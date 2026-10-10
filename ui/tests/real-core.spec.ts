@@ -5219,28 +5219,24 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
     expect(sessionId).toBeTruthy();
 
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
-    const toggle = page.getByRole("checkbox", {name: /Provider subagents/});
+    const toggle = page.getByRole("checkbox", {name: /Subagents/});
     await toggle.check();
     await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
     expect((await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent).toBeTruthy();
-    const effort = page.getByRole("combobox", {name: "Subagent effort"});
-    await effort.selectOption("high");
-    await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
-    await expect.poll(async () => (await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent.reasoning_effort).toBe("high");
+    await page.getByRole("combobox", {name: "Subagent runtime"}).selectOption("harness:inert-fixture");
+    await expect.poll(async () => (await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent.harness_profile_id).toBe("inert-fixture");
     await page.reload();
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
-    await expect(page.getByRole("checkbox", {name: /Provider subagents/})).toBeChecked();
-    await expect(page.getByRole("combobox", {name: "Subagent effort"})).toHaveValue("high");
-    await page.getByRole("combobox", {name: "Subagent effort"}).selectOption("");
-    await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
-    await expect.poll(async () => (await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent.reasoning_effort).toBeUndefined();
+    await expect(page.getByRole("checkbox", {name: /Subagents/})).toBeChecked();
+    await expect(page.getByRole("combobox", {name: "Subagent runtime"})).toHaveValue("harness:inert-fixture");
+    await expect(page.getByRole("combobox", {name: "Subagent effort"})).toHaveCount(0);
 
     await toggle.uncheck();
     await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
     expect((await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent).toBeUndefined();
     await page.reload();
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
-    await expect(page.getByRole("checkbox", {name: /Provider subagents/})).not.toBeChecked();
+    await expect(page.getByRole("checkbox", {name: /Subagents/})).not.toBeChecked();
     await testInfo.attach("subagents-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });

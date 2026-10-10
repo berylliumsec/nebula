@@ -1,22 +1,27 @@
 {
-  "change_digest": "3e48d218cd9784fdb60f16273875bb21e19dd0d0335be49c508f0ef529e44b35",
-  "reviewed_by": "Codex review of failed 3.0.5 release conversation scroll journey",
-  "reason": "The 3.0.5 release preparation failed the wide mobile WebKit conversation switch journey after all retries. A diagnostic run measuring message viewport position reproduced a 120 px shift. The syncing status was a flex sibling that narrowed the transcript, so it is now positioned without changing transcript geometry. A second diagnostic found the mobile Conversations drawer shrank the transcript viewport to 26 px while its scroll position was still treated as visible; scroll events under the drawer are ignored and the last visible position is cached. The browser assertion checks the reader's visible position across authoritative refresh. Run desktop, compact, small mobile Chromium, wide mobile WebKit, and the real Core conversation switch journey.",
-  "exclusions": "Python, frontend unit, native, unrelated browser journeys, and full suites are excluded. Mobile browsers are emulated; physical-device evidence is unavailable.",
+  "change_digest": "6591e22529e781faf08b5f39d6bc9e21ae4ef88fa4d3daee4e9426034b5f01f4",
+  "reviewed_by": "Codex review of harness child delegation journey",
+  "reason": "The Core test file covers harness-parent delegation, harness child rounds and existing provider children. Component tests cover runtime selection and request fields. Selected browser entries exercise settings, the saved choice, composer request and subagent pane in desktop Chromium, mobile Chromium and mobile WebKit; the real-Core entry checks persistence over a production LAN origin.",
+  "exclusions": "Unrelated provider, mission, workspace, browser and native journeys are excluded. Python remains on the 3.12 default. Mobile browsers are emulated; physical-device evidence is unavailable. No full suite is authorized.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 19,
+    "frontend": 28,
     "native": 0,
-    "playwright": 5
+    "playwright": 7
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_harness_provider_subagents.py"
+  ],
+  "frontend": [
+    "ui/src/components/chat-subagents/HarnessSubagentSettings.test.tsx",
+    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
+    "ui/src/pages/chatSubagentChoice.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "entry:conversation-switch-performance/desktop",
-    "entry:conversation-switch-performance/compact",
-    "entry:conversation-switch-performance/mobile-chromium-small",
-    "entry:conversation-switch-performance/mobile-webkit-wide",
-    "entry:conversation-switch-performance/assistant-real-desktop"
+    "entry:chat-subagents/desktop",
+    "entry:chat-subagents/mobile-chromium-small",
+    "entry:chat-subagents/mobile-webkit-small",
+    "entry:chat-subagents-core/real-core"
   ]
 }

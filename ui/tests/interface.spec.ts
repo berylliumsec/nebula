@@ -12535,6 +12535,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
     native_capabilities: { workspace_access: "write", shell: true },
     capabilities: { models: ["gpt-5.6"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "0.149.0" },
   };
+  const grok = { ...codex, id: "harness-grok-subagents", name: "Grok", kind: "grok_acp", default_model: "grok-code", capabilities: { ...codex.capabilities, models: ["grok-code"] } };
   const subagentProvider = {
     ...reasoningProvider,
     id: "provider-subagents",
@@ -12558,7 +12559,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
     if (path.endsWith("/providers") && request.method() === "GET") {
       await route.fulfill({ json: [subagentProvider] });
     } else if (path.endsWith("/harnesses") && request.method() === "GET") {
-      await route.fulfill({ json: [codex] });
+      await route.fulfill({ json: [codex, grok] });
     } else if (path.endsWith("/harness-sessions") && request.method() === "GET") {
       await route.fulfill({ json: [] });
     } else if (path.endsWith("/harness-sessions/harness-subagent-session/activity")) {
@@ -12578,7 +12579,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
       await route.fulfill({ json: [savedSession] });
     } else if (path.endsWith("/chat-sessions/harness-subagent-chat") && request.method() === "PATCH") {
       const body = request.postDataJSON();
-      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, provider_subagent: body.allow_subagents ? { provider_profile_id: body.subagent_provider_id, model: body.subagent_model, max_active: body.max_active_subagents, reasoning_effort: body.subagent_reasoning_effort } : null } };
+      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, provider_subagent: body.allow_subagents ? { ...(body.subagent_harness_profile_id ? { harness_profile_id: body.subagent_harness_profile_id } : { provider_profile_id: body.subagent_provider_id }), model: body.subagent_model, max_active: body.max_active_subagents, reasoning_effort: body.subagent_reasoning_effort } : null } };
       await route.fulfill({ json: savedSession });
     } else if (path.endsWith("/chat/sessions/harness-subagent-chat/subagents")) {
       await route.fulfill({ json: { session_id: "harness-subagent-chat", subagents: harnessChildren } });
@@ -12609,21 +12610,23 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   });
   await page.goto("/?view=chat&session=harness-subagent-chat");
 
-  // The harness picks one provider model for its subagents in its own settings.
+  // The harness picks a child runtime in its own settings.
   await page.getByRole("button", { name: "Assistant settings" }).click();
-  const toggle = page.getByRole("checkbox", { name: /Provider subagents/ });
+  const toggle = page.getByRole("checkbox", { name: /Subagents/ });
   await expect(toggle).not.toBeChecked();
   await toggle.check();
   await expect(page.getByText("Subagents saved. Applies to your next message.", { exact: true })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Subagent provider" })).toHaveValue(subagentProvider.id);
   await expect(page.getByRole("combobox", { name: "Subagent model" })).toHaveValue("deepseek/deepseek-v3.2");
-  await page.getByRole("combobox", { name: "Subagent effort" }).selectOption("high");
-  await expect(page.getByRole("combobox", { name: "Subagent effort" })).toHaveValue("high");
-  await expect(page.locator(".chat-harness-subagent-status")).toContainText("Tools verified");
+  await page.getByRole("combobox", { name: "Subagent runtime" }).selectOption("harness:harness-grok-subagents");
+  await expect(page.getByRole("combobox", { name: "Subagent model" })).toHaveValue("grok-code");
+  await expect(page.getByRole("combobox", { name: "Subagent effort" })).toHaveCount(0);
+  await expect(page.locator(".chat-harness-subagent-status")).toContainText("Harness subagents run on this machine");
   await page.reload();
   await page.getByRole("button", { name: "Assistant settings" }).click();
-  await expect(page.getByRole("checkbox", { name: /Provider subagents/ })).toBeChecked();
-  await expect(page.getByRole("combobox", { name: "Subagent effort" })).toHaveValue("high");
+  await expect(page.getByRole("checkbox", { name: /Subagents/ })).toBeChecked();
+  await expect(page.getByRole("combobox", { name: "Subagent runtime" })).toHaveValue("harness:harness-grok-subagents");
+  await expect(page.getByRole("combobox", { name: "Subagent effort" })).toHaveCount(0);
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
   // The parent request opens the same authoritative pane as a provider chat.
@@ -12631,8 +12634,8 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   await expect(request).toContainText("1 running");
   await request.getByRole("button", { name: "Review request" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
-  await expect(pane).toContainText("3 running · no limit · deepseek/deepseek-v3.2");
-  await expect(pane).toContainText("Tool outputs go to Local subagents");
+  await expect(pane).toContainText("3 running · no limit · grok-code");
+  await expect(pane).toContainText("project access follows the selected harness");
 
   const composer = page.locator(".chat-composer textarea").first();
   await composer.fill("Split the auth review.");
@@ -12642,9 +12645,8 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   expect(sent).toMatchObject({
     backend: "harness",
     allow_subagents: true,
-    subagent_provider_id: subagentProvider.id,
-    subagent_model: "deepseek/deepseek-v3.2",
-    subagent_reasoning_effort: "high",
+    subagent_harness_profile_id: grok.id,
+    subagent_model: "grok-code",
   });
   // No limit was set, so none is sent.
   expect(sent).not.toHaveProperty("max_active_subagents");

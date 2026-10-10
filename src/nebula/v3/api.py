@@ -936,6 +936,7 @@ class ChatSessionUpdateRequest(NebulaModel):
     allow_agent_messaging: bool | None = None
     max_active_subagents: int | None = Field(default=None, ge=1, le=100)
     subagent_provider_id: str | None = Field(default=None, max_length=200)
+    subagent_harness_profile_id: str | None = Field(default=None, max_length=200)
     subagent_model: str | None = Field(default=None, max_length=300)
     expected_revision: int | None = Field(default=None, ge=1)
 
@@ -952,6 +953,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.allow_agent_messaging is None
             and "max_active_subagents" not in self.model_fields_set
             and self.subagent_provider_id is None
+            and self.subagent_harness_profile_id is None
             and self.subagent_model is None
         ):
             raise ValueError("Provide a title, archived state, or assistant settings")
@@ -1984,6 +1986,7 @@ def create_app(
     # runs provider-chat subagents.
     if harness_runtime.provider_subagents is None:
         harness_runtime.bind_provider_subagents(provider_chat.subagents)
+    provider_chat.subagents.bind_harness_runtime(harness_runtime)
     if harness_runtime.agent_messages is None:
         harness_runtime.bind_agent_messages(provider_chat.agent_messages)
     from .mission_delegation import DelegatedMissionService
@@ -10853,6 +10856,7 @@ def create_app(
             or "max_active_subagents" in request.model_fields_set
             or "subagent_reasoning_effort" in request.model_fields_set
             or request.subagent_provider_id is not None
+            or request.subagent_harness_profile_id is not None
             or request.subagent_model is not None
         ):
             enabled = request.allow_subagents
@@ -10868,6 +10872,13 @@ def create_app(
                     provider_id = request.subagent_provider_id or str(
                         saved.get("provider_profile_id") or ""
                     )
+                    harness_id = request.subagent_harness_profile_id or str(
+                        saved.get("harness_profile_id") or ""
+                    )
+                    if request.subagent_provider_id is not None:
+                        harness_id = ""
+                    if request.subagent_harness_profile_id is not None:
+                        provider_id = ""
                     model = request.subagent_model or str(saved.get("model") or "")
                     limit = (
                         request.max_active_subagents
@@ -10877,7 +10888,11 @@ def create_app(
                     # Save the operator's choice while model verification runs.
                     # Starting a turn still validates tools and data-sharing consent.
                     metadata["provider_subagent"] = {
-                        "provider_profile_id": provider_id,
+                        **(
+                            {"harness_profile_id": harness_id}
+                            if harness_id
+                            else {"provider_profile_id": provider_id}
+                        ),
                         "model": model,
                         **({"max_active": limit} if limit is not None else {}),
                         **(

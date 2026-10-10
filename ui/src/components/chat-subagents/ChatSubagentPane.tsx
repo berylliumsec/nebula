@@ -23,10 +23,10 @@ interface ChatSubagentPaneProps {
   /** The narrow sheet shows one row per child instead of open cards. */
   compact?: boolean;
   /**
-   * A harness chat delegates to a provider model other than its own; name it.
+   * A harness chat delegates to the selected model or harness; name it.
    * Absent for provider chats, whose children share the chat's model.
    */
-  harnessDelegation?: { harnessName: string; providerName?: string; model?: string };
+  harnessDelegation?: { harnessName: string; providerName?: string; model?: string; childIsHarness?: boolean };
   /** The operator's running-at-once limit; absent means no limit. */
   limit?: number;
 }
@@ -116,7 +116,7 @@ export function ChatSubagentPane({
       compact
       title="Nothing delegated yet"
       explanation={harnessDelegation
-        ? `With provider subagents on, ${harnessDelegation.harnessName} can split independent work across parallel children on ${delegateModel ?? "the chosen provider model"}. They appear here as it does.`
+        ? `With subagents on, ${harnessDelegation.harnessName} can split independent work across parallel children on ${delegateTarget || "the chosen runtime"}. They appear here as it does.`
         : "With subagents allowed, the assistant can split independent work across parallel children on this model. They appear here as it does."}
     />}
 
@@ -198,7 +198,9 @@ export function ChatSubagentPane({
 
     <p className="chat-subagent-note">
       {harnessDelegation
-        ? `Subagents run on ${delegateTarget || "the chosen provider model"} with this project's approval policy. Their supervisor can assign project tools, MCP servers, skills, hooks, knowledge, command runtime, and delegation to each child. Tool outputs go to ${harnessDelegation.providerName ?? "that provider"}.`
+        ? harnessDelegation.childIsHarness
+          ? `Subagents run on ${delegateTarget || "the chosen harness"} with this project's approval policy. Their project access follows the selected harness and project policy.`
+          : `Subagents run on ${delegateTarget || "the chosen provider model"} with this project's approval policy. Their supervisor can assign project tools, MCP servers, skills, hooks, knowledge, command runtime, and delegation to each child. Tool outputs go to ${harnessDelegation.providerName ?? "that provider"}.`
         : "Subagents use this conversation's model and approval policy. Their supervisor can assign project tools, MCP servers, skills, hooks, knowledge, command runtime, and delegation to each child."}
     </p>
   </section>;

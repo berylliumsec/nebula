@@ -1357,6 +1357,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [allowAgentMessaging, setAllowAgentMessaging] = useState(false);
   const pendingAgentMessagingSaveSessionRef = useRef<string | undefined>(undefined);
   const [subagentProviderId, setSubagentProviderId] = useState("");
+  const [subagentHarnessId, setSubagentHarnessId] = useState("");
   const [subagentModel, setSubagentModel] = useState("");
   // How many subagents may run at once; undefined is no limit.
   const [subagentLimit, setSubagentLimit] = useState<number>();
@@ -1876,6 +1877,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (activeChatSession.backend === "harness") {
       setAllowSubagents(activeChatSession.allowSubagents === true);
       setSubagentProviderId(activeChatSession.subagentProviderId ?? "");
+      setSubagentHarnessId(activeChatSession.subagentHarnessId ?? "");
       setSubagentModel(activeChatSession.subagentModel ?? "");
       setSubagentLimit(activeChatSession.subagentLimit);
       setSubagentReasoningEffort(activeChatSession.subagentReasoningEffort);
@@ -1934,9 +1936,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const modelVerified = modelVerification?.status === "verified";
   const subagentProvider = enabledProviders.find((provider) => provider.id === subagentProviderId);
   const subagentModelVerification = providerModelVerification(subagentProvider, subagentModel);
+  const subagentHarness = harnesses.find((harness) => harness.id === subagentHarnessId && harness.enabled);
   // Only a checked model can run subagents; Core refuses anything else.
   const harnessSubagentsReady = Boolean(
-    allowSubagents && subagentProvider && subagentModel && subagentModelVerification?.status === "verified",
+    allowSubagents && subagentModel && (
+      subagentHarness
+        ? (subagentHarness.models.length === 0 || subagentHarness.models.includes(subagentModel))
+        : subagentProvider && subagentModelVerification?.status === "verified"
+    ),
   );
   const commandRuntimeAvailable = Boolean(modelVerified && commandRuntimeReady && !toolRuntimeReason);
   const defaultRuntime = useMemo(
@@ -1962,6 +1969,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessMode(saved.harnessMode ?? "");
     setAllowSubagents(saved.allowSubagents);
     setSubagentProviderId(saved.subagentProviderId ?? "");
+    setSubagentHarnessId(saved.subagentHarnessId ?? "");
     setSubagentModel(saved.subagentModel ?? "");
     setSubagentLimit(saved.maxActiveSubagents ?? undefined);
     setSubagentReasoningEffort(saved.subagentReasoningEffort ?? undefined);
@@ -3193,9 +3201,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
   };
 
-  const saveSubagentChoice = async (choice: { enabled: boolean; providerId: string; model: string; limit?: number; reasoningEffort?: ReasoningEffort }) => {
+  const saveSubagentChoice = async (choice: { enabled: boolean; providerId: string; harnessId?: string; model: string; limit?: number; reasoningEffort?: ReasoningEffort }) => {
     setAllowSubagents(choice.enabled);
     setSubagentProviderId(choice.providerId);
+    setSubagentHarnessId(choice.harnessId ?? "");
     setSubagentModel(choice.model);
     setSubagentLimit(choice.limit);
     setSubagentReasoningEffort(choice.reasoningEffort);
@@ -3204,6 +3213,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       void rememberAssistantDefaults({
         allowSubagents: choice.enabled,
         subagentProviderId: choice.providerId || null,
+        subagentHarnessId: choice.harnessId || null,
         subagentModel: choice.model || null,
         maxActiveSubagents: choice.limit ?? null,
         subagentReasoningEffort: choice.reasoningEffort ?? null,
@@ -3223,13 +3233,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         maxActiveSubagents: choice.limit ?? null,
         subagentReasoningEffort: choice.reasoningEffort ?? null,
         ...(current.backend === "harness" && choice.enabled
-          ? { subagentProviderId: choice.providerId, subagentModel: choice.model }
+          ? { subagentProviderId: choice.harnessId ? undefined : choice.providerId, subagentHarnessId: choice.harnessId, subagentModel: choice.model }
           : {}),
       });
       setSessions((items) => items.map((item) => item.id === updated.id ? updated : item));
       await rememberAssistantDefaults({
         allowSubagents: updated.allowSubagents === true,
         subagentProviderId: choice.providerId || null,
+        subagentHarnessId: choice.harnessId || null,
         subagentModel: choice.model || null,
         maxActiveSubagents: updated.subagentLimit ?? null,
         subagentReasoningEffort: updated.subagentReasoningEffort ?? null,
@@ -3237,6 +3248,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       if (sessionSelectionGenerationRef.current === selectionGeneration) {
         setAllowSubagents(updated.allowSubagents === true);
         setSubagentProviderId(updated.subagentProviderId ?? "");
+        setSubagentHarnessId(updated.subagentHarnessId ?? "");
         setSubagentModel(updated.subagentModel ?? "");
         setSubagentLimit(updated.subagentLimit);
         setSubagentReasoningEffort(updated.subagentReasoningEffort);
@@ -3247,6 +3259,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       if (sessionSelectionGenerationRef.current === selectionGeneration) {
         setAllowSubagents(current.allowSubagents === true);
         setSubagentProviderId(current.subagentProviderId ?? "");
+        setSubagentHarnessId(current.subagentHarnessId ?? "");
         setSubagentModel(current.subagentModel ?? "");
         setSubagentLimit(current.subagentLimit);
         setSubagentReasoningEffort(current.subagentReasoningEffort);
@@ -4974,6 +4987,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         enabled: !embeddedSideChat && allowSubagents,
         ready: harnessSubagentsReady,
         providerId: subagentProviderId,
+        harnessId: subagentHarnessId || undefined,
         model: subagentModel,
         limit: subagentLimit,
         reasoningEffort: subagentReasoningEffort,
@@ -6026,8 +6040,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 <div className="chat-knowledge-toggle" role="status" data-guide="knowledge-status"><ShieldCheck size={15} aria-hidden="true" /><span>Knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} source${knowledgeItemCount === 1 ? "" : "s"} available automatically` : `${runtimeKind === "provider" ? "Profile" : "Harness"} is text-only` : "No sources loaded"}</small></span></div>
                 {runtimeKind === "harness" && <HarnessSubagentSettings
                   providers={enabledProviders}
+                  harnesses={harnesses}
                   harnessName={selectedHarness?.name ?? "The harness"}
-                  choice={{ enabled: allowSubagents, providerId: subagentProviderId, model: subagentModel, limit: subagentLimit, reasoningEffort: subagentReasoningEffort }}
+                  choice={{ enabled: allowSubagents, providerId: subagentProviderId, harnessId: subagentHarnessId, model: subagentModel, limit: subagentLimit, reasoningEffort: subagentReasoningEffort }}
                   disabled={sending || assistantSettingsBusy}
                   onChange={(choice) => void saveSubagentChoice(choice)}
                 />}
@@ -6524,7 +6539,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             onOpenConversation={id => void selectSession(id)}
             harnessDelegation={runtimeKind === "harness" ? {
               harnessName: selectedHarness?.name ?? "The harness",
-              providerName: subagentProvider?.name,
+              providerName: subagentHarness?.name ?? subagentProvider?.name,
+              childIsHarness: Boolean(subagentHarness),
               model: allowSubagents && subagentModel ? subagentModel : undefined,
             } : undefined}
             limit={subagentLimit}

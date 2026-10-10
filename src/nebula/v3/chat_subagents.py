@@ -1,4 +1,4 @@
-"""Core-owned subagents that run on a provider model.
+"""Core-owned subagents that run on a provider model or harness.
 
 A parent provider turn delegates a task with ``start_subagent``. Core creates a
 child conversation bound to the same provider, model and capabilities, runs it
@@ -33,7 +33,7 @@ with that cause instead of leaving it running.
 
 A harness chat (Codex, Grok) delegates the same way through the Nebula gateway
 tools ``subagent.start``/``wait``/``list``/``message``/``stop``. Its children
-run on the provider model the operator picked for that chat. The harness waits
+run on the runtime and model the operator picked for that chat. The harness waits
 inside the gateway call for a bounded time; while its turn runs, updates are
 steered into it when the harness supports that, and whatever it has not
 received is handed to it at the start of its next turn.
@@ -82,6 +82,7 @@ from .domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    HarnessProfile,
     ProviderProfile,
     RiskClass,
     RunStatus,
@@ -109,6 +110,7 @@ from .tools import (
 
 if TYPE_CHECKING:
     from .chat import ChatService
+    from .harnesses import HarnessRuntimeService
     from .storage import NebulaStore
 
 # Subagents are unlimited unless the operator sets how many may run at once
@@ -338,7 +340,7 @@ ends. Reports name what failed: the error, failed tool steps and unread
 messages."""
 
 SUBAGENT_EFFORT_DESCRIPTION = (
-    "How hard the subagent reasons. Omit for the provider model default. "
+    "How hard the subagent reasons. Omit for the selected model default. "
     "An operator effort setting overrides this choice."
 )
 
@@ -407,8 +409,28 @@ def harness_subagent_instructions(
     wait_seconds: int = HARNESS_WAIT_DEFAULT_SECONDS,
     limit: int | None = None,
     forced_effort: str | None = None,
+    harness_profile_id: str | None = None,
 ) -> str:
-    """Developer instructions for a harness session with provider subagents."""
+    """Developer instructions for a harness session with selected subagents."""
+
+    if harness_profile_id:
+        return (
+            f"Harness subagents: subagent.start delegates independent work to a "
+            f"child on the selected harness model {model}. It runs in its own "
+            "conversation and reports back. Give complete, self-contained "
+            "instructions. The child inherits the selected harness's project "
+            "policy; capabilities may select MCP servers, knowledge, or the "
+            "command runtime. It cannot delegate further. "
+            + (f"At most {limit} run at once. " if limit is not None else "")
+            + (
+                f"The operator set every child to {forced_effort} effort. "
+                if forced_effort
+                else ""
+            )
+            + f"Call subagent.wait for reports (up to {wait_seconds} seconds), "
+            "subagent.message for new instructions or another round, and "
+            "subagent.stop to cancel it."
+        )
 
     effort_instruction = (
         f"The operator set every subagent to {forced_effort} effort. "
@@ -417,9 +439,10 @@ def harness_subagent_instructions(
         "omitted means the provider model default. "
     )
     return (
-        "Provider subagents: subagent.start hands one independent, multi-step task "
-        f"to a child assistant on the Nebula provider model {model} with this "
-        "project's command runtime and MCP servers by default. Call "
+        ("Harness subagents: " if harness_profile_id else "Provider subagents: ")
+        + "subagent.start hands one independent, multi-step task "
+        f"to a child assistant on {'the selected harness' if harness_profile_id else 'the Nebula provider'} model {model} with this "
+        "project's tools and MCP servers by default. Call "
         "subagent.capabilities to discover exact tool names, enabled MCP server "
         "IDs, project hooks and skill paths. Pass capabilities to subagent.start "
         "to narrow the child's tools or MCP servers and assign skills, lifecycle "
@@ -1023,6 +1046,7 @@ class SubagentService:
     def __init__(self, store: NebulaStore, chat: ChatService):
         self.store = store
         self.chat = chat
+        self.harness_runtime: HarnessRuntimeService | None = None
         # Replaced on every settle so each harness wait wakes once per change.
         self._changed = asyncio.Event()
         # Parent conversations inside a harness subagent.wait: the wait returns
@@ -1048,6 +1072,9 @@ class SubagentService:
     def _notify(self) -> None:
         changed, self._changed = self._changed, asyncio.Event()
         changed.set()
+
+    def bind_harness_runtime(self, runtime: HarnessRuntimeService) -> None:
+        self.harness_runtime = runtime
 
     def depth(self, session: ChatSession) -> int:
         """Count durable supervisor links; a corrupt cycle never grants delegation."""
@@ -1270,6 +1297,7 @@ class SubagentService:
             "parent_turn_id": record.parent_turn_id,
             "parent_backend": record.parent_backend.value,
             "provider_profile_id": provider_profile_id,
+            "harness_profile_id": record.harness_profile_id,
             "model": model,
             "reasoning_effort": record.reasoning_effort,
             "capabilities": record.parent_request.get("capabilities"),
@@ -1381,8 +1409,19 @@ class SubagentService:
                 native_skill_roots(workspace, self.chat.managed_skill_root)
             )
         hooks = discover_native_hooks(workspace) if workspace is not None else []
+        selected_setting = snapshot.get("provider_subagent")
+        harness_child = (
+            turn.backend == ChatBackend.HARNESS
+            and isinstance(selected_setting, dict)
+            and bool(selected_setting.get("harness_profile_id"))
+        )
         return {
-            "tool_names": sorted(names),
+            "tool_names": [] if harness_child else sorted(names),
+            **(
+                {"runtime": "harness", "model": selected_setting.get("model")}
+                if harness_child and isinstance(selected_setting, dict)
+                else {}
+            ),
             "mcp_servers": [
                 {
                     "id": item.id,
@@ -1391,7 +1430,9 @@ class SubagentService:
                 }
                 for item in mcp_profiles
             ],
-            "skills": [{"name": item.name, "path": item.path} for item in skills],
+            "skills": []
+            if harness_child
+            else [{"name": item.name, "path": item.path} for item in skills],
             "knowledge": {
                 "ready": self.chat._has_ready_knowledge(session.engagement_id),
                 "selected": bool(snapshot.get("knowledge_enabled")),
@@ -1407,7 +1448,7 @@ class SubagentService:
                 "tool_names": command_tools,
             },
             "subagents": {
-                "available": depth + 1 < SUBAGENT_DEPTH_CEILING,
+                "available": not harness_child and depth + 1 < SUBAGENT_DEPTH_CEILING,
                 "selected": bool(
                     snapshot.get("provider_subagent")
                     if turn.backend == ChatBackend.HARNESS
@@ -1416,7 +1457,9 @@ class SubagentService:
                 "depth": depth,
                 "max_depth": SUBAGENT_DEPTH_CEILING,
             },
-            "hooks": [
+            "hooks": []
+            if harness_child
+            else [
                 {
                     "id": item.id,
                     "name": item.manifest.name,
@@ -1870,7 +1913,7 @@ class SubagentService:
         # says it had no effect; the failure contract classifies it by type.
         if not invocation.chat_turn_id:
             raise ToolNotPermitted(
-                "subagents require a provider chat turn", rule="subagents.chat_turn"
+                "subagents require a chat turn", rule="subagents.chat_turn"
             )
         parent_turn = self.store.get(ChatTurn, invocation.chat_turn_id)
         parent_session = self.store.get(ChatSession, parent_turn.session_id)
@@ -1945,10 +1988,11 @@ class SubagentService:
             setting = snapshot.get("provider_subagent")
             if not isinstance(setting, dict):
                 raise ToolNotPermitted(
-                    "provider subagents are turned off for this conversation",
+                    "subagents are turned off for this conversation",
                     rule="subagents.turned_off",
                 )
             provider_id = str(setting.get("provider_profile_id") or "")
+            harness_id = str(setting.get("harness_profile_id") or "")
             model = str(setting.get("model") or "")
             forced_effort = _known_effort(setting.get("reasoning_effort"))
             # Children use Nebula's command runtime whenever the harness
@@ -1960,16 +2004,42 @@ class SubagentService:
                 and self.chat.automation_tool_platform is not None
             )
         else:
+            harness_id = ""
             provider_id = parent_turn.provider_profile_id or ""
             model = parent_turn.model
             tools_enabled = bool(snapshot.get("include_oci_tools", False))
             forced_effort = _known_effort(snapshot.get("subagent_reasoning_effort"))
         if selection is not None and "command_runtime" in selection:
             tools_enabled = selection["command_runtime"]
+        elif harness_id:
+            # A harness can have vendor-native workspace and shell tools even
+            # when its parent has no Nebula command-runtime snapshot.
+            tools_enabled = True
         effort = forced_effort or requested_effort
-        if not provider_id or not model:
+        if not (provider_id or harness_id) or not model:
             raise ToolNotPermitted(
-                "subagents need a provider model", rule="subagents.provider_model"
+                "subagents need a selected runtime and model",
+                rule="subagents.runtime_model",
+            )
+        if harness_id and allow_subagents:
+            raise refused_before_execution(
+                InvalidToolArguments(
+                    "harness subagents cannot delegate further subagents"
+                )
+            )
+        if (
+            harness_id
+            and selection is not None
+            and any(key in selection for key in ("tool_names", "hook_ids", "skills"))
+        ):
+            raise refused_before_execution(
+                InvalidToolArguments(
+                    "harness subagents use their selected harness tools; tool, hook and skill assignments are unavailable"
+                )
+            )
+        if harness_id:
+            self.validate_harness_setting(
+                parent_session.engagement_id, "", model, limit, effort, harness_id
             )
         # Limits come after the rules: a call that is not permitted must not
         # be told to wait and retry.
@@ -1985,11 +2055,26 @@ class SubagentService:
             **({"capabilities": selection} if selection is not None else {}),
         }
         subagent_id = str(uuid4())
+        harness_session = (
+            self.harness_runtime.create_session(
+                engagement_id=parent_session.engagement_id,
+                profile_id=harness_id,
+                model=model,
+                mcp_server_ids=mcp_server_ids,
+                reasoning_effort=effort,
+                tools_enabled=tools_enabled,
+            )
+            if harness_id and self.harness_runtime is not None
+            else None
+        )
         child_session = ChatSession(
             id=str(uuid4()),
             engagement_id=parent_session.engagement_id,
             title=f"Subagent · {label}"[:300],
-            provider_profile_id=provider_id,
+            backend=ChatBackend.HARNESS if harness_id else ChatBackend.PROVIDER,
+            provider_profile_id=provider_id or None,
+            harness_profile_id=harness_id or None,
+            harness_session_id=harness_session.id if harness_session else None,
             model=model,
             parent_session_id=parent_session.id,
             metadata={
@@ -2006,6 +2091,7 @@ class SubagentService:
             parent_backend=parent_turn.backend,
             child_session_id=child_session.id,
             provider_profile_id=provider_id,
+            harness_profile_id=harness_id or None,
             model=model,
             reasoning_effort=effort,
             name=label,
@@ -2024,6 +2110,33 @@ class SubagentService:
         )
         child_turn_id: str | None = None
         try:
+            if harness_id:
+                assert self.harness_runtime is not None and harness_session is not None
+                _, child_turn, harness_turn = self.harness_runtime.prepare_chat(
+                    engagement_id=parent_session.engagement_id,
+                    profile_id=harness_id,
+                    model=model,
+                    prompt=_bounded(content, 60_000),
+                    chat_session_id=child_session.id,
+                    harness_session_id=harness_session.id,
+                    mcp_server_ids=None,
+                    runtime_context=(
+                        "\n\nYou are a subagent. Complete only the delegated task. "
+                        "Your final answer is returned to the delegating assistant. "
+                        "Lead with findings and state what you could not verify."
+                    ),
+                    include_knowledge=include_knowledge,
+                    allow_cloud_knowledge=allow_cloud_knowledge,
+                )
+                child_turn_id = child_turn.id
+                record = self.store.update(
+                    ChatSubagent,
+                    record.id,
+                    {"child_turn_id": child_turn_id},
+                    expected_revision=record.revision,
+                )
+                self.harness_runtime.start_chat_turn(harness_turn.id)
+                return record
             prepared = await self.chat.prepare_async(
                 ChatCompletionRequest(
                     provider_id=provider_id,
@@ -2222,7 +2335,9 @@ class SubagentService:
 
         try:
             if child_turn_id is not None:
-                self.chat.cancel_turn(child_turn_id)
+                child_turn = self.store.get(ChatTurn, child_turn_id)
+                if child_turn.backend == ChatBackend.PROVIDER:
+                    self.chat.cancel_turn(child_turn_id)
             self.store.delete_chat_session(child_session.id)
             self.store.delete(ChatSubagent, record.id)
         except Exception as exc:
@@ -2296,6 +2411,11 @@ class SubagentService:
             "subagent_id": record.id,
             "name": record.name,
             **({"model": record.model} if harness else {}),
+            **(
+                {"harness_profile_id": record.harness_profile_id}
+                if record.harness_profile_id
+                else {}
+            ),
             "reasoning_effort": record.reasoning_effort or "model default",
             "status": record.status.value,
             "note": note,
@@ -2350,41 +2470,64 @@ class SubagentService:
         # The round runs for the parent turn that sent the message, or, when
         # Core starts it after a report, for the turn the child already has.
         driving_turn = self._parent_turn(record, parent_turn_id)
-        prepared = await self.chat.prepare_async(
-            ChatCompletionRequest(
-                provider_id=provider_id or "",
+        if record.harness_profile_id:
+            if self.harness_runtime is None:
+                raise RuntimeError("harness subagent runtime is unavailable")
+            child = self.store.get(ChatSession, record.child_session_id)
+            _, next_turn, harness_turn = self.harness_runtime.prepare_chat(
                 engagement_id=record.engagement_id,
-                session_id=record.child_session_id,
+                profile_id=record.harness_profile_id,
                 model=model,
-                messages=[
-                    ChatRequestMessage(
-                        role=ChatRole.USER,
-                        content=_bounded(
-                            "The delegating assistant sent you "
-                            + ("a message" if len(pending) == 1 else "messages")
-                            + f" after your last report:\n\n{body}",
-                            60_000,
-                        ),
-                    )
-                ],
+                prompt=_bounded(
+                    "The delegating assistant sent you "
+                    + ("a message" if len(pending) == 1 else "messages")
+                    + f" after your last report:\n\n{body}",
+                    60_000,
+                ),
+                chat_session_id=child.id,
+                harness_session_id=child.harness_session_id,
+                mcp_server_ids=None,
                 include_knowledge=bool(flags.get("include_knowledge")),
                 allow_cloud_knowledge=bool(flags.get("allow_cloud_knowledge")),
-                allow_subagents=bool(flags.get("allow_subagents")),
-                max_active_subagents=flags.get("max_active_subagents"),
-                tools_enabled=bool(flags.get("tools_enabled")),
-                mcp_server_ids=list(flags.get("mcp_server_ids") or []),
-                hook_ids=selection.get("hook_ids", []),
-                skill_selections=selection.get("skills", []),
-                allowed_tool_names=selection.get("tool_names"),
-                allow_mcp_catalog="mcp_server_ids" not in selection,
-                ssh_environment_ids=self._ssh_environment_ids(record, driving_turn),
-                allow_cloud_tool_results=True,
-                reasoning_effort=_known_effort(record.reasoning_effort),
-                stream=True,
             )
-        )
-        if prepared.turn is None:
-            raise RuntimeError("subagent turn was not created")
+            prepared = None
+        else:
+            prepared = await self.chat.prepare_async(
+                ChatCompletionRequest(
+                    provider_id=provider_id or "",
+                    engagement_id=record.engagement_id,
+                    session_id=record.child_session_id,
+                    model=model,
+                    messages=[
+                        ChatRequestMessage(
+                            role=ChatRole.USER,
+                            content=_bounded(
+                                "The delegating assistant sent you "
+                                + ("a message" if len(pending) == 1 else "messages")
+                                + f" after your last report:\n\n{body}",
+                                60_000,
+                            ),
+                        )
+                    ],
+                    include_knowledge=bool(flags.get("include_knowledge")),
+                    allow_cloud_knowledge=bool(flags.get("allow_cloud_knowledge")),
+                    allow_subagents=bool(flags.get("allow_subagents")),
+                    max_active_subagents=flags.get("max_active_subagents"),
+                    tools_enabled=bool(flags.get("tools_enabled")),
+                    mcp_server_ids=list(flags.get("mcp_server_ids") or []),
+                    hook_ids=selection.get("hook_ids", []),
+                    skill_selections=selection.get("skills", []),
+                    allowed_tool_names=selection.get("tool_names"),
+                    allow_mcp_catalog="mcp_server_ids" not in selection,
+                    ssh_environment_ids=self._ssh_environment_ids(record, driving_turn),
+                    allow_cloud_tool_results=True,
+                    reasoning_effort=_known_effort(record.reasoning_effort),
+                    stream=True,
+                )
+            )
+            if prepared.turn is None:
+                raise RuntimeError("subagent turn was not created")
+            next_turn = prepared.turn
         try:
             latest = self.get(record.id)
             unread = [
@@ -2414,7 +2557,7 @@ class SubagentService:
                     "error": None,
                     "result_message_id": None,
                     "reported_at": None,
-                    "child_turn_id": prepared.turn.id,
+                    "child_turn_id": next_turn.id,
                     "rounds": latest.rounds + 1,
                     **({"usage": usage} if usage is not None else {}),
                     **(
@@ -2438,10 +2581,20 @@ class SubagentService:
                 expected_revision=latest.revision,
             )
         except Exception:
-            self.chat.cancel_turn(prepared.turn.id)
+            if prepared is not None:
+                self.chat.cancel_turn(next_turn.id)
+            elif self.harness_runtime is not None:
+                await self.harness_runtime.cancel_turn(
+                    harness_turn.id,
+                    reason="The subagent changed before this round started.",
+                )
             raise
         self._mark_messages(pending, ChatSubagentMessageStatus.DELIVERED)
-        self.chat.start_provider_turn(prepared)
+        if prepared is not None:
+            self.chat.start_provider_turn(prepared)
+        else:
+            assert self.harness_runtime is not None
+            self.harness_runtime.start_chat_turn(harness_turn.id)
         self._notify()
         return record
 
@@ -2536,6 +2689,27 @@ class SubagentService:
             content,
             idempotency_key=idempotency_key,
         )
+        if record.harness_profile_id:
+            turn = self._child_turn(record)
+            if turn is not None and turn.harness_turn_id and self.harness_runtime:
+                try:
+                    await self.harness_runtime.steer_turn(
+                        turn.harness_turn_id,
+                        content,
+                        actor_id="subagent-parent",
+                        title="Delegating assistant",
+                        summary="The delegating assistant sent new instructions.",
+                    )
+                except Exception:  # diagnostic-expected: a finishing harness cannot accept a steer; the report names the unread message
+                    pass
+                else:
+                    self._mark_messages([message], ChatSubagentMessageStatus.DELIVERED)
+                    return {
+                        "subagent_id": record.id,
+                        "message_id": message.id,
+                        "status": record.status.value,
+                        "delivery": "steered",
+                    }
         question = self.open_question(record.id)
         if question is not None:
             self._close_question(question, None)
@@ -2880,7 +3054,16 @@ class SubagentService:
                 ):
                     break
                 stopped_turns.add(turn_id)
-                await self.chat.stop_provider_turn(turn_id)
+                child_turn = self.store.get(ChatTurn, turn_id)
+                if child_turn.backend == ChatBackend.HARNESS:
+                    if self.harness_runtime is None or not child_turn.harness_turn_id:
+                        raise RuntimeError("harness subagent runtime is unavailable")
+                    await self.harness_runtime.cancel_turn(
+                        child_turn.harness_turn_id,
+                        reason="The delegating assistant stopped this subagent.",
+                    )
+                else:
+                    await self.chat.stop_provider_turn(turn_id)
                 latest = self.get(record.id)
                 if latest.child_turn_id == turn_id:
                     await self._child_settled(latest, self.store.get(ChatTurn, turn_id))
@@ -3156,15 +3339,44 @@ class SubagentService:
         model: str,
         max_active: int | None = None,
         reasoning_effort: str | None = None,
+        harness_profile_id: str | None = None,
     ) -> dict[str, Any]:
-        """Check a harness chat's subagent model before any turn relies on it.
-
-        Children always run with tools, so the model must have passed the tool
-        check, and a cloud provider must accept project data. Turning provider
-        subagents on is the operator's consent to send the tool results.
-        """
+        """Check a harness chat's selected child runtime before a turn uses it."""
 
         from .chat import ChatConfigurationError, ChatPrivacyError
+
+        if harness_profile_id:
+            if provider_profile_id:
+                raise ChatConfigurationError("choose one subagent runtime")
+            try:
+                profile = self.store.get(HarnessProfile, harness_profile_id)
+            except NotFoundError as exc:
+                raise ChatConfigurationError(
+                    f"subagent harness {harness_profile_id!r} does not exist"
+                ) from exc
+            if not profile.enabled:
+                raise ChatConfigurationError(
+                    f"subagent harness {profile.name!r} is disabled"
+                )
+            if not model or (
+                profile.capabilities.models and model not in profile.capabilities.models
+            ):
+                raise ChatConfigurationError(
+                    "choose a model advertised by the subagent harness"
+                )
+            if self.harness_runtime is None:
+                raise ChatConfigurationError("subagent harness runtime is unavailable")
+            self.harness_runtime._validate_harness_privacy(
+                engagement_id, profile, [], allow_remote_mcp=False
+            )
+            if max_active is not None and subagent_limit(max_active) is None:
+                raise ChatConfigurationError("subagent limit is out of range")
+            return {
+                "harness_profile_id": profile.id,
+                "model": model,
+                **({"max_active": max_active} if max_active is not None else {}),
+                **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
+            }
 
         provider_profile_id = provider_profile_id.strip()
         model = model.strip()
@@ -3173,31 +3385,37 @@ class SubagentService:
                 "provider subagents need a provider and a model"
             )
         try:
-            profile = self.store.get(ProviderProfile, provider_profile_id)
+            provider_profile = self.store.get(ProviderProfile, provider_profile_id)
         except NotFoundError as exc:
             raise ChatConfigurationError(
                 f"subagent provider {provider_profile_id!r} does not exist"
             ) from exc
-        if not profile.enabled:
+        if not provider_profile.enabled:
             raise ChatConfigurationError(
-                f"subagent provider {profile.name!r} is disabled"
+                f"subagent provider {provider_profile.name!r} is disabled"
             )
-        if profile.model_allowlist and model not in profile.model_allowlist:
+        if (
+            provider_profile.model_allowlist
+            and model not in provider_profile.model_allowlist
+        ):
             raise ChatConfigurationError(
-                f"model {model!r} is not allowed by provider {profile.name!r}"
+                f"model {model!r} is not allowed by provider {provider_profile.name!r}"
             )
-        if not profile.tools_verified_for(model):
+        if not provider_profile.tools_verified_for(model):
             raise ChatConfigurationError(
                 f"subagent model {model!r} has not passed the tool check; verify it "
                 "before using it for subagents"
             )
-        provider = self.chat.provider_factory(profile)
+        provider = self.chat.provider_factory(provider_profile)
         self.chat._enforce_engagement_privacy(
             self.store.get(Engagement, engagement_id), provider
         )
-        if not provider.config.local and not profile.privacy.permits_sensitive_data:
+        if (
+            not provider.config.local
+            and not provider_profile.privacy.permits_sensitive_data
+        ):
             raise ChatPrivacyError(
-                f"provider {profile.name!r} does not permit project data, so it "
+                f"provider {provider_profile.name!r} does not permit project data, so it "
                 "cannot run subagents"
             )
         if max_active is not None and subagent_limit(max_active) is None:
@@ -3210,7 +3428,7 @@ class SubagentService:
             )
         # No key means no limit, so settings saved before limits existed match.
         return {
-            "provider_profile_id": profile.id,
+            "provider_profile_id": provider_profile.id,
             "model": model,
             **({"max_active": max_active} if max_active is not None else {}),
             **(

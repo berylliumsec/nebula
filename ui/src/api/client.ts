@@ -487,6 +487,7 @@ interface WireAssistantDefaults {
   hook_ids: string[];
   allow_subagents: boolean;
   subagent_provider_id: string | null;
+  subagent_harness_profile_id: string | null;
   subagent_model: string | null;
   max_active_subagents: number | null;
   subagent_reasoning_effort: AssistantDefaults["subagentReasoningEffort"];
@@ -2282,6 +2283,7 @@ function mapAssistantDefaults(value: WireAssistantDefaults): AssistantDefaults {
     hookIds: value.hook_ids,
     allowSubagents: value.allow_subagents,
     subagentProviderId: value.subagent_provider_id,
+    subagentHarnessId: value.subagent_harness_profile_id,
     subagentModel: value.subagent_model,
     maxActiveSubagents: value.max_active_subagents,
     subagentReasoningEffort: value.subagent_reasoning_effort,
@@ -2302,6 +2304,7 @@ const assistantDefaultWireKeys: Record<keyof AssistantDefaults, keyof WireAssist
   hookIds: "hook_ids",
   allowSubagents: "allow_subagents",
   subagentProviderId: "subagent_provider_id",
+  subagentHarnessId: "subagent_harness_profile_id",
   subagentModel: "subagent_model",
   maxActiveSubagents: "max_active_subagents",
   subagentReasoningEffort: "subagent_reasoning_effort",
@@ -3533,10 +3536,14 @@ export function chatRequestBody(
     ...(body.allowSubagents && body.subagentProviderId && body.subagentModel
       ? { subagent_provider_id: body.subagentProviderId, subagent_model: body.subagentModel }
       : {}),
+    ...(body.allowSubagents && body.subagentHarnessId && body.subagentModel
+      ? { subagent_harness_profile_id: body.subagentHarnessId, subagent_model: body.subagentModel }
+      : {}),
     ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),
     ...(body.pendingProviderSubagent ? {
       pending_provider_subagent: {
         provider_profile_id: body.pendingProviderSubagent.providerId,
+        ...(body.pendingProviderSubagent.harnessId ? { harness_profile_id: body.pendingProviderSubagent.harnessId } : {}),
         model: body.pendingProviderSubagent.model,
         ...(body.pendingProviderSubagent.maxActive ? { max_active: body.pendingProviderSubagent.maxActive } : {}),
         ...(body.pendingProviderSubagent.reasoningEffort ? { reasoning_effort: body.pendingProviderSubagent.reasoningEffort } : {}),
@@ -4094,15 +4101,15 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
  */
 function chatSessionSubagents(
   metadata: Record<string, unknown> | undefined,
-): Pick<ChatSessionSummary, "allowSubagents" | "subagentProviderId" | "subagentModel" | "subagentLimit" | "subagentReasoningEffort"> {
+): Pick<ChatSessionSummary, "allowSubagents" | "subagentProviderId" | "subagentHarnessId" | "subagentModel" | "subagentLimit" | "subagentReasoningEffort"> {
   const setting = metadata?.provider_subagent;
   const savedEffort = metadata?.subagent_reasoning_effort;
   const subagentReasoningEffort = REASONING_EFFORTS.includes(savedEffort as ReasoningEffort)
     ? savedEffort as ReasoningEffort : undefined;
   if (setting && typeof setting === "object") {
-    const { provider_profile_id: providerId, model, max_active: limit, reasoning_effort: settingEffort } = setting as Record<string, unknown>;
-    if (typeof providerId === "string" && typeof model === "string") {
-      return { allowSubagents: true, subagentProviderId: providerId, subagentModel: model, subagentLimit: subagentLimit(limit), subagentReasoningEffort: REASONING_EFFORTS.includes(settingEffort as ReasoningEffort) ? settingEffort as ReasoningEffort : subagentReasoningEffort };
+    const { provider_profile_id: providerId, harness_profile_id: harnessId, model, max_active: limit, reasoning_effort: settingEffort } = setting as Record<string, unknown>;
+    if ((typeof providerId === "string" || typeof harnessId === "string") && typeof model === "string") {
+      return { allowSubagents: true, subagentProviderId: typeof providerId === "string" ? providerId : undefined, subagentHarnessId: typeof harnessId === "string" ? harnessId : undefined, subagentModel: model, subagentLimit: subagentLimit(limit), subagentReasoningEffort: REASONING_EFFORTS.includes(settingEffort as ReasoningEffort) ? settingEffort as ReasoningEffort : subagentReasoningEffort };
     }
   }
   return { allowSubagents: metadata?.allow_subagents === true, subagentLimit: subagentLimit(metadata?.max_active_subagents), subagentReasoningEffort };
@@ -4119,6 +4126,7 @@ interface WireChatSubagent {
   child_session_id: string;
   child_turn_id?: string | null;
   provider_profile_id?: string | null;
+  harness_profile_id?: string | null;
   model?: string | null;
   capabilities?: {
     tool_names?: string[];
@@ -4162,6 +4170,7 @@ function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
     childSessionId: value.child_session_id,
     childTurnId: value.child_turn_id ?? undefined,
     providerProfileId: value.provider_profile_id ?? undefined,
+    harnessProfileId: value.harness_profile_id ?? undefined,
     model: value.model ?? undefined,
     capabilities: value.capabilities ? {
       toolNames: value.capabilities.tool_names,
@@ -9142,6 +9151,7 @@ export class ApiClient {
           ...(body.allowAgentMessaging !== undefined ? { allow_agent_messaging: body.allowAgentMessaging } : {}),
           ...(body.maxActiveSubagents !== undefined ? { max_active_subagents: body.maxActiveSubagents } : {}),
           ...(body.subagentProviderId ? { subagent_provider_id: body.subagentProviderId } : {}),
+          ...(body.subagentHarnessId ? { subagent_harness_profile_id: body.subagentHarnessId } : {}),
           ...(body.subagentModel ? { subagent_model: body.subagentModel } : {}),
           ...(body.subagentReasoningEffort !== undefined ? { subagent_reasoning_effort: body.subagentReasoningEffort } : {}),
           expected_revision: body.expectedRevision,

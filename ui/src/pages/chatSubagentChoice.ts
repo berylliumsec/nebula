@@ -7,6 +7,7 @@ export interface ComposerSubagentChoice {
   /** Harness chats: the chosen provider model passed the tool check, so this turn can use it. */
   ready: boolean;
   providerId: string;
+  harnessId?: string;
   model: string;
   /** How many subagents may run at once; absent means no limit. */
   limit?: number;
@@ -15,7 +16,7 @@ export interface ComposerSubagentChoice {
 
 type SubagentRequestFields = Pick<
   ChatCompletionRequest,
-  "allowSubagents" | "subagentProviderId" | "subagentModel" | "maxActiveSubagents" | "pendingProviderSubagent" | "subagentReasoningEffort"
+  "allowSubagents" | "subagentProviderId" | "subagentHarnessId" | "subagentModel" | "maxActiveSubagents" | "pendingProviderSubagent" | "subagentReasoningEffort"
 >;
 
 /**
@@ -31,11 +32,11 @@ export function subagentRequestFields(runtimeKind: "provider" | "harness", choic
     return { allowSubagents: choice.enabled, maxActiveSubagents: choice.enabled ? choice.limit : undefined, subagentReasoningEffort: choice.enabled ? choice.reasoningEffort : undefined };
   }
   if (choice.enabled && choice.ready) {
-    return { allowSubagents: true, subagentProviderId: choice.providerId, subagentModel: choice.model, maxActiveSubagents: choice.limit, subagentReasoningEffort: choice.reasoningEffort };
+    return { allowSubagents: true, ...(choice.harnessId ? { subagentHarnessId: choice.harnessId } : { subagentProviderId: choice.providerId }), subagentModel: choice.model, maxActiveSubagents: choice.limit, subagentReasoningEffort: choice.reasoningEffort };
   }
   if (!choice.enabled) return { allowSubagents: false };
   return {
     allowSubagents: false,
-    pendingProviderSubagent: { providerId: choice.providerId, model: choice.model, maxActive: choice.limit, reasoningEffort: choice.reasoningEffort },
+    pendingProviderSubagent: { providerId: choice.harnessId ? "" : choice.providerId, ...(choice.harnessId ? { harnessId: choice.harnessId } : {}), model: choice.model, maxActive: choice.limit, reasoningEffort: choice.reasoningEffort },
   };
 }

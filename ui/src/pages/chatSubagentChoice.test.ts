@@ -20,6 +20,15 @@ describe("the subagent fields a message carries", () => {
     });
   });
 
+  it("sends a selected harness as the child runtime", () => {
+    expect(subagentRequestFields("harness", { ...choice, providerId: "", harnessId: "codex", model: "gpt-test" })).toMatchObject({
+      allowSubagents: true, subagentHarnessId: "codex", subagentModel: "gpt-test",
+    });
+    expect(subagentRequestFields("harness", { ...choice, providerId: "", harnessId: "codex", model: "gpt-test", ready: false }).pendingProviderSubagent).toMatchObject({
+      harnessId: "codex", model: "gpt-test",
+    });
+  });
+
   it("carries a harness choice still being verified for Core to remember, without using it", () => {
     expect(subagentRequestFields("harness", { ...choice, ready: false })).toEqual({
       allowSubagents: false,
