@@ -5549,16 +5549,20 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   // Hold the network response: preview visibility must not depend on a timer.
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
-  await expect(page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true})).toBeAttached();
+  const readingAnchor = page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true});
+  await expect(readingAnchor).toBeAttached();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
+  const readingAnchorTop = await readingAnchor.evaluate(element => element.getBoundingClientRect().top);
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
   await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeEnabled();
   await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Unsent source draft");
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
   freshSource = true;
   releaseRefresh(); refreshGate = undefined;
-  await expect(page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true})).toBeAttached();
-  await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
+  await expect(readingAnchor).toBeAttached();
+  // WebKit may adjust scrollTop as the syncing notice is removed. The reader's
+  // place is the message's viewport position, not the container pixel offset.
+  await expect.poll(async () => Math.abs(await readingAnchor.evaluate(element => element.getBoundingClientRect().top) - readingAnchorTop)).toBeLessThanOrEqual(4);
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
 

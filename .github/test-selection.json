@@ -1,20 +1,22 @@
 {
-  "change_digest": "d1c29ed2f9c458cc6dde2a7210353ca4d1172ac6292db8c4e9a015e73b9aa845",
-  "reviewed_by": "Codex review of failed 3.0.4 release WebKit policy journey",
-  "reason": "The 3.0.4 release preparation failed the project authorization mode journey on wide mobile WebKit after retries because Playwright's direct radio and checkbox control clicks did not leave the controls selected during scrolling. The test now taps the visible label text, which matches the operator interaction, and asserts both resulting states. Run this exact journey on desktop, small mobile Chromium, and wide mobile WebKit.",
-  "exclusions": "Only a Playwright interaction changed. Python, frontend unit, native, unrelated browser journeys, and full suites are excluded. Mobile browsers are emulated; physical-device evidence is unavailable.",
+  "change_digest": "3e48d218cd9784fdb60f16273875bb21e19dd0d0335be49c508f0ef529e44b35",
+  "reviewed_by": "Codex review of failed 3.0.5 release conversation scroll journey",
+  "reason": "The 3.0.5 release preparation failed the wide mobile WebKit conversation switch journey after all retries. A diagnostic run measuring message viewport position reproduced a 120 px shift. The syncing status was a flex sibling that narrowed the transcript, so it is now positioned without changing transcript geometry. A second diagnostic found the mobile Conversations drawer shrank the transcript viewport to 26 px while its scroll position was still treated as visible; scroll events under the drawer are ignored and the last visible position is cached. The browser assertion checks the reader's visible position across authoritative refresh. Run desktop, compact, small mobile Chromium, wide mobile WebKit, and the real Core conversation switch journey.",
+  "exclusions": "Python, frontend unit, native, unrelated browser journeys, and full suites are excluded. Mobile browsers are emulated; physical-device evidence is unavailable.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 5
   },
   "python": [],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:project-runtime-policy/desktop",
-    "entry:project-runtime-policy/mobile-chromium-small",
-    "entry:project-runtime-policy/mobile-webkit-wide"
+    "entry:conversation-switch-performance/desktop",
+    "entry:conversation-switch-performance/compact",
+    "entry:conversation-switch-performance/mobile-chromium-small",
+    "entry:conversation-switch-performance/mobile-webkit-wide",
+    "entry:conversation-switch-performance/assistant-real-desktop"
   ]
 }

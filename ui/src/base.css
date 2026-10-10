@@ -406,6 +406,7 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .chat-harness-mcp > span { color: var(--text); white-space: nowrap; }
 .chat-harness-mcp > small { color: var(--muted); font-size: 11px; }
 .chat-thread { position: relative; display: flex; min-height: 0; flex: 1; }
+.chat-thread > .chat-syncing { position: absolute; z-index: 2; top: 8px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); margin: 0; padding: 6px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-raised); pointer-events: none; }
 .chat-scroll { min-height: 0; flex: 1; padding: 25px 30px; overflow-y: auto; overflow-anchor: none; }
 .chat-scroll-jump { position: sticky; z-index: 2; display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--text-strong); background: var(--surface-raised); box-shadow: none; cursor: pointer; }
 .chat-scroll-jump:hover { border-color: var(--blue); color: var(--blue); }
