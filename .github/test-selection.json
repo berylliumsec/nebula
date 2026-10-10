@@ -1,5 +1,5 @@
 {
-  "change_digest": "fc245ef3f08298536bf2be6e4ea516e8ac471459744c6bac65e56c4ced1ae572",
+  "change_digest": "4e77b56d6449a85f1fcacc7eba386ca98e27b2569f8d3825ca096d29d97e0153",
   "reviewed_by": "Codex focused review of Grok harness deletion",
   "reason": "Two exact Core API tests cover bounded reference checks and rejection when history still uses a harness. Eighteen collected HarnessSettings component cases cover confirmation, inline conflict, retry, and adjacent settings. Eight catalogued desktop and mobile browser entries exercise conflict, retry, removal, and reachable 44 px actions through Settings. Three real-Core production LAN entries cover the durable conflict and removal through the UI and reload. The changed release-live case was collected to review disposable fixture cleanup.",
   "exclusions": "No native behavior changed and unrelated suites are excluded. The one release-live case requires an explicit deployed candidate, private token, and release origin, so it is collected but not run in PR CI. Physical-device testing is unavailable; selected mobile browser projects are emulated.",
