@@ -108,6 +108,28 @@ def next_stable_version(tag: str) -> str:
     return f"{major}.{minor}.{int(patch) + (0 if prerelease else 1)}"
 
 
+def available_stable_version(previous_tag: str) -> str:
+    """Never reuse an immutable tag left by a failed release attempt."""
+    version = next_stable_version(previous_tag)
+    for _ in range(20):
+        tag = f"nebula-v{version}"
+        tagged = run("git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}")
+        released = run("gh", "release", "view", tag, "--repo", REPOSITORY, check=False)
+        if not tagged and not released:
+            return version
+        print(f"Skipping reserved immutable release version {version}", flush=True)
+        version = next_stable_version(tag)
+    raise RuntimeError("No available stable version in the next 20 versions")
+
+
+def require_current_main() -> None:
+    current = gh_json(f"repos/{REPOSITORY}/commits/main")["sha"]
+    if current != MAIN_SHA:
+        raise RuntimeError(
+            f"Main advanced from {MAIN_SHA} to {current}; leave this candidate unpublished"
+        )
+
+
 def green_main() -> None:
     runs = gh_json(
         f"repos/{REPOSITORY}/actions/workflows/ci.yml/runs"
@@ -343,12 +365,9 @@ def main() -> None:
     selection, review_reason = preflight_impact(previous_source, MAIN_SHA)
     run("gh", "attestation", "verify", "--help")
 
-    version = next_stable_version(previous_tag)
+    version = available_stable_version(previous_tag)
     tag = f"nebula-v{version}"
-    if run("git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"):
-        raise RuntimeError(f"Existing tag {tag} needs release manager recovery")
-    if run("gh", "release", "view", tag, "--repo", REPOSITORY, check=False):
-        raise RuntimeError(f"Existing release {tag} needs release manager recovery")
+    require_current_main()
 
     run("git", "config", "user.name", "github-actions[bot]")
     run(
@@ -486,6 +505,7 @@ def main() -> None:
         raise RuntimeError("Draft metadata is not the expected stable release")
     if published_release()["tag_name"] != previous_tag:
         raise RuntimeError("Another Nebula release was published during preparation")
+    require_current_main()
     updater_started = datetime.now(timezone.utc).replace(microsecond=0)
     publish_release(tag)
     updater_commit = gh_json(f"repos/{REPOSITORY}/commits/main")["sha"]

@@ -382,11 +382,16 @@ def release_driver(tmp_path, monkeypatch):
         calls.append((args, _kwargs))
         if state.get("error_predicate", lambda _args: False)(args):
             raise RuntimeError("simulated uncertain command failure")
-        if args[:3] == ("git", "ls-remote", "--tags") and state.get("existing_tag"):
+        if (
+            args[:3] == ("git", "ls-remote", "--tags")
+            and args[-1] == "refs/tags/nebula-v3.0.0"
+            and state.get("existing_tag")
+        ):
             return "c" * 40
         if (
             args[:3] == ("gh", "release", "view")
             and "--json" not in args
+            and args[3] == "nebula-v3.0.0"
             and state.get("existing_release")
         ):
             return "existing release"
@@ -406,7 +411,7 @@ def release_driver(tmp_path, monkeypatch):
             return "b123 focused change"
         if args[:3] == ("gh", "release", "view") and "--json" in args:
             return json.dumps(
-                {"isDraft": True, "isPrerelease": False, "tagName": "nebula-v3.0.0"}
+                {"isDraft": True, "isPrerelease": False, "tagName": args[3]}
             )
         return ""
 
@@ -421,7 +426,7 @@ def release_driver(tmp_path, monkeypatch):
                     }
                 ]
             }
-        return {"sha": "b" * 40}
+        return {"sha": ("d" if state["advanced"] else "b") * 40}
 
     @contextmanager
     def app_token(_permission):
@@ -664,11 +669,25 @@ def test_default_children_exclude_key_and_privileged_children_get_only_lease(
 
 
 @pytest.mark.parametrize("existing", ["existing_tag", "existing_release"])
-def test_retry_never_recreates_existing_release_state(release_driver, existing):
+def test_reserved_version_advances_without_reusing_immutable_tag(release_driver, existing):
     release_driver.state[existing] = True
-    with pytest.raises(RuntimeError, match="release manager recovery"):
+    daily.main()
+    assert any(command[:4] == ("git", "tag", "-a", "nebula-v3.0.1") for command in release_driver.commands)
+    release_driver.assets.assert_called_once_with(101, "3.0.1")
+
+
+def test_main_advancing_during_preparation_prevents_publication(release_driver):
+    def advance_after_preparation(run_id, *_args):
+        if run_id == 101:
+            release_driver.state["advanced"] = True
+
+    release_driver.assets.side_effect = advance_after_preparation
+    with pytest.raises(RuntimeError, match="leave this candidate unpublished"):
         daily.main()
-    assert_no_release_mutations(release_driver)
+    assert not any(
+        command[:3] == ("gh", "release", "edit")
+        for command in release_driver.commands
+    )
 
 
 @pytest.mark.parametrize(
