@@ -1681,7 +1681,8 @@
       {"area":"terminal-assistant","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"Terminal opens Assistant beside the live shell|Assistant opens the live terminal beside the chat","runtime":"mock","shard":"1/1"}
     ],
     "core-api": [
-      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core-sandbox","shard":"1/1"}
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core-sandbox","shard":"1/2"},
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core-sandbox","shard":"2/2"}
     ],
     "themes": [
       {"area":"themes","project":"desktop","test_match":"tests/interface.spec.ts","grep":"theme","runtime":"mock","shard":"1/1"},
