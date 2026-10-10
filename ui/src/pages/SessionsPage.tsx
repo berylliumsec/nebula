@@ -3522,15 +3522,17 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (previewOwnerRef.current === sessionId && !loadingHistory && sessionReadReady) {
       const durable = messages.filter(message => message.durable);
       const durableIds = new Set(durable.map(message => message.id));
-      // Mobile hides the transcript while Conversations is open; its DOM offset
-      // is then zero. Retain the last visible reading position instead.
+      // The mobile Conversations drawer can shrink the transcript viewport to
+      // a few pixels without making its clientHeight zero. Keep the last
+      // reading position from before the drawer covered the transcript.
       const viewport = chatViewportRef.current;
       const lastPosition = chatReadingPositionRef.current.sessionId === sessionId ? chatReadingPositionRef.current : undefined;
+      const visibleViewport = !mobileListOpen && Boolean(viewport?.clientHeight);
       chatPreviews.set(sessionId, {
         messages: durable,
         toolCards: toolCards.filter(card => durableIds.has(card.assistantId)),
-        scrollTop: viewport?.clientHeight ? viewport.scrollTop : lastPosition?.scrollTop ?? 0,
-        followBottom: viewport?.clientHeight ? chatFollowBottomRef.current : lastPosition?.followBottom ?? true,
+        scrollTop: visibleViewport ? viewport!.scrollTop : lastPosition?.scrollTop ?? 0,
+        followBottom: visibleViewport ? chatFollowBottomRef.current : lastPosition?.followBottom ?? true,
       });
     }
     const preview = chatPreviews.get(id);
@@ -6052,7 +6054,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     aria-live="polite"
                     onScroll={(event) => {
                       const viewport = event.currentTarget;
-                      if (!viewport.clientHeight) return;
+                      if (!viewport.clientHeight || mobileListOpen) return;
                       if (chatScrollJumpRef.current === "turn") alignCurrentTurn();
                       const geometry = {scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, clientHeight: viewport.clientHeight};
                       const jump = chatScrollJumpRef.current;
