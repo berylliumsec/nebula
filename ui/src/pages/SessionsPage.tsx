@@ -20,6 +20,7 @@ import { RefreshCw } from "lucide-react";
 import { ChatEvidence } from "../components/ChatEvidence";
 import { useChatQueue } from "./useChatQueue";
 import { newEditorBufferId, useAdoptWorkbenchEditorSession } from "../state/WorkbenchEditorContext";
+import { readStorage, writeStorage } from "../state/browserStorage";
 import { adoptNotePanelState } from "../components/NotesPanel";
 import { ChatQueuePanel } from "../components/ChatQueuePanel";
 import { estimateTokensFromBytes, ProviderGoalPanel, utf8Length, type ProviderGoalDraft } from "../components/ProviderGoalPanel";
@@ -1194,7 +1195,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     updateSearchParams(params => {
       const previousId = params.get("session") ?? "";
       if (!embeddedSideChat && !previousId) {
-        adoptEditorSession(draftEditorKey, id);
+        adoptEditorSession(editorDraftSessionKey, id);
         if (engagement) adoptNotePanelState(`${engagement.id}:${draftEditorKey}`, `${engagement.id}:${id}`);
         if (params.get("side")) rememberChatSide(id, params.get("side") as ChatSide);
         if (params.get("companion") === "full") rememberCompanionExpanded(id, true);
@@ -1253,6 +1254,16 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     uploadEvidence,
     updateObservation,
   } = useWorkspace();
+  // The editor's IndexedDB recovery is keyed by this draft identity. Keep the
+  // identity through reloads and scope it to the project workspace.
+  const editorDraftStorageKey = engagement ? `nebula.editor.draft-key.${engagement.id}` : "";
+  const activeEditorDraftKey = useMemo(() => editorDraftStorageKey
+    ? readStorage(editorDraftStorageKey) || draftEditorKey
+    : draftEditorKey, [draftEditorKey, editorDraftStorageKey]);
+  const editorDraftSessionKey = engagement ? `${engagement.id}:${activeEditorDraftKey}` : activeEditorDraftKey;
+  useEffect(() => {
+    if (editorDraftStorageKey) writeStorage(editorDraftStorageKey, activeEditorDraftKey);
+  }, [activeEditorDraftKey, editorDraftStorageKey]);
   const assistantDefaultsRef = useRef<{ projectId: string; value: AssistantDefaults } | undefined>(undefined);
   const assistantDefaultsSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const assistantDefaultsGenerationRef = useRef(0);
@@ -2819,7 +2830,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
 
   const newConversation = () => {
-    setDraftEditorKey(newEditorBufferId());
+    const nextDraftEditorKey = newEditorBufferId();
+    if (editorDraftStorageKey) writeStorage(editorDraftStorageKey, nextDraftEditorKey);
+    setDraftEditorKey(nextDraftEditorKey);
     setResolvedApproval(undefined);
     // URL navigation and state updates are committed on separate React turns.
     // Suppress the old URL session during that gap so it cannot immediately
@@ -6394,7 +6407,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           </div>}
           {api && engagement && <div ref={(element) => { sideSize.panelRef.current = element; }} id="chat-side-code" role={chatSideVisible && sideView === "code" ? "region" : undefined} aria-label={chatSideVisible && sideView === "code" ? "Code beside chat" : undefined} className={`persistent-code-editor${chatSideVisible && sideView === "code" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "code" ? sideSize.panelStyle : undefined} hidden={view !== "code" && !(chatSideVisible && sideView === "code")}>
             {chatSideVisible && sideView === "code" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Code editor</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Code editor to side" : "Expand Code editor in chat"} title={companionExpanded ? "Return Code editor to side" : "Expand Code editor in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Code editor" title="Hide Code editor" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
-            <Suspense fallback={<LoadingSurface label="Loading code editor" />}><CodeEditorPanel key={sessionId || draftEditorKey} active={view === "code" || (chatSideVisible && sideView === "code")} api={api} engagementId={engagement.id} editorSessionKey={sessionId || draftEditorKey} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get("openFile") ?? undefined} initialOpenLine={Number(searchParams.get("openLine")) || undefined} initialOpenRequest={searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>
+            <Suspense fallback={<LoadingSurface label="Loading code editor" />}><CodeEditorPanel key={`${engagement.id}:${sessionId || activeEditorDraftKey}`} active={view === "code" || (chatSideVisible && sideView === "code")} api={api} engagementId={engagement.id} editorSessionKey={sessionId || editorDraftSessionKey} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get("openFile") ?? undefined} initialOpenLine={Number(searchParams.get("openLine")) || undefined} initialOpenRequest={searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>
 
           </div>}
           {api && engagement && <div ref={(element) => { if (sideView === "browser") sideSize.panelRef.current = element; }} id="chat-side-browser" role={chatSideVisible && sideView === "browser" ? "region" : undefined} aria-label={chatSideVisible && sideView === "browser" ? "Browser beside chat" : undefined} className={`persistent-browser integrated-browser-layout${browserAssistantOpen && view === "browser" ? " assistant-open" : ""}${chatSideVisible && sideView === "browser" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "browser" ? sideSize.panelStyle : undefined} hidden={view !== "browser" && !(chatSideVisible && sideView === "browser")}>

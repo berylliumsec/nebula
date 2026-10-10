@@ -1626,6 +1626,12 @@
       {"area":"zero-responsive-shell","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"Zero keeps one navigable panoramic shell at every breakpoint","runtime":"mock","shard":"1/1"},
       {"area":"zero-responsive-shell","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"Zero keeps one navigable panoramic shell at every breakpoint","runtime":"mock","shard":"1/1"}
     ],
+    "release-ui-stragglers": [
+      {"area":"release-ui-stragglers","project":"desktop","test_match":"tests/interface.spec.ts","grep":"the 320px mobile companion keeps controls visible|an idle resumed harness keeps routine telemetry quiet","runtime":"mock","shard":"1/1"}
+    ],
+    "release-core-lifecycle": [
+      {"area":"release-core-lifecycle","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade focused work surfaces retain real Core project context|assistant upgrade mobile Code keeps its controls readable|assistant upgrade edits a sent message in place|assistant upgrade large side chat opens|stabilization real Core keeps the Subagents choice|assistant upgrade real Core shows the live queue position|assistant upgrade real Core keeps a subagent wait attached","runtime":"real-core","shard":"1/1"}
+    ],
     "project-lifecycle": [
       {"area":"project-lifecycle","project":"desktop","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
       {"area":"project-lifecycle","project":"compact","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
