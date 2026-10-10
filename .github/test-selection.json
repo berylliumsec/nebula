@@ -1,38 +1,16 @@
 {
-  "change_digest": "4e77b56d6449a85f1fcacc7eba386ca98e27b2569f8d3825ca096d29d97e0153",
-  "reviewed_by": "Codex focused review of Grok harness deletion",
-  "reason": "Two exact Core API tests cover bounded reference checks and rejection when history still uses a harness. Eighteen collected HarnessSettings component cases cover confirmation, inline conflict, retry, and adjacent settings. Eight catalogued desktop and mobile browser entries exercise conflict, retry, removal, and reachable 44 px actions through Settings. Three real-Core production LAN entries cover the durable conflict and removal through the UI and reload. The changed release-live case was collected to review disposable fixture cleanup.",
-  "exclusions": "No native behavior changed and unrelated suites are excluded. The one release-live case requires an explicit deployed candidate, private token, and release origin, so it is collected but not run in PR CI. Physical-device testing is unavailable; selected mobile browser projects are emulated.",
+  "change_digest": "d7cf8b73963c1ce33eae2673b414941590f1ff18fa74fc74522fb4e4157de401",
+  "reviewed_by": "Codex review of failed 3.0.6 disposable Core release runner",
+  "reason": "The 3.0.6 release preparation passed 195 jobs but the unsharded disposable real Core job exhausted its hosted runner disk during the Kali human-workstation build. The first sharded attempt still exhausted disk with 106 GiB initially available, consistent with rootless vfs layer copying. The core-api catalog splits the same 92 real Core cases into two 46-case shards. The workflow now requires a fresh rootless fuse-overlayfs store, retains one worker per runner, removes unused SDKs and host APT downloads, and records final disk use. Run the catalog tests and both sandbox shards to verify complete selection and image preparation without reducing Core coverage.",
+  "exclusions": "No product UI or Core source changed. Frontend unit, native, unrelated browser journeys, and full suites are excluded. This selects one complete real Core test file across two shards as the exact failed integration boundary.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 18,
+    "python": 34,
+    "frontend": 0,
     "native": 0,
-    "playwright": 11
+    "playwright": 92
   },
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_api.py::test_harness_delete_checks_only_entities_that_can_reference_it",
-    "tests/v3/test_api.py::test_harness_delete_preserves_profile_when_session_references_it"
-  ],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx"
-  ],
+  "python": ["tests/test_playwright_impact.py"],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:harness-delete/desktop",
-    "entry:harness-delete/compact",
-    "entry:harness-delete/mobile-chromium-small",
-    "entry:harness-delete/mobile-chromium-ledger-390",
-    "entry:harness-delete/mobile-chromium-wide",
-    "entry:harness-delete/mobile-webkit-small",
-    "entry:harness-delete/mobile-webkit",
-    "entry:harness-delete/mobile-webkit-wide",
-    "entry:harness-delete-core/assistant-real-desktop",
-    "entry:harness-delete-core/assistant-real-chromium-390",
-    "entry:harness-delete-core/assistant-real-webkit-390"
-  ]
+  "playwright": ["entry:core-api/real-core"]
 }

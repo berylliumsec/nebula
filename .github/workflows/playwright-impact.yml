@@ -142,10 +142,26 @@ jobs:
         run: |
           # Hosted runners carry large SDKs this job never uses. Reclaim their
           # space before pulling and extending the Kali runtime image.
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/share/powershell /opt/az /usr/share/swift
           df -h /
           sudo apt-get update
           sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          df -h /
+          # Use a fresh overlay store. The hosted runner's existing rootless
+          # store can select vfs, which copies Kali layers until the disk fills.
+          mkdir -p "$HOME/.config/containers"
+          cat > "$HOME/.config/containers/storage.conf" <<EOF
+          [storage]
+          driver = "overlay"
+          graphroot = "$RUNNER_TEMP/nebula-podman-storage"
+          [storage.options.overlay]
+          mount_program = "/usr/bin/fuse-overlayfs"
+          EOF
+          podman info --format '{{.Store.GraphDriverName}}' | grep -Fx overlay
+          podman info --format '{{.Store.GraphRoot}} {{.Store.GraphOptions}}'
           podman info --format '{{.Host.Security.Rootless}}' | grep -Fx true
           podman pull docker.io/kalilinux/kali-rolling:latest
           runner_uid="$(id -u)"
@@ -177,9 +193,18 @@ jobs:
         run: |
           args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
           if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
+          # This selected Core file is monolithic. Without fully-parallel
+          # collection Playwright assigns all its tests to shard 1, leaving
+          # shard 2 empty even though each runner still uses one worker.
+          if test "$PROJECT" = real-core && test "$TEST_SHARD" != 1/1; then
+            args+=(--fully-parallel)
+          fi
           # Listing is cheap and records the actual selected tests/count before running.
           npm --prefix ui run test:e2e -- "${args[@]}" --list
           npm --prefix ui run test:e2e -- "${args[@]}"
+      - name: Report disposable runner storage
+        if: always() && matrix.runtime == 'real-core-sandbox'
+        run: df -h /
       - name: Retain browser failure and retry evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
