@@ -1312,7 +1312,7 @@ async function runAssistantGuideTour(page: Page, testInfo: TestInfo, selectedGui
         }
         if (title === "Run the assistant’s commands beside the chat" && await card.getByRole("heading", {name: "Open the terminal", exact: true}).isVisible()) {
           const phone = (page.viewportSize()?.width ?? 1440) < 768;
-          const target = phone ? page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Terminal", exact: true}) : page.getByRole("button", {name: "Show terminal", exact: true});
+          const target = phone ? page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Terminal", exact: true}) : page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Terminal/});
           await expect(target).toBeVisible();
           await expect(target).toHaveAttribute("data-guide", "terminal-toggle");
           const bounds = await target.boundingBox();
