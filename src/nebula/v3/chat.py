@@ -489,6 +489,7 @@ class PendingProviderSubagent(NebulaModel):
     """
 
     provider_profile_id: str = Field(default="", max_length=200)
+    harness_profile_id: str | None = Field(default=None, max_length=200)
     model: str = Field(default="", max_length=500)
     max_active: int | None = Field(default=None, ge=1, le=SUBAGENT_LIMIT_CEILING)
     reasoning_effort: ReasoningEffort | None = None
@@ -626,6 +627,7 @@ class ChatCompletionRequest(NebulaModel):
     # Harness chats: the provider model their subagents run on. Provider chats
     # ignore these; their children share the chat's own model.
     subagent_provider_id: str | None = Field(default=None, max_length=200)
+    subagent_harness_profile_id: str | None = Field(default=None, max_length=200)
     subagent_model: str | None = Field(default=None, max_length=500)
     # Harness chats: the operator checked Subagents on a model still being
     # verified, so this turn runs without them. Core remembers the choice on
@@ -653,12 +655,16 @@ class ChatCompletionRequest(NebulaModel):
     stream: bool = False
 
     def harness_provider_subagent(self) -> dict[str, Any] | None:
-        """The provider subagent model a harness chat turn asks for, if any."""
+        """The selected child runtime for a harness chat turn, if any."""
 
         if not self.allow_subagents:
             return None
         return {
-            "provider_profile_id": self.subagent_provider_id or "",
+            **(
+                {"harness_profile_id": self.subagent_harness_profile_id}
+                if self.subagent_harness_profile_id
+                else {"provider_profile_id": self.subagent_provider_id or ""}
+            ),
             "model": self.subagent_model or "",
             **(
                 {"reasoning_effort": self.subagent_reasoning_effort}
