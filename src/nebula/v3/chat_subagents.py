@@ -4734,10 +4734,34 @@ class SubagentService:
         # repaired without duplicating a message or usage debit.
         # Only readable records, and each fails alone: one bad row must not
         # keep Core from starting or the other rounds from settling.
-        for record in self.store.iter_readable_entities(
-            ChatSubagent,
-            {"status": [status.value for status in CHAT_SUBAGENT_TERMINAL_STATUSES]},
-        ):
+        records = list(self.store.iter_readable_entities(ChatSubagent))
+        child_session_ids = {record.child_session_id for record in records}
+        pending_parent_ids = {
+            message.parent_session_id
+            for message in self.store.iter_readable_entities(
+                ChatSubagentMessage,
+                {
+                    "direction": ChatSubagentMessageDirection.TO_PARENT.value,
+                    "status": ChatSubagentMessageStatus.PENDING.value,
+                },
+            )
+        }
+        for record in records:
+            if record.status not in CHAT_SUBAGENT_TERMINAL_STATUSES:
+                continue
+            # A posted root-child report with no unfinished goal charge or
+            # message has nothing to repair. Replaying delivery for every such
+            # historical child scans all siblings repeatedly on large stores.
+            # Nested children still need ancestor propagation, and interrupted
+            # children may carry a restart recovery marker.
+            if (
+                record.status != ChatSubagentStatus.INTERRUPTED
+                and record.result_message_id is not None
+                and record.pending_goal_charge_turn_id is None
+                and record.parent_session_id not in child_session_ids
+                and record.parent_session_id not in pending_parent_ids
+            ):
+                continue
             try:
                 await self._repair_settled_after_restart(record)
             except Exception as exc:
