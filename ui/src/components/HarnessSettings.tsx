@@ -84,6 +84,7 @@ export function HarnessSettings() {
   const [sessionCredential, setSessionCredential] = useState(false);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const [deleteError, setDeleteError] = useState<{ id: string; message: string }>();
 
   const [catalogError, setCatalogError] = useState<string>();
   const reload = useCallback(async (isActive: () => boolean = () => true) => {
@@ -110,13 +111,22 @@ export function HarnessSettings() {
       confirmLabel: "Delete harness",
       tone: "danger",
     })) return;
+    setDeleteError(undefined);
     setBusy(profile.id);
     try {
       await api?.deleteHarness(profile.id, profile.revision);
+      setHarnesses(current => current.filter(item => item.id !== profile.id));
       await reload();
+      announceSettingsSaved(`Harness “${profile.name}” deleted.`);
     } catch (actionError) {
       void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings");
-      setError(actionError instanceof Error ? actionError.message : "Delete failed.");
+      const detail = actionError instanceof Error ? actionError.message : "Delete failed.";
+      setDeleteError({
+        id: profile.id,
+        message: detail.includes("still referenced by")
+          ? "Saved conversations or missions still use this harness. Remove those records before retrying, or disable the harness to stop new use."
+          : detail,
+      });
     } finally {
       setBusy(undefined);
     }
@@ -419,7 +429,7 @@ export function HarnessSettings() {
       <div className="section-heading"><div><h2>Agent harnesses</h2><p>Add a named profile for each Codex or Grok account.</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
       {catalogError && <div role="status"><p>{catalogError}</p><button className="button quiet" type="button" onClick={() => void reload()}>Retry catalogs</button></div>}
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
-      {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card" key={profile.id}>
+      {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card harness-settings-card" key={profile.id}>
         <header className="integration-card-heading"><span className={`status-dot ${profile.enabled ? profile.healthy ? "healthy" : "warning" : "unavailable"}`} /><div><small>{profile.kind === "grok_acp" ? "Grok Build · ACP" : "Codex App Server"}</small><h3>{profile.name}</h3></div></header>
         <p className="integration-card-summary">{profile.detail ?? `${profile.connectionMode} · ${profile.transport}${profile.transport === "websocket" ? " · experimental" : ""}`}</p>
         <p className="integration-card-summary" role="status">Sign-in: {profile.authenticationState ?? "unverified"} · Session: {profile.sessionState ?? "unverified"} · Model turn: {profile.turnState ?? "unverified"}{profile.lastSuccessfulTurnAt ? ` · Last success ${new Date(profile.lastSuccessfulTurnAt).toLocaleString()}` : ""}{profile.lastTurnFailureReason ? ` · ${profile.lastTurnFailureReason.replaceAll("_", " ")}` : ""}</p>
@@ -435,6 +445,8 @@ export function HarnessSettings() {
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.subagents} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { subagents: event.target.checked })} /><span><strong>Subagents</strong><small>Delegated analysis in the bounded session.</small></span></label>
         </details>
         <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void checkSavedHarness(profile).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><button className="button quiet" type="button" title="Runs a small real model turn and uses provider quota" disabled={busy === profile.id || !profile.enabled} onClick={() => void testSavedHarness(profile)}>Test turn</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} title="Edit harness" type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} title="Delete harness" type="button" disabled={busy === profile.id} onClick={() => void removeHarness(profile)}><Trash2 size={14} /></button></div></footer>
+        {busy === profile.id && <p role="status" className="integration-card-summary">Working on this harness…</p>}
+        {deleteError?.id === profile.id && <div role="alert" className="integration-card-summary"><p>{deleteError.message}</p><button className="button quiet" type="button" onClick={() => void removeHarness(profile)}>Retry delete</button></div>}
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings" data-guide="mcp-settings">
