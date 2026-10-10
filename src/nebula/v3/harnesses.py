@@ -589,13 +589,13 @@ def _gateway_subagent_tools(
     wait_default, wait_max = _subagent_wait_limits(kind)
     return {
         "subagent.capabilities": (
-            "List exact tool names, enabled MCP servers, project lifecycle hooks and available skills a provider subagent may be assigned.",
+            "List the child runtime and the capabilities this conversation may assign to its subagents.",
             {"type": "object", "properties": {}, "additionalProperties": False},
         ),
         "subagent.start": (
             "Delegate one independent, multi-step task to a parallel subagent on the "
-            "Nebula provider model chosen for this conversation. It uses this "
-            "project's command runtime and MCP servers, cannot see this "
+            "runtime and model chosen for this conversation. It uses this "
+            "project's permitted tools and MCP servers, cannot see this "
             "conversation, and returns immediately with its id. Pass "
             "reasoning_effort for this task, or omit it for the model default. "
             "An operator effort setting overrides this choice.",
@@ -659,14 +659,14 @@ def _gateway_subagent_tools(
             },
         ),
         "subagent.list": (
-            "List this conversation's provider subagents with their status, their "
+            "List this conversation's subagents with their status, their "
             "messages to you and any report you have not received.",
             {"type": "object", "properties": {}, "additionalProperties": False},
         ),
         "subagent.message": (
-            "Send one of your provider subagents a message: new instructions, a "
-            "correction or the answer to its question. A running subagent reads "
-            "it before its next step; a finished one starts another round with it.",
+            "Send one of your subagents new instructions or a correction. A "
+            "running harness child receives a steer when supported; a finished "
+            "child starts another round with the message.",
             {
                 "type": "object",
                 "properties": {
@@ -683,7 +683,7 @@ def _gateway_subagent_tools(
             },
         ),
         "subagent.stop": (
-            "Stop a running provider subagent.",
+            "Stop a running subagent.",
             {
                 "type": "object",
                 "properties": {"subagent_id": {"type": "string", "maxLength": 200}},
@@ -717,12 +717,19 @@ def _session_provider_subagent(session: HarnessSession) -> dict[str, Any] | None
     if not isinstance(setting, dict):
         return None
     provider_id = setting.get("provider_profile_id")
+    harness_id = setting.get("harness_profile_id")
     model = setting.get("model")
-    if not isinstance(provider_id, str) or not isinstance(model, str):
+    if not (
+        isinstance(provider_id, str) or isinstance(harness_id, str)
+    ) or not isinstance(model, str):
         return None
     limit = subagent_limit(setting.get("max_active"))
     return {
-        "provider_profile_id": provider_id,
+        **(
+            {"harness_profile_id": harness_id}
+            if isinstance(harness_id, str)
+            else {"provider_profile_id": provider_id}
+        ),
         "model": model,
         **({"max_active": limit} if limit is not None else {}),
     }
@@ -883,6 +890,7 @@ def _harness_developer_instructions(
                 _subagent_wait_limits(_VENDOR_HARNESS_KINDS.get(vendor))[0],
                 provider_subagent.get("max_active"),
                 provider_subagent.get("reasoning_effort"),
+                provider_subagent.get("harness_profile_id"),
             )
             if provider_subagent
             and any(
@@ -9854,7 +9862,7 @@ class HarnessRuntimeService:
         if provider_subagent is not None:
             if self.provider_subagents is None:
                 raise HarnessConfigurationError(
-                    "provider subagents are unavailable in this Core"
+                    "subagents are unavailable in this Core"
                 )
             subagent_setting = self.provider_subagents.validate_harness_setting(
                 engagement_id,
@@ -9862,6 +9870,7 @@ class HarnessRuntimeService:
                 str(provider_subagent.get("model") or ""),
                 provider_subagent.get("max_active"),
                 provider_subagent.get("reasoning_effort"),
+                provider_subagent.get("harness_profile_id"),
             )
         # Standing profile consent stands in for the per-turn confirmation.
         allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
@@ -10464,6 +10473,7 @@ class HarnessRuntimeService:
                 str(choice.get("model") or ""),
                 choice.get("max_active"),
                 choice.get("reasoning_effort"),
+                choice.get("harness_profile_id"),
             )
         except (
             ChatError
@@ -10666,6 +10676,9 @@ class HarnessRuntimeService:
                 stopped=turn.status == HarnessTurnStatus.CANCELLED,
                 failed=turn.status == HarnessTurnStatus.FAILED,
             )
+            # A harness subagent is itself a chat turn. Its durable result
+            # must settle the child record as provider children do.
+            await self.provider_subagents.turn_settled(turn.chat_turn_id)
         except Exception as exc:
             record_caught_exception(
                 "harnesses",
@@ -13648,7 +13661,7 @@ class HarnessRuntimeService:
             or not isinstance(turn.metadata.get("provider_subagent"), dict)
         ):
             raise ToolNotPermitted(
-                "Provider subagents are turned off for this conversation.",
+                "Subagents are turned off for this conversation.",
                 rule="subagents.turned_off",
             )
         parent_session_id = turn.chat_session_id
@@ -15192,7 +15205,7 @@ class HarnessRuntimeService:
         parts: list[str] = []
         if setting is not None and self.provider_subagents is not None:
             parts.append(
-                f"subagent\0{setting['provider_profile_id']}\0{setting['model']}"
+                f"subagent\0{setting.get('harness_profile_id') or setting.get('provider_profile_id')}\0{setting['model']}"
                 f"\0{setting.get('max_active') or ''}"
             )
         if (
