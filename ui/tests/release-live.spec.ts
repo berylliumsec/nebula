@@ -52,10 +52,14 @@ test("stabilization deployed approval completes once and survives reconnect", as
     await page.goto(`${origin}/#pair=${encodeURIComponent(invitation.secret)}&code=${encodeURIComponent(invitation.confirmation_code)}`);
     await page.getByLabel("Device name").fill(`Release browser ${projectId}`);
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
-    pairedDeviceId = (await (await api.get("auth/devices")).json()).find((device: {name: string}) => device.name === `Release browser ${projectId}`)?.id;
+    await expect(page).toHaveURL(`${origin}/`);
+    await expect.poll(async () => {
+      pairedDeviceId = (await (await api.get("auth/devices")).json()).find((device: {name: string}) => device.name === `Release browser ${projectId}`)?.id;
+      return pairedDeviceId;
+    }).toBeTruthy();
     expect(pairedDeviceId).toBeTruthy();
     await page.goto(`${origin}/projects/${projectId}/workbench?view=chat`);
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
     await page.getByRole("button", {name: "New chat", exact: true}).click();
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     await page.getByRole("combobox", {name: "Chat runtime", exact: true}).selectOption("harness");
@@ -107,6 +111,7 @@ test("stabilization deployed approval completes once and survives reconnect", as
       const response = await api.patch(`${collection}/${id}`, {data: {changes, expected_revision: (await current.json()).revision}});
       expect(response.ok(), `Could not retire disposable ${collection} fixture`).toBe(true);
     }
+    pairedDeviceId ??= (await (await api.get("auth/devices")).json()).find((device: {name: string}) => device.name === `Release browser ${projectId}`)?.id;
     if (pairedDeviceId) expect((await api.delete(`auth/devices/${pairedDeviceId}`)).ok()).toBe(true);
     await api.dispose();
   }

@@ -1,27 +1,16 @@
 {
-  "change_digest": "a97749eb0ecc04ccd76bf52627abf1ab9a862e7977197de8590585114e80eb69",
-  "reviewed_by": "Codex review of subagent restart recovery on the live Core data shape",
-  "reason": "Eight exact Core tests cover settled-child replay, interrupted recovery, goal charge, pending reports and questions. One real-Core browser case checks saved Subagents settings over a production LAN origin. The packaged Core is also started against a disposable copy of live data before deployment.",
-  "exclusions": "No frontend or native code changed. Unrelated Python and browser journeys are excluded. Mobile browser emulation and a physical device are not evidence for this startup repair. No full suite is authorized.",
+  "change_digest": "c65fe3514bf36b286dbfe5800cc414c33ba29637963c74e755ce511304216ff5",
+  "reviewed_by": "Codex review of the release-live pairing route correction",
+  "reason": "The one changed release-live desktop test pairs through the deployed LAN browser, opens its own disposable project, completes a harness approval, and verifies reconnect. It was collected as one test and run against the installed Core. The test requires explicit live origin and private token and is therefore run locally, not by PR CI.",
+  "exclusions": "No production source changed. CI omits Python, frontend, native, and Playwright because the only changed test needs explicit local release credentials; no full suite is authorized. The local run uses one desktop Chromium test, one worker, no retries, and traces off. Physical mobile device is outside this test correction.",
   "expected_tests": {
-    "python": 8,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 1
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_chat_subagents.py::test_restart_keeps_recoverable_subagent_round_live",
-    "tests/v3/test_chat_subagents.py::test_restart_repairs_a_late_terminal_child_write_from_the_old_core",
-    "tests/v3/test_chat_subagents.py::test_core_shutdown_preserves_safely_interrupted_subagents_for_restart",
-    "tests/v3/test_chat_subagents.py::test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent",
-    "tests/v3/test_chat_subagents.py::test_restart_replays_only_subagents_with_unfinished_delivery",
-    "tests/v3/test_chat_subagents.py::test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level",
-    "tests/v3/test_chat_subagents.py::test_failed_parent_resume_fails_the_turn_and_posts_reports",
-    "tests/v3/test_chat_subagents.py::test_idle_parent_releases_a_question_and_it_is_posted"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:chat-subagents-core/real-core"
-  ]
+  "playwright": []
 }
