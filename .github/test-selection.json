@@ -23,16 +23,16 @@
   ],
   "native": [],
   "playwright": [
-    "harness-delete/desktop",
-    "harness-delete/compact",
-    "harness-delete/mobile-chromium-small",
-    "harness-delete/mobile-chromium-ledger-390",
-    "harness-delete/mobile-chromium-wide",
-    "harness-delete/mobile-webkit-small",
-    "harness-delete/mobile-webkit",
-    "harness-delete/mobile-webkit-wide",
-    "harness-delete-core/assistant-real-desktop",
-    "harness-delete-core/assistant-real-chromium-390",
-    "harness-delete-core/assistant-real-webkit-390"
+    "entry:harness-delete/desktop",
+    "entry:harness-delete/compact",
+    "entry:harness-delete/mobile-chromium-small",
+    "entry:harness-delete/mobile-chromium-ledger-390",
+    "entry:harness-delete/mobile-chromium-wide",
+    "entry:harness-delete/mobile-webkit-small",
+    "entry:harness-delete/mobile-webkit",
+    "entry:harness-delete/mobile-webkit-wide",
+    "entry:harness-delete-core/assistant-real-desktop",
+    "entry:harness-delete-core/assistant-real-chromium-390",
+    "entry:harness-delete-core/assistant-real-webkit-390"
   ]
 }
