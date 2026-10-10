@@ -4461,8 +4461,6 @@ test("stabilization real Core preserves note drafts and reuses saved notes in re
     await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
     await page.getByRole("button", {name: "New note", exact: true}).click();
-    await page.getByLabel("Note title", {exact: true}).fill("Local fixture mechanism");
-    await page.getByLabel("Note body", {exact: true}).fill("The local fixture button changes Ready to Saved. No external site was contacted.");
     let failSave = true;
     await page.route("**/api/v1/observations", async route => {
       if (failSave && route.request().method() === "POST") {
@@ -4470,10 +4468,11 @@ test("stabilization real Core preserves note drafts and reuses saved notes in re
         await route.fulfill({status: 503, json: {detail: "Injected fixture save failure"}});
       } else await route.continue();
     });
-    await page.getByRole("button", {name: "Save", exact: true}).click();
+    await page.getByLabel("Note title", {exact: true}).fill("Local fixture mechanism");
+    await page.getByLabel("Note body", {exact: true}).fill("The local fixture button changes Ready to Saved. No external site was contacted.");
     await expect(page.getByText("Injected fixture save failure", {exact: false}).first()).toBeVisible();
     await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
-    await page.getByRole("button", {name: "Save", exact: true}).click();
+    await page.getByRole("button", {name: "Retry save", exact: true}).click();
     await expect(page.getByRole("region", {name: "Edit Local fixture mechanism", exact: true})).toBeVisible();
     await page.reload();
     await page.getByRole("button", {name: /Local fixture mechanism/}).click();
