@@ -6362,6 +6362,65 @@ async function expectNoChatStreamFailure(page: Page) {
   await expect(page.getByText(/no longer running|Could not reconnect|could not be completed|Connection lost/)).toHaveCount(0);
 }
 
+test("assistant upgrade real Core Grok harness deletion survives conflict, retry, and reload on LAN", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Grok deletion fixture"}});
+    expect(projectResponse.status()).toBe(201);
+    const project = await projectResponse.json() as {id: string};
+    const profileResponse = await api.post("harnesses", {data: {
+      name: "Grok deletion fixture", kind: "grok_acp", executable: "/bin/true", enabled: true,
+      privacy: {local_only: true, permits_sensitive_data: false},
+    }});
+    expect(profileResponse.status()).toBe(201);
+    const profile = await profileResponse.json() as {id: string; name: string};
+    // Harness sessions are read-only over generic HTTP; seed only this
+    // disposable Core's database to model a saved conversation reference.
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(repository, ".venv/bin/python");
+    const sessionId = `grok-delete-${profile.id}`;
+    const changeFixture = (action: "create" | "delete") => {
+      const result = spawnSync(python, ["-c", [
+        "import sys",
+        "from nebula.v3.domain import HarnessSession",
+        "from nebula.v3.storage import NebulaStore",
+        "store = NebulaStore(sys.argv[1])",
+        "action, session_id, project_id, profile_id = sys.argv[2:]",
+        "store.create(HarnessSession(id=session_id, engagement_id=project_id, harness_profile_id=profile_id, model='fixture-model')) if action == 'create' else store.delete(HarnessSession, session_id)",
+      ].join("\n"), path.join(core.dataDir, "nebula.db"), action, sessionId, project.id, profile.id], {
+        encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
+      });
+      expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+    };
+    changeFixture("create");
+
+    await pairRealCoreBrowser(page, core, "Grok delete browser");
+    await page.goto(`${core.origin}/settings#automation-settings`);
+    const card = page.locator(".provider-card").filter({has: page.getByRole("heading", {name: profile.name})});
+    await card.getByRole("button", {name: `Delete ${profile.name}`}).click();
+    await page.getByRole("dialog", {name: "Delete this harness?"}).getByRole("button", {name: "Delete harness"}).click();
+    await expect(card.getByRole("alert")).toContainText("Saved conversations or missions still use this harness");
+    expect((await api.get(`harnesses/${profile.id}`)).status()).toBe(200);
+
+    changeFixture("delete");
+    await card.getByRole("button", {name: "Retry delete"}).click();
+    await page.getByRole("dialog", {name: "Delete this harness?"}).getByRole("button", {name: "Delete harness"}).click();
+    await expect(card).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("heading", {name: profile.name})).toHaveCount(0);
+    expect((await api.get(`harnesses/${profile.id}`)).status()).toBe(404);
+    await testInfo.attach("grok-delete-real-core", {body: JSON.stringify({origin: core.origin, build: "ui/dist production", project: testInfo.project.name, viewport: page.viewportSize(), profileId: profile.id, result: "conflict, retry, reload, deleted"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade real Core follows goal turns Core starts while the viewer waits", async ({ page }, testInfo) => {
   test.setTimeout(150_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
