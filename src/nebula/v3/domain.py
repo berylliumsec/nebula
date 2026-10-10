@@ -903,6 +903,7 @@ class AssistantDefaults(NebulaModel):
     hook_ids: list[str] = Field(default_factory=list, max_length=64)
     allow_subagents: bool = False
     subagent_provider_id: str | None = Field(default=None, max_length=200)
+    subagent_harness_profile_id: str | None = Field(default=None, max_length=200)
     subagent_model: str | None = Field(default=None, max_length=500)
     max_active_subagents: int | None = Field(default=None, ge=1, le=32)
     subagent_reasoning_effort: str | None = Field(default=None, max_length=20)
@@ -4100,7 +4101,7 @@ CHAT_SUBAGENT_TERMINAL_STATUSES = frozenset(
 
 
 class ChatSubagent(Entity):
-    """A provider-chat child conversation delegated by a parent turn.
+    """A child conversation delegated by a parent turn.
 
     The parent is a provider chat (children share its model) or a harness chat
     (children run on the provider model the operator picked for that chat).
@@ -4114,6 +4115,7 @@ class ChatSubagent(Entity):
     child_session_id: str = Field(min_length=1, max_length=200)
     child_turn_id: str | None = Field(default=None, max_length=200)
     provider_profile_id: str | None = Field(default=None, max_length=200)
+    harness_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
     # The reasoning level the child was asked for; None is the model's default.
     reasoning_effort: str | None = Field(default=None, max_length=20)

@@ -274,10 +274,115 @@ def _setup(
     )
     adapter.runtime = runtime
     runtime.bind_provider_subagents(chat.subagents)
+    chat.subagents.bind_harness_runtime(runtime)
     return store, project, harness, chat, adapter, runtime
 
 
 SETTING = {"provider_profile_id": "provider", "model": "model-a"}
+
+
+def test_harness_delegates_to_harness_and_reuses_child_for_another_round(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        setting = {"harness_profile_id": harness.id, "model": "gpt-test"}
+        seen: dict = {}
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            if "Count route files" in prompt:
+                return "Found three routes."
+            if "after your last report" in prompt:
+                return "The correction is complete."
+            seen["capabilities"] = _payload(
+                await connection.call("subagent.capabilities")
+            )
+            started = _payload(
+                await connection.call(
+                    "subagent.start", task="Count route files", name="Routes"
+                )
+            )
+            seen["started"] = started
+            seen["first"] = _payload(await connection.call("subagent.wait"))
+            seen["message"] = _payload(
+                await connection.call(
+                    "subagent.message",
+                    subagent_id=started["subagent_id"],
+                    message="Correct the summary.",
+                )
+            )
+            seen["second"] = _payload(await connection.call("subagent.wait"))
+            return "The child completed both rounds."
+
+        adapter.script = script
+        parent, _, turn = _prepare(
+            runtime, project, harness, "Delegate the work.", setting=setting
+        )
+        await runtime.start_chat_turn(turn.id)
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE, (
+            store.get(HarnessTurn, turn.id).error,
+            seen,
+        )
+        record = store.get(ChatSubagent, seen["started"]["subagent_id"])
+        child = store.get(ChatSession, record.child_session_id)
+        assert child.backend == ChatBackend.HARNESS
+        assert child.harness_profile_id == harness.id
+        assert child.parent_session_id == parent.id
+        assert record.harness_profile_id == harness.id
+        assert record.rounds == 2
+        assert record.status == ChatSubagentStatus.COMPLETED
+        assert seen["capabilities"]["runtime"] == "harness"
+        assert seen["capabilities"]["subagents"]["available"] is False
+        assert seen["capabilities"]["tool_names"] == []
+        assert seen["first"]["subagents"][0]["report"] == "Found three routes."
+        assert seen["message"]["delivery"] == "new_round"
+        assert seen["second"]["subagents"][0]["report"] == "The correction is complete."
+
+    asyncio.run(scenario())
+
+
+def test_harness_subagent_stop_cancels_its_harness_turn(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        gate = asyncio.Event()
+        seen: dict = {}
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            if "Wait for the stop" in prompt:
+                await gate.wait()
+                return "This child should have stopped."
+            started = _payload(
+                await connection.call(
+                    "subagent.start", task="Wait for the stop", name="Stopped child"
+                )
+            )
+            seen["id"] = started["subagent_id"]
+            seen["stopped"] = _payload(
+                await connection.call(
+                    "subagent.stop", subagent_id=started["subagent_id"]
+                )
+            )
+            return "Stopped the child."
+
+        adapter.script = script
+        _, _, parent_turn = _prepare(
+            runtime,
+            project,
+            harness,
+            "Start and stop.",
+            setting={"harness_profile_id": harness.id, "model": "gpt-test"},
+        )
+        await runtime.start_chat_turn(parent_turn.id)
+        record = store.get(ChatSubagent, seen["id"])
+        child_turn = store.get(ChatTurn, record.child_turn_id)
+        assert seen["stopped"]["status"] == "stopped"
+        assert record.status == ChatSubagentStatus.STOPPED
+        assert child_turn.harness_turn_id
+        assert (
+            store.get(HarnessTurn, child_turn.harness_turn_id).status
+            == HarnessTurnStatus.CANCELLED
+        )
+        gate.set()
+
+    asyncio.run(scenario())
 
 
 def _prepare(runtime, project, harness, prompt, *, chat_id=None, setting=SETTING):
@@ -990,7 +1095,7 @@ def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
     start = _gateway_subagent_tools(HarnessKind.GROK_ACP)["subagent.start"]
     assert "omit it for the model default" in start[0]
     assert (
-        "Omit for the provider model default"
+        "Omit for the selected model default"
         in start[1]["properties"]["reasoning_effort"]["description"]
     )
 
