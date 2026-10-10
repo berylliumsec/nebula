@@ -23,6 +23,7 @@ from nebula.v3.domain import (
     ChatSession,
     ChatSubagent,
     ChatSubagentMessage,
+    ChatSubagentMessageDirection,
     ChatSubagentMessageStatus,
     ChatSubagentStatus,
     ChatTurn,
@@ -2261,6 +2262,82 @@ def test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level(
         assert len(store.list_entities(ChatGoalUsageCharge)) == 1
         assert store.get(type(goal), goal.id).usage == charged_usage
         await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_restart_replays_only_subagents_with_unfinished_delivery(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        store, project, _, chat = _setup(tmp_path, RoutedProvider([], []))
+        settled = []
+        for index in range(64):
+            settled.append(
+                store.create(
+                    ChatSubagent(
+                        engagement_id=project.id,
+                        parent_session_id=f"parent-{index}",
+                        parent_turn_id="parent-turn",
+                        child_session_id=f"child-{index}",
+                        name=f"Child {index}",
+                        task="Previously completed work.",
+                        status=ChatSubagentStatus.COMPLETED,
+                        finished_at=utc_now(),
+                        result_message_id=f"posted-{index}",
+                    )
+                )
+            )
+
+        def unfinished(index: int, **changes):
+            return store.create(
+                ChatSubagent(
+                    engagement_id=project.id,
+                    parent_session_id=changes.pop(
+                        "parent_session_id", f"parent-{index}"
+                    ),
+                    parent_turn_id="parent-turn",
+                    child_session_id=f"child-{index}",
+                    name=f"Child {index}",
+                    task="Work requiring restart repair.",
+                    status=changes.pop("status", ChatSubagentStatus.COMPLETED),
+                    finished_at=utc_now(),
+                    result_message_id=changes.pop(
+                        "result_message_id", f"posted-{index}"
+                    ),
+                    **changes,
+                )
+            )
+
+        unposted = unfinished(64, result_message_id=None)
+        uncharged = unfinished(65, pending_goal_charge_turn_id="child-turn")
+        nested = unfinished(66, parent_session_id=settled[0].child_session_id)
+        interrupted = unfinished(67, status=ChatSubagentStatus.INTERRUPTED)
+        pending_message = unfinished(68)
+        store.create(
+            ChatSubagentMessage(
+                engagement_id=project.id,
+                subagent_id=pending_message.id,
+                parent_session_id=pending_message.parent_session_id,
+                direction=ChatSubagentMessageDirection.TO_PARENT,
+                content="A question not yet delivered.",
+            )
+        )
+
+        repaired = []
+
+        async def record_repair(record):
+            repaired.append(record.id)
+
+        monkeypatch.setattr(
+            chat.subagents, "_repair_settled_after_restart", record_repair
+        )
+        await chat.subagents.reconcile_after_restart()
+        assert set(repaired) == {
+            unposted.id,
+            uncharged.id,
+            nested.id,
+            interrupted.id,
+            pending_message.id,
+        }
 
     asyncio.run(scenario())
 
