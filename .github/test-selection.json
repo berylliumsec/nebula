@@ -14,14 +14,5 @@
     "ui/src/state/ThemeContext.test.tsx"
   ],
   "native": [],
-  "playwright": [
-    "quiet-lens/desktop",
-    "quiet-lens/compact",
-    "quiet-lens/mobile-chromium-small",
-    "quiet-lens/mobile-chromium",
-    "quiet-lens/mobile-chromium-wide",
-    "quiet-lens/mobile-webkit-small",
-    "quiet-lens/mobile-webkit",
-    "quiet-lens/mobile-webkit-wide"
-  ]
+  "playwright": ["area:quiet-lens"]
 }
