@@ -13,14 +13,14 @@
   "frontend": ["ui/src/state/ThemeContext.test.tsx"],
   "native": [],
   "playwright": [
-    "zero-dark-palette/desktop",
-    "zero-dark-palette/compact",
-    "zero-dark-palette/mobile-chromium-small",
-    "zero-dark-palette/mobile-chromium",
-    "zero-dark-palette/mobile-chromium-wide",
-    "zero-dark-palette/mobile-webkit-small",
-    "zero-dark-palette/mobile-webkit",
-    "zero-dark-palette/mobile-webkit-wide",
-    "zero-dark-visuals/desktop"
+    "entry:zero-dark-palette/desktop",
+    "entry:zero-dark-palette/compact",
+    "entry:zero-dark-palette/mobile-chromium-small",
+    "entry:zero-dark-palette/mobile-chromium",
+    "entry:zero-dark-palette/mobile-chromium-wide",
+    "entry:zero-dark-palette/mobile-webkit-small",
+    "entry:zero-dark-palette/mobile-webkit",
+    "entry:zero-dark-palette/mobile-webkit-wide",
+    "entry:zero-dark-visuals/desktop"
   ]
 }
