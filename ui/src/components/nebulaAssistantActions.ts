@@ -2,9 +2,22 @@ import type { HarnessProfile } from "../api/types";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 
 type Runtime = { kind: "provider" | "harness"; id: string; model: string };
+export type ProjectMode = "docker" | "host";
 
 function normalized(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Only an explicit project-policy command may change the command runtime. */
+export function projectModeChange(prompt: string): { mode: ProjectMode; from?: ProjectMode } | undefined {
+  const text = normalized(prompt.replace(/\b(docker|host)mode\b/gi, "$1 mode"));
+  if (!/^(?:(?:please|can you|could you|would you)\s+)?(?:open|change|switch|set|use)\b/.test(text)) return undefined;
+  const from = text.match(/\bfrom\s+(docker|host)(?:\s+mode)?\b/)?.[1] as ProjectMode | undefined;
+  const target = text.match(/\b(?:to|into|use)\s+(docker|host)(?:\s+mode)?\b/)?.[1]
+    ?? text.match(/\b(?:set|switch)\s+(?:the\s+)?(?:project\s+)?(?:execution\s+mode|policy)\s+(docker|host)(?:\s+mode)?$/)?.[1];
+  if (target !== "docker" && target !== "host") return undefined;
+  if (!text.includes("project policy") && !text.includes("execution mode") && !from) return undefined;
+  return { mode: target, ...(from ? { from } : {}) };
 }
 
 /** Route an explicit navigation request through the same Settings lens as search. */

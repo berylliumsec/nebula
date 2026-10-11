@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessProfile } from "../api/types";
-import { assistantTurnOptions, settingToOpen } from "./nebulaAssistantActions";
+import { assistantTurnOptions, projectModeChange, settingToOpen } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("recognizes explicit project mode changes without treating questions as commands", () => {
+    expect(projectModeChange("open project policy and change from dockermode to host mode"))
+      .toEqual({ from: "docker", mode: "host" });
+    expect(projectModeChange("switch project execution mode to Docker"))
+      .toEqual({ mode: "docker" });
+    expect(projectModeChange("Where is Host mode?")).toBeUndefined();
+    expect(projectModeChange("open project policy")).toBeUndefined();
+  });
   it("opens an unambiguous named setting and ignores ordinary questions", () => {
     expect(settingToOpen("Please open MCP servers settings")?.id).toBe("settings.mcp");
     expect(settingToOpen("can you bring up model provider settings?")?.id).toBe("settings.providers");

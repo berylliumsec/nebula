@@ -56,7 +56,7 @@ export function AppShell() {
   const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
-  const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null }>();
+  const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null; refreshKey: number; status?: string }>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem("nebula.sidebar.collapsed");
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
@@ -74,7 +74,12 @@ export function AppShell() {
   }), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
-    setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
+    setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
+  }, []);
+  const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string) => {
+    setSettingLens((current) => current?.entry.id === entry.id
+      ? { ...current, refreshKey: current.refreshKey + 1, status }
+      : current);
   }, []);
   const openProjectPicker = useCallback(() => {
     setSidebarCollapsed(false);
@@ -219,7 +224,7 @@ export function AppShell() {
                 <Outlet />
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />
-              <NebulaControlAssistant onOpenSetting={openSetting} />
+              <NebulaControlAssistant onOpenSetting={openSetting} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting} />
               <CommandPalette
                 api={api}
                 activeProjectId={engagement?.id}
@@ -228,9 +233,9 @@ export function AppShell() {
                 onClose={() => setPaletteOpen(false)}
                 onToggleActivity={toggleActivity}
                 onToggleSidebar={toggleSidebar}
-                onOpenSetting={(entry, returnFocus) => setSettingLens({ entry, returnFocus })}
+                onOpenSetting={openSetting}
               />
-              {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} onClose={() => setSettingLens(undefined)} />}
+              {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} onClose={() => setSettingLens(undefined)} />}
             </div>
             </GuideProvider>
           </ChromeProvider>

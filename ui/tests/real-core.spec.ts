@@ -4973,6 +4973,55 @@ for (const runtime of ["provider", "harness"] as const) {
   });
 }
 
+test("project execution mode assistant saves and shows Host then Docker on production LAN Core", async ({ page }) => {
+  test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const projectName = "Assistant Mode Acceptance";
+    const created = await api.post("engagements", { data: {
+      name: projectName, description: "", client_name: null, status: "active",
+      tags: [], workspace_path: null, metadata: {},
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = ((await created.json()) as { id: string }).id;
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: "Open Nebula assistant" })).toBeVisible({ timeout: 20_000 });
+    const askMode = async (prompt: string) => {
+      const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
+      await launcher.click();
+      const assistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
+      await expect(assistant).toContainText(projectName);
+      const composer = assistant.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+      await composer.fill(prompt);
+      await composer.press("Enter");
+      const lens = page.getByRole("dialog", { name: "Project policy and network scope" });
+      await expect(lens).toBeVisible();
+      return lens;
+    };
+    const hostLens = await askMode("open project policy and change from dockermode to host mode");
+    await expect(page.getByRole("heading", { name: `Switch ${projectName} to Host mode?` })).toBeVisible();
+    await page.getByRole("button", { name: "Switch to Host mode" }).click();
+    await expect(hostLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("host");
+    await expect(hostLens.getByText(`${projectName} saved in Host mode for new sessions.`)).toBeVisible();
+    await expect(hostLens).toHaveCount(0, { timeout: 5000 });
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
+    // This LAN fixture uses a fragment bearer token, so reopen with that token.
+    await page.goto("about:blank");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
+    const dockerLens = await askMode("switch project execution mode to Docker");
+    await page.getByRole("button", { name: "Switch to Docker mode" }).click();
+    await expect(dockerLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("docker");
+    await expect(dockerLens).toHaveCount(0, { timeout: 5000 });
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("stabilization real Core runtime policy explains approvals and preserves frozen sessions", async ({ page }, info) => {
   test.setTimeout(90_000);
   page.setDefaultTimeout(10_000);

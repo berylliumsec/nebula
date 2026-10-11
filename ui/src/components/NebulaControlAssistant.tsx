@@ -10,7 +10,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import type { ChatMessage } from "../api/types";
-import { assistantTurnOptions, settingToOpen } from "./nebulaAssistantActions";
+import { assistantTurnOptions, projectModeChange, settingToOpen } from "./nebulaAssistantActions";
 import styles from "./NebulaControlAssistant.module.css";
 
 const THEMES: { value: ThemePreference; label: string }[] = [
@@ -19,7 +19,11 @@ const THEMES: { value: ThemePreference; label: string }[] = [
   { value: "zero-light", label: "Zero Light" }, { value: "zero-dark", label: "Zero Dark" },
 ];
 
-export function NebulaControlAssistant({ onOpenSetting }: { onOpenSetting: (entry: SettingCatalogEntry) => void }) {
+export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedSetting }: {
+  onOpenSetting: (entry: SettingCatalogEntry) => void;
+  onCloseSetting?: () => void;
+  onSavedSetting?: (entry: SettingCatalogEntry, status: string) => void;
+}) {
   const { api, engagement, providers, harnesses } = useWorkspace();
   const confirm = useConfirmation();
   const { preference, setPreference } = useTheme();
@@ -117,9 +121,70 @@ export function NebulaControlAssistant({ onOpenSetting }: { onOpenSetting: (entr
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not stop the response. Try again."); }
   };
 
-  const send = async () => {
-    const prompt = draft.trim();
-    if (!prompt) return;
+  const send = async (currentText = draft) => {
+    const prompt = currentText.trim();
+    if (!prompt || busy || loadingHistory) return;
+    const modeChange = projectModeChange(prompt);
+    if (modeChange) {
+      if (!api || !engagement) { setError("Choose a project to change its execution mode."); return; }
+      const entry = settingCatalog.find((item) => item.id === "settings.network-scope")!;
+      const projectId = engagement.id;
+      const projectName = engagement.name;
+      const modeLabel = modeChange.mode === "host" ? "Host" : "Docker";
+      setDraft("");
+      setError("");
+      setBusy(true);
+      setHidden(true);
+      setMessages((current) => [...current, { role: "user", content: prompt }]);
+      onOpenSetting(entry);
+      try {
+        const policy = await api.getAutomationPolicy(projectId);
+        const currentMode = policy.executionMode ?? "docker";
+        if (modeChange.from && currentMode !== modeChange.from) {
+          throw new Error(`${projectName} is already in ${currentMode === "host" ? "Host" : "Docker"} mode. Its policy was not changed. Check the open setting and try again.`);
+        }
+        if (currentMode === modeChange.mode) {
+          onSavedSetting?.(entry, `${projectName} is already in ${modeLabel} mode.`);
+          setMessages((current) => [...current, { role: "assistant", content: `${projectName} is already in ${modeLabel} mode. No change was needed.` }]);
+        } else {
+          const approved = await confirm({
+            title: `Switch ${projectName} to ${modeLabel} mode?`,
+            message: modeChange.mode === "host"
+              ? "Commands will run as the Nebula server's OS user. Agents can access other host folders and networks allowed by that account. Docker isolation, scope-filtered networking, and container VPN routing will not apply. Existing sessions keep their current policy."
+              : "New command sessions will run inside Docker. Existing sessions keep their current policy.",
+            confirmLabel: `Switch to ${modeLabel} mode`,
+          });
+          if (!approved) {
+            setMessages((current) => [...current, { role: "assistant", content: "The project policy was not changed." }]);
+          } else {
+            await api.updateAutomationPolicy(projectId, {
+              executionMode: modeChange.mode,
+              hostAccessAcknowledged: modeChange.mode === "host",
+              approvalPolicy: policy.approvalPolicy,
+              networkEnabled: policy.networkEnabled,
+              runnerProfileId: policy.runnerProfileId,
+              vpnProfileId: policy.vpnProfileId,
+              maxTimeoutMs: policy.maxTimeoutMs,
+              expectedRevision: policy.revision,
+            });
+            const observed = await api.getAutomationPolicy(projectId);
+            if (observed.executionMode !== modeChange.mode) throw new Error("Core did not confirm the new execution mode. Reopen Project Policy before retrying.");
+            onSavedSetting?.(entry, `${projectName} saved in ${modeLabel} mode for new sessions.`);
+            setMessages((current) => [...current, { role: "assistant", content: `${projectName} is now in ${modeLabel} mode for new sessions. Existing sessions keep their previous policy.` }]);
+          }
+        }
+        // Keep the updated Settings control visible long enough to inspect the result.
+        await new Promise((resolve) => window.setTimeout(resolve, 1800));
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "The project policy could not be changed. Check the open setting and retry.");
+        setDraft(prompt);
+      } finally {
+        onCloseSetting?.();
+        setHidden(false);
+        setBusy(false);
+      }
+      return;
+    }
     const setting = settingToOpen(prompt);
     if (setting) {
       setDraft("");
@@ -127,7 +192,7 @@ export function NebulaControlAssistant({ onOpenSetting }: { onOpenSetting: (entr
       setHidden(true);
       return;
     }
-    if (!api || !engagement || !runtime || busy || loadingHistory) return;
+    if (!api || !engagement || !runtime) return;
     const turnOptions = assistantTurnOptions(runtime, harnesses);
     let allowCloudToolResults = false;
     if (toolRuntime && !(toolRuntime.kind === "provider" ? toolRuntime.profile.local : toolRuntime.profile.localOnly)) {
@@ -202,7 +267,7 @@ export function NebulaControlAssistant({ onOpenSetting }: { onOpenSetting: (entr
       {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
       {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
     </div>
-    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(); }}><textarea ref={input} aria-label="Ask Nebula to change a setting" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} rows={2} maxLength={4000} placeholder="Ask about or open a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!settingToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
+    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Nebula to change a setting" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about or open a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!settingToOpen(draft) && !projectModeChange(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
   </div> : null;
 
   return <>{!open || hidden ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}{panelContent && createPortal(panelContent, document.body)}</>;

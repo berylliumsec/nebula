@@ -78,4 +78,59 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
     expect(streamChat.mock.calls[0][0]).toMatchObject({ messages: [{ content: "First\nsecond" }] });
   });
+
+  it("opens Project Policy, confirms Host access, preserves policy fields, and reads Core back", async () => {
+    const user = userEvent.setup();
+    const original = {
+      id: "policy", engagementId: "project", executionMode: "docker", hostAccessAcknowledged: false,
+      approvalPolicy: "always", networkEnabled: true, runnerProfileId: "runner", vpnProfileId: "vpn",
+      maxTimeoutMs: 120000, revision: 3,
+    } as const;
+    const saved = { ...original, executionMode: "host", hostAccessAcknowledged: true, revision: 4 } as const;
+    const getAutomationPolicy = vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(saved);
+    const updateAutomationPolicy = vi.fn().mockResolvedValue(saved);
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), getAutomationPolicy, updateAutomationPolicy },
+      engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    const onOpenSetting = vi.fn();
+    const onCloseSetting = vi.fn();
+    const onSavedSetting = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} onSavedSetting={onSavedSetting} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    const composer = screen.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "open project policy and change from dockermode to host mode{enter}");
+    await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" })));
+    expect(updateAutomationPolicy).not.toHaveBeenCalled();
+    expect(screen.getByText(/Docker isolation, scope-filtered networking/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Switch to Host mode" }));
+    await waitFor(() => expect(updateAutomationPolicy).toHaveBeenCalledWith("project", {
+      executionMode: "host", hostAccessAcknowledged: true, approvalPolicy: "always",
+      networkEnabled: true, runnerProfileId: "runner", vpnProfileId: "vpn",
+      maxTimeoutMs: 120000, expectedRevision: 3,
+    }));
+    await waitFor(() => expect(onSavedSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" }), "Project saved in Host mode for new sessions."));
+    await waitFor(() => expect(onCloseSetting).toHaveBeenCalled(), { timeout: 4000 });
+    expect(getAutomationPolicy).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Project is now in Host mode for new sessions/)).toBeInTheDocument();
+  });
+
+  it("does not change mode when the requested source mode differs from Core", async () => {
+    const user = userEvent.setup();
+    const updateAutomationPolicy = vi.fn();
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null),
+        getAutomationPolicy: vi.fn().mockResolvedValue({ executionMode: "host" }), updateAutomationPolicy },
+      engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={vi.fn()} onCloseSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    const composer = screen.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "open project policy and change from dockermode to host mode{enter}");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("already in Host mode"));
+    expect(updateAutomationPolicy).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("open project policy and change from dockermode to host mode");
+  });
 });
