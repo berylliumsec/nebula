@@ -1798,6 +1798,7 @@ export interface HarnessTurnDetail {
 }
 
 export interface ChatCompletionRequest {
+  controlAssistant?: boolean;
   backend?: "provider" | "harness";
   providerId?: Identifier;
   harnessProfileId?: Identifier;
@@ -2291,6 +2292,7 @@ export interface ChatSessionSummary {
   isSubagent?: boolean;
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
+  isControlAssistant?: boolean;
   inheritedMessageCount?: number;
   forkedFromMessageId?: Identifier;
   model?: string;

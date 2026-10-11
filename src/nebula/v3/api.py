@@ -9570,6 +9570,12 @@ def create_app(
                 )
             prompt = request.messages[-1].content
             runtime_context = ""
+            if request.control_assistant:
+                runtime_context += (
+                    "Nebula settings assistant: use nebula.settings.catalog before claiming a setting can change. "
+                    "Use bounded settings tools and report success only after a saved read-back. "
+                    "Device appearance is changed in the assistant window. Other settings open in Settings."
+                )
             if request.context_attachments:
                 selected = [
                     {
@@ -9601,6 +9607,7 @@ def create_app(
                 profile_id=request.harness_profile_id or "",
                 model=request.model,
                 prompt=prompt,
+                title="Nebula assistant" if request.control_assistant else None,
                 content_blocks=request.messages[-1].content_blocks,
                 chat_session_id=request.session_id,
                 harness_session_id=request.harness_session_id,
@@ -9625,6 +9632,7 @@ def create_app(
                 provider_subagent=request.harness_provider_subagent(),
                 pending_provider_subagent=request.harness_pending_provider_subagent(),
                 allow_agent_messaging=request.allow_agent_messaging,
+                control_assistant=request.control_assistant,
             )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)
@@ -10703,6 +10711,26 @@ def create_app(
         # The conversation list polls this; an unchanged answer is a 304.
         unchanged = conditional(request, response, content_etag("activity", activity))
         return unchanged or activity
+
+    @app.get(
+        f"{API_PREFIX}/chat/control-assistant/session",
+        response_model=ChatSession | None,
+        tags=["chat-sessions"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_control_assistant_session(engagement_id: str) -> ChatSession | None:
+        store.get(Engagement, engagement_id)
+        return next(
+            (
+                item for item in store.find_entities(
+                    ChatSession, {}, engagement_id=engagement_id,
+                    newest_first=True, limit=None,
+                )
+                if item.metadata.get("control_assistant") is True
+                and item.metadata.get("archived_at") is None
+            ),
+            None,
+        )
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",

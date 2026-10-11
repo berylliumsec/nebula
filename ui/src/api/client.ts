@@ -3522,6 +3522,7 @@ export function chatRequestBody(
 ): JsonObject {
   return {
     backend: body.backend ?? "provider",
+    ...(body.controlAssistant ? { control_assistant: true } : {}),
     provider_id: body.providerId,
     harness_profile_id: body.harnessProfileId,
     harness_session_id: body.harnessSessionId,
@@ -3614,6 +3615,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     parentSessionId: value.parent_session_id ?? undefined,
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     isSideChat: value.metadata?.side_chat === true,
+    isControlAssistant: value.metadata?.control_assistant === true,
     inheritedMessageCount: typeof value.metadata?.inherited_message_count === "number"
       ? value.metadata.inherited_message_count : undefined,
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
@@ -9065,7 +9067,14 @@ export class ApiClient {
       "chat-sessions",
       signal,
       engagementId,
-    ).then((items) => page(items.map(mapChatSession).filter(session => !session.isSideChat)));
+    ).then((items) => page(items.map(mapChatSession).filter(session => !session.isSideChat && !session.isControlAssistant)));
+  }
+
+  getControlAssistantSession(engagementId: string, signal?: AbortSignal): Promise<ChatSessionSummary | undefined> {
+    return this.request<WireChatSession | null>(
+      `chat/control-assistant/session?engagement_id=${encodeURIComponent(engagementId)}`,
+      { signal },
+    ).then((value) => value ? mapChatSession(value) : undefined);
   }
 
   getChatSession(sessionId: string, signal?: AbortSignal): Promise<ChatSessionSummary> {
