@@ -15,6 +15,7 @@ import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } f
 import { browserAuthorizationRecovery } from "../api/runtime";
 import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
 import { SettingsLens } from "./SettingsLens";
+import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { HandoffRecoveryNotice } from "./HandoffRecoveryNotice";
 import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
@@ -218,6 +219,7 @@ export function AppShell() {
                 <Outlet />
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />
+              <NebulaControlAssistant onOpenSetting={openSetting} />
               <CommandPalette
                 api={api}
                 activeProjectId={engagement?.id}

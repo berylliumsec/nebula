@@ -584,6 +584,7 @@ def resolve_chat_model_content(
 class ChatCompletionRequest(NebulaModel):
     _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
     backend: ChatBackend = ChatBackend.PROVIDER
+    control_assistant: bool = False
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -5546,9 +5547,10 @@ class ChatService:
                     engagement_id=engagement.id,
                     # Titles describe the operator's prompt, never the expanded
                     # provider payload containing selected-context envelopes.
-                    title=self._title(request.messages),
+                    title="Nebula assistant" if request.control_assistant else self._title(request.messages),
                     provider_profile_id=profile.id,
                     model=selected_model,
+                    metadata={"control_assistant": True} if request.control_assistant else {},
                 )
 
         citations: list[ChatCitation] = []
@@ -5565,6 +5567,14 @@ class ChatService:
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
             operator_decisions
         )
+        if request.control_assistant or (session and session.metadata.get("control_assistant") is True):
+            instructions += (
+                "\n\nYou are the Nebula settings assistant. Use nebula.settings.catalog to identify supported settings. "
+                "Use the settings tools for bounded Core changes and report success only after their saved read-back. "
+                "For device appearance, direct the operator to the Appearance controls in this assistant window. "
+                "For other settings, name the matching Settings destination and let the operator review it there. "
+                "Never claim that suggesting a change applied it."
+            )
         if work_enabled:
             instructions += "\n\n" + WORK_AVAILABLE_INSTRUCTIONS
         if subagent_child:
@@ -5668,6 +5678,16 @@ class ChatService:
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
         web_search_selected = not side_chat and self._web_search_selected(engagement_id)
+        settings_assistant_available = bool(
+            not side_chat
+            and engagement_id
+            and self.tool_platform is not None
+            and profile.tools_verified_for(selected_model)
+            and (
+                provider.config.local
+                or (profile.privacy.permits_sensitive_data and allow_cloud_tool_results)
+            )
+        )
         # Each family sends tool inputs and results to the model; the names
         # tell the operator what a refused cloud turn was about to share.
         tool_families = [
@@ -5677,6 +5697,7 @@ class ChatService:
                 ("MCP servers", bool(mcp_profiles)),
                 ("SSH hosts", bool(ssh_environments)),
                 ("web search", web_search_selected),
+                ("Nebula settings", settings_assistant_available),
                 ("browser control", bool(browser_session_id)),
                 ("project model context", model_context),
                 ("skill resources", skill_resources_selected),
@@ -5743,6 +5764,7 @@ class ChatService:
                         or catalog_profiles
                         or ssh_environments
                         or web_search_selected
+                        or settings_assistant_available
                     )
                     and self.tool_platform is not None
                     else None
