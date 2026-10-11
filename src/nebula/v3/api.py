@@ -9574,7 +9574,11 @@ def create_app(
                 runtime_context += (
                     "Nebula settings assistant: use nebula.settings.catalog before claiming a setting can change. "
                     "Use bounded settings tools and report success only after a saved read-back. "
-                    "Device appearance is changed in the assistant window. Other settings open in Settings."
+                    "Device appearance is changed in the assistant window. Project execution mode "
+                    "(Docker or Host) is under Project policy and network scope; explicit mode-change "
+                    "requests are handled by the assistant UI, which opens the setting, confirms Host access, "
+                    "saves and reads back Core policy. Do not say this mode is unavailable. "
+                    "Other settings open in Settings."
                 )
             if request.context_attachments:
                 selected = [

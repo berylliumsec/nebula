@@ -61,6 +61,9 @@ def catalog() -> dict[str, Any]:
                     ["take_notes", "suggest_next_steps"] if identifier == "follow-up" else
                     ["default_model"] if identifier in {"providers", "harnesses"} else []
                 ),
+                "assistant_ui_actions": (
+                    ["project_execution_mode"] if identifier == "network-scope" else []
+                ),
             }
             for identifier, label, target in SETTING_DESTINATIONS
         ],

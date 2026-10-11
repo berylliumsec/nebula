@@ -25,6 +25,9 @@ def test_catalog_covers_settings_destinations_without_secrets():
     }
     assert all(item["url"].startswith("/settings#") for item in result["settings"])
     assert all("credential" not in str(item.get("direct_changes", [])) for item in result["settings"])
+    project_policy = next(item for item in result["settings"] if item["id"] == "network-scope")
+    assert project_policy["assistant_ui_actions"] == ["project_execution_mode"]
+    assert project_policy["direct_changes"] == []
 
 
 def test_post_tool_change_reads_back_from_core(tmp_path):
