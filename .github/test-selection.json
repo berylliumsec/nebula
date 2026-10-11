@@ -1,13 +1,13 @@
 {
-  "change_digest": "26f3e478d025b943ec82d8e9763cbf788ff6eb505820941e71bda57eac1eec04",
-  "reviewed_by": "Codex focused review of Nebula assistant product-help and packaged-index diff",
-  "reason": "The dedicated Nebula assistant searches a generated SQLite product index, reads selected-project Docker/Host context, answers troubleshooting questions, and opens Settings lenses. A PEP 517 build hook now generates the index for wheels, source archives, and editable installs; clean isolated package builds verify each path. Select 13 collected Python tests in settings tools and product index plus exact harness and package audit cases, 15 assistant component tests, the one assistant stabilization journey across eight permanent desktop/mobile Chromium/WebKit profiles, and three project execution mode journeys in assistant-real-desktop and assistant-real-webkit-320. The 14 browser cases exercise the production bundle and real Core on LAN where applicable.",
-  "exclusions": "No native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded. The build hook is verified by manual isolated package builds, not a release-wide packaging suite. No physical phone or Safari device was available. Browser fixture Core processes and the throwaway are separate from the production Core.",
+  "change_digest": "ed8a0335fbdb3f0ed5d77a1563106dc08edb3d03188ca79a5e61cd86e79ea5aa",
+  "reviewed_by": "Codex focused review of exact Nebula assistant action tools and browser authority",
+  "reason": "The dedicated assistant now exposes exact open-setting, device-theme, and project-mode actions to provider and harness models, with the catalog as a discovery fallback. Browser-owned actions return pending intents; the requesting UI validates, applies, confirms, and retains their result for refresh. Grok's actual activity uses item_id for tool calls and OkayOutput for MCP results; the UI decodes those fields before dispatch. The project-mode tool uses a short name that stays intact under Grok's portable MCP alias. Project mode still opens its visible policy, asks for Host permission, and reads back Core state. Select 14 collected Python cases for tool catalog, scope, product index, and exact harness/package boundaries; 20 assistant unit/component cases for parsing, model receipts, theme and Host actions; both assistant stabilization journeys across eight permanent desktop/mobile Chromium/WebKit profiles, including a Grok-shaped MCP receipt and long transcript visibility; and three existing real-Core project-policy journeys in each selected desktop and mobile WebKit profile. These 22 browser cases exercise the production bundle and real Core on LAN where applicable. Isolated wheel, source archive, and editable builds separately verify the generated index.",
+  "exclusions": "No native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded. The build hook is verified by isolated package builds, not a release-wide packaging suite. Browser fixture Core processes and the throwaway are separate from the production Core. No physical phone or Safari device is claimed.",
   "expected_tests": {
-    "python": 13,
-    "frontend": 15,
+    "python": 14,
+    "frontend": 20,
     "native": 0,
-    "playwright": 14
+    "playwright": 22
   },
   "python": [
     "tests/v3/test_settings_assistant_tools.py",
@@ -22,13 +22,21 @@
   "native": [],
   "playwright": [
     "nebula-assistant/desktop/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/desktop/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/compact/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/compact/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-chromium-small/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-chromium-small/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-chromium-ledger-390/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-chromium-ledger-390/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-chromium-wide/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-chromium-wide/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-webkit-small/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-webkit-small/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-webkit/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-webkit/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-webkit-wide/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-webkit-wide/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/assistant-real-desktop/project execution mode Nebula help answers a Docker host-file question",
     "nebula-assistant/assistant-real-desktop/project execution mode assistant saves and shows Host then Docker",
     "nebula-assistant/assistant-real-desktop/project execution mode settings assistant opens every catalog setting",

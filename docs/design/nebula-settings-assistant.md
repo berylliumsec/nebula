@@ -17,6 +17,8 @@ The operator may open Settings from a catalog result without losing the draft.
 | Close | Window closes without deleting history | React presentation, Core transcript | Browser and real Core |
 | Compose | Enter submits one message; Shift+Enter inserts a newline; composition does not submit | React draft and Core turn | Component, browser and real Core |
 | Open a named setting | An unambiguous open/show request opens the existing Settings lens immediately | Shared settings catalog and shell lens | Component and browser |
+| Change this device's theme | An explicit theme command opens Appearance, applies and confirms the browser preference, then closes the lens; “Zero theme” means Zero Dark | Browser theme context and storage; shell lens owns presentation | Component and desktop/mobile browser |
+| Model-selected browser action | The model calls an exact open-setting or device-theme tool; Core returns a typed pending action, and only the requesting browser applies and confirms it | Scoped tool receipt and browser theme/lens state | Tool unit, component, real-Core browser and live model |
 | Fast answer | Provider turns request low effort; harness turns select advertised low effort and fast tier or matching fast model | Runtime model options and Core provider adapters | Component and real Core |
 | Change project execution mode | An explicit request opens Project Policy, names the selected project, confirms Host access, saves through the existing policy API, reads back the mode, refreshes the visible control, and closes the lens after showing the result | Core automation policy; shell lens owns presentation | Component, browser, real Core and LAN |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
@@ -42,6 +44,22 @@ confirmation. With no project selected, the assistant asks for a selection.
 An explicit navigation command is a local UI action rather than a model turn:
 it opens the same Settings lens as a catalog result, even without a configured
 model. Ambiguous or conversational requests continue to the selected runtime.
+An explicit device-theme command follows that same local path, including when
+no project or model is selected. The assistant shows the Appearance lens, applies
+one of its five advertised values, checks the active theme, and reports whether
+browser storage retained it. A question about how themes work remains a model
+question. The legacy “Zero theme” name resolves to Zero Dark on this device.
+For requests that reach a model, `nebula.settings.open`,
+`nebula.settings.set_device_theme`, and
+`nebula.settings.set_project_mode` expose exact bounded actions. The tool receipt
+is an intent, not a completed browser change. The requesting assistant window
+validates the action, applies it, and reports the observed result. The
+`nebula.settings.catalog` tool lists exact action names and argument values when
+the model needs to discover a destination or capability. Replayed tool events
+are deduplicated by tool-call id. Browser action outcomes remain attached to
+their Core message in browser storage so the requesting device shows the
+confirmation again after refresh. The transcript follows new results into view.
+The general assistant never receives these tools.
 An explicit project execution-mode command is also handled by the UI so the
 operator sees the existing control and approves Host access before Core saves.
 The requested source mode, when supplied, must match Core's current policy;

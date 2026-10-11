@@ -37,6 +37,24 @@ SEARCH_SCHEMA = {
     "properties": {"query": {"type": "string", "minLength": 3, "maxLength": 1000}},
     "required": ["query"],
 }
+OPEN_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"setting_id": {"type": "string", "enum": [item[0] for item in SETTING_DESTINATIONS]}},
+    "required": ["setting_id"],
+}
+THEME_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"theme": {"type": "string", "enum": ["light", "dark", "studio-dark", "zero-light", "zero-dark"]}},
+    "required": ["theme"],
+}
+PROJECT_MODE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "mode": {"type": "string", "enum": ["docker", "host"]},
+        "from": {"type": "string", "enum": ["docker", "host"]},
+    },
+    "required": ["mode"],
+}
 POST_TOOL_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -58,6 +76,13 @@ DEFAULT_MODEL_SCHEMA = {
 
 def catalog() -> dict[str, Any]:
     return {
+        "actions": [
+            {"name": "nebula.settings.open", "argument": "setting_id", "values": [item[0] for item in SETTING_DESTINATIONS], "effect": "open the setting on the requesting browser"},
+            {"name": "nebula.settings.set_device_theme", "argument": "theme", "values": THEME_SCHEMA["properties"]["theme"]["enum"], "effect": "apply a theme on the requesting browser"},
+            {"name": "nebula.settings.set_project_mode", "argument": "mode", "values": ["docker", "host"], "effect": "show the selected project's policy, confirm Host access if needed, and save for new sessions"},
+            {"name": "nebula.settings.set_post_tool", "arguments": ["setting", "enabled"], "effect": "save one project post-tool preference in Core"},
+            {"name": "nebula.settings.set_default_model", "arguments": ["kind", "profile_id", "model"], "effect": "save one listed default model in Core"},
+        ],
         "settings": [
             {
                 "id": identifier, "label": label,
@@ -67,6 +92,7 @@ def catalog() -> dict[str, Any]:
                     ["default_model"] if identifier in {"providers", "harnesses"} else []
                 ),
                 "assistant_ui_actions": (
+                    ["device_theme"] if identifier == "appearance" else
                     ["project_execution_mode"] if identifier == "network-scope" else []
                 ),
             }
@@ -74,8 +100,41 @@ def catalog() -> dict[str, Any]:
         ],
         "device_appearance": {
             "values": ["light", "dark", "studio-dark", "zero-light", "zero-dark"],
-            "authority": "browser preference; use the assistant's Appearance controls on that device",
+            "authority": "browser preference; the assistant UI applies explicit theme commands on the active device",
         },
+    }
+
+
+def open_setting(arguments: dict[str, Any]) -> dict[str, Any]:
+    setting_id = arguments.get("setting_id")
+    if not isinstance(setting_id, str) or setting_id not in {item[0] for item in SETTING_DESTINATIONS}:
+        raise ValueError("choose a setting_id from nebula.settings.catalog")
+    return {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "open_setting", "setting_id": setting_id},
+    }
+
+
+def request_device_theme(arguments: dict[str, Any]) -> dict[str, Any]:
+    theme = arguments.get("theme")
+    if theme not in THEME_SCHEMA["properties"]["theme"]["enum"]:
+        raise ValueError("choose a listed device theme")
+    return {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "device_theme", "theme": theme},
+    }
+
+
+def request_project_execution_mode(arguments: dict[str, Any]) -> dict[str, Any]:
+    mode = arguments.get("mode")
+    source = arguments.get("from")
+    if mode not in PROJECT_MODE_SCHEMA["properties"]["mode"]["enum"]:
+        raise ValueError("choose docker or host mode")
+    if source is not None and source not in PROJECT_MODE_SCHEMA["properties"]["from"]["enum"]:
+        raise ValueError("choose docker or host as the source mode")
+    return {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "project_execution_mode", "mode": mode, **({"from": source} if source else {})},
     }
 
 
@@ -193,6 +252,15 @@ def provider_plugins(store: NebulaStore, artifact_store: Any, engagement_id: str
     async def list_settings(_arguments: dict[str, Any]) -> dict[str, Any]:
         return catalog()
 
+    async def open_setting_on_device(arguments: dict[str, Any]) -> dict[str, Any]:
+        return open_setting(arguments)
+
+    async def select_device_theme(arguments: dict[str, Any]) -> dict[str, Any]:
+        return request_device_theme(arguments)
+
+    async def select_project_execution_mode(arguments: dict[str, Any]) -> dict[str, Any]:
+        return request_project_execution_mode(arguments)
+
     async def set_post_tool(arguments: dict[str, Any]) -> dict[str, Any]:
         return set_post_tool_preference(store, artifact_store, engagement_id, arguments)
 
@@ -229,6 +297,21 @@ def provider_plugins(store: NebulaStore, artifact_store: Any, engagement_id: str
             input_schema=CATALOG_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
             risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
         ), list_settings),
+        AnalysisTool(ToolSpec(
+            name="nebula.settings.open", description="Open one listed Nebula setting on the requesting browser. Call with its setting_id for any request to show or navigate to a setting; call nebula.settings.catalog first only when the destination is unclear. Returns a pending browser action, not proof that a lens opened.",
+            input_schema=OPEN_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
+        ), open_setting_on_device),
+        AnalysisTool(ToolSpec(
+            name="nebula.settings.set_device_theme", description="Request Light, Dark, Studio Dark, Zero Light, or Zero Dark on the requesting browser. Use zero-dark for 'Zero theme'. Returns a pending browser action; the browser applies and confirms it. Do not claim it was saved from this tool result alone.",
+            input_schema=THEME_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
+        ), select_device_theme),
+        AnalysisTool(ToolSpec(
+            name="nebula.settings.set_project_mode", description="Request Docker or Host mode for the selected project's future command sessions. The requesting browser opens Project Policy, asks for Host access approval if needed, saves through Core, and reads back the result. This tool only returns a pending action, not a saved change.",
+            input_schema=PROJECT_MODE_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
+        ), select_project_execution_mode),
         AnalysisTool(ToolSpec(
             name="nebula.settings.set_post_tool", description="Change one post-tool note or next-step preference for the current project and read it back. The analysis runtime must already be configured before enabling either preference.",
             input_schema=POST_TOOL_SCHEMA, output_schema={"type": "object", "additionalProperties": True},

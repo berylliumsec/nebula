@@ -17,6 +17,9 @@ from nebula.v3.settings_assistant_tools import (
     model_choices,
     set_default_model,
     set_post_tool_preference,
+    open_setting,
+    request_device_theme,
+    request_project_execution_mode,
 )
 
 
@@ -30,7 +33,33 @@ def test_catalog_covers_settings_destinations_without_secrets():
     assert all("credential" not in str(item.get("direct_changes", [])) for item in result["settings"])
     project_policy = next(item for item in result["settings"] if item["id"] == "network-scope")
     assert project_policy["assistant_ui_actions"] == ["project_execution_mode"]
+    assert next(item for item in result["settings"] if item["id"] == "appearance")["assistant_ui_actions"] == ["device_theme"]
     assert project_policy["direct_changes"] == []
+    assert {item["name"] for item in result["actions"]} == {
+        "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode",
+        "nebula.settings.set_post_tool", "nebula.settings.set_default_model",
+    }
+
+
+def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them():
+    assert open_setting({"setting_id": "appearance"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "open_setting", "setting_id": "appearance"},
+    }
+    assert request_device_theme({"theme": "zero-dark"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "device_theme", "theme": "zero-dark"},
+    }
+    assert request_project_execution_mode({"mode": "host", "from": "docker"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "project_execution_mode", "mode": "host", "from": "docker"},
+    }
+    with pytest.raises(ValueError):
+        open_setting({"setting_id": "hidden-secret"})
+    with pytest.raises(ValueError):
+        request_device_theme({"theme": "custom-css"})
+    with pytest.raises(ValueError):
+        request_project_execution_mode({"mode": "unconfined"})
 
 
 def test_post_tool_change_reads_back_from_core(tmp_path):
@@ -89,7 +118,7 @@ def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
     names = {plugin.spec.name for plugin in provider_plugins(store, artifacts, project.id)}
     assert names == {
         "nebula.help.search", "nebula.help.project_context",
-        "nebula.settings.catalog", "nebula.settings.set_post_tool",
+        "nebula.settings.catalog", "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
 
@@ -105,7 +134,7 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(t
     assert not any(name.startswith(("nebula.settings.", "nebula.help.")) for name in ordinary.specs)
     assert set(settings.specs) == {
         "nebula.help.search", "nebula.help.project_context",
-        "nebula.settings.catalog", "nebula.settings.set_post_tool",
+        "nebula.settings.catalog", "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
 
