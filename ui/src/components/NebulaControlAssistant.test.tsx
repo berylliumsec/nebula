@@ -54,6 +54,17 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("button", { name: "Show Nebula assistant" })).toBeInTheDocument();
   });
 
+  it("keeps the catalog available from a navigation prompt without a model", async () => {
+    const user = userEvent.setup();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula to change a setting" }), "open pineapple moon");
+    const send = screen.getByRole("button", { name: "Send to Nebula assistant" });
+    expect(send).toBeEnabled();
+    await user.click(send);
+    expect(screen.getByText("I couldn't identify one setting. Browse the settings list below.")).toBeInTheDocument();
+  });
+
   it("sends once on Enter, keeps Shift+Enter as a newline, and ignores composition", async () => {
     const user = userEvent.setup();
     const streamChat = vi.fn().mockResolvedValue({

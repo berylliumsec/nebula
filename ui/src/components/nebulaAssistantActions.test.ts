@@ -14,8 +14,55 @@ describe("settings assistant actions", () => {
   it("opens an unambiguous named setting and ignores ordinary questions", () => {
     expect(settingToOpen("Please open MCP servers settings")?.id).toBe("settings.mcp");
     expect(settingToOpen("can you bring up model provider settings?")?.id).toBe("settings.providers");
+    expect(settingToOpen("open project scope")?.id).toBe("settings.network-scope");
     expect(settingToOpen("What can I change in settings?")).toBeUndefined();
     expect(settingToOpen("open assistant")).toBeUndefined();
+  });
+
+  it("routes plain-language requests for every catalog setting without a model turn", () => {
+    const cases = [
+      ["open theme", "settings.appearance"],
+      ["show provider", "settings.providers"],
+      ["bring up playbook", "settings.skills"],
+      ["open internet", "settings.web-search"],
+      ["show follow up", "settings.follow-up"],
+      ["open codex", "settings.harnesses"],
+      ["open mcp", "settings.mcp"],
+      ["open ssh", "settings.ssh-environments"],
+      ["open automation", "settings.automation-runtime"],
+      ["open vpn", "settings.vpn-egress"],
+      ["open podman", "settings.runners"],
+      ["open project scope", "settings.network-scope"],
+      ["open identity", "settings.operators"],
+      ["open qr", "settings.devices"],
+      ["open upgrade", "settings.release"],
+      ["open telemetry", "settings.diagnostics"],
+      ["open readiness", "settings.setup"],
+    ];
+    for (const [prompt, expected] of cases) expect(settingToOpen(prompt)?.id, prompt).toBe(expected);
+  });
+
+  it("finds the intended setting in conversational navigation requests", () => {
+    const cases = [
+      ["where can I change the theme colors?", "settings.appearance"],
+      ["which setting holds API keys for models?", "settings.providers"],
+      ["where are the shared skills?", "settings.skills"],
+      ["where can I find web research?", "settings.web-search"],
+      ["where is automatic follow up?", "settings.follow-up"],
+      ["where do I configure the harness?", "settings.harnesses"],
+      ["where can I add an MCP server?", "settings.mcp"],
+      ["which setting manages remote SSH machines?", "settings.ssh-environments"],
+      ["where is the automation runtime?", "settings.automation-runtime"],
+      ["where do I upload an OpenVPN tunnel profile?", "settings.vpn-egress"],
+      ["where is the Podman runner config?", "settings.runners"],
+      ["where is project scope for CIDR ports?", "settings.network-scope"],
+      ["where can I set operator identity?", "settings.operators"],
+      ["where can I pair my phone?", "settings.devices"],
+      ["where are release channel updates?", "settings.release"],
+      ["where do I inspect logs?", "settings.diagnostics"],
+      ["where can I check Core readiness?", "settings.setup"],
+    ];
+    for (const [prompt, expected] of cases) expect(settingToOpen(prompt)?.id, prompt).toBe(expected);
   });
 
   it("chooses advertised low effort and a matching fast harness model", () => {

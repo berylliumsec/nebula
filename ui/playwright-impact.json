@@ -1746,8 +1746,8 @@
       {"area":"nebula-settings-assistant","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"stabilization Nebula settings assistant opens from every screen and changes this device theme","runtime":"mock","shard":"1/1"},
       {"area":"nebula-settings-assistant","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization Nebula settings assistant opens from every screen and changes this device theme","runtime":"mock","shard":"1/1"},
       {"area":"nebula-settings-assistant","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization Nebula settings assistant opens from every screen and changes this device theme","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-settings-assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant saves and shows Host then Docker on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"nebula-settings-assistant","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant saves and shows Host then Docker on production LAN Core","runtime":"real-core","shard":"1/1"}
+      {"area":"nebula-settings-assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode (?:assistant saves and shows Host then Docker|settings assistant opens every catalog setting from a prompt) on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"nebula-settings-assistant","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode (?:assistant saves and shows Host then Docker|settings assistant opens every catalog setting from a prompt) on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "desktop-interface": [
       {"area":"desktop-interface","project":"desktop","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
