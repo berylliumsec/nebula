@@ -2113,6 +2113,8 @@ reloadTest("stabilization Nebula settings assistant opens from every screen and 
   await open.click();
   const assistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
   await expect(assistant).toBeVisible();
+  const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Nebula settings assistant"]').analyze();
+  expect(assistantA11y.violations).toEqual([]);
   await assistant.getByText("Settings I can help with").click();
   await assistant.getByRole("button", { name: "Light", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");

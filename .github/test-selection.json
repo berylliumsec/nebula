@@ -1,16 +1,17 @@
 {
-  "change_digest": "1ac5abc2b1d787021e1f140b4ebc48ef79de7710c0c26c1991a04e42ce51e707",
+  "change_digest": "b9998a897063a60dbe52c540309d0da2c430f07a4234af5cabe5dfe4b8ebb854",
   "reviewed_by": "Codex focused review of Nebula settings assistant worktree",
-  "reason": "The assistant switches Project Policy execution mode through a visible Settings lens and explicit Host confirmation, preserves unrelated policy fields with revision checks, reads Core back, and waits for the refreshed control to show the saved value before closing. The catalog and provider/harness prompt locate the mode. Select five Core settings tests, eleven focused UI tests, the assistant interaction in eight browser profiles, and the production LAN real-Core mode-change journey in desktop Chromium and 320 px WebKit.",
-  "exclusions": "No native code changed. Unrelated Python, frontend, and Playwright journeys and full suites are excluded. The eight-profile UI journey uses mocked Core for interaction and viewport behavior; the two real-Core browser runs prove durable policy and production LAN behavior. Physical-device testing is unavailable and not claimed.",
+  "reason": "Core now separates settings-only provider and harness tool catalogs and rejects cross-assistant session reuse. The UI resolves settings navigation locally, including 17 canonical, 17 short, and 17 conversational prompts. Select the settings tools file and one exact harness boundary test, two assistant component files, eight focused mocked browser profiles, and the catalog plus saved-mode journeys in desktop and 320 px WebKit real-Core production LAN. The no-model navigation fallback remains available from the Send button. The selected interface journey scans the assistant dialog for accessibility violations.",
+  "exclusions": "No native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded after reviewing the shared chat, API, harness, and Playwright manifest diff. The browser run covers the selected settings journeys only. Physical-device testing is unavailable and not claimed.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 11,
+    "python": 8,
+    "frontend": 14,
     "native": 0,
-    "playwright": 10
+    "playwright": 12
   },
   "python": [
-    "tests/v3/test_settings_assistant_tools.py"
+    "tests/v3/test_settings_assistant_tools.py",
+    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session"
   ],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",
