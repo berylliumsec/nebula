@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from importlib import resources
 from typing import Any
 
 from .domain import AutomationProjectPolicy, Engagement, HarnessProfile, ProviderProfile, RiskClass
@@ -31,6 +33,12 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("setup", "Terminal and Core setup", "setup-settings"),
 )
 
+# Packaged with Core and imported by the browser build. IDs are the only
+# navigation arguments accepted from a model; the browser resolves the route.
+APP_DESTINATIONS: tuple[dict[str, Any], ...] = tuple(json.loads(
+    resources.files("nebula.v3").joinpath("assistant_destinations.json").read_text(encoding="utf-8")
+))
+
 CATALOG_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {}}
 SEARCH_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -41,6 +49,11 @@ OPEN_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {"setting_id": {"type": "string", "enum": [item[0] for item in SETTING_DESTINATIONS]}},
     "required": ["setting_id"],
+}
+NAVIGATE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"destination_id": {"type": "string", "enum": [item["id"] for item in APP_DESTINATIONS]}},
+    "required": ["destination_id"],
 }
 THEME_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -77,6 +90,7 @@ DEFAULT_MODEL_SCHEMA = {
 def catalog() -> dict[str, Any]:
     return {
         "actions": [
+            {"name": "nebula.navigate.open", "argument": "destination_id", "values": [item["id"] for item in APP_DESTINATIONS], "effect": "navigate the requesting browser to a listed Nebula page"},
             {"name": "nebula.settings.open", "argument": "setting_id", "values": [item[0] for item in SETTING_DESTINATIONS], "effect": "open the setting on the requesting browser"},
             {"name": "nebula.settings.set_device_theme", "argument": "theme", "values": THEME_SCHEMA["properties"]["theme"]["enum"], "effect": "apply a theme on the requesting browser"},
             {"name": "nebula.settings.set_project_mode", "argument": "mode", "values": ["docker", "host"], "effect": "show the selected project's policy, confirm Host access if needed, and save for new sessions"},
@@ -98,6 +112,7 @@ def catalog() -> dict[str, Any]:
             }
             for identifier, label, target in SETTING_DESTINATIONS
         ],
+        "destinations": list(APP_DESTINATIONS),
         "device_appearance": {
             "values": ["light", "dark", "studio-dark", "zero-light", "zero-dark"],
             "authority": "browser preference; the assistant UI applies explicit theme commands on the active device",
@@ -112,6 +127,16 @@ def open_setting(arguments: dict[str, Any]) -> dict[str, Any]:
     return {
         "state": "pending_browser_apply",
         "client_action": {"kind": "open_setting", "setting_id": setting_id},
+    }
+
+
+def open_destination(arguments: dict[str, Any]) -> dict[str, Any]:
+    destination_id = arguments.get("destination_id")
+    if not isinstance(destination_id, str) or destination_id not in {item["id"] for item in APP_DESTINATIONS}:
+        raise ValueError("choose a destination_id from nebula.settings.catalog")
+    return {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "navigate", "destination_id": destination_id},
     }
 
 
@@ -255,6 +280,9 @@ def provider_plugins(store: NebulaStore, artifact_store: Any, engagement_id: str
     async def open_setting_on_device(arguments: dict[str, Any]) -> dict[str, Any]:
         return open_setting(arguments)
 
+    async def navigate_on_device(arguments: dict[str, Any]) -> dict[str, Any]:
+        return open_destination(arguments)
+
     async def select_device_theme(arguments: dict[str, Any]) -> dict[str, Any]:
         return request_device_theme(arguments)
 
@@ -302,6 +330,11 @@ def provider_plugins(store: NebulaStore, artifact_store: Any, engagement_id: str
             input_schema=OPEN_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
             risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
         ), open_setting_on_device),
+        AnalysisTool(ToolSpec(
+            name="nebula.navigate.open", description="Open a listed Nebula page or Workbench view in the requesting browser, including All projects. Call with a destination_id from nebula.settings.catalog; the browser supplies the selected project ID. Returns a pending browser action, not proof of navigation.",
+            input_schema=NAVIGATE_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
+        ), navigate_on_device),
         AnalysisTool(ToolSpec(
             name="nebula.settings.set_device_theme", description="Request Light, Dark, Studio Dark, Zero Light, or Zero Dark on the requesting browser. Use zero-dark for 'Zero theme'. Returns a pending browser action; the browser applies and confirms it. Do not claim it was saved from this tool result alone.",
             input_schema=THEME_SCHEMA, output_schema={"type": "object", "additionalProperties": True},

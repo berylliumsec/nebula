@@ -17,6 +17,7 @@ The operator may open Settings from a catalog result without losing the draft.
 | Close | Window closes without deleting history | React presentation, Core transcript | Browser and real Core |
 | Compose | Enter submits one message; Shift+Enter inserts a newline; composition does not submit | React draft and Core turn | Component, browser and real Core |
 | Open a named setting | An unambiguous open/show request opens the existing Settings lens immediately | Shared settings catalog and shell lens | Component and browser |
+| Open an app destination | A request such as “show me my projects” navigates to the All projects page immediately; every static app route is available through the assistant catalog and exact model tool | Shared packaged destination list, URL and selected Core project | Tool unit, component, desktop/mobile browser, real Core |
 | Change this device's theme | An explicit theme command opens Appearance, applies and confirms the browser preference, then closes the lens; “Zero theme” means Zero Dark | Browser theme context and storage; shell lens owns presentation | Component and desktop/mobile browser |
 | Model-selected browser action | The model calls an exact open-setting or device-theme tool; Core returns a typed pending action, and only the requesting browser applies and confirms it | Scoped tool receipt and browser theme/lens state | Tool unit, component, real-Core browser and live model |
 | Fast answer | Provider turns request low effort; harness turns select advertised low effort and fast tier or matching fast model | Runtime model options and Core provider adapters | Component and real Core |
@@ -60,6 +61,16 @@ are deduplicated by tool-call id. Browser action outcomes remain attached to
 their Core message in browser storage so the requesting device shows the
 confirmation again after refresh. The transcript follows new results into view.
 The general assistant never receives these tools.
+The packaged app destination list covers the All projects page, the selected
+project overview and its Work, Assets, Evidence, Sources, Results, Findings and
+Reports pages, all eight Workbench views, Library and Settings. Its entries
+hold route templates, labels and aliases. The browser supplies the selected
+project ID and uses React Router navigation; the model receives only destination
+IDs and a bounded `nebula.navigate.open` action. A destination that needs a
+project opens All projects for selection when none is active. Dynamic resource
+links such as an individual finding or conversation require a selected record
+and are not guessed from a name. URL state remains authoritative after reload,
+back and forward. Settings mutations remain exclusive to this assistant.
 An explicit project execution-mode command is also handled by the UI so the
 operator sees the existing control and approves Host access before Core saves.
 The requested source mode, when supplied, must match Core's current policy;

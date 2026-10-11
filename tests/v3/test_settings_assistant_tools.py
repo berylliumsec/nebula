@@ -10,6 +10,7 @@ from nebula.v3.domain import AutomationProjectPolicy, ChatRole, ChatSession, Eng
 from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
 from nebula.v3.settings_assistant_tools import (
+    APP_DESTINATIONS,
     SETTING_DESTINATIONS,
     catalog,
     provider_plugins,
@@ -18,6 +19,7 @@ from nebula.v3.settings_assistant_tools import (
     set_default_model,
     set_post_tool_preference,
     open_setting,
+    open_destination,
     request_device_theme,
     request_project_execution_mode,
 )
@@ -25,6 +27,9 @@ from nebula.v3.settings_assistant_tools import (
 
 def test_catalog_covers_settings_destinations_without_secrets():
     result = catalog()
+    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 19
+    assert {item["id"] for item in result["destinations"]} == {item["id"] for item in APP_DESTINATIONS}
+    assert next(item for item in result["destinations"] if item["id"] == "projects")["path"] == "/projects"
     assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 17
     assert {item["id"] for item in result["settings"]} == {
         item[0] for item in SETTING_DESTINATIONS
@@ -36,12 +41,17 @@ def test_catalog_covers_settings_destinations_without_secrets():
     assert next(item for item in result["settings"] if item["id"] == "appearance")["assistant_ui_actions"] == ["device_theme"]
     assert project_policy["direct_changes"] == []
     assert {item["name"] for item in result["actions"]} == {
+        "nebula.navigate.open",
         "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode",
         "nebula.settings.set_post_tool", "nebula.settings.set_default_model",
     }
 
 
 def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them():
+    assert open_destination({"destination_id": "projects"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "navigate", "destination_id": "projects"},
+    }
     assert open_setting({"setting_id": "appearance"}) == {
         "state": "pending_browser_apply",
         "client_action": {"kind": "open_setting", "setting_id": "appearance"},
@@ -56,6 +66,8 @@ def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies
     }
     with pytest.raises(ValueError):
         open_setting({"setting_id": "hidden-secret"})
+    with pytest.raises(ValueError):
+        open_destination({"destination_id": "https://example.org"})
     with pytest.raises(ValueError):
         request_device_theme({"theme": "custom-css"})
     with pytest.raises(ValueError):
@@ -117,6 +129,7 @@ def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
     project = store.create(Engagement(name="Project A"))
     names = {plugin.spec.name for plugin in provider_plugins(store, artifacts, project.id)}
     assert names == {
+        "nebula.navigate.open",
         "nebula.help.search", "nebula.help.project_context",
         "nebula.settings.catalog", "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
@@ -131,8 +144,9 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(t
     common = dict(engagement_id=project.id, turn_id="turn", provider=None, model="small", allow_empty=True)
     ordinary = runtime.chat_components(**common)
     settings = runtime.chat_components(**common, settings_assistant=True)
-    assert not any(name.startswith(("nebula.settings.", "nebula.help.")) for name in ordinary.specs)
+    assert not any(name.startswith(("nebula.settings.", "nebula.help.", "nebula.navigate.")) for name in ordinary.specs)
     assert set(settings.specs) == {
+        "nebula.navigate.open",
         "nebula.help.search", "nebula.help.project_context",
         "nebula.settings.catalog", "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
