@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessProfile } from "../api/types";
-import { assistantTurnOptions, projectModeChange, settingToOpen } from "./nebulaAssistantActions";
+import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingToOpen } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
   it("recognizes explicit project mode changes without treating questions as commands", () => {
@@ -17,6 +17,8 @@ describe("settings assistant actions", () => {
     expect(settingToOpen("open project scope")?.id).toBe("settings.network-scope");
     expect(settingToOpen("What can I change in settings?")).toBeUndefined();
     expect(settingToOpen("open assistant")).toBeUndefined();
+    expect(isSettingNavigationRequest("Where can I fix a host file permission error in Docker mode?")).toBe(false);
+    expect(settingToOpen("Why can't my assistant edit a host file in Docker mode?")).toBeUndefined();
   });
 
   it("routes plain-language requests for every catalog setting without a model turn", () => {

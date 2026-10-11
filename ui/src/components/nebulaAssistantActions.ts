@@ -17,6 +17,9 @@ const NAVIGATION_WORDS = new Set([
 
 export function isSettingNavigationRequest(prompt: string): boolean {
   const text = normalized(prompt);
+  // A question about a failure needs an explanation grounded in Core state,
+  // even when it also contains a word such as "where" or "find".
+  if (/\b(?:why|how|cannot|cant|doesnt|failed|failure|error|troubleshoot|unable|permission|not working)\b/.test(text)) return false;
   return /^(?:(?:please|can you|could you|would you)\s+)?(?:open|show|bring up|take me to|go to|find|locate|where|which setting)\b/.test(text)
     || /\b(?:where|which setting|setting for|controls for|page for)\b/.test(text);
 }

@@ -237,7 +237,7 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
       }
       allowCloudToolResults = sharesToolResultsAlways(toolRuntime) || await confirm({
         title: "Share settings tool results?",
-        message: `Allow this turn to send bounded settings tool inputs and results to ${toolRuntime.profile.name}? Core keeps the saved settings, and risky actions still require approval.`,
+        message: `Allow this turn to send bounded Nebula help and settings tool inputs and results to ${toolRuntime.profile.name}? Core keeps the saved settings, and risky actions still require approval.`,
         confirmLabel: "Allow this turn",
       });
       if (!allowCloudToolResults) return;
@@ -284,15 +284,20 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
   const matches = query.trim() ? settingCatalog.filter((entry) =>
     [entry.label, entry.description, ...entry.keywords].join(" ").toLowerCase().includes(query.toLowerCase())) : settingCatalog;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up"]);
-  const panelContent = open ? <div ref={panel} className={styles.panel} role="dialog" aria-label="Nebula settings assistant" style={{ left: position.x, top: position.y }} hidden={hidden}>
+  const panelContent = open ? <div ref={panel} className={styles.panel} role="dialog" aria-label="Nebula assistant" style={{ left: position.x, top: position.y }} hidden={hidden}>
     <div className={styles.header}>
       <button className="icon-button subtle" type="button" aria-label="Move Nebula assistant" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
-      <strong>Nebula settings</strong><small>{engagement?.name ?? "Choose a project"}</small>
+      <strong>Nebula assistant</strong><small>{engagement?.name ?? "Choose a project"}</small>
       <button className="icon-button subtle" type="button" aria-label="Hide Nebula assistant" title="Hide assistant" onClick={() => setHidden(true)}><Minimize2 size={18} /></button>
       <button className="icon-button subtle" type="button" aria-label="Close Nebula assistant" title="Close assistant; keep history" onClick={() => { setOpen(false); setHidden(false); }}><X size={18} /></button>
     </div>
     <div className={styles.body}>
-      <div className={styles.transcript} role="log" aria-label="Nebula assistant conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>)}</div>
+      <div className={styles.transcript} role="log" aria-label="Nebula assistant conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children, ...props }) => {
+        const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
+        return setting
+          ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); setHidden(true); }}>{children}</a>
+          : <a href={href} {...props}>{children}</a>;
+      } }}>{message.content}</ReactMarkdown></div>)}</div>
       {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setSuggestions([]); setHidden(true); }}>{entry.label}</button>)}</div>}
       <details ref={catalogRef} className={styles.catalog}><summary>Settings I can help with</summary><input aria-label="Find a setting" placeholder="Find a setting" value={query} onChange={(event) => setQuery(event.target.value)} />
         <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setHidden(true); }}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
@@ -303,8 +308,8 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
       {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
       {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
     </div>
-    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Nebula to change a setting" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about or open a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
+    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Nebula a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about Nebula or open a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
   </div> : null;
 
-  return <>{!open || hidden ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula settings assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}{panelContent && createPortal(panelContent, document.body)}</>;
+  return <>{!open || hidden ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}{panelContent && createPortal(panelContent, document.body)}</>;
 }

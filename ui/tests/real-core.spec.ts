@@ -4974,6 +4974,56 @@ for (const runtime of ["provider", "harness"] as const) {
   });
 }
 
+test("project execution mode Nebula help answers a Docker host-file question and opens the setting on production LAN Core", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const stub = await startLocalModelStub({
+    responseContent: "Docker mode can edit the linked project workspace, but arbitrary host paths are outside that workspace. Link the folder or switch future sessions to Host mode. Existing sessions keep their current mode. [Open Project Policy](/settings#engagement-policy-settings)",
+  });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const created = await api.post("engagements", { data: {
+      name: "Nebula Help Acceptance", description: "", client_name: null, status: "active",
+      tags: [], workspace_path: null, metadata: {},
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = ((await created.json()) as { id: string }).id;
+    const providerResponse = await api.post("providers", { data: {
+      name: "Nebula help model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string; revision: number };
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: { model: "security-model", expected_revision: provider.revision },
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
+    await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+    const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+    const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
+    await composer.fill("Why can't my assistant edit /etc/hosts in Docker mode?");
+    await composer.press("Enter");
+    await expect(assistant.getByRole("link", { name: "Open Project Policy" })).toBeVisible({ timeout: 30_000 });
+    const request = stub.requests.find((item) => Array.isArray(item.tools) &&
+      (item.tools as Array<{ function?: { name?: string } }>).some((tool) => tool.function?.name === "nebula_help_search"));
+    expect(request).toBeTruthy();
+    const toolNames = (request!.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name);
+    expect(toolNames).toContain("nebula_help_project_context");
+    expect(JSON.stringify(request!.messages)).toContain("packaged product index");
+    await assistant.getByRole("link", { name: "Open Project Policy" }).click();
+    await expect(page.getByRole("dialog", { name: "Project policy and network scope" })).toBeVisible();
+    await expect(assistant).toBeHidden();
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "model stub", dispose: () => stopLocalModelStub(stub) },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("project execution mode assistant saves and shows Host then Docker on production LAN Core", async ({ page }) => {
   test.setTimeout(90_000);
   page.setDefaultTimeout(10_000);
@@ -4993,9 +5043,9 @@ test("project execution mode assistant saves and shows Host then Docker on produ
     const askMode = async (prompt: string) => {
       const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
       await launcher.click();
-      const assistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
+      const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
       await expect(assistant).toContainText(projectName);
-      const composer = assistant.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+      const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
       await composer.fill(prompt);
       await composer.press("Enter");
       const lens = page.getByRole("dialog", { name: "Project policy and network scope" });
@@ -5082,8 +5132,8 @@ test("project execution mode settings assistant opens every catalog setting from
     for (const entry of settingCatalog) {
       for (const prompt of [`open ${entry.label}`, naturalPrompts[entry.id], conversationalPrompts[entry.id]]) {
         await page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ }).click();
-        const assistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
-        const composer = assistant.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+        const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+        const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
         await composer.fill(prompt);
         const started = Date.now();
         await composer.press("Enter");
@@ -5098,8 +5148,8 @@ test("project execution mode settings assistant opens every catalog setting from
       }
     }
     await page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ }).click();
-    const assistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
-    const composer = assistant.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+    const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+    const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
     await composer.fill("open a setting named pineapple moon");
     const unknownStarted = Date.now();
     await composer.press("Enter");
