@@ -99,6 +99,7 @@ REQUIRED_MEMBERS = (
     # The harness MCP gateway shim runs from this bundled source file.
     ("nebula/v3/mcp_gateway.py",),
     ("nebula/v3/operator_help.md",),
+    ("nebula/v3/product_knowledge.sqlite3.b85",),
     ("nebula/v3/diagnostic_guidance.json",),
     ("nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",),
     ("nebula/v3/report_assets/fonts/NotoSans-Bold.ttf",),

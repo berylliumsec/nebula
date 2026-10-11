@@ -1,17 +1,19 @@
 {
-  "change_digest": "b9998a897063a60dbe52c540309d0da2c430f07a4234af5cabe5dfe4b8ebb854",
-  "reviewed_by": "Codex focused review of Nebula settings assistant worktree",
-  "reason": "Core now separates settings-only provider and harness tool catalogs and rejects cross-assistant session reuse. The UI resolves settings navigation locally, including 17 canonical, 17 short, and 17 conversational prompts. Select the settings tools file and one exact harness boundary test, two assistant component files, eight focused mocked browser profiles, and the catalog plus saved-mode journeys in desktop and 320 px WebKit real-Core production LAN. The no-model navigation fallback remains available from the Send button. The selected interface journey scans the assistant dialog for accessibility violations.",
-  "exclusions": "No native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded after reviewing the shared chat, API, harness, and Playwright manifest diff. The browser run covers the selected settings journeys only. Physical-device testing is unavailable and not claimed.",
+  "change_digest": "26f3e478d025b943ec82d8e9763cbf788ff6eb505820941e71bda57eac1eec04",
+  "reviewed_by": "Codex focused review of Nebula assistant product-help and packaged-index diff",
+  "reason": "The dedicated Nebula assistant searches a generated SQLite product index, reads selected-project Docker/Host context, answers troubleshooting questions, and opens Settings lenses. A PEP 517 build hook now generates the index for wheels, source archives, and editable installs; clean isolated package builds verify each path. Select 13 collected Python tests in settings tools and product index plus exact harness and package audit cases, 15 assistant component tests, the one assistant stabilization journey across eight permanent desktop/mobile Chromium/WebKit profiles, and three project execution mode journeys in assistant-real-desktop and assistant-real-webkit-320. The 14 browser cases exercise the production bundle and real Core on LAN where applicable.",
+  "exclusions": "No native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded. The build hook is verified by manual isolated package builds, not a release-wide packaging suite. No physical phone or Safari device was available. Browser fixture Core processes and the throwaway are separate from the production Core.",
   "expected_tests": {
-    "python": 8,
-    "frontend": 14,
+    "python": 13,
+    "frontend": 15,
     "native": 0,
-    "playwright": 12
+    "playwright": 14
   },
   "python": [
     "tests/v3/test_settings_assistant_tools.py",
-    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session"
+    "tests/v3/test_product_knowledge.py",
+    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session",
+    "tests/v3/test_packaging.py::test_artifact_member_audit_accepts_only_complete_v3_payload"
   ],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",
@@ -19,15 +21,19 @@
   ],
   "native": [],
   "playwright": [
-    "nebula-settings-assistant/desktop",
-    "nebula-settings-assistant/compact",
-    "nebula-settings-assistant/mobile-chromium-small",
-    "nebula-settings-assistant/mobile-chromium-ledger-390",
-    "nebula-settings-assistant/mobile-chromium-wide",
-    "nebula-settings-assistant/mobile-webkit-small",
-    "nebula-settings-assistant/mobile-webkit",
-    "nebula-settings-assistant/mobile-webkit-wide",
-    "nebula-settings-assistant/assistant-real-desktop",
-    "nebula-settings-assistant/assistant-real-webkit-320"
+    "nebula-assistant/desktop/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/compact/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-chromium-small/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-chromium-ledger-390/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-chromium-wide/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-webkit-small/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-webkit/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/mobile-webkit-wide/stabilization Nebula assistant opens from every screen and changes this device theme",
+    "nebula-assistant/assistant-real-desktop/project execution mode Nebula help answers a Docker host-file question",
+    "nebula-assistant/assistant-real-desktop/project execution mode assistant saves and shows Host then Docker",
+    "nebula-assistant/assistant-real-desktop/project execution mode settings assistant opens every catalog setting",
+    "nebula-assistant/assistant-real-webkit-320/project execution mode Nebula help answers a Docker host-file question",
+    "nebula-assistant/assistant-real-webkit-320/project execution mode assistant saves and shows Host then Docker",
+    "nebula-assistant/assistant-real-webkit-320/project execution mode settings assistant opens every catalog setting"
   ]
 }

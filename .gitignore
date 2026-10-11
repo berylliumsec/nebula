@@ -13,3 +13,4 @@ src/.DS_Store
 nmap_output
 ui/playwright-report/
 ui/test-results/
+src/nebula/v3/product_knowledge.sqlite3.b85

@@ -1,4 +1,4 @@
-# Nebula settings assistant contract
+# Nebula assistant contract
 
 Entry: the persistent assistant icon in the shared shell opens one movable,
 hideable control conversation. Closing the window preserves its Core transcript.
@@ -19,6 +19,8 @@ The operator may open Settings from a catalog result without losing the draft.
 | Open a named setting | An unambiguous open/show request opens the existing Settings lens immediately | Shared settings catalog and shell lens | Component and browser |
 | Fast answer | Provider turns request low effort; harness turns select advertised low effort and fast tier or matching fast model | Runtime model options and Core provider adapters | Component and real Core |
 | Change project execution mode | An explicit request opens Project Policy, names the selected project, confirms Host access, saves through the existing policy API, reads back the mode, refreshes the visible control, and closes the lens after showing the result | Core automation policy; shell lens owns presentation | Component, browser, real Core and LAN |
+| Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
+| Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Host access confirmation | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 
 The setting catalog lists every Settings section. Current direct actions cover
 device appearance, provider and harness default models from their advertised
@@ -48,6 +50,26 @@ failure leaves the policy unchanged and keeps a retryable draft. The saved
 mode must be read back, and the visible control must reflect it before the lens
 closes. Existing sessions
 retain their frozen policy revision; new sessions use the new mode.
+The assistant also answers Nebula usage and troubleshooting questions. Its
+read-only project-context tool reports the selected project's current policy
+and linked workspace without creating or changing a policy. In Docker mode,
+commands can work inside the project workspace; an arbitrary host path is not
+available merely because the host has it. Linking the intended folder as the
+project workspace or, with explicit Host access consent, switching future
+sessions to Host mode are the two relevant remedies. The assistant must explain
+that a previously opened command session keeps its frozen mode. Its product
+help scope does not grant filesystem commands, arbitrary MCP servers, web
+search, or a way to bypass the existing Settings approval path. General chat
+still does not receive Nebula settings tools. When its answer cites a known
+Settings destination, the UI opens that destination as a lens on click.
+The product knowledge index is generated from current top-level product
+documentation, the Settings catalog, and this contract, chunked by headings with source paths and
+content hashes, embedded locally, and packaged as a compressed text resource
+that the package build generates and Core loads as a read-only SQLite vector database in memory. A full-text index answers immediately if the local embedding
+model has not been prepared; dense retrieval is added when that model is
+ready. Build verification rejects an index whose source digest no longer
+matches the documentation. The index describes product behavior; Core-owned
+project policy and workspace state always come from the live context tool.
 Provider turns request low effort; Core's provider adapter maps or omits that
 control for the selected model. Harness model options determine low effort and
 fast selection. An existing harness conversation may rebind to its advertised
