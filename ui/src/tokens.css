@@ -187,7 +187,8 @@
   --shadow: 0 18px 48px rgb(41 63 84 / 16%);
 }
 
-:root[data-theme="zero-dark"] {
+/* The original Zero Dark preference now has its own stable palette. */
+:root[data-theme="zero-classic"] {
   color-scheme: dark;
   --canvas: #080a0d;
   --surface: #0e1115;
@@ -218,4 +219,74 @@
   --action-primary-pressed: color-mix(in srgb, var(--blue) 50%, var(--surface-raised));
   --action-primary-text: #f4f8fc;
   --shadow: 0 18px 48px rgb(0 0 0 / 46%);
+}
+
+:root[data-theme="glacier"] {
+  color-scheme: dark;
+  --canvas: #071923;
+  --surface: #102834;
+  --surface-muted: #16313e;
+  --surface-raised: #1c3b4a;
+  --surface-overlay: #213f4d;
+  --surface-hover: #284a59;
+  --text: #deedf1;
+  --text-strong: #f6fcfd;
+  --muted: #a8c0c9;
+  --muted-strong: #c3d7de;
+  --border: #466978;
+  --border-soft: #2c4c5a;
+  --blue: #6cc9df;
+  --blue-bright: #a4e7f0;
+  --blue-muted: rgb(108 201 223 / 15%);
+  --green: #78c5a6;
+  --green-muted: #173b32;
+  --violet: #b7b0e2;
+  --yellow: #e9ca83;
+  --orange: #dda677;
+  --red: #e3888a;
+  --red-muted: #402a34;
+  --focus: #a4e7f0;
+  --on-accent: #06202b;
+  --action-primary: #286f88;
+  --action-primary-hover: #3388a3;
+  --action-primary-pressed: #215c72;
+  --action-primary-text: #f6fcfd;
+  --brand-start: #6cc9df;
+  --brand-end: #6d9cdf;
+  --shadow: 0 18px 48px rgb(2 14 22 / 48%);
+}
+
+:root[data-theme="amber"] {
+  color-scheme: dark;
+  --canvas: #1c1511;
+  --surface: #291f19;
+  --surface-muted: #32251d;
+  --surface-raised: #392b22;
+  --surface-overlay: #413025;
+  --surface-hover: #4b3729;
+  --text: #f1e4d3;
+  --text-strong: #fff8eb;
+  --muted: #c8ae93;
+  --muted-strong: #ddc4a8;
+  --border: #70523b;
+  --border-soft: #513b2d;
+  --blue: #e7ad62;
+  --blue-bright: #ffd397;
+  --blue-muted: rgb(231 173 98 / 15%);
+  --green: #a5c892;
+  --green-muted: #303b27;
+  --violet: #d6b5d5;
+  --yellow: #eac777;
+  --orange: #efad6b;
+  --red: #eb8e88;
+  --red-muted: #4a2828;
+  --focus: #ffd397;
+  --on-accent: #2c1908;
+  --action-primary: #9c622d;
+  --action-primary-hover: #b27639;
+  --action-primary-pressed: #824f23;
+  --action-primary-text: #fff8eb;
+  --brand-start: #e7ad62;
+  --brand-end: #c9805c;
+  --shadow: 0 18px 48px rgb(20 11 5 / 54%);
 }

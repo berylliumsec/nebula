@@ -1,20 +1,33 @@
 {
-  "change_digest": "34e354cdd6b08665844b0b15dd0a16baf2ab17986750fd158e446cd3a6cd2396",
-  "reviewed_by": "Codex review of desktop release deployment status recording",
-  "reason": "The daily release driver currently records unsuccessful candidate attempts as desktop-release deployments, while successful release and updater jobs suppress deployment records. The change keeps preparation gated without creating a deployment and records a successful deployment only after the published release and updater Pages deployment succeed. The selected tests verify the gate, the existing no-deployment policy for preparation jobs, and the exact-tag publication record.",
-  "exclusions": "No Nebula product UI, browser journey, frontend unit, native code, or packaged binary changes. Playwright, frontend, native, unrelated Python tests, and full suites are excluded. Local collection and focused execution use Python 3.11.7; CI uses selected Python 3.12.",
+  "change_digest": "0efe6c53668439c3e42cc6cdb951c2a92f565470a57598c9b08cb4d0a0978af0",
+  "reviewed_by": "Codex focused review of theme migration, palette options, Zero shell compatibility, and the public commit guard",
+  "reason": "The original Zero Dark palette is restored as Zero Classic with a one-time device-preference migration. Glacier and Amber add distinct token palettes and previews while Zero Dark remains Dark-token matched. Three collected ThemeContext component cases cover storage fallback and the one-time migration. Three theme-specific App cases passed locally with an exact name filter. CI cannot filter Vitest tests within a file; running the entire App file revealed eight unrelated failures, so it is excluded from the CI selection pending separate work. Collected browser tests: 8 picker cases across 1440/1024 desktop and 320/390/430 Chromium/WebKit, 9 desktop Zero Dark material cases, and 3 Workbench variant cases in desktop Chromium plus Pixel 5 Chromium and 390px iPhone WebKit. Browser coverage checks selection, storage reload, original palette values, shell geometry, visual surfaces, and mobile width. The local public commit guard now defaults to excluding CSS from content review, accepts local path and size configuration, and requires exact staged-tree authorization plus a matching commit trailer for a one-commit bypass. Eighteen collected Python guard cases exercise those boundaries with synthetic Git repositories and a fake reviewer. Existing screenshot attachments remain visual evidence instead of stale binary snapshots.",
+  "exclusions": "No Core API, provider, harness, server-owned state, native runtime, or database migration changed. Unrelated Python, frontend, and Playwright files and full suites are excluded. The full App.test.tsx file is excluded from CI because 8 unrelated cases fail; its 3 changed theme cases passed with a local filter. The preference is device-local; production real-Core LAN browser smoke will check the served build. Physical-device acceptance is unavailable and is reported separately.",
   "expected_tests": {
-    "python": 3,
-    "frontend": 0,
+    "python": 18,
+    "frontend": 3,
     "native": 0,
-    "playwright": 0
+    "playwright": 20
   },
   "python": [
-    "tests/test_daily_stable_release.py::test_workflow_checks_initiator_before_exposing_app_key",
-    "tests/v3/test_packaging.py::test_protected_release_jobs_do_not_create_deployment_records",
-    "tests/v3/test_packaging.py::test_desktop_release_record_follows_successful_updater_deployment_and_uses_tag"
+    "tests/test_public_commit_guard.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/state/ThemeContext.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:zero-dark-palette/desktop",
+    "entry:zero-dark-palette/compact",
+    "entry:zero-dark-palette/mobile-chromium-small",
+    "entry:zero-dark-palette/mobile-chromium",
+    "entry:zero-dark-palette/mobile-chromium-wide",
+    "entry:zero-dark-palette/mobile-webkit-small",
+    "entry:zero-dark-palette/mobile-webkit",
+    "entry:zero-dark-palette/mobile-webkit-wide",
+    "entry:zero-dark-visuals/desktop",
+    "entry:theme-variety/desktop",
+    "entry:theme-variety/mobile-chromium",
+    "entry:theme-variety/mobile-webkit"
+  ]
 }

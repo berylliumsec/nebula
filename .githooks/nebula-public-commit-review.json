@@ -1,0 +1,6 @@
+{
+  "exclude_globs": ["*.css"],
+  "max_files": 80,
+  "max_file_bytes": 1024000,
+  "max_total_bytes": 1048576
+}

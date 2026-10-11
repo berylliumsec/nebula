@@ -9,7 +9,7 @@ import {
 } from "react";
 import { readStorage, writeStorage } from "./browserStorage";
 
-export type ThemePreference = "light" | "dark" | "zero-light" | "zero-dark" | "studio-dark";
+export type ThemePreference = "light" | "dark" | "glacier" | "amber" | "zero-light" | "zero-dark" | "zero-classic" | "studio-dark";
 
 interface ThemeContextValue {
   preference: ThemePreference;
@@ -20,20 +20,29 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const STORAGE_KEY = "nebula.theme";
+const PALETTE_VERSION_KEY = "nebula.theme.paletteVersion";
+const PALETTE_VERSION = "2";
 const DEFAULT_PREFERENCE: ThemePreference = "dark";
+const THEME_ORDER: ThemePreference[] = ["light", "dark", "glacier", "amber", "zero-light", "zero-dark", "zero-classic", "studio-dark"];
 
 
 function normalizePreference(value: string | null): ThemePreference | undefined {
-  if (value === "light" || value === "dark" || value === "zero-light" || value === "zero-dark" || value === "studio-dark") return value;
-  if (value === "zero") return "zero-dark";
+  if (THEME_ORDER.some((theme) => theme === value)) return value as ThemePreference;
+  if (value === "zero") return "zero-classic";
   if (value === "high-contrast" || value === "system") return "dark";
   return undefined;
 }
 
 function initialPreference(): ThemePreference {
   const saved = readStorage(STORAGE_KEY);
-  const normalized = normalizePreference(saved) ?? DEFAULT_PREFERENCE;
+  // Existing Zero Dark choices belonged to the original charcoal palette.
+  // Move those device preferences once, then allow the new Zero Dark to persist.
+  const paletteVersion = readStorage(PALETTE_VERSION_KEY);
+  const normalized = (saved === "zero-dark" && paletteVersion !== PALETTE_VERSION
+    ? "zero-classic"
+    : normalizePreference(saved)) ?? DEFAULT_PREFERENCE;
   if (saved && saved !== normalized) writeStorage(STORAGE_KEY, normalized);
+  if (paletteVersion !== PALETTE_VERSION) writeStorage(PALETTE_VERSION_KEY, PALETTE_VERSION);
   return normalized;
 }
 
@@ -63,12 +72,13 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   }, [resolvedTheme]);
 
   const setPreference = useCallback((value: ThemePreference) => {
+    writeStorage(PALETTE_VERSION_KEY, PALETTE_VERSION);
     writeStorage(STORAGE_KEY, value);
     setPreferenceState(value);
   }, []);
 
   const cycleTheme = useCallback(() => {
-    setPreference(preference === "light" ? "dark" : preference === "dark" ? "zero-light" : preference === "zero-light" ? "zero-dark" : preference === "zero-dark" ? "studio-dark" : "light");
+    setPreference(THEME_ORDER[(THEME_ORDER.indexOf(preference) + 1) % THEME_ORDER.length]);
   }, [preference, setPreference]);
 
   const value = useMemo(

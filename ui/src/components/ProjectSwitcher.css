@@ -7,7 +7,7 @@
   background: var(--surface-raised);
 }
 
-:root[data-theme="zero-dark"] .side-nav .engagement-picker > .engagement-menu {
+:root[data-theme="zero-classic"] .side-nav .engagement-picker > .engagement-menu {
   border-color: rgb(205 225 255 / 17%);
   background: linear-gradient(145deg, rgb(27 29 35 / 97%), rgb(8 9 12 / 98%));
   box-shadow: 0 36px 110px rgb(0 0 0 / 68%), inset 0 1px rgb(255 255 255 / 7%);

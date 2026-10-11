@@ -1,7 +1,7 @@
 import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Contrast, KeyRound, Minus, Moon, Pencil, Plus, RefreshCw, RotateCcw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
+import { Check, Contrast, KeyRound, Minus, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, UserRound, X } from "lucide-react";
 import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SkillCatalogInfo } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { UpstreamProviderPicker, upstreamCatalog, type UpstreamProviderOption } from "../components/UpstreamProviderPicker";
@@ -30,12 +30,15 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { CompactSettingsList } from "../components/CompactSettingsList";
 
-const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "zero-light", label: "Zero Light", icon: Sun },
-  { value: "zero-dark", label: "Zero Dark", icon: Moon },
-  { value: "studio-dark", label: "Studio Dark", icon: Moon },
+const themeOptions: { value: ThemePreference; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "glacier", label: "Glacier" },
+  { value: "amber", label: "Amber" },
+  { value: "zero-light", label: "Zero Light" },
+  { value: "zero-dark", label: "Zero Dark" },
+  { value: "zero-classic", label: "Zero Classic" },
+  { value: "studio-dark", label: "Studio Dark" },
 ];
 
 const settingsSections = [
@@ -865,12 +868,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         <DevicePairingSettings api={api} disabled={previewMode} />
         <section className="panel appearance-panel" id="appearance-settings">
           <header className="panel-header compact"><div><h2>Appearance</h2><p>Saved on this device</p></div><Contrast size={19} /></header>
-          <div className="theme-options">
-            {themeOptions.map(({ value, label, icon: Icon }) => (
-              <button key={value} type="button" aria-pressed={preference === value} onClick={() => setPreference(value)}><span><Icon size={18} /></span><strong>{label}</strong>{preference === value && <small>Active</small>}</button>
+          <div className="theme-options" role="group" aria-label="Color theme">
+            {themeOptions.map(({ value, label }) => (
+              <button key={value} type="button" data-theme-choice={value} aria-label={label} aria-pressed={preference === value} onClick={() => setPreference(value)}><span className="theme-preview" aria-hidden="true"><i /><i /></span><strong>{label}</strong>{preference === value && <small aria-hidden="true">Active</small>}</button>
             ))}
           </div>
-          <p className="appearance-help">Choose Light, Dark, or Zero Dark for this device.</p>
+          <p className="appearance-help">Zero Classic keeps the original charcoal palette. Zero Dark uses Dark colors.</p>
           <TextSizeControl />
         </section>
         <section className="panel secrets-panel" id="security-settings">

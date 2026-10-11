@@ -14,11 +14,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.appearance",
     label: "Appearance and theme",
-    description: "Choose Light, Dark, or Zero Dark for this device",
+    description: "Choose a color theme for this device",
     category: "Identity & Security",
     scope: "Device",
     target: "appearance-settings",
-    keywords: ["appearance", "theme", "light", "dark", "zero dark", "color scheme", "display"],
+    keywords: ["appearance", "theme", "light", "dark", "zero dark", "zero classic", "glacier", "amber", "color scheme", "display"],
   },
   {
     id: "settings.providers",

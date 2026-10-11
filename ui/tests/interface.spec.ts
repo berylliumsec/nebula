@@ -707,6 +707,13 @@ async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark" | "stu
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 }
 
+async function setInitialZeroDark(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem("nebula.theme.paletteVersion", "2");
+    localStorage.setItem("nebula.theme", "zero-dark");
+  });
+}
+
 async function findPathologicalText(page: Page) {
   return page.locator(".page").evaluateAll((roots) => {
     const issues: string[] = [];
@@ -2081,29 +2088,92 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-test("theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
+test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await page.getByText("Identity & Security", { exact: true }).click();
   const appearance = page.locator("#appearance-settings");
+  const paletteTokens = [
+    "--canvas", "--surface", "--surface-muted", "--surface-raised", "--surface-overlay", "--surface-hover",
+    "--text", "--text-strong", "--muted", "--muted-strong", "--border", "--border-soft",
+    "--blue", "--blue-bright", "--blue-muted", "--green", "--green-muted", "--violet",
+    "--yellow", "--orange", "--red", "--red-muted", "--focus", "--action-primary",
+    "--action-primary-hover", "--action-primary-pressed", "--action-primary-text", "--shadow",
+  ];
+  let darkPalette: Record<string, string> | undefined;
+  let darkShellColors: { top: string; navigation: string } | undefined;
 
   for (const [label, theme, zeroShell] of [
-    ["Studio Dark", "studio-dark", false],
     ["Light", "light", false],
     ["Dark", "dark", false],
+    ["Glacier", "glacier", false],
+    ["Amber", "amber", false],
     ["Zero Light", "zero-light", true],
     ["Zero Dark", "zero-dark", true],
+    ["Zero Classic", "zero-classic", true],
+    ["Studio Dark", "studio-dark", false],
   ] as const) {
-    await appearance.getByRole("button", { name: label, exact: true }).click();
+    const option = appearance.getByRole("button", { name: label, exact: true });
+    await expect(option.locator(".theme-preview")).toBeVisible();
+    expect((await option.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await option.click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    await expect(option).toHaveAttribute("aria-pressed", "true");
     if (zeroShell) await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
     else await expect(page.locator(".app-shell")).not.toHaveClass(/zero-layer-shell/);
     expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBe(theme);
+    if (theme === "dark" || theme === "zero-dark") {
+      const palette = await page.evaluate((tokens) => Object.fromEntries(tokens.map((token) => [token, getComputedStyle(document.documentElement).getPropertyValue(token).trim()])), paletteTokens);
+      const shellColors = await page.evaluate(() => ({
+        top: getComputedStyle(document.querySelector(".top-bar")!).backgroundColor,
+        navigation: getComputedStyle(document.querySelector(".side-nav")!).backgroundColor,
+      }));
+      if (theme === "dark") {
+        darkPalette = palette;
+        darkShellColors = shellColors;
+      } else {
+        expect(palette).toEqual(darkPalette);
+        expect(shellColors).toEqual(darkShellColors);
+      }
+    }
+    if (theme === "zero-classic" || theme === "glacier" || theme === "amber") {
+      const expected = {
+        "zero-classic": { canvas: "#191b1e", surface: "#24272b", accent: "#68a8ff" },
+        glacier: { canvas: "#071923", surface: "#102834", accent: "#6cc9df" },
+        amber: { canvas: "#1c1511", surface: "#291f19", accent: "#e7ad62" },
+      }[theme];
+      const palette = await page.evaluate(() => {
+        const style = getComputedStyle(document.documentElement);
+        return { canvas: style.getPropertyValue("--canvas").trim(), surface: style.getPropertyValue("--surface").trim(), accent: style.getPropertyValue("--blue").trim() };
+      });
+      expect(palette).toEqual(expected);
+      if (testInfo.project.name === "desktop") await testInfo.attach(`${theme}-appearance.png`, { body: await appearance.screenshot(), contentType: "image/png" });
+    }
   }
 
+  await appearance.getByRole("button", { name: "Zero Dark", exact: true }).click();
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+});
+
+test("theme picker keeps Zero Classic, Glacier, and Amber Workbench colors across viewports", async ({ page }, testInfo) => {
+  for (const [label, theme, canvas, background, zeroShell] of [
+    ["Zero Classic", "zero-classic", "#191b1e", "rgb(25, 27, 30)", true],
+    ["Glacier", "glacier", "#071923", "rgb(7, 25, 35)", false],
+    ["Amber", "amber", "#1c1511", "rgb(28, 21, 17)", false],
+  ] as const) {
+    await openWorkspace(page, "/settings#appearance-settings", "Settings");
+    await page.locator("#appearance-settings").getByRole("button", { name: label, exact: true }).click();
+    await openWorkspace(page, "/", "Workbench");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    if (zeroShell) await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+    else await expect(page.locator(".app-shell")).not.toHaveClass(/zero-layer-shell/);
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim())).toBe(canvas);
+    await expect(page.locator(".main-content")).toHaveCSS("background-color", background);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    if (testInfo.project.name === "desktop") await testInfo.attach(`${theme}-workbench.png`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  }
 });
 
 test("theme picker Studio Dark keeps the project and Workbench readable across viewports", async ({ page }, testInfo) => {
@@ -2785,7 +2855,7 @@ test("all task workspaces keep responsive content inside its owning surface", as
 
 test("all assistant states remain fully visible inside mobile Workbench navigation and desktop viewports", async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 2048, height: 868 });
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/?view=chat", "Workbench");
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations" }).click();
@@ -3280,7 +3350,7 @@ test("conversation More actions remain usable on mobile Workbench navigation", a
 test("the 320px mobile companion keeps controls visible and the composer above navigation", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One browser run covers the explicit 320px boundary.");
   await page.setViewportSize({ width: 320, height: 700 });
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", { name: "Start new chat", exact: true }).click();
 
@@ -3353,7 +3423,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
 
 test("host folder picker remains usable as a bounded project workflow", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile browser projects.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/settings", "Settings");
   if (testInfo.project.name.startsWith("mobile-")) {
     await page.getByRole("button", { name: "Show sidebar" }).click();
@@ -3522,7 +3592,7 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
     enabled: true, default_model: "fixture", privacy: {local_only: true, permits_sensitive_data: true},
     capabilities: {models: ["fixture"], checked_at: entity.updated_at, authentication_state: "verified"},
   }]}));
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await page.goto("/?view=chat");
   await page.getByRole("button", {name: "New chat", exact: true}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
@@ -8224,7 +8294,7 @@ test("completed harness output keeps live commentary in expandable work detail",
 });
 
 test("the workbench expands to the full viewport with compact chrome and completed harness output geometry", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/?view=chat", "Workbench");
 
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
@@ -8300,7 +8370,7 @@ test("the workbench expands to the full viewport with compact chrome and complet
 });
 
 test("phone shell Code Browser and Files focus leaves only the work surface and exit control", async ({ page }, testInfo) => {
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await page.route("**/api/v1/engagements/scratch-project/browser-companion", route => route.fulfill({ json: {
     session_id: "focus-browser", active_tab_id: null, tabs: [], page_state_reset: false,
   } }));
@@ -8441,7 +8511,7 @@ test("all three themes snap primary workbench surfaces to the available screen",
 
 test("the code editor keeps its caret and syntax layers aligned while typing", async ({ page }, testInfo) => {
   test.slow();
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await page.goto("/?view=code");
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
@@ -8809,7 +8879,7 @@ test("remote Core mode keeps the native Browser and command worker on this deskt
 });
 
 test("phone shell project notes fill the Workbench writing area", async ({ page }, testInfo) => {
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   if (mobile) {
@@ -8861,7 +8931,7 @@ test("phone shell project notes fill the Workbench writing area", async ({ page 
 
 test("terminal and notes keep a visible focused caret", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/", "Workbench");
 
   const terminalSurface = page.locator(".xterm-shell").first();
@@ -9197,7 +9267,7 @@ for (const theme of ["light", "dark", "zero-dark"] as const) {
 
 test("Zero keeps its themed shell without the removed context deck", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "The full shell contract only needs one desktop browser project.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/", "Workbench");
 
   await expect(page.locator(".app-shell.zero-layer-shell")).toHaveCount(1);
@@ -9214,7 +9284,7 @@ test("Zero keeps its themed shell without the removed context deck", async ({ pa
 });
 
 test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ page }, testInfo) => {
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await setInitialZeroDark(page);
   await openWorkspace(page, "/", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
 
@@ -9301,50 +9371,86 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   expect(await persistentSurface.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
 });
 
+async function expectZeroDarkBackground(page: Page, selector: string, token: string) {
+  const colors = await page.locator(selector).first().evaluate((element, variable) => {
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = `var(${variable})`;
+    document.body.append(probe);
+    const expected = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { actual: getComputedStyle(element).backgroundColor, expected };
+  }, token);
+  expect(colors.actual, `${selector} should use ${token}`).toBe(colors.expected);
+}
+
+async function expectZeroDarkShellMaterials(page: Page) {
+  await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+  await expectZeroDarkBackground(page, ".zero-status-band", "--canvas");
+  await expectZeroDarkBackground(page, ".side-nav.zero-anchor-dock", "--surface");
+  await expectZeroDarkBackground(page, ".main-content", "--canvas");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+}
+
 for (const [name, route, heading] of workspaces) {
   test(`Zero Dark preserves the ${name} desktop hierarchy`, async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
-    await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+    test.skip(testInfo.project.name !== "desktop", "Capture the representative desktop surface at its reference size.");
+    await page.addInitScript(() => {
+      localStorage.setItem("nebula.theme.paletteVersion", "2");
+      localStorage.setItem("nebula.theme", "zero-dark");
+    });
     await openWorkspace(page, route, heading);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
-    await page.waitForTimeout(360);
-    await expect(page).toHaveScreenshot(`${name}-zero-dark.png`, { fullPage: true });
+    await expectZeroDarkShellMaterials(page);
+    await testInfo.attach(`${name}-zero-dark.png`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   });
 }
 
 test("Zero Dark preserves representative desktop overlays", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  test.skip(testInfo.project.name !== "desktop", "Capture the representative desktop surface at its reference size.");
+  await page.addInitScript(() => {
+    localStorage.setItem("nebula.theme.paletteVersion", "2");
+    localStorage.setItem("nebula.theme", "zero-dark");
+  });
   await openWorkspace(page, "/", "Workbench");
+  await expectZeroDarkShellMaterials(page);
   await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
-  await expect(page).toHaveScreenshot("workbench-zero-dark-command-palette.png", { fullPage: true });
+  await expectZeroDarkBackground(page, ".command-palette", "--surface-raised");
+  await testInfo.attach("workbench-zero-dark-command-palette.png", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
 
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+Alt+i");
   await expect(page.getByRole("complementary", { name: "Activity inspector" })).toBeVisible();
-  await expect(page).toHaveScreenshot("workbench-zero-dark-activity-drawer.png", { fullPage: true });
+  await expectZeroDarkBackground(page, ".activity-center.open", "--surface-raised");
+  await testInfo.attach("workbench-zero-dark-activity-drawer.png", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   await page.getByRole("button", { name: "Close activity center" }).click();
 });
 
 test("Zero Dark preserves a representative resource dialog", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  test.skip(testInfo.project.name !== "desktop", "Capture the representative desktop surface at its reference size.");
+  await page.addInitScript(() => {
+    localStorage.setItem("nebula.theme.paletteVersion", "2");
+    localStorage.setItem("nebula.theme", "zero-dark");
+  });
   await openWorkspace(page, "/findings", "Findings");
-  await page.waitForTimeout(360);
   await page.getByRole("button", { name: "New finding" }).click();
   await expect(page.getByRole("dialog", { name: "Create candidate finding" })).toBeVisible();
-  await expect(page).toHaveScreenshot("findings-zero-dark-dialog.png", { fullPage: true });
+  await expectZeroDarkBackground(page, ".modal-surface", "--surface-raised");
+  await testInfo.attach("findings-zero-dark-dialog.png", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   await page.getByRole("button", { name: "Close candidate finding dialog" }).click();
 });
 
 test("Zero Dark preserves the appearance selector", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
-  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  test.skip(testInfo.project.name !== "desktop", "Capture the representative desktop surface at its reference size.");
+  await page.addInitScript(() => {
+    localStorage.setItem("nebula.theme.paletteVersion", "2");
+    localStorage.setItem("nebula.theme", "zero-dark");
+  });
   await openWorkspace(page, "/settings#appearance-settings", "Settings");
   await expect(page.getByRole("link", { name: "Advanced settings" })).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".appearance-panel")).toBeVisible();
-  await expect(page.locator(".appearance-panel")).toHaveScreenshot("settings-zero-dark-appearance.png");
+  await expectZeroDarkBackground(page, ".theme-options button[aria-pressed='true']", "--blue-muted");
+  await testInfo.attach("settings-zero-dark-appearance.png", { body: await page.locator(".appearance-panel").screenshot(), contentType: "image/png" });
 });
 
 test("advanced settings keeps the binary inventory collapsed until requested", async ({ page }) => {

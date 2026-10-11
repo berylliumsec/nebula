@@ -1,36 +1,49 @@
 /* Theme variants are deliberately chromatic only. */
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) body {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) body {
   background:
     radial-gradient(900px 520px at 78% -12%, rgb(83 132 186 / 8%), transparent 68%),
     linear-gradient(115deg, transparent 0 58%, rgb(117 174 232 / 2%) 100%),
     var(--canvas);
 }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) body::after { display: none; }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.panel, .button, .icon-button, .nav-item, .project-tabs, .settings-tabs, .session-tabs) {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) body::after { display: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) :where(.panel, .button, .icon-button, .nav-item, .project-tabs, .settings-tabs, .session-tabs) {
   filter: none;
   text-shadow: none;
 }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.button, .icon-button, .nav-item, .project-tabs button, .settings-tabs a, .session-tabs button)::after { display: none; }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(button, .button, .nav-item, .settings-tabs a):active { filter: none; }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .button.primary {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) :where(.button, .icon-button, .nav-item, .project-tabs button, .settings-tabs a, .session-tabs button)::after { display: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) :where(button, .button, .nav-item, .settings-tabs a):active { filter: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) .button.primary {
   color: var(--action-primary-text);
   border-color: transparent;
   background: var(--action-primary);
   box-shadow: none;
 }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :focus-visible { box-shadow: none; }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.status-dot.healthy, .pulse-dot, .live-dot.open) { box-shadow: none; }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .chat-message.assistant { border-color: transparent; background: transparent; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) :focus-visible { box-shadow: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) :where(.status-dot.healthy, .pulse-dot, .live-dot.open) { box-shadow: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) .chat-message.assistant { border-color: transparent; background: transparent; }
 /* Surface hierarchy: a tinted canvas, a quieter sidebar and top bar, and one
    raised composer. Operator turns read as compact bubbles in every theme. */
-:root:is([data-theme="dark"], [data-theme="light"]) .top-bar { background: var(--canvas); }
-:root:is([data-theme="dark"], [data-theme="light"]) .chat-composer { border-color: var(--border-soft); background: var(--surface-raised); box-shadow: 0 10px 30px rgb(0 0 0 / 28%); }
-:root[data-theme="dark"] .side-nav { background: var(--surface); }
-:root:is([data-theme="dark"], [data-theme="light"]) .button.primary:disabled { color: var(--muted); background: var(--surface-hover); opacity: 1; }
-:root:is([data-theme="dark"], [data-theme="light"]) .workspace-notices { background: transparent; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="glacier"], [data-theme="amber"]) .top-bar { background: var(--canvas); }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="glacier"], [data-theme="amber"]) .chat-composer { border-color: var(--border-soft); background: var(--surface-raised); box-shadow: 0 10px 30px rgb(0 0 0 / 28%); }
+:root:is([data-theme="dark"], [data-theme="glacier"], [data-theme="amber"]) .side-nav { background: var(--surface); }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="glacier"], [data-theme="amber"]) .button.primary:disabled { color: var(--muted); background: var(--surface-hover); opacity: 1; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="glacier"], [data-theme="amber"]) .workspace-notices { background: transparent; }
 :root[data-theme="light"] .side-nav { background: var(--surface-muted); }
 :root[data-theme="light"] .chat-composer { box-shadow: 0 8px 24px rgb(41 63 84 / 9%); }
-:root:is([data-theme="dark"], [data-theme="light"]) .chat-message.operator { border: 1px solid var(--border-soft); background: var(--surface-raised); }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.command-palette, .modal-surface, .provider-dialog, .engagement-menu, .activity-center) {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="glacier"], [data-theme="amber"]) .chat-message.operator { border: 1px solid var(--border-soft); background: var(--surface-raised); }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"], [data-theme="zero-classic"], [data-theme="glacier"], [data-theme="amber"]) :where(.command-palette, .modal-surface, .provider-dialog, .engagement-menu, .activity-center) {
   animation: none;
+}
+
+/* Two atmospheric palettes share the ordinary shell and component geometry. */
+:root[data-theme="glacier"] body,
+:root[data-theme="glacier"] .main-content {
+  background: radial-gradient(800px 480px at 85% -10%, rgb(77 195 223 / 11%), transparent 66%), var(--canvas);
+}
+:root[data-theme="amber"] body,
+:root[data-theme="amber"] .main-content {
+  background: radial-gradient(800px 480px at 85% -10%, rgb(226 150 70 / 12%), transparent 66%), var(--canvas);
+}
+:root:is([data-theme="glacier"], [data-theme="amber"]) .side-nav {
+  background: linear-gradient(180deg, var(--surface), var(--canvas));
 }
