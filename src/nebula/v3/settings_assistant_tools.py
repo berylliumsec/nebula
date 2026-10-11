@@ -49,6 +49,18 @@ APP_DESTINATIONS: tuple[dict[str, Any], ...] = tuple(
     )
 )
 
+DEVICE_THEMES = (
+    "light",
+    "dark",
+    "glacier",
+    "amber",
+    "zero-light",
+    "zero-dark",
+    "zero-classic",
+    "studio-dark",
+)
+PROJECT_MODES = ("docker", "host")
+
 CATALOG_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {}}
 SEARCH_SCHEMA = {
     "type": "object",
@@ -84,7 +96,7 @@ THEME_SCHEMA = {
     "properties": {
         "theme": {
             "type": "string",
-            "enum": ["light", "dark", "studio-dark", "zero-light", "zero-dark"],
+            "enum": list(DEVICE_THEMES),
         }
     },
     "required": ["theme"],
@@ -93,8 +105,8 @@ PROJECT_MODE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "mode": {"type": "string", "enum": ["docker", "host"]},
-        "from": {"type": "string", "enum": ["docker", "host"]},
+        "mode": {"type": "string", "enum": list(PROJECT_MODES)},
+        "from": {"type": "string", "enum": list(PROJECT_MODES)},
     },
     "required": ["mode"],
 }
@@ -137,7 +149,7 @@ def catalog() -> dict[str, Any]:
             {
                 "name": "nebula.settings.set_device_theme",
                 "argument": "theme",
-                "values": THEME_SCHEMA["properties"]["theme"]["enum"],
+                "values": list(DEVICE_THEMES),
                 "effect": "apply a theme on the requesting browser",
             },
             {
@@ -181,7 +193,7 @@ def catalog() -> dict[str, Any]:
         ],
         "destinations": list(APP_DESTINATIONS),
         "device_appearance": {
-            "values": ["light", "dark", "studio-dark", "zero-light", "zero-dark"],
+            "values": list(DEVICE_THEMES),
             "authority": "browser preference; the assistant UI applies explicit theme commands on the active device",
         },
     }
@@ -213,7 +225,7 @@ def open_destination(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def request_device_theme(arguments: dict[str, Any]) -> dict[str, Any]:
     theme = arguments.get("theme")
-    if theme not in THEME_SCHEMA["properties"]["theme"]["enum"]:
+    if theme not in DEVICE_THEMES:
         raise ValueError("choose a listed device theme")
     return {
         "state": "pending_browser_apply",
@@ -224,12 +236,9 @@ def request_device_theme(arguments: dict[str, Any]) -> dict[str, Any]:
 def request_project_execution_mode(arguments: dict[str, Any]) -> dict[str, Any]:
     mode = arguments.get("mode")
     source = arguments.get("from")
-    if mode not in PROJECT_MODE_SCHEMA["properties"]["mode"]["enum"]:
+    if mode not in PROJECT_MODES:
         raise ValueError("choose docker or host mode")
-    if (
-        source is not None
-        and source not in PROJECT_MODE_SCHEMA["properties"]["from"]["enum"]
-    ):
+    if source is not None and source not in PROJECT_MODES:
         raise ValueError("choose docker or host as the source mode")
     return {
         "state": "pending_browser_apply",
@@ -346,41 +355,43 @@ def set_default_model(store: NebulaStore, arguments: dict[str, Any]) -> dict[str
     ):
         raise ValueError("kind, profile_id, and model are required")
     if kind == "provider":
-        profile = store.get(ProviderProfile, profile_id)
-        choices = profile.model_allowlist
-        if not profile.enabled or model not in choices:
+        provider = store.get(ProviderProfile, profile_id)
+        choices = provider.model_allowlist
+        if not provider.enabled or model not in choices:
             raise ValueError("choose an enabled provider and one of its allowed models")
         store.update(
             ProviderProfile,
-            profile.id,
+            provider.id,
             {
-                "metadata": {**profile.metadata, "default_model": model},
+                "metadata": {**provider.metadata, "default_model": model},
             },
-            expected_revision=profile.revision,
+            expected_revision=provider.revision,
         )
-        saved = store.get(ProviderProfile, profile.id)
-        observed = saved.metadata.get("default_model")
+        saved_provider = store.get(ProviderProfile, provider.id)
+        observed = saved_provider.metadata.get("default_model")
+        profile_name = provider.name
     else:
-        profile = store.get(HarnessProfile, profile_id)
-        choices = profile.capabilities.models
-        if not profile.enabled or model not in choices:
+        harness = store.get(HarnessProfile, profile_id)
+        choices = harness.capabilities.models
+        if not harness.enabled or model not in choices:
             raise ValueError(
                 "choose an enabled harness and one of its advertised models"
             )
         store.update(
             HarnessProfile,
-            profile.id,
+            harness.id,
             {"default_model": model},
-            expected_revision=profile.revision,
+            expected_revision=harness.revision,
         )
-        saved = store.get(HarnessProfile, profile.id)
-        observed = saved.default_model
+        saved_harness = store.get(HarnessProfile, harness.id)
+        observed = saved_harness.default_model
+        profile_name = harness.name
     if observed != model:
         raise RuntimeError("Core did not confirm the saved default model")
     return {
         "kind": kind,
-        "profile_id": profile.id,
-        "profile_name": profile.name,
+        "profile_id": profile_id,
+        "profile_name": profile_name,
         "default_model": observed,
         "saved": True,
     }
@@ -488,7 +499,7 @@ def provider_plugins(
         AnalysisTool(
             ToolSpec(
                 name="nebula.settings.set_device_theme",
-                description="Request Light, Dark, Studio Dark, Zero Light, or Zero Dark on the requesting browser. Use zero-dark for 'Zero theme'. Returns a pending browser action; the browser applies and confirms it. Do not claim it was saved from this tool result alone.",
+                description="Request a listed device theme on the requesting browser, including Glacier, Amber, and Zero Classic. Use zero-dark for 'Zero theme'. Returns a pending browser action; the browser applies and confirms it. Do not claim it was saved from this tool result alone.",
                 input_schema=THEME_SCHEMA,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.LOCAL_READ,

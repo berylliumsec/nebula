@@ -11,6 +11,7 @@ from contextlib import closing
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -105,7 +106,7 @@ def _dense_query(query: str) -> np.ndarray | None:
             vector = np.asarray(_model()([query])[0], dtype=np.float32)
         return vector / max(float(np.linalg.norm(vector)), 1e-12)
     except Exception:
-        # Text search remains usable when the optional local model fails.
+        # diagnostic-expected: text search remains usable when the optional local model fails.
         return None
 
 
@@ -125,14 +126,14 @@ def search_product_knowledge(query: str, *, limit: int = 4) -> list[dict[str, ob
     if terms:
         with closing(_connection()) as connection:
             expression = " OR ".join(f'"{word}"' for word in terms)
-            for rank, (identifier,) in enumerate(
+            for lexical_rank, (identifier,) in enumerate(
                 connection.execute(
                     "SELECT p.id FROM passages_fts f JOIN passages p ON p.rowid=f.rowid "
                     "WHERE passages_fts MATCH ? ORDER BY bm25(passages_fts) LIMIT 24",
                     (expression,),
                 )
             ):
-                lexical[identifier] = rank
+                lexical[identifier] = lexical_rank
     dense = _dense_query(query)
     candidates: list[tuple[float, dict[str, object]]] = []
     for row in rows:
@@ -144,7 +145,9 @@ def search_product_knowledge(query: str, *, limit: int = 4) -> list[dict[str, ob
         score = 1 / (2 + rank) if rank is not None else 0.0
         similarity = 0.0
         if dense is not None:
-            vector = np.frombuffer(row["vector"], dtype="<f2").astype(np.float32)
+            vector = np.frombuffer(cast(bytes, row["vector"]), dtype="<f2").astype(
+                np.float32
+            )
             vector /= max(float(np.linalg.norm(vector)), 1e-12)
             similarity = float(np.dot(dense, vector))
             if similarity >= 0.38:

@@ -92,6 +92,14 @@ def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies
         "state": "pending_browser_apply",
         "client_action": {"kind": "device_theme", "theme": "zero-dark"},
     }
+    assert {"glacier", "amber", "zero-classic"} <= set(
+        catalog()["device_appearance"]["values"]
+    )
+    for theme in ("glacier", "amber", "zero-classic"):
+        assert request_device_theme({"theme": theme})["client_action"] == {
+            "kind": "device_theme",
+            "theme": theme,
+        }
     assert request_project_execution_mode({"mode": "host", "from": "docker"}) == {
         "state": "pending_browser_apply",
         "client_action": {

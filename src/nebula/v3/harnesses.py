@@ -7290,9 +7290,13 @@ class GrokAcpAdapter(HarnessAdapter):
         account = home / "auth.json"
         if account.is_symlink():
             if account.resolve() != source.resolve():
-                raise HarnessConfigurationError("The isolated Grok account link changed. Reconnect the harness and retry.")
+                raise HarnessConfigurationError(
+                    "The isolated Grok account link changed. Reconnect the harness and retry."
+                )
         elif account.exists():
-            raise HarnessConfigurationError("The isolated Grok account path is occupied. Reconnect the harness and retry.")
+            raise HarnessConfigurationError(
+                "The isolated Grok account path is occupied. Reconnect the harness and retry."
+            )
         else:
             account.symlink_to(source.resolve())
         return home
@@ -7318,7 +7322,9 @@ class GrokAcpAdapter(HarnessAdapter):
         command = [str(executable)]
         if session is not None and _unrestricted_harness_session(session):
             command.extend(["--always-approve", "--sandbox", "off"])
-        settings_only = bool(session and session.metadata.get("control_assistant") is True)
+        settings_only = bool(
+            session and session.metadata.get("control_assistant") is True
+        )
         if settings_only:
             command.extend(["--disable-web-search", "--no-subagents"])
         if (
@@ -9244,8 +9250,7 @@ class HarnessRuntimeService:
         execution_mode = self._project_execution_mode(engagement_id)
         if (
             tools_enabled
-            and
-            profile.permission_mode == "unrestricted"
+            and profile.permission_mode == "unrestricted"
             and execution_mode == "host"
             and not scope.bypass_permissions
         ):
@@ -9902,11 +9907,17 @@ class HarnessRuntimeService:
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
         if control_assistant:
-            if any((
-                mcp_server_ids, context_attachments, harness_skill,
-                provider_subagent, pending_provider_subagent,
-                allow_agent_messaging, harness_mode,
-            )):
+            if any(
+                (
+                    mcp_server_ids,
+                    context_attachments,
+                    harness_skill,
+                    provider_subagent,
+                    pending_provider_subagent,
+                    allow_agent_messaging,
+                    harness_mode,
+                )
+            ):
                 raise HarnessConfigurationError(
                     "The Nebula assistant accepts Nebula help and settings tools only."
                 )
@@ -10222,7 +10233,9 @@ class HarnessRuntimeService:
                     model=session.model,
                     metadata={
                         "context_management": "runtime_managed",
-                        "initial_title_state": "operator" if control_assistant else "pending",
+                        "initial_title_state": "operator"
+                        if control_assistant
+                        else "pending",
                         **({"control_assistant": True} if control_assistant else {}),
                         "allow_agent_messaging": allow_agent_messaging,
                         "harness_runtime_options": session.metadata.get(
@@ -10399,9 +10412,13 @@ class HarnessRuntimeService:
         from .chat_decisions import decision_snapshot, decision_instructions
 
         operator_decisions = (
-            [] if control_assistant else decision_snapshot(self.store, chat.id, engagement_id)
+            []
+            if control_assistant
+            else decision_snapshot(self.store, chat.id, engagement_id)
         )
-        runtime_context = (runtime_context or "") + decision_instructions(operator_decisions)
+        runtime_context = (runtime_context or "") + decision_instructions(
+            operator_decisions
+        )
         assistant_scope = (
             "\n\nYou are the Nebula product assistant. Answer Nebula usage questions and troubleshoot "
             "using the packaged product index: call nebula.help.search for product behavior, cite its "
@@ -10428,8 +10445,8 @@ class HarnessRuntimeService:
             "read-back. Link a relevant setting as /settings#target only when explaining where it is. "
             "The assistant window handles explicit Docker/Host mode changes "
             "with confirmation and Core read-back. If facts are unavailable, say what needs checking."
-            if control_assistant else
-            "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
+            if control_assistant
+            else "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
             "Do not claim to have changed a Nebula setting from this conversation."
         )
         chat_turn = ChatTurn(
@@ -10478,7 +10495,10 @@ class HarnessRuntimeService:
             origin=HarnessTurnOrigin.CHAT,
             chat_session_id=chat.id,
             chat_turn_id=chat_turn.id,
-            prompt=clean_prompt + handoff_context + (runtime_context or "") + assistant_scope,
+            prompt=clean_prompt
+            + handoff_context
+            + (runtime_context or "")
+            + assistant_scope,
             metadata={
                 "user_prompt": clean_prompt,
                 "image_blocks": [
@@ -13167,34 +13187,99 @@ class HarnessRuntimeService:
         *,
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
-        from .settings_assistant_tools import CATALOG_SCHEMA, DEFAULT_MODEL_SCHEMA, NAVIGATE_SCHEMA, OPEN_SCHEMA, POST_TOOL_SCHEMA, PROJECT_MODE_SCHEMA, SEARCH_SCHEMA, THEME_SCHEMA
+        from .settings_assistant_tools import (
+            CATALOG_SCHEMA,
+            DEFAULT_MODEL_SCHEMA,
+            NAVIGATE_SCHEMA,
+            OPEN_SCHEMA,
+            POST_TOOL_SCHEMA,
+            PROJECT_MODE_SCHEMA,
+            SEARCH_SCHEMA,
+            THEME_SCHEMA,
+        )
 
         current = self.store.get(HarnessSession, session.id)
         settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
-        for name, description, schema, read_only in ((
-            ("nebula.help.search", "Search the bundled source-linked Nebula product knowledge index for usage and troubleshooting answers.", SEARCH_SCHEMA, True),
-            ("nebula.help.project_context", "Read the selected project's Docker or Host mode and linked workspace before troubleshooting host-path or isolation problems.", CATALOG_SCHEMA, True),
-            ("nebula.settings.catalog", "List Nebula setting destinations and bounded direct changes.", CATALOG_SCHEMA, True),
-            ("nebula.settings.open", "Open one listed Nebula setting on the requesting browser. Call with its setting_id; use the catalog first if unsure. Returns a pending browser action.", OPEN_SCHEMA, False),
-            ("nebula.navigate.open", "Open one listed Nebula page, including All projects and Workbench views, on the requesting browser. Call with its destination_id; use the catalog first if unsure. Returns a pending browser action.", NAVIGATE_SCHEMA, False),
-            ("nebula.settings.set_device_theme", "Request a listed theme on the requesting browser. 'Zero theme' means zero-dark. The browser applies and confirms this pending action.", THEME_SCHEMA, False),
-            ("nebula.settings.set_project_mode", "Request Docker or Host mode for the selected project's future sessions. The browser opens Project Policy, confirms Host access if needed, saves and reads back. Returns a pending browser action.", PROJECT_MODE_SCHEMA, False),
-            ("nebula.settings.set_post_tool", "Change one post-tool note or next-step preference for this project's configured analysis runtime and read it back.", POST_TOOL_SCHEMA, False),
-            ("nebula.settings.models", "List enabled provider and harness profiles and their allowed or advertised models.", CATALOG_SCHEMA, True),
-            ("nebula.settings.set_default_model", "Set a listed provider or harness default model for future chats and read it back.", DEFAULT_MODEL_SCHEMA, False),
-        ) if settings_only else ()):
-            tools.append({
-                "name": name,
-                "description": description,
-                "inputSchema": schema,
-                "annotations": {
-                    "readOnlyHint": read_only,
-                    "destructiveHint": False,
-                    "idempotentHint": True,
-                    "openWorldHint": False,
-                },
-            })
+        for name, description, schema, read_only in (
+            (
+                (
+                    "nebula.help.search",
+                    "Search the bundled source-linked Nebula product knowledge index for usage and troubleshooting answers.",
+                    SEARCH_SCHEMA,
+                    True,
+                ),
+                (
+                    "nebula.help.project_context",
+                    "Read the selected project's Docker or Host mode and linked workspace before troubleshooting host-path or isolation problems.",
+                    CATALOG_SCHEMA,
+                    True,
+                ),
+                (
+                    "nebula.settings.catalog",
+                    "List Nebula setting destinations and bounded direct changes.",
+                    CATALOG_SCHEMA,
+                    True,
+                ),
+                (
+                    "nebula.settings.open",
+                    "Open one listed Nebula setting on the requesting browser. Call with its setting_id; use the catalog first if unsure. Returns a pending browser action.",
+                    OPEN_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.navigate.open",
+                    "Open one listed Nebula page, including All projects and Workbench views, on the requesting browser. Call with its destination_id; use the catalog first if unsure. Returns a pending browser action.",
+                    NAVIGATE_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.settings.set_device_theme",
+                    "Request a listed theme on the requesting browser. 'Zero theme' means zero-dark. The browser applies and confirms this pending action.",
+                    THEME_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.settings.set_project_mode",
+                    "Request Docker or Host mode for the selected project's future sessions. The browser opens Project Policy, confirms Host access if needed, saves and reads back. Returns a pending browser action.",
+                    PROJECT_MODE_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.settings.set_post_tool",
+                    "Change one post-tool note or next-step preference for this project's configured analysis runtime and read it back.",
+                    POST_TOOL_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.settings.models",
+                    "List enabled provider and harness profiles and their allowed or advertised models.",
+                    CATALOG_SCHEMA,
+                    True,
+                ),
+                (
+                    "nebula.settings.set_default_model",
+                    "Set a listed provider or harness default model for future chats and read it back.",
+                    DEFAULT_MODEL_SCHEMA,
+                    False,
+                ),
+            )
+            if settings_only
+            else ()
+        ):
+            tools.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "inputSchema": schema,
+                    "annotations": {
+                        "readOnlyHint": read_only,
+                        "destructiveHint": False,
+                        "idempotentHint": True,
+                        "openWorldHint": False,
+                    },
+                }
+            )
         if settings_only:
             self._gateway_tool_maps[session.id] = {}
             self._gateway_oci_tool_maps[session.id] = {}
@@ -13641,19 +13726,52 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
-        settings_only = self.store.get(HarnessSession, session.id).metadata.get("control_assistant") is True
-        if (name.startswith(("nebula.settings.", "nebula.help.", "nebula.navigate."))) != settings_only:
-            raise HarnessConfigurationError("This tool is not available to this assistant.")
-        if name in {"nebula.help.search", "nebula.help.project_context", "nebula.settings.catalog", "nebula.settings.open", "nebula.navigate.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool", "nebula.settings.models", "nebula.settings.set_default_model"}:
-            from .settings_assistant_tools import catalog, model_choices, open_destination, open_setting, project_context, request_device_theme, request_project_execution_mode, set_default_model, set_post_tool_preference
+        settings_only = (
+            self.store.get(HarnessSession, session.id).metadata.get("control_assistant")
+            is True
+        )
+        if (
+            name.startswith(("nebula.settings.", "nebula.help.", "nebula.navigate."))
+        ) != settings_only:
+            raise HarnessConfigurationError(
+                "This tool is not available to this assistant."
+            )
+        if name in {
+            "nebula.help.search",
+            "nebula.help.project_context",
+            "nebula.settings.catalog",
+            "nebula.settings.open",
+            "nebula.navigate.open",
+            "nebula.settings.set_device_theme",
+            "nebula.settings.set_project_mode",
+            "nebula.settings.set_post_tool",
+            "nebula.settings.models",
+            "nebula.settings.set_default_model",
+        }:
+            from .settings_assistant_tools import (
+                catalog,
+                model_choices,
+                open_destination,
+                open_setting,
+                project_context,
+                request_device_theme,
+                request_project_execution_mode,
+                set_default_model,
+                set_post_tool_preference,
+            )
 
             if name == "nebula.help.search":
                 from .product_knowledge import search_product_knowledge
 
                 query = arguments.get("query")
                 if not isinstance(query, str) or not 3 <= len(query) <= 1000:
-                    raise HarnessConfigurationError("provide a product-help query of 3 to 1000 characters")
-                value = {"matches": search_product_knowledge(query), "source": "bundled Nebula product knowledge"}
+                    raise HarnessConfigurationError(
+                        "provide a product-help query of 3 to 1000 characters"
+                    )
+                value = {
+                    "matches": search_product_knowledge(query),
+                    "source": "bundled Nebula product knowledge",
+                }
             elif name == "nebula.help.project_context":
                 value = project_context(self.store, turn.engagement_id)
             elif name == "nebula.settings.catalog":
@@ -13671,8 +13789,14 @@ class HarnessRuntimeService:
             elif name == "nebula.settings.set_default_model":
                 value = set_default_model(self.store, arguments)
             else:
-                value = set_post_tool_preference(self.store, self.artifact_store, turn.engagement_id, arguments)
-            return {"content": [{"type": "text", "text": json.dumps(value)}], "structuredContent": value, "isError": False}
+                value = set_post_tool_preference(
+                    self.store, self.artifact_store, turn.engagement_id, arguments
+                )
+            return {
+                "content": [{"type": "text", "text": json.dumps(value)}],
+                "structuredContent": value,
+                "isError": False,
+            }
         if name == "browser.companion":
             current = self.store.get(HarnessSession, session.id)
             companion_id = current.metadata.get("browser_companion_session_id")
@@ -15422,10 +15546,12 @@ class HarnessRuntimeService:
                 scoped_future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
                 )
-                scoped_future.set_result(HarnessPermissionDecision(
-                    allowed=True,
-                    reason="The settings gateway validates and executes this exact tool",
-                ))
+                scoped_future.set_result(
+                    HarnessPermissionDecision(
+                        allowed=True,
+                        reason="The settings gateway validates and executes this exact tool",
+                    )
+                )
                 return PermissionTicket(None, None, scoped_future)
         policy, server, tool, risk, rationale = self._permission_policy(
             session, request

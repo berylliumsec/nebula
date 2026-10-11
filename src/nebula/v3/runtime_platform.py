@@ -12,7 +12,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal, Protocol, cast
 
 from .artifacts import ArtifactStore
 from .context_retrieval import DenseEncoder
@@ -66,6 +66,9 @@ from .tools import (
 from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
 from .working_notes import WriteNotesTool
 from .settings_assistant_tools import provider_plugins as settings_assistant_plugins
+
+if TYPE_CHECKING:
+    from .automation_tools import AutomationToolComponents
 
 
 LOGGER = logging.getLogger(__name__)
@@ -150,7 +153,7 @@ class _AllowedToolBroker:
 
 
 def restrict_tool_components(
-    components: RuntimeToolComponents,
+    components: RuntimeToolComponents | AutomationToolComponents,
     names: list[str],
     *,
     required: frozenset[str] = frozenset(),
