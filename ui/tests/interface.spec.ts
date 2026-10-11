@@ -2088,6 +2088,28 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
+test("stabilization Nebula settings assistant opens from every screen and changes this device theme", async ({ page }) => {
+  await openWorkspace(page, "/settings", "Settings");
+  const open = page.getByRole("button", { name: "Open Nebula assistant" });
+  await expect(open).toBeVisible();
+  const target = await open.boundingBox();
+  expectTouchTarget(target?.width, "Nebula assistant launcher width");
+  expectTouchTarget(target?.height, "Nebula assistant launcher height");
+  await open.click();
+  const assistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
+  await expect(assistant).toBeVisible();
+  await assistant.getByText("Settings I can help with").click();
+  await assistant.getByRole("button", { name: "Light", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await assistant.getByRole("button", { name: "Hide Nebula assistant" }).click();
+  await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  await expect(page.getByRole("dialog", { name: "Nebula settings assistant" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
