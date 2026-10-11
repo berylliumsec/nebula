@@ -2203,6 +2203,43 @@ reloadTest("stabilization Nebula assistant applies a model-selected device-theme
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
 });
 
+reloadTest("stabilization Nebula assistant follows a model-selected Projects navigation receipt", async ({ page }) => {
+  const provider = {
+    ...entity, id: "provider-navigation-action", name: "Navigation action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["navigation-action-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "navigation-action-model" },
+  };
+  await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
+  await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["navigation-action-model"] } }));
+  let requested = false;
+  await page.route("**/api/v1/chat/completions", route => {
+    requested = (route.request().postDataJSON() as { control_assistant?: boolean }).control_assistant === true;
+    const events = [
+      { type: "started", provider_id: provider.id, model: "navigation-action-model", session_id: "navigation-action-session", turn_id: "navigation-action-turn" },
+      { type: "tool_completed", harness_turn_id: "navigation-action-turn", item_id: "navigation-action-call",
+        tool_name: "nebula_navigate_open_1234567890abcdef", server_id: "nebula",
+        payload: { toolCallId: "navigation-action-call", status: "completed", rawOutput: { output: { OkayOutput: JSON.stringify({ state: "pending_browser_apply",
+          client_action: { kind: "navigate", destination_id: "projects" } }) } } } },
+      { type: "done", provider_id: provider.id, model: "navigation-action-model", session_id: "navigation-action-session", turn_id: "navigation-action-turn",
+        message: { id: "navigation-action-answer", role: "assistant", content: "Opening All projects." },
+        usage: { input_tokens: 4, output_tokens: 4, total_tokens: 8 }, finish_reason: "stop", citations: [] },
+    ];
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") });
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
+  await composer.fill("Locate the place with everything I've built");
+  await composer.press("Enter");
+  await expect.poll(() => requested).toBe(true);
+  await expect(page).toHaveURL(/\/projects$/);
+  await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
+});
+
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
