@@ -779,6 +779,7 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
     return (
         _session_execution_mode(session) == "host"
         and session.metadata.get("harness_permission_mode") == "unrestricted"
+        and session.metadata.get("control_assistant") is not True
         and isinstance(scope, dict)
         and scope.get("bypass_permissions") is True
         and session.metadata.get("analysis_only") is not True
@@ -7274,6 +7275,28 @@ class GrokAcpAdapter(HarnessAdapter):
         "write",
     )
 
+    @staticmethod
+    def _settings_home(profile: HarnessProfile, workspace: Path) -> Path:
+        """Keep ambient Grok MCP servers and plugins out of settings sessions."""
+
+        source = _harness_home(profile) / "auth.json"
+        if not source.is_file():
+            raise HarnessConfigurationError(
+                "The Grok account is not signed in for the settings assistant. Check the harness account and retry."
+            )
+        home = workspace.parent / f"{workspace.name}.settings-home"
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        home.chmod(0o700)
+        account = home / "auth.json"
+        if account.is_symlink():
+            if account.resolve() != source.resolve():
+                raise HarnessConfigurationError("The isolated Grok account link changed. Reconnect the harness and retry.")
+        elif account.exists():
+            raise HarnessConfigurationError("The isolated Grok account path is occupied. Reconnect the harness and retry.")
+        else:
+            account.symlink_to(source.resolve())
+        return home
+
     async def _connect(
         self,
         profile: HarnessProfile,
@@ -7295,6 +7318,9 @@ class GrokAcpAdapter(HarnessAdapter):
         command = [str(executable)]
         if session is not None and _unrestricted_harness_session(session):
             command.extend(["--always-approve", "--sandbox", "off"])
+        settings_only = bool(session and session.metadata.get("control_assistant") is True)
+        if settings_only:
+            command.extend(["--disable-web-search", "--no-subagents"])
         if (
             native_capabilities.workspace_access == HarnessWorkspaceAccess.NONE
             and not native_capabilities.shell
@@ -7311,15 +7337,18 @@ class GrokAcpAdapter(HarnessAdapter):
             if isinstance(reasoning_effort, str) and reasoning_effort:
                 command.extend(["--reasoning-effort", reasoning_effort])
         command.append("stdio")
+        environment = _harness_environment(
+            profile, host_session=bool(native_capabilities.shell)
+        )
+        if settings_only:
+            environment["GROK_HOME"] = str(self._settings_home(profile, workspace))
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace),
-            env=_harness_environment(
-                profile, host_session=bool(native_capabilities.shell)
-            ),
+            env=environment,
             limit=MAX_MCP_MESSAGE_BYTES,
         )
         rpc = _AcpRpc(process=process)
@@ -9123,6 +9152,7 @@ class HarnessRuntimeService:
         service_tier: str | None = None,
         cyber_access_program: str | None = None,
         tools_enabled: bool = True,
+        control_assistant: bool = False,
     ) -> HarnessSession:
         if self._closed:
             raise HarnessUnavailableError("harness runtime is shut down")
@@ -9213,6 +9243,8 @@ class HarnessRuntimeService:
         )
         execution_mode = self._project_execution_mode(engagement_id)
         if (
+            tools_enabled
+            and
             profile.permission_mode == "unrestricted"
             and execution_mode == "host"
             and not scope.bypass_permissions
@@ -9235,6 +9267,12 @@ class HarnessRuntimeService:
             "approval_policy": self._project_approval_policy(engagement_id),
             "native_capabilities": native_capabilities.model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
+            **({"control_assistant": True} if control_assistant else {}),
+            **(
+                {"settings_grok_home_version": 1}
+                if control_assistant and profile.kind == HarnessKind.GROK_ACP
+                else {}
+            ),
             "runtime_options": {
                 "reasoning_effort": resolved_reasoning_effort,
                 "service_tier": resolved_service_tier,
@@ -9375,6 +9413,7 @@ class HarnessRuntimeService:
         frozen_scope = session.metadata.get("scope_snapshot")
         if (
             execution_mode == "host"
+            and session.metadata.get("control_assistant") is not True
             and session.metadata.get("harness_permission_mode") == "unrestricted"
             and not (
                 isinstance(frozen_scope, dict)
@@ -9393,8 +9432,12 @@ class HarnessRuntimeService:
         metadata.update(
             {
                 "execution_mode": execution_mode,
-                "native_capabilities": _native_capabilities_for_execution_mode(
-                    _session_native_capabilities(session, profile), execution_mode
+                "native_capabilities": (
+                    HarnessNativeCapabilities()
+                    if session.metadata.get("control_assistant") is True
+                    else _native_capabilities_for_execution_mode(
+                        _session_native_capabilities(session, profile), execution_mode
+                    )
                 ).model_dump(mode="json"),
             }
         )
@@ -9858,6 +9901,18 @@ class HarnessRuntimeService:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
+        if control_assistant:
+            if any((
+                mcp_server_ids, context_attachments, harness_skill,
+                provider_subagent, pending_provider_subagent,
+                allow_agent_messaging, harness_mode,
+            )):
+                raise HarnessConfigurationError(
+                    "The settings assistant accepts settings tools only."
+                )
+            include_knowledge = False
+            allow_cloud_knowledge = False
+            max_artifact_queries = 0
         profile = self.store.get(HarnessProfile, profile_id)
         subagent_setting: dict[str, Any] | None = None
         if provider_subagent is not None:
@@ -9948,6 +10003,10 @@ class HarnessRuntimeService:
             chat = self.store.get(ChatSession, chat_session_id)
             if chat.engagement_id != engagement_id:
                 raise HarnessStateError("chat belongs to a different project")
+            if (chat.metadata.get("control_assistant") is True) != control_assistant:
+                raise HarnessStateError(
+                    "A settings assistant conversation cannot be used as an ordinary chat, or vice versa."
+                )
             # A busy vendor session may be forked for independent work, but a
             # conversation has only one active response owner. Reject a stale
             # send before changing its harness binding or saving its message.
@@ -10019,6 +10078,12 @@ class HarnessRuntimeService:
             )
             changed = (
                 session is None
+                or bool(session.metadata.get("control_assistant")) != control_assistant
+                or (
+                    control_assistant
+                    and profile.kind == HarnessKind.GROK_ACP
+                    and session.metadata.get("settings_grok_home_version") != 1
+                )
                 or session.harness_profile_id != profile_id
                 or session.model != selected_model
                 or set(session.mcp_server_ids) != set(selected_mcp)
@@ -10042,6 +10107,8 @@ class HarnessRuntimeService:
                     reasoning_effort=effort,
                     service_tier=tier,
                     cyber_access_program=cyber_program,
+                    tools_enabled=not control_assistant,
+                    control_assistant=control_assistant,
                 )
                 chat = self._rebind_chat_session(
                     chat,
@@ -10081,6 +10148,10 @@ class HarnessRuntimeService:
                 session = self._compatible_session(
                     harness_session_id, engagement_id, profile_id, model
                 )
+                if bool(session.metadata.get("control_assistant")) != control_assistant:
+                    raise HarnessStateError(
+                        "A settings assistant cannot attach an ordinary harness session."
+                    )
                 existing_options = session.metadata.get("runtime_options")
                 frozen_options = (
                     existing_options if isinstance(existing_options, dict) else {}
@@ -10136,6 +10207,8 @@ class HarnessRuntimeService:
                         if harness_cyber_access_program == "automatic"
                         else harness_cyber_access_program
                     ),
+                    tools_enabled=not control_assistant,
+                    control_assistant=control_assistant,
                 )
             chat = self.store.create(
                 ChatSession(
@@ -10325,9 +10398,21 @@ class HarnessRuntimeService:
         )
         from .chat_decisions import decision_snapshot, decision_instructions
 
-        operator_decisions = decision_snapshot(self.store, chat.id, engagement_id)
-        runtime_context = (runtime_context or "") + decision_instructions(
-            operator_decisions
+        operator_decisions = (
+            [] if control_assistant else decision_snapshot(self.store, chat.id, engagement_id)
+        )
+        runtime_context = (runtime_context or "") + decision_instructions(operator_decisions)
+        assistant_scope = (
+            "\n\nYou are the Nebula settings assistant. Help only with Nebula settings. "
+            "Use nebula.settings.catalog to find the supported destinations and direct changes. "
+            "Call only nebula.settings tools. Confirm a change only after a saved read-back. "
+            "Device appearance is controlled in the assistant window. Docker and Host execution modes "
+            "are under Project policy and network scope; the assistant window handles explicit mode "
+            "changes with confirmation and a Core read-back. Do not say those modes are unavailable. "
+            "If a change has no direct tool, name its setting so the operator can use the open controls."
+            if control_assistant else
+            "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
+            "Do not claim to have changed a Nebula setting from this conversation."
         )
         chat_turn = ChatTurn(
             id=str(uuid4()),
@@ -10341,6 +10426,7 @@ class HarnessRuntimeService:
                 or _native_capability_names(native_capabilities)
                 or knowledge_access
                 or subagent_setting
+                or control_assistant
             ),
             max_artifact_queries=max_artifact_queries,
             request_snapshot={
@@ -10374,7 +10460,7 @@ class HarnessRuntimeService:
             origin=HarnessTurnOrigin.CHAT,
             chat_session_id=chat.id,
             chat_turn_id=chat_turn.id,
-            prompt=clean_prompt + handoff_context + (runtime_context or ""),
+            prompt=clean_prompt + handoff_context + (runtime_context or "") + assistant_scope,
             metadata={
                 "user_prompt": clean_prompt,
                 "image_blocks": [
@@ -13065,13 +13151,15 @@ class HarnessRuntimeService:
     ) -> dict[str, Any]:
         from .settings_assistant_tools import CATALOG_SCHEMA, DEFAULT_MODEL_SCHEMA, POST_TOOL_SCHEMA
 
+        current = self.store.get(HarnessSession, session.id)
+        settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
-        for name, description, schema, read_only in (
+        for name, description, schema, read_only in ((
             ("nebula.settings.catalog", "List Nebula setting destinations and bounded direct changes.", CATALOG_SCHEMA, True),
             ("nebula.settings.set_post_tool", "Change one post-tool note or next-step preference for this project's configured analysis runtime and read it back.", POST_TOOL_SCHEMA, False),
             ("nebula.settings.models", "List enabled provider and harness profiles and their allowed or advertised models.", CATALOG_SCHEMA, True),
             ("nebula.settings.set_default_model", "Set a listed provider or harness default model for future chats and read it back.", DEFAULT_MODEL_SCHEMA, False),
-        ):
+        ) if settings_only else ()):
             tools.append({
                 "name": name,
                 "description": description,
@@ -13083,7 +13171,10 @@ class HarnessRuntimeService:
                     "openWorldHint": False,
                 },
             })
-        current = self.store.get(HarnessSession, session.id)
+        if settings_only:
+            self._gateway_tool_maps[session.id] = {}
+            self._gateway_oci_tool_maps[session.id] = {}
+            return {"tools": tools}
         if current.metadata.get("browser_companion_session_id"):
             spec = companion_spec(image_supported=self._model_image_supported(current))
             tools.append(
@@ -13526,6 +13617,9 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
+        settings_only = self.store.get(HarnessSession, session.id).metadata.get("control_assistant") is True
+        if (name.startswith("nebula.settings.")) != settings_only:
+            raise HarnessConfigurationError("This tool is not available to this assistant.")
         if name in {"nebula.settings.catalog", "nebula.settings.set_post_tool", "nebula.settings.models", "nebula.settings.set_default_model"}:
             from .settings_assistant_tools import catalog, model_choices, set_default_model, set_post_tool_preference
 
@@ -15154,15 +15248,16 @@ class HarnessRuntimeService:
         )
         self._gateways[session.id] = gateway
         execution_mode = _session_execution_mode(session)
+        settings_only = session.metadata.get("control_assistant") is True
         isolated_workspace = (
             self.workspace_resolver(session.engagement_id)
-            if execution_mode == "host" and not analysis_only
+            if execution_mode == "host" and not analysis_only and not settings_only
             else gateway.root / "vendor-workspace"
         )
         if portable_names and not analysis_only:
             # Grok indexes native sessions by cwd. Keep this private directory
             # stable across Core restarts, separately from the ephemeral socket.
-            if execution_mode != "host":
+            if execution_mode != "host" or settings_only:
                 isolated_workspace = (
                     self.artifact_store.root
                     / "harness-workspaces"
@@ -15270,6 +15365,27 @@ class HarnessRuntimeService:
             return PermissionTicket(None, None, gateway_future)
         turn = self.store.get(HarnessTurn, turn_id)
         session = self.store.get(HarnessSession, turn.harness_session_id)
+        if (
+            session.metadata.get("control_assistant") is True
+            and session.metadata.get("settings_grok_home_version") == 1
+            and request.category == "permission"
+            and request.vendor_name == "session/request_permission"
+        ):
+            raw_input = request.arguments.get("rawInput")
+            target = raw_input.get("tool_name") if isinstance(raw_input, dict) else None
+            allowed = {
+                f"nebula__{_portable_gateway_tool_name(tool['name'])}"
+                for tool in self._gateway_catalog(session)["tools"]
+            }
+            if target in allowed:
+                scoped_future: asyncio.Future[HarnessPermissionDecision] = (
+                    asyncio.get_running_loop().create_future()
+                )
+                scoped_future.set_result(HarnessPermissionDecision(
+                    allowed=True,
+                    reason="The settings gateway validates and executes this exact tool",
+                ))
+                return PermissionTicket(None, None, scoped_future)
         policy, server, tool, risk, rationale = self._permission_policy(
             session, request
         )
