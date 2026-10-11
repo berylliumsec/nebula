@@ -57,7 +57,7 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
-const firstRunThemeTest = "Dark is the first-run default theme";
+const firstRunThemeTest = "Quiet Lens is the first-run default theme";
 
 
 const entity = {
@@ -2080,9 +2080,13 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 });
 
 test(firstRunThemeTest, async ({ page }) => {
-  await openWorkspace(page, "/", "Workbench");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim())).toBe("#0b111a");
+  await page.goto("/");
+  await expect(page.locator("#nebula-boot")).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "quiet-lens");
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim())).toBe("#090d11");
+  await expect(page.locator(".app-shell")).toHaveClass(/quiet-lens-shell/);
+  await expect(page.getByRole("button", { name: "Open top menu" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
 
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
