@@ -71,6 +71,9 @@
   border-radius: 0;
   background: var(--canvas);
 }
+/* A companion keeps its side slot in focus. The general chat focus flex rule
+   would stack the fixed-width companion above the conversation. */
+.sessions-page.chat-focus .session-workspace.chat-companion-open:not(.expanded) { display: grid !important; }
 .sessions-page.chat-focus .session-workspace > :is(.side-chat-divider, .side-chat-pane, .chat-side-terminal, .side-chat-resize-handle) { display: none !important; }
 .sessions-page.chat-focus .conversation-toolbar { flex: 0 0 auto; min-height: 64px; padding: 8px 20px; border-bottom: 1px solid var(--border-soft); border-radius: 0; }
 .sessions-page.chat-focus .conversation-toolbar .session-conversations-toggle,

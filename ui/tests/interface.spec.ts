@@ -13366,6 +13366,75 @@ test("stabilization Project Snapshot floats over chat and minimizes", async ({ p
   await expect(opener).toBeFocused();
 });
 
+test("stabilization focus mode keeps an empty chat beside its code editor", async ({ page }, testInfo) => {
+  await setInitialZeroDark(page);
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const emptyChat = page.locator(".session-workspace > .chat-empty-state");
+  await expect(emptyChat.getByRole("button", { name: "Start new chat" })).toBeVisible();
+
+  if (!mobile) {
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Code editor/ }).click();
+    await expect(page.getByRole("region", { name: "Code beside chat" })).toBeVisible();
+    await expect(page).toHaveURL(/side=code/);
+  }
+
+  const enterFocus = page.getByRole("button", { name: "Enter focus mode" });
+  if (mobile) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
+  } else await enterFocus.click();
+  await expect(page.locator(".sessions-page.chat-focus")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Exit focus mode" })).toBeVisible();
+  await expect(page.locator(".app-shell > .side-nav, .app-shell > .mobile-companion-nav")).toBeHidden();
+
+  if (!mobile) {
+    const placement = await page.locator(".session-workspace.chat-companion-open").evaluate((workspace) => {
+      const bounds = workspace.getBoundingClientRect();
+      const chat = workspace.querySelector<HTMLElement>(":scope > .chat-empty-state")!.getBoundingClientRect();
+      const code = workspace.querySelector<HTMLElement>(":scope > .chat-companion-panel")!.getBoundingClientRect();
+      return {
+        display: getComputedStyle(workspace).display,
+        chatWidth: chat.width,
+        chatRight: chat.right,
+        chatBottomGap: bounds.bottom - chat.bottom,
+        codeLeft: code.left,
+        codeRightGap: bounds.right - code.right,
+        codeTopGap: code.top - bounds.top,
+        codeHeightGap: bounds.height - code.height,
+      };
+    });
+    expect(placement.display).toBe("grid");
+    expect(placement.chatWidth).toBeGreaterThan(300);
+    expect(placement.codeLeft - placement.chatRight).toBeGreaterThanOrEqual(8);
+    expect(Math.abs(placement.chatBottomGap)).toBeLessThanOrEqual(2);
+    expect(Math.abs(placement.codeRightGap)).toBeLessThanOrEqual(2);
+    expect(Math.abs(placement.codeTopGap)).toBeLessThanOrEqual(2);
+    expect(Math.abs(placement.codeHeightGap)).toBeLessThanOrEqual(2);
+    await page.screenshot({ path: testInfo.outputPath("chat-code-focus.png") });
+  } else {
+    await expect(page.locator(".chat-companion-panel")).toHaveCount(0);
+    const emptyBounds = await emptyChat.boundingBox();
+    expect(emptyBounds!.x).toBeGreaterThanOrEqual(0);
+    expect(emptyBounds!.x + emptyBounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+    expect(emptyBounds!.y + emptyBounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1);
+  }
+
+  await page.getByRole("button", { name: "Exit focus mode" }).click();
+  await expect(page.locator(".sessions-page.chat-focus")).toHaveCount(0);
+  await expect(emptyChat.getByRole("button", { name: "Start new chat" })).toBeVisible();
+  if (!mobile) {
+    const code = page.getByRole("region", { name: "Code beside chat" });
+    await expect(code).toBeVisible();
+    const codeBounds = await code.boundingBox();
+    const chatBounds = await emptyChat.boundingBox();
+    expect(codeBounds!.x - (chatBounds!.x + chatBounds!.width)).toBeGreaterThanOrEqual(8);
+    await expect(page).toHaveURL(/side=code/);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+});
+
 test("chat companions reveal Code, Browser, and Notes from the conversation", async ({ page }) => {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
