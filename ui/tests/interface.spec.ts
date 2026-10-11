@@ -2126,6 +2126,17 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   const reopenedAssistant = page.getByRole("dialog", { name: "Nebula assistant" });
   await expect(reopenedAssistant).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("change to zero theme");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  const appearanceLens = page.getByRole("dialog", { name: "Appearance and theme" });
+  await expect(appearanceLens).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await expect(appearanceLens.getByRole("button", { name: /Zero Dark/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(appearanceLens).toHaveCount(0, { timeout: 4000 });
+  await expect(reopenedAssistant).toContainText("Changed this device to Zero Dark");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
   await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("open MCP servers");
   await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
   await expect(page.getByRole("dialog", { name: "MCP servers" })).toBeVisible();
@@ -2146,6 +2157,50 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   expect(savedRequest).toMatchObject({ execution_mode: "host", host_access_acknowledged: true, approval_policy: "always", expected_revision: 1 });
   await expect(policyLens).toHaveCount(0, { timeout: 5000 });
   await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("Scratch Project is now in Host mode for new sessions");
+});
+
+reloadTest("stabilization Nebula assistant applies a model-selected device-theme tool receipt", async ({ page }) => {
+  const provider = {
+    ...entity, id: "provider-theme-action", name: "Theme action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["theme-action-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "theme-action-model" },
+  };
+  await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
+  await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["theme-action-model"] } }));
+  let requested = false;
+  await page.route("**/api/v1/chat/completions", route => {
+    const request = route.request().postDataJSON() as { control_assistant?: boolean };
+    requested = request.control_assistant === true;
+    const events = [
+      { type: "started", provider_id: provider.id, model: "theme-action-model", session_id: "theme-action-session", turn_id: "theme-action-turn" },
+      { type: "tool_completed", harness_turn_id: "theme-action-turn", item_id: "theme-action-call",
+        tool_name: "nebula_settings_set_device_theme_1234567890abcdef", server_id: "nebula",
+        payload: { toolCallId: "theme-action-call", status: "completed", rawOutput: { output: { OkayOutput: JSON.stringify({ state: "pending_browser_apply",
+          client_action: { kind: "device_theme", theme: "zero-dark" } }) } } } },
+      { type: "done", provider_id: provider.id, model: "theme-action-model", session_id: "theme-action-session", turn_id: "theme-action-turn",
+        message: { id: "theme-action-answer", role: "assistant", content: "Applying Zero Dark on this device. " + "Checking the requested display setting. ".repeat(40) },
+        usage: { input_tokens: 4, output_tokens: 4, total_tokens: 8 }, finish_reason: "stop", citations: [] },
+    ];
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") });
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.evaluate(() => localStorage.setItem("nebula.theme", "light"));
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  await assistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("could you make the screen look like Nebula Zero?");
+  await assistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  await expect.poll(() => requested).toBe(true);
+  const appearance = page.getByRole("dialog", { name: "Appearance and theme" });
+  await expect(appearance).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await expect(appearance.getByRole("button", { name: /Zero Dark/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(appearance).toHaveCount(0, { timeout: 4000 });
+  await expect(assistant).toContainText("Changed this device to Zero Dark");
+  await expect(assistant.getByText(/Changed this device to Zero Dark/)).toBeInViewport();
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
 });
 
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
