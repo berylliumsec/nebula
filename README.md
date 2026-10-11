@@ -9,13 +9,11 @@ Nebula is a cybersecurity harness built around the operator. Test manually in it
 
 *Illustrative Workbench conversation shown in the real Nebula interface.*
 
-## Start with the Nebula assistant
+## Nebula assistant
 
-Click the bot icon in the upper-right corner to ask how Nebula works, get help with setup, or find your way around. The dedicated Nebula assistant can open pages and settings for you, including Model providers, Terminal, and Files. Connect a model or harness for conversational answers.
+<img src="docs/images/nebula-assistant-icon.svg" alt="Nebula assistant bot icon" width="36" height="36">
 
-![Playwright walkthrough of the Nebula assistant answering a product question, opening Model providers, and navigating to Files](docs/images/nebula-assistant-getting-started.gif)
-
-[Watch the walkthrough video](docs/videos/nebula-assistant-getting-started.mp4).
+Find the bot icon in Nebula's upper-right corner. It opens setup help and navigation; connect a model or harness to ask questions.
 
 ## Acknowledgement
 
