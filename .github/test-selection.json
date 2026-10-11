@@ -1,16 +1,35 @@
 {
-  "change_digest": "346730358e26ea826a049d2f4bd1ceb98b0f852d0a031062bab2cf055edde40e",
-  "reviewed_by": "Codex review of operator control, autonomous work, runtime choice, prompt caching, VPN and Mercury wording",
-  "reason": "The diff changes only the repository-root static homepage and README copy, plus responsive homepage CSS. Source inspection confirms multi-step Assistant turns and durable Missions, operator scope and approval choices including the Allow all bypass, container-only OpenVPN routing, and conditional Mercury enrollment. Only Codex and Grok are offered as new external harnesses; Anthropic, OpenRouter, Ollama and vLLM are model-provider options. OpenRouter requests use a chat session routing key, Claude routes receive cache breakpoints, and the UI displays cache reads reported by the provider. No measured high cache-hit rate or general efficiency claim is made. The README acknowledgement remains near the top. The Mercury mention links to the public repository URL supplied by the user. The standalone homepage has no catalogued Playwright entry. Eight direct static-page browser checks are collected in /tmp/nebula-homepage-smoke.cjs: Chromium desktop 1440/1024, Chromium mobile 320/390/430, and WebKit mobile 320/390/430. They check the heading, feature cards, Mercury link and availability copy, installation destination, legacy-copy absence, and horizontal overflow.",
-  "exclusions": "No Core, SPA, native, provider, or API code changed. No relevant Python, frontend, native, or catalogued Playwright tests are selected; all full suites and unrelated journeys are excluded. The direct file:// browser check does not establish a deployed site, real-Core workflow, LAN-origin behavior, physical-device acceptance, or Mercury enrollment coverage.",
+  "change_digest": "fa2df0575955a1a165046c139f3ba092df4ab6a61f11648dc15205e851cd99db",
+  "reviewed_by": "Codex scoped review of Grok ACP and Codex app-server discovery paths",
+  "reason": "The diff consumes Grok initialize model metadata and ACP session/list, consumes Codex app-server skills/list, applies the documented Codex image-input default, and uses Codex thread/fork when a chat branch maps to a completed assistant turn. Eleven exact Python adapter/runtime tests exercise structured replies, legacy fallbacks, native turn boundaries, and skill selection. Six catalogued mock UI runs cover external-session discovery and skill selection at desktop Chromium, mobile Chromium, and mobile WebKit widths. The disposable production Core/LAN journey checks the visible result and native adapter integration.",
+  "exclusions": "No frontend or native source changes warrant their unit/native suites. Browser tests use fixture API responses for UI behavior; live adapter replies and durable behavior are checked separately against the disposable production Core. Full suites, unrelated assistant journeys, paid multimodal inference, and OpenRouter image routing are excluded. Side chats and non-assistant boundaries retain the existing bounded handoff because they do not map exactly to a Codex turn.",
   "expected_tests": {
-    "python": 0,
+    "python": 11,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 6
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_harness_adapters.py::test_codex_probe_discovers_selectable_models",
+    "tests/v3/test_harness_adapters.py::test_codex_skills_use_app_server_catalog",
+    "tests/v3/test_harness_adapters.py::test_grok_probe_uses_structured_model_catalog_without_cli",
+    "tests/v3/test_harness_adapters.py::test_grok_probe_negotiates_cached_token_without_credentials",
+    "tests/v3/test_harness_adapters.py::test_grok_catalog_uses_selected_account_for_command_and_cache",
+    "tests/v3/test_harness_adapters.py::test_grok_session_listing_timeout_kills_the_child_process",
+    "tests/v3/test_harness_adapters.py::test_grok_session_listing_uses_acp_timestamp_and_skips_cli",
+    "tests/v3/test_harnesses.py::test_harness_skill_catalog_is_bounded_and_invocation_is_validated",
+    "tests/v3/test_harnesses.py::test_codex_native_skill_catalog_is_selectable_for_a_chat",
+    "tests/v3/test_harness_adapters.py::test_codex_fork_uses_stored_turn_boundary",
+    "tests/v3/test_harnesses.py::test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:advanced-session-binding/desktop",
+    "entry:advanced-session-binding/mobile-chromium-small",
+    "entry:advanced-session-binding/mobile-webkit-small",
+    "entry:chat-stream-scroll/desktop",
+    "entry:chat-stream-scroll/mobile-chromium-ledger-390",
+    "entry:chat-stream-scroll/mobile-webkit"
+  ]
 }

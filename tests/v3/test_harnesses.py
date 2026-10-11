@@ -90,6 +90,7 @@ from nebula.v3.domain import (
 from nebula.v3.harnesses import (
     ADAPTER_CONTRACT_VERSION,
     AdapterOpenRequest,
+    CodexAppServerAdapter,
     HarnessAdapter,
     HarnessConfigurationError,
     HarnessConnection,
@@ -100,6 +101,7 @@ from nebula.v3.harnesses import (
     HarnessRuntimeService,
     ExternalHarnessSession,
     HarnessSkillInvocation,
+    HarnessSkillSummary,
     HarnessTransportError,
     _harness_developer_instructions,
 )
@@ -718,6 +720,162 @@ def test_disabled_nebula_knowledge_does_not_suppress_installed_skills():
         "tools; it does not constrain explicitly invoked installed skills"
         in instructions
     )
+
+
+def test_codex_native_skill_catalog_is_selectable_for_a_chat(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    native_path = tmp_path / "native-plugin" / "SKILL.md"
+    native_path.parent.mkdir()
+    native_path.write_text("---\nname: native-plugin\n---\n", encoding="utf-8")
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "native_capabilities": profile.native_capabilities.model_copy(
+                update={"skills": True}
+            ),
+            "capabilities": profile.capabilities.model_copy(
+                update={"skill_invocation": True}
+            ),
+        },
+        expected_revision=profile.revision,
+    )
+
+    class NativeSkillAdapter(CodexAppServerAdapter):
+        async def list_available_skills(self, _profile, _credentials, _workspace):
+            return [
+                HarnessSkillSummary(
+                    name="native-plugin", path=str(native_path), source="installed"
+                )
+            ]
+
+    runtime.adapter_factory = lambda _kind: NativeSkillAdapter()
+
+    async def scenario() -> None:
+        skills = await runtime.refresh_available_skills(
+            engagement_id=engagement.id, profile_id=profile.id
+        )
+        assert [(item.name, item.path) for item in skills] == [
+            ("native-plugin", str(native_path))
+        ]
+        _chat, _chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model="test-model",
+            prompt="Use the native skill",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            harness_skill=HarnessSkillInvocation(
+                name="native-plugin", path=str(native_path)
+            ),
+        )
+        assert turn.metadata["harness_skill"] == {
+            "name": "native-plugin",
+            "path": str(native_path),
+        }
+
+    asyncio.run(scenario())
+
+
+def test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    chat, chat_turn, turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Inspect the project",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    source_session = store.get(HarnessSession, chat.harness_session_id)
+    store.update(
+        HarnessSession,
+        source_session.id,
+        {"external_session_id": "source-thread", "status": HarnessSessionStatus.IDLE},
+        expected_revision=source_session.revision,
+    )
+    store.update(
+        ChatTurn,
+        chat_turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=chat_turn.revision,
+    )
+    store.update(
+        HarnessTurn,
+        turn.id,
+        {"status": HarnessTurnStatus.COMPLETE, "external_turn_id": "codex-turn"},
+        expected_revision=turn.revision,
+    )
+    answer = store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=chat.id,
+            sequence=2,
+            role="assistant",
+            content="Project inspected",
+            metadata={"harness_turn_id": turn.id},
+        )
+    )
+    fork_session = runtime.fork_session(source_session.id, reason="chat fork")
+    fork = ChatService(store).fork_session(
+        chat.id,
+        through_message_id=answer.id,
+        harness_session_id=fork_session.id,
+    )
+    calls: list[tuple[str, str]] = []
+
+    class NativeForkAdapter(CodexAppServerAdapter):
+        async def fork_thread(
+            self, _profile, _credentials, _workspace, *, source_thread_id, last_turn_id
+        ):
+            calls.append((source_thread_id, last_turn_id))
+            return "native-child-thread"
+
+    runtime.adapter_factory = lambda _kind: NativeForkAdapter()
+    fork = asyncio.run(
+        runtime.maybe_fork_native_codex_chat(
+            source=chat, fork=fork, through_message_id=answer.id
+        )
+    )
+    assert calls == [("source-thread", "codex-turn")]
+    assert fork.metadata["harness_context_handoff_pending"] is False
+    assert fork.metadata["harness_native_fork"] is True
+    native_session = store.get(HarnessSession, fork_session.id)
+    assert native_session.external_session_id == "native-child-thread"
+    assert native_session.metadata["native_codex_fork"] is True
+
+    user_message = next(
+        item
+        for item in store.list_session_entities(ChatMessage, chat.id)
+        if item.role.value == "user"
+    )
+    fallback_session = runtime.fork_session(source_session.id, reason="user boundary")
+    fallback = ChatService(store).fork_session(
+        chat.id,
+        through_message_id=user_message.id,
+        harness_session_id=fallback_session.id,
+    )
+    fallback = asyncio.run(
+        runtime.maybe_fork_native_codex_chat(
+            source=chat, fork=fallback, through_message_id=user_message.id
+        )
+    )
+    assert calls == [("source-thread", "codex-turn")]
+    assert fallback.metadata["harness_context_handoff_pending"] is True
+    assert store.get(HarnessSession, fallback_session.id).external_session_id is None
+
+    _chat, _chat_turn, continued = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Continue",
+        chat_session_id=fork.id,
+        harness_session_id=fork_session.id,
+        mcp_server_ids=[],
+    )
+    assert "Nebula conversation handoff" not in continued.prompt
 
 
 def test_codex_daybreak_choice_is_advertised_and_saved_for_chat(tmp_path):

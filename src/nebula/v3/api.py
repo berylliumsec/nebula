@@ -4116,7 +4116,7 @@ def create_app(
         profile_id: str,
         engagement_id: str = Query(min_length=1, max_length=200),
     ) -> list[HarnessSkillSummary]:
-        return harness_runtime.available_skills(
+        return await harness_runtime.refresh_available_skills(
             engagement_id=engagement_id,
             profile_id=profile_id,
         )
@@ -9601,6 +9601,12 @@ def create_app(
                     status_code=409,
                     detail="Attach one browser session per conversation.",
                 )
+            if request.harness_skill is not None:
+                await harness_runtime.refresh_available_skills(
+                    engagement_id=engagement_id,
+                    profile_id=request.harness_profile_id or "",
+                    force_reload=False,
+                )
             chat, chat_turn, harness_turn = harness_runtime.prepare_chat(
                 engagement_id=engagement_id,
                 profile_id=request.harness_profile_id or "",
@@ -11028,7 +11034,7 @@ def create_app(
                     reason=f"conversation fork through {request.through_message_id}",
                 ).id
         try:
-            return chat_service().fork_session(
+            fork = chat_service().fork_session(
                 session_id,
                 through_message_id=request.through_message_id,
                 before_message_id=request.before_message_id,
@@ -11044,6 +11050,11 @@ def create_app(
                 with suppress(NotFoundError):
                     store.delete(HarnessSession, harness_session_id)
             raise
+        return await harness_runtime.maybe_fork_native_codex_chat(
+            source=source,
+            fork=fork,
+            through_message_id=request.through_message_id,
+        )
 
     @app.delete(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
