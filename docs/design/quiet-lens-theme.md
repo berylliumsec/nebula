@@ -7,8 +7,9 @@ release is proposed until the interaction choices below are reviewed.
 
 This study follows the user's sketches: the top menu and left sidebar are two
 separate, closed, tapered shapes. Their ends do not touch. After mouse inactivity,
-their contours recede. Mouse movement reveals the two thin shapes and quiet
-secondary controls; hovering either shape reveals only that shape's labels.
+their contours recede. Mouse movement reveals thin top, left, and right shapes;
+hovering one reveals only that surface's contents. The bottom composer has its
+own thin outline and opens on hover.
 Keyboard focus has the same reveal as hover. Touch keeps visible handles and
 opens a lens with a tap. The Send control and composer use the same contour
 language.
@@ -53,19 +54,21 @@ temporary access token is not committed.
 | Settings setup | [Settings](quiet-lens-previews/real-core-settings-rest.png) |
 | 320 px chat with three visible lines | [Mobile chat](quiet-lens-previews/real-core-mobile-chat.png) |
 | 320 px side lens | [Mobile navigation](quiet-lens-previews/real-core-mobile-side.png) |
-| Mouse movement, composer at rest | [Session rail visible](quiet-lens-previews/real-core-rail-active-composer-idle.png) |
+| Mouse movement, composer at rest | [Thin Session outline](quiet-lens-previews/real-core-rail-active-composer-idle.png) |
 | 60-second pointer idle | [Session rail hidden, thin composer outline](quiet-lens-previews/real-core-rail-idle-composer-idle.png) |
 | Composer hover | [Composer revealed](quiet-lens-previews/real-core-composer-hover.png) |
+| Session outline hover | [Session contents revealed](quiet-lens-previews/real-core-rail-hover.png) |
 | 320 px touch composer | [Multiline draft visible](quiet-lens-previews/real-core-mobile-composer-visible.png) |
 
 The current visibility proposal for design review is: keep conversation content
 and anything requiring operator attention visible. A thin tapered outline marks
 the composer at rest. Its controls appear while its own area is hovered or it
 has keyboard focus or active typing; moving the mouse elsewhere does not reveal
-them. The Session rail begins hidden, appears
-when the mouse moves anywhere, and fades after 60 seconds without movement. Its pending-action
-state remains visible. Pointer movement also brightens the two independent
-navigation contours; it does not expand labels.
+them. The Session rail begins hidden. Mouse movement anywhere shows its thin
+vertical outline; hovering that outline or reaching the rail by keyboard focus
+reveals its contents. The outline fades after 60 seconds without movement or
+hover. Its pending-action state remains visible. Pointer movement also brightens
+the independent top and left navigation contours; it does not expand labels.
 Hovering or focusing a contour reveals that menu alone. A tap opens its menu on
 touch screens, and Escape or an outside tap closes it. The side menu owns project
 and section navigation; the top menu owns page actions, status, and commands.
@@ -76,9 +79,9 @@ Primary buttons use the tapered oval language while keeping their labels readabl
 | Journey step | Observable invariant | State authority |
 | --- | --- | --- |
 | Open a conversation | The content remains the visual priority; the two navigation lenses stay disconnected. A thin composer outline remains at the bottom, with its full controls revealed by hovering or focusing it. | Core owns the saved conversation; the URL owns the selected project and conversation; React owns unsent text. |
-| Move the mouse | Both thin contours brighten and the Session rail appears from movement anywhere. The rail fades after 60 seconds without movement. Moving outside the composer does not reveal it. | Local presentation state and a 60-second timer. |
+| Move the mouse | The top and left contours brighten and a thin right Session outline appears. The rail fades after 60 seconds without movement or hover. Moving outside the composer does not reveal its controls. | Local presentation state and a 60-second timer. |
 | Use the composer | Hovering its outline and stable footprint or reaching it by keyboard focus reveals the full controls. While focused, typing, sending, or resolving an action, the composer remains visible. A long unsent draft is preserved if focus leaves. | React owns the draft and presentation; Core owns submitted turns. |
-| Use the Session rail | Its links remain available while the mouse is active, on keyboard focus, or when the rail contains a pending action. Hiding it does not change the selected conversation or shift its layout. | Core owns goal and agent status; React owns transient visibility. |
+| Use the Session rail | Hovering the narrow right outline or focusing a rail control reveals its links. A pending action keeps them visible. Hiding the rail does not change the selected conversation or shift its layout. | Core owns goal and agent status; React owns transient visibility. |
 | Reveal navigation | Hover, keyboard focus, or tap reveals only the targeted lens without moving the content; Escape closes a tapped lens. | Local presentation state. |
 | Select a destination | A destination has a readable label, visible focus, and a usable touch target of at least 44 px despite the thin visual contour. | URL plus Core catalog. |
 | Send a message | Send and its enabled or disabled state are clear when the composer is revealed. An active response keeps its Stop control visible. | Core owns the submitted turn; local state owns unsent input. |
@@ -101,29 +104,33 @@ Playwright journey in desktop Chromium and mobile Chromium/WebKit at 320–430 p
 with a clock-controlled 60-second idle assertion on desktop; selected App and
 ThemeContext component files; a production build; and the disposable real-Core
 review on a LAN origin. Check hover locality, keyboard focus and draft retention,
-rail idle/reveal, pending-action visibility, long content, touch targets,
+rail outline/hover/idle reveal, pending-action visibility, long content, touch targets,
 reduced motion, and reload. A review build is not a claim of full product
 acceptance; skipped gates must be recorded in the handoff.
 
 ## Review evidence and limits
 
-The production UI bundle builds. The focused Quiet Lens browser journey passes
-in eight profiles: desktop and compact Chromium, plus Chromium and WebKit at
-320, 390, and 430 px. It selects the theme through Appearance, checks separate
+The production UI bundle builds. The focused Quiet Lens browser journey passed
+in eight profiles before the right Session outline refinement: desktop and
+compact Chromium, plus Chromium and WebKit at 320, 390, and 430 px. The updated
+wide desktop journey passed again after that refinement. It selects the theme
+through Appearance, checks separate
 top and side reveals, Escape, 44 px targets, no horizontal overflow, and visible
 three-line and scrollable long drafts. At desktop widths it checks composer
 hover locality, keyboard focus, and draft retention after blur. The wide desktop
 profile checks the Session rail's initial hidden state, 59-second and 60-second
-timer boundary, movement reveal, keyboard focus, and pending-action visibility.
+timer boundary, movement reveal as a 12 px contour, narrow hover target, full
+contents on hover, keyboard focus, and pending-action visibility.
 The real LAN Core review reached
 Workbench, Findings, Reports, Projects, Library, and Settings; it clicked the
 Findings primary action, sent a chat message through Core, and reloaded the saved
 conversation. In this iteration a second message was sent from a newly created
 chat with the hover-revealed composer and restored after reload. At the LAN
 origin, wide Chromium showed a visible 12 px composer outline and hidden controls
-outside its hover area, visible controls on hover, and the Session rail changing
-from opacity 1 to 0 at the simulated
-60-second boundary and back to 1 on pointer movement. The 320 px Chromium and
+outside its hover area, visible controls on hover, and a separate 12 px Session
+outline whose contents remained hidden until its narrow hit area was hovered.
+The rail changed from opacity 1 to 0 at the simulated 60-second boundary and
+back to 1 on pointer movement. The 320 px Chromium and
 390 px WebKit real-Core browser checks kept the multiline composer visible with
 zero horizontal overflow. These are browser emulations, not physical phones.
 A two-worker replay briefly reset the WebKit 430 px fixture to Zero Classic;
@@ -142,5 +149,5 @@ a completed product theme.
 - Whether mobile navigation should obscure, dim, or shift the conversation while open.
 - Which actions should use the lens shape, and which require persistent text because
   they carry consequences or request operator input.
-- Whether the thin composer outline and hover footprint are discoverable enough, and
+- Whether the thin composer and Session outlines are discoverable enough, and
   whether the blank right gutter should remain to avoid moving the transcript.

@@ -2464,6 +2464,9 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
     await page.mouse.move(360, 310);
     await expect(rail).toHaveCSS("opacity", "1");
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "0");
+    await expect.poll(() => rail.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0.72");
+    expect(await rail.evaluate(element => Number.parseFloat(getComputedStyle(element, "::before").width))).toBeLessThanOrEqual(12);
     await page.clock.fastForward(59_000);
     await expect(shell).toHaveAttribute("data-quiet-rail", "active");
     await page.clock.fastForward(1_000);
@@ -2471,6 +2474,18 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     await expect(rail).toHaveCSS("opacity", "0");
     await page.mouse.move(370, 320);
     await expect(rail).toHaveCSS("opacity", "1");
+    const railBounds = await rail.boundingBox();
+    expect(railBounds).not.toBeNull();
+    await page.mouse.move(railBounds!.x + 8, railBounds!.y + railBounds!.height / 2);
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "0");
+    await rail.hover();
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "1");
+    await expect.poll(() => rail.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0");
+    await page.clock.fastForward(60_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await expect(rail).toHaveCSS("opacity", "1");
+    await page.mouse.move(370, 320);
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "0");
     await rail.getByRole("button", { name: /Session details/ }).focus();
     await page.clock.fastForward(60_000);
     await expect(shell).toHaveAttribute("data-quiet-rail", "idle");

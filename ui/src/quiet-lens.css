@@ -184,8 +184,8 @@
 :root[data-theme="quiet-lens"] .chat-composer .chat-composer-submit { min-width: 60px; border-radius: 50% / 68%; }
 :root[data-theme="quiet-lens"] .chat-composer footer .chat-composer-icon { border-radius: 50%; }
 
-/* The composer rests as a narrow ellipse inside a stable hover footprint.
-   Pointer movement elsewhere only reveals the Session rail. */
+/* The composer rests as a narrow ellipse. Pointer movement reveals the matching
+   Session contour, while each surface opens only under its own hover or focus. */
 @media (hover: hover) and (pointer: fine) {
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer {
     position: relative;
@@ -222,9 +222,41 @@
     pointer-events: none;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail {
+    position: relative;
+    clip-path: inset(0);
+    transition: opacity 180ms ease, border-color 180ms ease, background-color 180ms ease, clip-path 180ms ease;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail::before {
+    position: absolute;
+    top: 43%;
+    left: 50%;
+    width: 12px;
+    height: min(74%, 540px);
+    border: 1px solid var(--blue);
+    border-radius: 50%;
+    background: rgb(158 186 194 / 3%);
+    content: "";
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
     transition: opacity 180ms ease;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell[data-quiet-rail="idle"] .chat-studio > .chat-studio-rail:not(:focus-within):not([data-quiet-attention="true"]) {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > * {
+    transition: opacity 180ms ease;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) {
+    border-color: transparent;
+    background: transparent;
+    clip-path: inset(0 calc(50% - 22px));
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"])::before {
+    opacity: .72;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) > * {
+    opacity: 0;
+    pointer-events: none;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell[data-quiet-rail="idle"] .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) {
     opacity: 0;
     pointer-events: none;
   }
@@ -325,5 +357,7 @@
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer::before,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer > *,
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail { transition: none; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail::before,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > * { transition: none; }
 }
