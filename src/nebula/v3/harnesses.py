@@ -7341,7 +7341,7 @@ async def _grok_model_catalog(
         if models:
             return models, options
 
-    models: list[str] = []
+    models = []
     if profile.executable:
         process = await asyncio.create_subprocess_exec(
             profile.executable,
@@ -7384,7 +7384,7 @@ async def _grok_model_catalog(
     for model in models:
         entry = catalog.get(model) if isinstance(catalog, dict) else None
         info = entry.get("info") if isinstance(entry, dict) else None
-        efforts: list[HarnessRuntimeOption] = []
+        efforts = []
         if isinstance(info, dict):
             for option in info.get("reasoning_efforts", []):
                 if not isinstance(option, dict):
@@ -7741,7 +7741,7 @@ class GrokAcpAdapter(HarnessAdapter):
         if process.returncode != 0:
             detail = stderr.decode("utf-8", errors="replace").strip()
             raise HarnessUnavailableError(detail[:500] or "Grok sessions list failed")
-        sessions: list[ExternalHarnessSession] = []
+        sessions = []
         row = re.compile(
             r"^(?P<id>[0-9a-fA-F-]{36})\s+"
             r"(?P<created>\d{4}-\d{2}-\d{2})\s+"
@@ -9811,7 +9811,11 @@ class HarnessRuntimeService:
                 source_thread_id=source_session.external_session_id,
                 last_turn_id=source_turn.external_turn_id,
             )
-        except (HarnessError, OSError, TimeoutError):  # diagnostic-expected: native fork failure uses the persisted bounded handoff
+        except (
+            HarnessError,
+            OSError,
+            TimeoutError,
+        ):  # diagnostic-expected: native fork failure uses the persisted bounded handoff
             return fork
         with self.store.transaction() as transaction:
             transaction.update(
