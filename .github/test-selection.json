@@ -1,13 +1,13 @@
 {
-  "change_digest": "feca948a8bc06a81ee5923dcff6435f45b99112470b5233e1c5d8671491f0484",
+  "change_digest": "565ec2e00a89f88787f81a912981c4c688b64598aff2fff65d0b06c35f123549",
   "reviewed_by": "Codex focused review of assistant navigation and prior settings journeys",
-  "reason": "The assistant branch adds a packaged list of 19 app destinations, direct local navigation for exact requests such as show me my projects, and a scoped nebula.navigate.open tool for provider and harness turns. The browser validates tool receipts and navigates with the selected project ID. Fourteen Python cases cover catalog, scope, knowledge index, and harness boundaries; 24 frontend cases cover exact destinations, parsed receipts, and the assistant interaction. Existing 22 selected browser journeys still cover settings and policy actions. Eight real-Core production LAN browser cases open all 19 app routes from the assistant in desktop Chromium 1440/1024 and emulated mobile Chromium/WebKit 320/390/430, then reload. Eight mocked browser cases replay the exact Grok OkayOutput navigation receipt, which previously failed at the API decoder. The selection is bound to the feature branch merge-base while current main advances; it must be reviewed again after branch synchronization before PR. The new JSON resource is included in the wheel and frozen-Core data list and required by the frozen archive audit.",
+  "reason": "The assistant branch adds a packaged list of 19 app destinations, direct local navigation for exact requests such as show me my projects, and a scoped nebula.navigate.open tool for provider and harness turns. The browser validates tool receipts and navigates with the selected project ID. Fourteen Python cases cover catalog, scope, knowledge index, and harness boundaries; 24 frontend cases cover exact destinations, parsed receipts, and the assistant interaction. Existing 22 selected browser journeys still cover settings and policy actions. Eight real-Core production LAN browser cases open all 19 app routes from the assistant in desktop Chromium 1440/1024 and emulated mobile Chromium/WebKit 320/390/430, then reload. Eight mocked browser cases replay the exact Grok OkayOutput navigation receipt, which previously failed at the API decoder. The selection is bound to the feature branch merge-base while current main advances; it must be reviewed again after branch synchronization before PR. The new JSON resource is included in the wheel and frozen-Core data list and required by the frozen archive audit. The launcher now lives in the shared top bar, the five-item mobile Workbench navigation, and the mobile focus toolbar, avoiding the Zero dock overlay. One new component case checks the persistent assistant behind an inline launcher. Eight mocked browser profiles check placement and hide/restore; the existing explicit 320px mobile companion geometry case checks the fifth navigation action. No backend behavior changes in this follow-up.",
   "exclusions": "No native code changed. Unrelated Python, frontend, browser journeys and full suites are excluded. Dynamic record URLs need an object ID and are outside the static route catalog. The production Core is not touched; the throwaway and browser fixtures are isolated. Physical devices are unavailable and not claimed.",
   "expected_tests": {
     "python": 14,
-    "frontend": 24,
+    "frontend": 25,
     "native": 0,
-    "playwright": 38
+    "playwright": 47
   },
   "python": [
     "tests/v3/test_settings_assistant_tools.py",
@@ -25,27 +25,35 @@
     "nebula-assistant/desktop/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/desktop/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/desktop/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/desktop/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/compact/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/compact/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/compact/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/compact/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/mobile-chromium-small/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/mobile-chromium-small/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-chromium-small/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/mobile-chromium-small/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/mobile-chromium-ledger-390/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/mobile-chromium-ledger-390/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-chromium-ledger-390/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/mobile-chromium-ledger-390/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/mobile-chromium-wide/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/mobile-chromium-wide/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-chromium-wide/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/mobile-chromium-wide/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/mobile-webkit-small/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/mobile-webkit-small/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-webkit-small/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/mobile-webkit-small/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/mobile-webkit/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/mobile-webkit/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-webkit/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/mobile-webkit/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/mobile-webkit-wide/stabilization Nebula assistant opens from every screen and changes this device theme",
     "nebula-assistant/mobile-webkit-wide/stabilization Nebula assistant applies a model-selected device-theme tool receipt",
     "nebula-assistant/mobile-webkit-wide/stabilization Nebula assistant follows a model-selected Projects navigation receipt",
+    "nebula-assistant/mobile-webkit-wide/stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock",
     "nebula-assistant/assistant-real-desktop/project execution mode Nebula help answers a Docker host-file question",
     "nebula-assistant/assistant-real-desktop/project execution mode assistant saves and shows Host then Docker",
     "nebula-assistant/assistant-real-desktop/project execution mode settings assistant opens every catalog setting",
@@ -59,6 +67,7 @@
     "nebula-assistant/assistant-real-chromium-430/project execution mode assistant navigates every app destination on production LAN Core",
     "nebula-assistant/assistant-real-webkit-320/project execution mode assistant navigates every app destination on production LAN Core",
     "nebula-assistant/assistant-real-webkit-390/project execution mode assistant navigates every app destination on production LAN Core",
-    "nebula-assistant/assistant-real-webkit-430/project execution mode assistant navigates every app destination on production LAN Core"
+    "nebula-assistant/assistant-real-webkit-430/project execution mode assistant navigates every app destination on production LAN Core",
+    "phone-shell/desktop/the 320px mobile companion keeps controls visible"
   ]
 }

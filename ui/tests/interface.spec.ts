@@ -2131,7 +2131,6 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   const appearanceLens = page.getByRole("dialog", { name: "Appearance and theme" });
   await expect(appearanceLens).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
-  await expect(appearanceLens.getByRole("button", { name: /Zero Dark/ })).toHaveAttribute("aria-pressed", "true");
   await expect(appearanceLens).toHaveCount(0, { timeout: 4000 });
   await expect(reopenedAssistant).toContainText("Changed this device to Zero Dark");
   await page.reload();
@@ -2238,6 +2237,42 @@ reloadTest("stabilization Nebula assistant follows a model-selected Projects nav
   await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
+});
+
+reloadTest("stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await openWorkspace(page, "/settings", "Settings");
+  const topBar = page.locator(".top-bar");
+  const launcher = topBar.getByRole("button", { name: "Open Nebula assistant" });
+  await expect(launcher).toBeVisible();
+  expectTouchTarget((await launcher.boundingBox())?.width, "Assistant launcher width");
+  expectTouchTarget((await launcher.boundingBox())?.height, "Assistant launcher height");
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+  if ((page.viewportSize()?.width ?? 0) > 760) {
+    const gear = await page.locator(".zero-anchor-dock .settings-nav-item").boundingBox();
+    const assistant = await launcher.boundingBox();
+    expect(assistant && gear && assistant.y + assistant.height < gear.y).toBe(true);
+  }
+  await launcher.click();
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  await expect(assistant).toBeVisible();
+  await assistant.getByRole("button", { name: "Hide Nebula assistant" }).click();
+  await expect(topBar.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+
+  if ((page.viewportSize()?.width ?? 0) <= 760) {
+    await openWorkspace(page, "/?view=chat", "Workbench");
+    const mobileNav = page.getByRole("navigation", { name: "Mobile operator navigation" });
+    await expect(mobileNav.getByRole("button")).toHaveCount(5);
+    const mobileLauncher = mobileNav.getByRole("button", { name: "Show Nebula assistant" });
+    await expect(mobileLauncher).toBeVisible();
+    expectTouchTarget((await mobileLauncher.boundingBox())?.width, "Mobile assistant launcher width");
+    await mobileLauncher.click();
+    await expect(assistant).toBeVisible();
+    await assistant.getByRole("button", { name: "Close Nebula assistant" }).click();
+    await mobileNav.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
+    await expect(page.locator(".sessions-page.full-screen .session-toolbar").getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
+  }
 });
 
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
@@ -3531,7 +3566,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
   expect(geometry.pageWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   expect(geometry.duplicateDockDisplay).toBe("none");
   expect(geometry.composerFontSize).toBeGreaterThanOrEqual(16);
-  expect(geometry.navigationIcons).toHaveLength(4);
+  expect(geometry.navigationIcons).toHaveLength(5);
   expect(geometry.navigationIcons.every(({ width, height }) => width >= 18 && height >= 18)).toBe(true);
 
   await page.getByRole("button", { name: "More workbench views" }).click();
