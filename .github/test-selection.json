@@ -1,17 +1,16 @@
 {
-  "change_digest": "fc869bea4e4a44a9c2c27eb2be1afcf77df4587bf9ca541a6a3c33e5dbdde0db",
+  "change_digest": "68d35c1918bf5c1f5a67b1d3bc31b082555960c093c5fcb0465fba986c1577c7",
   "reviewed_by": "Codex focused Quiet Lens UI review",
-  "reason": "The branch adds the opt-in Quiet Lens theme to the real Nebula shell, composer, Session rail, and focus toolbar. The focused interface journey selects the theme, checks separate navigation contours, visible multiline and long drafts, the 60-second Session rail reveal, and the focus toolbar hidden, keyboard, and hover states. Its desktop and compact profiles cover fine-pointer focus controls; mobile Chromium and WebKit at 320, 390, and 430 px cover touch presentation. App and ThemeContext component tests cover Appearance discovery and saved preference restoration. A disposable production Core on a LAN origin supplements the selected browser regression.",
-  "exclusions": "No backend, API, or native implementation changes, so Python and native tests are unrelated. No full frontend or Playwright suite, unrelated catalog journeys, provider turn validation, or physical-device run is selected. The Session rail only exists at wide desktop width, and the focus toolbar hiding rule only applies to fine-pointer devices; touch controls remain visible. Real-Core visual checks are reported separately from the focused mocked browser regression.",
+  "reason": "The rebased branch makes Quiet Lens the first-run default, retains saved appearance choices, and adds a real-interface README preview before the existing assistant video. ThemeContext component tests cover default selection, blocked storage, migration, and saved choices. Two focused App component cases for the new default and existing dark-sidebar preference passed locally; the broad App file has eight unrelated failures on current origin/main, so the selected CI frontend file is limited to ThemeContext. The dedicated Quiet Lens interface journey covers navigation contours, composer, Session rail, focus controls, draft retention, and touch presentation in desktop/compact Chromium and Chromium/WebKit phone profiles at 320, 390, and 430 px. The first-run default case is added on desktop and compact. The production UI is built and reviewed separately against a disposable Core on a LAN origin; the README image uses illustrative conversation text.",
+  "exclusions": "No backend, API, or native implementation changes, so Python and native tests are unrelated. No full frontend or Playwright suite, unrelated catalog journeys, provider turns, or physical-device run is selected. The full App.test.tsx file is excluded from CI selection because eight cases fail unchanged on an isolated origin/main baseline; the two cases relevant to this default change passed by exact name locally and the browser journey covers the integration. The README image and copy need visual/manual review. The Session rail exists only at wide desktop width, and the focus toolbar hiding rule only applies to fine-pointer devices; touch controls remain visible.",
   "expected_tests": {
     "python": 0,
-    "frontend": 46,
+    "frontend": 4,
     "native": 0,
-    "playwright": 8
+    "playwright": 10
   },
   "python": [],
   "frontend": [
-    "ui/src/App.test.tsx",
     "ui/src/state/ThemeContext.test.tsx"
   ],
   "native": [],
