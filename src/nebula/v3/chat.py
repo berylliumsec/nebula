@@ -714,7 +714,7 @@ class ChatCompletionRequest(NebulaModel):
 def isolate_settings_assistant_request(
     request: ChatCompletionRequest, session: ChatSession | None = None
 ) -> ChatCompletionRequest:
-    """Keep a settings conversation separate from ordinary chat capabilities."""
+    """Keep the Nebula product assistant separate from ordinary chat capabilities."""
 
     saved_settings_session = bool(
         session and session.metadata.get("control_assistant") is True
@@ -751,7 +751,7 @@ def isolate_settings_assistant_request(
         request.harness_cyber_access_program,
     )):
         raise ChatConfigurationError(
-            "The settings assistant accepts settings tools only; remove general tools and attached context."
+            "The Nebula assistant accepts Nebula help and settings tools only; remove general tools and attached context."
         )
     return request.model_copy(
         update={"include_knowledge": False, "allow_mcp_catalog": False}
@@ -5626,15 +5626,25 @@ class ChatService:
         )
         if request.control_assistant or (session and session.metadata.get("control_assistant") is True):
             instructions += (
-                "\n\nYou are the Nebula settings assistant. Use nebula.settings.catalog to identify supported settings. "
-                "Use the settings tools for bounded Core changes and report success only after their saved read-back. "
-                "For device appearance, direct the operator to the Appearance controls in this assistant window. "
-                "Project execution mode (Docker or Host) is under Project policy and network scope. "
-                "An explicit request to switch modes is handled by the assistant UI: it opens the setting, "
-                "asks for Host access confirmation, saves, and reads back Core's policy. Do not say this mode "
-                "is unavailable or ask the operator to find it manually. "
-                "For other settings, name the matching Settings destination and let the operator review it there. "
-                "Never claim that suggesting a change applied it."
+                "\n\nYou are the Nebula product assistant. Answer Nebula usage questions and troubleshoot "
+                "using the packaged product index: call nebula.help.search for product behavior, cite its "
+                "source, and distinguish documented behavior from live Core facts. For host file access, "
+                "command isolation, or execution-mode "
+                "questions, call nebula.help.project_context before answering; do not assume the project's "
+                "mode from the question. If policy_source is default, describe Docker as the effective "
+                "default, not a saved policy. A stored Docker policy may be auto-created, so never claim "
+                "the operator explicitly chose it. Docker commands can access their project workspace, including a "
+                "linked host folder, but not arbitrary host paths. Host mode grants new command sessions "
+                "the Nebula server user's filesystem access after explicit confirmation; existing sessions "
+                "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
+                "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
+                "host files from this assistant; after fixing access, the operator can ask the general "
+                "assistant in a new session to make the edit. Use nebula.settings.catalog for destinations "
+                "and bounded changes. Report success only after a saved read-back. For device appearance, "
+                "direct the operator to the Appearance controls in this assistant window. Link a relevant "
+                "setting as /settings#target so its controls open in the assistant UI. The assistant window "
+                "handles explicit Docker/Host mode changes with confirmation and Core read-back. If facts "
+                "are unavailable, say what needs checking. Never claim that suggesting a change applied it."
             )
         else:
             instructions += (
@@ -5766,7 +5776,7 @@ class ChatService:
                 ("MCP servers", bool(mcp_profiles)),
                 ("SSH hosts", bool(ssh_environments)),
                 ("web search", web_search_selected),
-                ("Nebula settings", settings_assistant_available),
+                ("Nebula product help and settings", settings_assistant_available),
                 ("browser control", bool(browser_session_id)),
                 ("project model context", model_context),
                 ("skill resources", skill_resources_selected),
@@ -12367,7 +12377,7 @@ class ChatService:
             if settings_only:
                 components = restrict_tool_components(
                     components,
-                    [name for name in components.specs if name.startswith("nebula.settings.")],
+                    [name for name in components.specs if name.startswith(("nebula.help.", "nebula.settings."))],
                 )
             allowed_names = turn.request_snapshot.get("allowed_tool_names")
             if isinstance(allowed_names, list):

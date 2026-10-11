@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import Engagement, HarnessProfile, ProviderProfile, RiskClass
+from .domain import AutomationProjectPolicy, Engagement, HarnessProfile, ProviderProfile, RiskClass
 from .storage import NebulaStore
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -32,6 +32,11 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
 )
 
 CATALOG_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {}}
+SEARCH_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"query": {"type": "string", "minLength": 3, "maxLength": 1000}},
+    "required": ["query"],
+}
 POST_TOOL_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -71,6 +76,35 @@ def catalog() -> dict[str, Any]:
             "values": ["light", "dark", "studio-dark", "zero-light", "zero-dark"],
             "authority": "browser preference; use the assistant's Appearance controls on that device",
         },
+    }
+
+
+def project_context(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
+    """Read the selected project's runtime facts without creating a policy."""
+
+    engagement = store.get(Engagement, engagement_id)
+    policies = store.find_entities(
+        AutomationProjectPolicy, {"engagement_id": engagement.id}, limit=1,
+    )
+    policy = policies[0] if policies else None
+    return {
+        "project_id": engagement.id,
+        "project_name": engagement.name,
+        "execution_mode": policy.execution_mode if policy else "docker",
+        "policy_source": "stored" if policy else "default",
+        "policy_description": (
+            "Host mode is stored in Core with host-access acknowledgment."
+            if policy and policy.execution_mode == "host" else
+            "Docker mode is stored in Core. It may be the automatically created default or an operator selection; Core does not record which."
+            if policy else
+            "No execution policy is stored for this project; Docker is the effective default."
+        ),
+        "linked_workspace_path": engagement.workspace_path,
+        "workspace_kind": "linked_host_folder" if engagement.workspace_path else "nebula_managed",
+        "docker_access": "Commands can access the project workspace, including a linked host folder, but not arbitrary host paths outside it.",
+        "host_access": "Host mode runs new command sessions as the Nebula server's OS user, subject to that user's filesystem permissions.",
+        "existing_sessions": "Existing command sessions keep their frozen execution mode; start a new session after a policy change.",
+        "setting_url": "/settings#engagement-policy-settings",
     }
 
 
@@ -165,10 +199,31 @@ def provider_plugins(store: NebulaStore, artifact_store: Any, engagement_id: str
     async def list_models(_arguments: dict[str, Any]) -> dict[str, Any]:
         return model_choices(store)
 
+    async def read_project_context(_arguments: dict[str, Any]) -> dict[str, Any]:
+        return project_context(store, engagement_id)
+
+    async def search_help(arguments: dict[str, Any]) -> dict[str, Any]:
+        from .product_knowledge import search_product_knowledge
+
+        query = arguments.get("query")
+        if not isinstance(query, str) or not 3 <= len(query) <= 1000:
+            raise ValueError("provide a product-help query of 3 to 1000 characters")
+        return {"matches": search_product_knowledge(query), "source": "bundled Nebula product knowledge"}
+
     async def save_default_model(arguments: dict[str, Any]) -> dict[str, Any]:
         return set_default_model(store, arguments)
 
     return [
+        AnalysisTool(ToolSpec(
+            name="nebula.help.search", description="Search the packaged, source-linked Nebula product documentation index. Use for usage or troubleshooting questions; cite the returned source and check live project facts separately with nebula.help.project_context.",
+            input_schema=SEARCH_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
+        ), search_help),
+        AnalysisTool(ToolSpec(
+            name="nebula.help.project_context", description="Read the selected project's Docker or Host mode and linked workspace. Call before explaining host-file access, command isolation, or a failed host-path edit; this tool changes nothing.",
+            input_schema=CATALOG_SCHEMA, output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ, idempotency=IdempotencyBehavior.SAFE,
+        ), read_project_context),
         AnalysisTool(ToolSpec(
             name="nebula.settings.catalog", description="List Nebula setting destinations and bounded direct changes. Use this before answering where a setting is or what can be changed.",
             input_schema=CATALOG_SCHEMA, output_schema={"type": "object", "additionalProperties": True},

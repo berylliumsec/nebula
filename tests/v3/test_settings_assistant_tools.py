@@ -6,13 +6,14 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatConfigurationError, ChatHistoryConflict, ChatRequestMessage, isolate_settings_assistant_request
-from nebula.v3.domain import ChatRole, ChatSession, Engagement, HarnessCapabilities, HarnessKind, HarnessProfile, ProviderProfile
+from nebula.v3.domain import AutomationProjectPolicy, ChatRole, ChatSession, Engagement, HarnessCapabilities, HarnessKind, HarnessProfile, ProviderProfile
 from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
 from nebula.v3.settings_assistant_tools import (
     SETTING_DESTINATIONS,
     catalog,
     provider_plugins,
+    project_context,
     model_choices,
     set_default_model,
     set_post_tool_preference,
@@ -51,12 +52,43 @@ def test_post_tool_change_reads_back_from_core(tmp_path):
     assert store.get(Engagement, project.id).metadata["post_tool_assistant"]["take_notes"] is False
 
 
+def test_project_context_reads_mode_and_linked_workspace_without_creating_policy(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    project = store.create(Engagement(name="Bounded project"))
+    other = store.create(Engagement(name="Other project"))
+    store.create(AutomationProjectPolicy(engagement_id=other.id, execution_mode="host", host_access_acknowledged=True))
+    default = project_context(store, project.id)
+    assert default["execution_mode"] == "docker"
+    assert default["policy_source"] == "default"
+    assert "No execution policy is stored" in default["policy_description"]
+    assert default["linked_workspace_path"] is None
+    assert not store.find_entities(AutomationProjectPolicy, {"engagement_id": project.id})
+    auto_default = store.create(Engagement(name="Auto default"))
+    store.create(AutomationProjectPolicy(engagement_id=auto_default.id, execution_mode="docker"))
+    stored_docker = project_context(store, auto_default.id)
+    assert stored_docker["policy_source"] == "stored"
+    assert "may be the automatically created default" in stored_docker["policy_description"]
+
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    project = store.update(Engagement, project.id, {"workspace_path": str(linked)}, expected_revision=project.revision)
+    store.create(AutomationProjectPolicy(engagement_id=project.id, execution_mode="host", host_access_acknowledged=True))
+    observed = project_context(store, project.id)
+    assert observed["execution_mode"] == "host"
+    assert observed["policy_source"] == "stored"
+    assert "host-access acknowledgment" in observed["policy_description"]
+    assert observed["linked_workspace_path"] == str(linked)
+    assert observed["workspace_kind"] == "linked_host_folder"
+    assert "Existing command sessions" in observed["existing_sessions"]
+
+
 def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     project = store.create(Engagement(name="Project A"))
     names = {plugin.spec.name for plugin in provider_plugins(store, artifacts, project.id)}
     assert names == {
+        "nebula.help.search", "nebula.help.project_context",
         "nebula.settings.catalog", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
@@ -70,8 +102,9 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(t
     common = dict(engagement_id=project.id, turn_id="turn", provider=None, model="small", allow_empty=True)
     ordinary = runtime.chat_components(**common)
     settings = runtime.chat_components(**common, settings_assistant=True)
-    assert not any(name.startswith("nebula.settings.") for name in ordinary.specs)
+    assert not any(name.startswith(("nebula.settings.", "nebula.help.")) for name in ordinary.specs)
     assert set(settings.specs) == {
+        "nebula.help.search", "nebula.help.project_context",
         "nebula.settings.catalog", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
