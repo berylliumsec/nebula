@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
         sys.path.insert(0, repository_root)
 
 from scripts.generate_third_party_notices import generate_notices
+from scripts.build_product_knowledge import ensure as ensure_product_knowledge
 from scripts.nebula3_version import check_versions
 from scripts.package_audit import FORBIDDEN_MODULES, inspect_pyinstaller_binary
 
@@ -137,6 +138,7 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     require_runtime_imports()
     version = check_versions(root)
+    ensure_product_knowledge()
     migrations, frontend = stage_runtime_payload(root)
     license_file = root / "LICENSE.md"
     if not license_file.is_file():
@@ -154,9 +156,15 @@ def main() -> None:
     operator_help = root / "src" / "nebula" / "v3" / "operator_help.md"
     if not operator_help.is_file():
         raise RuntimeError("the bundled Nebula 3 operator-help corpus is required")
+    product_knowledge = root / "src" / "nebula" / "v3" / "product_knowledge.sqlite3.b85"
+    if not product_knowledge.is_file():
+        raise RuntimeError("the bundled Nebula product knowledge index is required")
     diagnostic_guidance = root / "src" / "nebula" / "v3" / "diagnostic_guidance.json"
     if not diagnostic_guidance.is_file():
         raise RuntimeError("the bundled diagnostic guidance catalog is required")
+    assistant_destinations = root / "src" / "nebula" / "v3" / "assistant_destinations.json"
+    if not assistant_destinations.is_file():
+        raise RuntimeError("the bundled assistant navigation catalog is required")
     kali_tool_inventory = root / "src" / "nebula" / "v3" / "kali_tool_inventory.py"
     if not kali_tool_inventory.is_file():
         raise RuntimeError("the Kali security-tool inventory helper is required")
@@ -233,7 +241,11 @@ def main() -> None:
         "--add-data",
         f"{operator_help}:nebula/v3",
         "--add-data",
+        f"{product_knowledge}:nebula/v3",
+        "--add-data",
         f"{diagnostic_guidance}:nebula/v3",
+        "--add-data",
+        f"{assistant_destinations}:nebula/v3",
         "--add-data",
         f"{kali_tool_inventory}:nebula/v3",
         "--add-data",

@@ -1,33 +1,44 @@
 {
-  "change_digest": "0efe6c53668439c3e42cc6cdb951c2a92f565470a57598c9b08cb4d0a0978af0",
-  "reviewed_by": "Codex focused review of theme migration, palette options, Zero shell compatibility, and the public commit guard",
-  "reason": "The original Zero Dark palette is restored as Zero Classic with a one-time device-preference migration. Glacier and Amber add distinct token palettes and previews while Zero Dark remains Dark-token matched. Three collected ThemeContext component cases cover storage fallback and the one-time migration. Three theme-specific App cases passed locally with an exact name filter. CI cannot filter Vitest tests within a file; running the entire App file revealed eight unrelated failures, so it is excluded from the CI selection pending separate work. Collected browser tests: 8 picker cases across 1440/1024 desktop and 320/390/430 Chromium/WebKit, 9 desktop Zero Dark material cases, and 3 Workbench variant cases in desktop Chromium plus Pixel 5 Chromium and 390px iPhone WebKit. Browser coverage checks selection, storage reload, original palette values, shell geometry, visual surfaces, and mobile width. The local public commit guard now defaults to excluding CSS from content review, accepts local path and size configuration, and requires exact staged-tree authorization plus a matching commit trailer for a one-commit bypass. Eighteen collected Python guard cases exercise those boundaries with synthetic Git repositories and a fake reviewer. Existing screenshot attachments remain visual evidence instead of stale binary snapshots.",
-  "exclusions": "No Core API, provider, harness, server-owned state, native runtime, or database migration changed. Unrelated Python, frontend, and Playwright files and full suites are excluded. The full App.test.tsx file is excluded from CI because 8 unrelated cases fail; its 3 changed theme cases passed with a local filter. The preference is device-local; production real-Core LAN browser smoke will check the served build. Physical-device acceptance is unavailable and is reported separately.",
+  "change_digest": "55d0c7ca0994f75ba5c66256eacf16e8915afa45c55432cdfc156901d3374313",
+  "reviewed_by": "Codex focused review of assistant navigation and prior settings journeys",
+  "reason": "The assistant branch adds a packaged list of 19 app destinations, direct local navigation for exact requests such as show me my projects, and a scoped nebula.navigate.open tool for provider and harness turns. The browser validates tool receipts and navigates with the selected project ID. Fourteen Python cases cover catalog, scope, knowledge index, and harness boundaries; 28 frontend cases cover exact destinations, parsed receipts, and the assistant interaction. Existing 22 selected browser journeys still cover settings and policy actions. Eight real-Core production LAN browser cases open all 19 app routes from the assistant in desktop Chromium 1440/1024 and emulated mobile Chromium/WebKit 320/390/430, then reload. Eight mocked browser cases replay the exact Grok OkayOutput navigation receipt, which previously failed at the API decoder. The new JSON resource is included in the wheel and frozen-Core data list and required by the frozen archive audit. The launcher now lives in the shared top bar, the five-item mobile Workbench navigation, and the mobile focus toolbar, avoiding the Zero dock overlay. One new component case checks the persistent assistant behind an inline launcher. Eight mocked browser profiles check placement and hide/restore; the existing explicit 320px mobile companion geometry case checks the fifth navigation action. The launcher placement follow-up does not change backend behavior. Rebased onto current main; the appearance catalog retains Zero Classic, Glacier, and Amber while the assistant theme journey checks Zero Dark. This selection covers the feature diff against main. The Playwright catalog groups the four assistant journeys per browser profile and combines the real-Core navigation journey with the existing desktop and 320px WebKit settings journeys, producing 17 focused matrix entries for 47 tests. Current main adds Glacier, Amber, and Zero Classic: the assistant now shares the UI theme list, and its tool and direct commands expose all three. Three ThemeContext cases cover appearance preference migration and storage; the existing eight-profile assistant journey exercises the new choices through visible controls.",
+  "exclusions": "No native code changed. Unrelated Python, frontend, browser journeys and full suites are excluded. Dynamic record URLs need an object ID and are outside the static route catalog. Focused pre-merge tests use an isolated throwaway Core and browser fixtures; production deployment follows the merged main commit. Physical devices are unavailable and not claimed.",
   "expected_tests": {
-    "python": 18,
-    "frontend": 3,
+    "python": 14,
+    "frontend": 28,
     "native": 0,
-    "playwright": 20
+    "playwright": 47
   },
   "python": [
-    "tests/test_public_commit_guard.py"
+    "tests/v3/test_settings_assistant_tools.py",
+    "tests/v3/test_product_knowledge.py",
+    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session",
+    "tests/v3/test_packaging.py::test_artifact_member_audit_accepts_only_complete_v3_payload"
   ],
   "frontend": [
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/assistantDestinations.test.ts",
     "ui/src/state/ThemeContext.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:zero-dark-palette/desktop",
-    "entry:zero-dark-palette/compact",
-    "entry:zero-dark-palette/mobile-chromium-small",
-    "entry:zero-dark-palette/mobile-chromium",
-    "entry:zero-dark-palette/mobile-chromium-wide",
-    "entry:zero-dark-palette/mobile-webkit-small",
-    "entry:zero-dark-palette/mobile-webkit",
-    "entry:zero-dark-palette/mobile-webkit-wide",
-    "entry:zero-dark-visuals/desktop",
-    "entry:theme-variety/desktop",
-    "entry:theme-variety/mobile-chromium",
-    "entry:theme-variety/mobile-webkit"
+    "entry:nebula-settings-assistant/desktop",
+    "entry:nebula-settings-assistant/compact",
+    "entry:nebula-settings-assistant/mobile-chromium-small",
+    "entry:nebula-settings-assistant/mobile-chromium-ledger-390",
+    "entry:nebula-settings-assistant/mobile-chromium-wide",
+    "entry:nebula-settings-assistant/mobile-webkit-small",
+    "entry:nebula-settings-assistant/mobile-webkit",
+    "entry:nebula-settings-assistant/mobile-webkit-wide",
+    "entry:nebula-settings-assistant/assistant-real-desktop",
+    "entry:nebula-settings-assistant/assistant-real-compact",
+    "entry:nebula-settings-assistant/assistant-real-chromium-320",
+    "entry:nebula-settings-assistant/assistant-real-chromium-390",
+    "entry:nebula-settings-assistant/assistant-real-chromium-430",
+    "entry:nebula-settings-assistant/assistant-real-webkit-320",
+    "entry:nebula-settings-assistant/assistant-real-webkit-390",
+    "entry:nebula-settings-assistant/assistant-real-webkit-430",
+    "entry:phone-shell/desktop"
   ]
 }

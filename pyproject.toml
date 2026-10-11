@@ -1,6 +1,7 @@
 [build-system]
-requires = [ "poetry-core>=1.0.0",]
-build-backend = "poetry.core.masonry.api"
+requires = [ "poetry-core>=1.0.0", "numpy", "chromadb>=1.5.9,<2",]
+build-backend = "nebula_build_backend"
+backend-path = [ "build_backend",]
 
 [tool.poetry]
 name = "nebula-ai"
@@ -12,7 +13,18 @@ license = "BSD"
 homepage = "https://github.com/berylliumsec/nebula"
 keywords = [ "AI", "ethical hacking", "nmap", "zap", "crackmapexec",]
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: BSD License", "Programming Language :: Python :: 3",]
-include = [ "src/nebula/v3/operator_help.md", "src/nebula/v3/diagnostic_guidance.json", "src/nebula/v3/report_assets/**/*",]
+include = [
+  "src/nebula/v3/operator_help.md",
+  { path = "src/nebula/v3/product_knowledge.sqlite3.b85", format = [ "wheel", "sdist",] },
+  "src/nebula/v3/diagnostic_guidance.json",
+  "src/nebula/v3/assistant_destinations.json",
+  "src/nebula/v3/report_assets/**/*",
+  { path = "build_backend/nebula_build_backend.py", format = "sdist" },
+  { path = "scripts/build_product_knowledge.py", format = "sdist" },
+  { path = "docs/*.md", format = "sdist" },
+  { path = "docs/design/nebula-settings-assistant.md", format = "sdist" },
+  { path = "ui/src/settingsCatalog.ts", format = "sdist" },
+]
 [[tool.poetry.packages]]
 include = "nebula"
 from = "src"

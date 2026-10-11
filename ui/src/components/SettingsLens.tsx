@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ExternalLink, SlidersHorizontal, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { SettingCatalogEntry } from "../settingsCatalog";
@@ -9,6 +9,9 @@ interface SettingsLensProps {
   entry: SettingCatalogEntry;
   onClose: () => void;
   returnFocus?: HTMLElement | null;
+  refreshKey?: number;
+  status?: string;
+  statusMode?: "docker" | "host";
 }
 
 const FOCUSABLE = [
@@ -20,10 +23,23 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function SettingsLens({ entry, onClose, returnFocus }: SettingsLensProps) {
+export function SettingsLens({ entry, onClose, returnFocus, refreshKey = 0, status, statusMode }: SettingsLensProps) {
   const navigate = useNavigate();
   const lensRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const [statusReady, setStatusReady] = useState(false);
+
+  useEffect(() => {
+    if (!status || !statusMode) { setStatusReady(Boolean(status)); return; }
+    setStatusReady(false);
+    const check = () => {
+      const mode = lensRef.current?.querySelector<HTMLSelectElement>('select[aria-label="Project execution mode"]');
+      if (mode?.value === statusMode && !mode.disabled) setStatusReady(true);
+    };
+    check();
+    const interval = window.setInterval(check, 50);
+    return () => window.clearInterval(interval);
+  }, [refreshKey, status, statusMode]);
 
   useEffect(() => {
     returnFocusRef.current = returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -89,12 +105,13 @@ export function SettingsLens({ entry, onClose, returnFocus }: SettingsLensProps)
             <small>{entry.category} · {entry.scope}</small>
             <h2 id="settings-lens-title">{entry.label}</h2>
             <p>{entry.description}</p>
+            {status && statusReady && <p className="settings-lens-assistant-status" role="status">{status}</p>}
           </div>
           <button className="icon-button subtle" type="button" aria-label="Close setting" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="settings-lens-content">
           <Suspense fallback={<div className="settings-lens-loading" role="status">Loading setting…</div>}>
-            <SettingsPage embeddedTarget={entry.target} />
+            <SettingsPage key={refreshKey} embeddedTarget={entry.target} />
           </Suspense>
         </div>
         <footer>

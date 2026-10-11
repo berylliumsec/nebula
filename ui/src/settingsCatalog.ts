@@ -18,7 +18,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Identity & Security",
     scope: "Device",
     target: "appearance-settings",
-    keywords: ["appearance", "theme", "light", "dark", "zero dark", "zero classic", "glacier", "amber", "color scheme", "display"],
+    keywords: ["appearance", "theme", "light", "dark", "studio dark", "zero light", "zero dark", "zero classic", "zero theme", "glacier", "amber", "color scheme", "display"],
   },
   {
     id: "settings.providers",
@@ -117,7 +117,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
-    keywords: ["host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools"],
+    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools"],
   },
   {
     id: "settings.operators",

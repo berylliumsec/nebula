@@ -15,6 +15,7 @@ import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } f
 import { browserAuthorizationRecovery } from "../api/runtime";
 import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
 import { SettingsLens } from "./SettingsLens";
+import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { HandoffRecoveryNotice } from "./HandoffRecoveryNotice";
 import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
@@ -55,7 +56,7 @@ export function AppShell() {
   const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
-  const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null }>();
+  const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null; refreshKey: number; status?: string; statusMode?: "docker" | "host" }>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem("nebula.sidebar.collapsed");
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
@@ -73,7 +74,12 @@ export function AppShell() {
   }), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
-    setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
+    setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
+  }, []);
+  const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string, mode: "docker" | "host") => {
+    setSettingLens((current) => current?.entry.id === entry.id
+      ? { ...current, refreshKey: current.refreshKey + 1, status, statusMode: mode }
+      : current);
   }, []);
   const openProjectPicker = useCallback(() => {
     setSidebarCollapsed(false);
@@ -183,6 +189,7 @@ export function AppShell() {
           <ChromeProvider value={chrome}>
             <GuideProvider>
             <BrowserAutomationWorker />
+            <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
               <SideNav collapsed={sidebarCollapsed} open={projectPickerOpen} setOpen={setProjectPickerOpen} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
@@ -226,10 +233,11 @@ export function AppShell() {
                 onClose={() => setPaletteOpen(false)}
                 onToggleActivity={toggleActivity}
                 onToggleSidebar={toggleSidebar}
-                onOpenSetting={(entry, returnFocus) => setSettingLens({ entry, returnFocus })}
+                onOpenSetting={openSetting}
               />
-              {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} onClose={() => setSettingLens(undefined)} />}
+              {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} statusMode={settingLens.statusMode} onClose={() => setSettingLens(undefined)} />}
             </div>
+            </NebulaControlAssistant>
             </GuideProvider>
           </ChromeProvider>
         </WorkbenchDraftProvider>

@@ -1,0 +1,25 @@
+.launcher { position: fixed; z-index: 85; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-overlay); color: var(--text); box-shadow: 0 8px 25px rgb(0 0 0 / 18%); cursor: pointer; }
+.launcher:focus-visible, .panel :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.panel { position: fixed; z-index: 85; box-sizing: border-box; display: flex; flex-direction: column; width: min(560px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - 24px)); border: 1px solid var(--border); border-radius: 18px; background: var(--surface-overlay); color: var(--text); box-shadow: 0 24px 80px rgb(0 0 0 / 24%); }
+.panel[hidden] { display: none; }
+.panel button { min-width: 44px; min-height: 44px; }
+.header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.header strong { flex: 1; font-size: .95rem; }
+.header small { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.body { min-height: 160px; overflow: auto; padding: 12px 16px; }
+.transcript { max-height: min(380px, 45dvh); overflow: auto; overflow-wrap: anywhere; }
+.transcript pre { max-width: 100%; overflow: auto; }
+.question { margin: 12px 0; color: var(--muted); }
+.answer { line-height: 1.6; }
+.catalog { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.catalog summary { cursor: pointer; }
+.catalog input { box-sizing: border-box; width: 100%; margin-top: 10px; }
+.catalog > div { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.catalog .settingList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 190px; overflow: auto; }
+.settingList button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-width: 0; text-align: left; }
+.settingList small { font-size: .72rem; color: var(--muted); }
+.themes { border-top: 1px solid var(--border); padding-top: 8px; }
+.composer { display: flex; align-items: end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+.composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
+@media (max-width: 760px) { .launcher { bottom: calc(80px + env(safe-area-inset-bottom)); } }
+@media (max-width: 430px) { .catalog .settingList { grid-template-columns: 1fr; } }

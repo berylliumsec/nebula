@@ -12,7 +12,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal, Protocol, cast
 
 from .artifacts import ArtifactStore
 from .context_retrieval import DenseEncoder
@@ -65,6 +65,10 @@ from .tools import (
 )
 from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
 from .working_notes import WriteNotesTool
+from .settings_assistant_tools import provider_plugins as settings_assistant_plugins
+
+if TYPE_CHECKING:
+    from .automation_tools import AutomationToolComponents
 
 
 LOGGER = logging.getLogger(__name__)
@@ -149,7 +153,7 @@ class _AllowedToolBroker:
 
 
 def restrict_tool_components(
-    components: RuntimeToolComponents,
+    components: RuntimeToolComponents | AutomationToolComponents,
     names: list[str],
     *,
     required: frozenset[str] = frozenset(),
@@ -352,6 +356,7 @@ class RuntimePlatform:
         ssh_environments: tuple[SshEnvironment, ...] = (),
         include_oci: bool = False,
         allow_empty: bool = False,
+        settings_assistant: bool = False,
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
         """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
@@ -367,7 +372,11 @@ class RuntimePlatform:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
-        search_enabled = web_search_enabled(scope)
+        if settings_assistant and (mcp_profiles or ssh_environments or include_oci):
+            raise RuntimePlatformError(
+                "the settings assistant cannot attach general tools"
+            )
+        search_enabled = web_search_enabled(scope) and not settings_assistant
         if (
             not mcp_profiles
             and not ssh_environments
@@ -376,6 +385,11 @@ class RuntimePlatform:
         ):
             raise RuntimePlatformError("no tool source was selected")
         registry = ToolRegistry()
+        if settings_assistant:
+            for plugin in settings_assistant_plugins(
+                self.store, self.artifact_store, engagement_id
+            ):
+                registry.register(plugin)
         if search_enabled:
             registry.register(WebSearchTool(self.search_runtime, scope))
         if mcp_profiles:
@@ -392,10 +406,11 @@ class RuntimePlatform:
                 raise RuntimePlatformError(str(exc)) from exc
         for plugin in build_ssh_tool_plugins(ssh_environments):
             registry.register(plugin)
-        register_artifact_retrieval_tools(
-            registry,
-            output_service=ToolOutputService(self.store, self.artifact_store),
-        )
+        if not settings_assistant:
+            register_artifact_retrieval_tools(
+                registry,
+                output_service=ToolOutputService(self.store, self.artifact_store),
+            )
         broker = ToolBroker(
             registry=registry,
             policy_engine=PolicyEngine(),

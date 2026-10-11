@@ -2492,6 +2492,159 @@ def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
     asyncio.run(scenario())
 
 
+def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    normal_chat, _, normal_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="ordinary work",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    normal_session = store.get(HarnessSession, normal_turn.harness_session_id)
+    assert not any(
+        item["name"].startswith(
+            ("nebula.settings.", "nebula.help.", "nebula.navigate.")
+        )
+        for item in runtime._gateway_catalog(normal_session, turn=normal_turn)["tools"]
+    )
+    chat, chat_turn, turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="open project scope",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        control_assistant=True,
+    )
+    session = store.get(HarnessSession, turn.harness_session_id)
+    assert chat.metadata["control_assistant"] is True
+    assert session.metadata["control_assistant"] is True
+    assert session.metadata["command_runtime_enabled"] is False
+    assert session.metadata[
+        "native_capabilities"
+    ] == HarnessNativeCapabilities().model_dump(mode="json")
+    assert chat_turn.tools_enabled is True
+    assert "You are the Nebula product assistant" in turn.prompt
+    assert "call nebula.help.project_context before answering" in turn.prompt
+    assert (
+        "Call only nebula.help, nebula.settings, and nebula.navigate tools"
+        in turn.prompt
+    )
+    assert turn.metadata["knowledge_access"] is False
+    assert {
+        item["name"] for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+    } == {
+        "nebula.navigate.open",
+        "nebula.help.search",
+        "nebula.help.project_context",
+        "nebula.settings.catalog",
+        "nebula.settings.open",
+        "nebula.settings.set_device_theme",
+        "nebula.settings.set_project_mode",
+        "nebula.settings.set_post_tool",
+        "nebula.settings.models",
+        "nebula.settings.set_default_model",
+    }
+    session = store.update(
+        HarnessSession,
+        session.id,
+        {"metadata": {**session.metadata, "settings_grok_home_version": 1}},
+        expected_revision=session.revision,
+    )
+
+    async def verify_gateway_permission() -> None:
+        settings_permission = HarnessPermissionRequest(
+            vendor_request_id="catalog",
+            category="permission",
+            vendor_name="session/request_permission",
+            tool_name="use_tool",
+            arguments={
+                "rawInput": {
+                    "tool_name": f"nebula__{harness_module._portable_gateway_tool_name('nebula.settings.catalog')}"
+                }
+            },
+        )
+        # A Grok settings session uses a private home. The wrapper is allowed
+        # only after its exact target is matched to the scoped gateway catalog.
+        allowed = await (
+            await runtime._request_permission(turn.id, settings_permission)
+        ).decision
+        assert allowed.allowed is True
+        denied = await (
+            await runtime._request_permission(
+                turn.id,
+                settings_permission.model_copy(
+                    update={
+                        "vendor_request_id": "external",
+                        "arguments": {
+                            "rawInput": {"tool_name": "firecrawl__firecrawl_search"}
+                        },
+                    }
+                ),
+            )
+        ).decision
+        assert denied.allowed is False
+
+    asyncio.run(verify_gateway_permission())
+    restricted = store.update(
+        HarnessSession,
+        session.id,
+        {"metadata": {**session.metadata, "harness_permission_mode": "unrestricted"}},
+        expected_revision=session.revision,
+    )
+    host_session = runtime._fork_session_for_execution_mode(
+        restricted, profile, execution_mode="host", reason="execution_mode_changed"
+    )
+    assert host_session.metadata["control_assistant"] is True
+    assert host_session.metadata["command_runtime_enabled"] is False
+    assert host_session.metadata[
+        "native_capabilities"
+    ] == HarnessNativeCapabilities().model_dump(mode="json")
+    assert {
+        item["name"]
+        for item in runtime._gateway_catalog(host_session, turn=turn)["tools"]
+    } == {
+        "nebula.navigate.open",
+        "nebula.help.search",
+        "nebula.help.project_context",
+        "nebula.settings.catalog",
+        "nebula.settings.open",
+        "nebula.settings.set_device_theme",
+        "nebula.settings.set_project_mode",
+        "nebula.settings.set_post_tool",
+        "nebula.settings.models",
+        "nebula.settings.set_default_model",
+    }
+    with pytest.raises(Exception, match="settings assistant"):
+        runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="borrow ordinary chat",
+            chat_session_id=chat.id,
+            harness_session_id=session.id,
+            mcp_server_ids=[],
+            control_assistant=False,
+        )
+    with pytest.raises(Exception, match="settings assistant"):
+        runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="borrow settings tools",
+            chat_session_id=normal_chat.id,
+            harness_session_id=normal_session.id,
+            mcp_server_ids=[],
+            control_assistant=True,
+        )
+
+
 def test_knowledge_access_change_refreshes_fixed_gateway_catalog(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)

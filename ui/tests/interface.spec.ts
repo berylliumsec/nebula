@@ -2088,6 +2088,197 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
+reloadTest("stabilization Nebula assistant opens from every screen and changes this device theme", async ({ page }) => {
+  let policyMode: "docker" | "host" = "docker";
+  let savedRequest: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/engagements/scratch-project/automation-policy", async (route) => {
+    if (route.request().method() === "PUT") {
+      savedRequest = route.request().postDataJSON() as Record<string, unknown>;
+      policyMode = savedRequest.execution_mode === "host" ? "host" : "docker";
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ...entity, revision: policyMode === "host" ? 2 : 1, id: "automation-policy-scratch",
+      engagement_id: "scratch-project", execution_mode: policyMode,
+      host_access_acknowledged: policyMode === "host", approval_policy: "always",
+      network_enabled: false, runner_profile_id: "local", vpn_profile_id: null,
+      max_timeout_ms: 300000,
+    }) });
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  const open = page.getByRole("button", { name: "Open Nebula assistant" });
+  await expect(open).toBeVisible();
+  const target = await open.boundingBox();
+  expectTouchTarget(target?.width, "Nebula assistant launcher width");
+  expectTouchTarget(target?.height, "Nebula assistant launcher height");
+  await open.click();
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  await expect(assistant).toBeVisible();
+  const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Nebula assistant"]').analyze();
+  expect(assistantA11y.violations).toEqual([]);
+  await assistant.getByText("Settings I can help with").click();
+  await assistant.getByRole("button", { name: "Light", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  for (const [label, theme] of [["Glacier", "glacier"], ["Amber", "amber"], ["Zero Classic", "zero-classic"], ["Light", "light"]] as const) {
+    await assistant.getByRole("button", { name: label, exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+  }
+  await assistant.getByRole("button", { name: "Hide Nebula assistant" }).click();
+  await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  const reopenedAssistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  await expect(reopenedAssistant).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("change to zero theme");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  const appearanceLens = page.getByRole("dialog", { name: "Appearance and theme" });
+  await expect(appearanceLens).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await expect(appearanceLens).toHaveCount(0, { timeout: 4000 });
+  await expect(reopenedAssistant).toContainText("Changed this device to Zero Dark");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("open MCP servers");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  await expect(page.getByRole("dialog", { name: "MCP servers" })).toBeVisible();
+  expect(new URL(page.url()).pathname).not.toBe("/settings");
+  await page.getByRole("button", { name: "Close setting" }).click();
+  await page.getByRole("button", { name: "Show Nebula assistant" }).click();
+  await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("Scratch Project");
+  const modeComposer = page.getByRole("textbox", { name: "Ask Nebula a question" });
+  await modeComposer.fill("open project policy and change from dockermode to host mode");
+  await modeComposer.press("Enter");
+  const policyLens = page.getByRole("dialog", { name: "Project policy and network scope" });
+  await expect(policyLens).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Switch Scratch Project to Host mode?" })).toBeVisible();
+  expect(savedRequest).toBeUndefined();
+  await page.getByRole("button", { name: "Switch to Host mode" }).click();
+  await expect(policyLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("host");
+  await expect(policyLens.getByText("Scratch Project saved in Host mode for new sessions.")).toBeVisible();
+  expect(savedRequest).toMatchObject({ execution_mode: "host", host_access_acknowledged: true, approval_policy: "always", expected_revision: 1 });
+  await expect(policyLens).toHaveCount(0, { timeout: 5000 });
+  await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("Scratch Project is now in Host mode for new sessions");
+});
+
+reloadTest("stabilization Nebula assistant applies a model-selected device-theme tool receipt", async ({ page }) => {
+  const provider = {
+    ...entity, id: "provider-theme-action", name: "Theme action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["theme-action-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "theme-action-model" },
+  };
+  await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
+  await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["theme-action-model"] } }));
+  let requested = false;
+  await page.route("**/api/v1/chat/completions", route => {
+    const request = route.request().postDataJSON() as { control_assistant?: boolean };
+    requested = request.control_assistant === true;
+    const events = [
+      { type: "started", provider_id: provider.id, model: "theme-action-model", session_id: "theme-action-session", turn_id: "theme-action-turn" },
+      { type: "tool_completed", harness_turn_id: "theme-action-turn", item_id: "theme-action-call",
+        tool_name: "nebula_settings_set_device_theme_1234567890abcdef", server_id: "nebula",
+        payload: { toolCallId: "theme-action-call", status: "completed", rawOutput: { output: { OkayOutput: JSON.stringify({ state: "pending_browser_apply",
+          client_action: { kind: "device_theme", theme: "zero-dark" } }) } } } },
+      { type: "done", provider_id: provider.id, model: "theme-action-model", session_id: "theme-action-session", turn_id: "theme-action-turn",
+        message: { id: "theme-action-answer", role: "assistant", content: "Applying Zero Dark on this device. " + "Checking the requested display setting. ".repeat(40) },
+        usage: { input_tokens: 4, output_tokens: 4, total_tokens: 8 }, finish_reason: "stop", citations: [] },
+    ];
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") });
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.evaluate(() => localStorage.setItem("nebula.theme", "light"));
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  await assistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("could you make the screen look like Nebula Zero?");
+  await assistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  await expect.poll(() => requested).toBe(true);
+  const appearance = page.getByRole("dialog", { name: "Appearance and theme" });
+  await expect(appearance).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await expect(appearance.getByRole("button", { name: /Zero Dark/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(appearance).toHaveCount(0, { timeout: 4000 });
+  await expect(assistant).toContainText("Changed this device to Zero Dark");
+  await expect(assistant.getByText(/Changed this device to Zero Dark/)).toBeInViewport();
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+});
+
+reloadTest("stabilization Nebula assistant follows a model-selected Projects navigation receipt", async ({ page }) => {
+  const provider = {
+    ...entity, id: "provider-navigation-action", name: "Navigation action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["navigation-action-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "navigation-action-model" },
+  };
+  await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
+  await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["navigation-action-model"] } }));
+  let requested = false;
+  await page.route("**/api/v1/chat/completions", route => {
+    requested = (route.request().postDataJSON() as { control_assistant?: boolean }).control_assistant === true;
+    const events = [
+      { type: "started", provider_id: provider.id, model: "navigation-action-model", session_id: "navigation-action-session", turn_id: "navigation-action-turn" },
+      { type: "tool_completed", harness_turn_id: "navigation-action-turn", item_id: "navigation-action-call",
+        tool_name: "nebula_navigate_open_1234567890abcdef", server_id: "nebula",
+        payload: { toolCallId: "navigation-action-call", status: "completed", rawOutput: { output: { OkayOutput: JSON.stringify({ state: "pending_browser_apply",
+          client_action: { kind: "navigate", destination_id: "projects" } }) } } } },
+      { type: "done", provider_id: provider.id, model: "navigation-action-model", session_id: "navigation-action-session", turn_id: "navigation-action-turn",
+        message: { id: "navigation-action-answer", role: "assistant", content: "Opening All projects." },
+        usage: { input_tokens: 4, output_tokens: 4, total_tokens: 8 }, finish_reason: "stop", citations: [] },
+    ];
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") });
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
+  await composer.fill("Locate the place with everything I've built");
+  await composer.press("Enter");
+  await expect.poll(() => requested).toBe(true);
+  await expect(page).toHaveURL(/\/projects$/);
+  await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
+});
+
+reloadTest("stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await openWorkspace(page, "/settings", "Settings");
+  const topBar = page.locator(".top-bar");
+  const launcher = topBar.getByRole("button", { name: "Open Nebula assistant" });
+  await expect(launcher).toBeVisible();
+  expectTouchTarget((await launcher.boundingBox())?.width, "Assistant launcher width");
+  expectTouchTarget((await launcher.boundingBox())?.height, "Assistant launcher height");
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+  if ((page.viewportSize()?.width ?? 0) > 760) {
+    const gear = await page.locator(".zero-anchor-dock .settings-nav-item").boundingBox();
+    const assistant = await launcher.boundingBox();
+    expect(assistant && gear && assistant.y + assistant.height < gear.y).toBe(true);
+  }
+  await launcher.click();
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  await expect(assistant).toBeVisible();
+  await assistant.getByRole("button", { name: "Hide Nebula assistant" }).click();
+  await expect(topBar.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+
+  if ((page.viewportSize()?.width ?? 0) <= 760) {
+    await openWorkspace(page, "/?view=chat", "Workbench");
+    const mobileNav = page.getByRole("navigation", { name: "Mobile operator navigation" });
+    await expect(mobileNav.getByRole("button")).toHaveCount(5);
+    const mobileLauncher = mobileNav.getByRole("button", { name: "Show Nebula assistant" });
+    await expect(mobileLauncher).toBeVisible();
+    expectTouchTarget((await mobileLauncher.boundingBox())?.width, "Mobile assistant launcher width");
+    await mobileLauncher.click();
+    await expect(assistant).toBeVisible();
+    await assistant.getByRole("button", { name: "Close Nebula assistant" }).click();
+    await mobileNav.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
+    await expect(page.locator(".sessions-page.full-screen .session-toolbar").getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
+  }
+});
+
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
@@ -3379,7 +3570,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
   expect(geometry.pageWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   expect(geometry.duplicateDockDisplay).toBe("none");
   expect(geometry.composerFontSize).toBeGreaterThanOrEqual(16);
-  expect(geometry.navigationIcons).toHaveLength(4);
+  expect(geometry.navigationIcons).toHaveLength(5);
   expect(geometry.navigationIcons.every(({ width, height }) => width >= 18 && height >= 18)).toBe(true);
 
   await page.getByRole("button", { name: "More workbench views" }).click();

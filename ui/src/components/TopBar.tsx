@@ -24,6 +24,7 @@ import { createPortal } from "react-dom";
 import { ModalSurface } from "./DialogSystem";
 import { useOptionalGuides } from "../guides/GuideProvider";
 import { projectSurface } from "../resourceRoutes";
+import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
 
 interface TopBarProps {
   activityOpen: boolean;
@@ -158,6 +159,7 @@ export function TopBar({
           <span>Commands</span>
           <kbd>⌘K</kbd>
         </button>
+        <NebulaAssistantLauncherButton />
         {approvalsCount > 0 && <button
           className={`icon-button approval-trigger${approvalsCount > 0 ? " has-approvals" : ""}`}
           type="button"

@@ -584,6 +584,7 @@ def resolve_chat_model_content(
 class ChatCompletionRequest(NebulaModel):
     _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
     backend: ChatBackend = ChatBackend.PROVIDER
+    control_assistant: bool = False
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -708,6 +709,55 @@ class ChatCompletionRequest(NebulaModel):
                     "harness chat requires harness_profile_id and no provider_id"
                 )
         return self
+
+
+def isolate_settings_assistant_request(
+    request: ChatCompletionRequest, session: ChatSession | None = None
+) -> ChatCompletionRequest:
+    """Keep the Nebula product assistant separate from ordinary chat capabilities."""
+
+    saved_settings_session = bool(
+        session and session.metadata.get("control_assistant") is True
+    )
+    if session is not None and saved_settings_session != request.control_assistant:
+        raise ChatHistoryConflict(
+            "A settings assistant conversation cannot be used as an ordinary chat, or vice versa."
+        )
+    if not request.control_assistant:
+        return request
+    if any(
+        (
+            request.tools_enabled,
+            request.mcp_server_ids,
+            request.ssh_environment_ids,
+            request.hook_ids,
+            request.goal_id,
+            request.skill,
+            request.skill_selections,
+            request.harness_skill,
+            request.context_attachments,
+            any(message.content_blocks for message in request.messages),
+            request.allow_subagents,
+            request.allow_agent_messaging,
+            request.max_active_subagents,
+            request.subagent_reasoning_effort,
+            request.subagent_provider_id,
+            request.subagent_harness_profile_id,
+            request.subagent_model,
+            request.pending_provider_subagent,
+            request.allowed_tool_names,
+            request.allow_cloud_knowledge,
+            request.max_artifact_queries,
+            request.harness_mode,
+            request.harness_cyber_access_program,
+        )
+    ):
+        raise ChatConfigurationError(
+            "The Nebula assistant accepts Nebula help and settings tools only; remove general tools and attached context."
+        )
+    return request.model_copy(
+        update={"include_knowledge": False, "allow_mcp_catalog": False}
+    )
 
 
 class ChatRuntimeSwitchPreflightRequest(NebulaModel):
@@ -5259,6 +5309,13 @@ class ChatService:
 
     async def prepare_async(self, request: ChatCompletionRequest) -> PreparedChat:
         started_at = utc_now()
+        scoped_session = (
+            self.store.get(ChatSession, request.session_id)
+            if request.session_id
+            else None
+        )
+        request = isolate_settings_assistant_request(request, scoped_session)
+        settings_only = request.control_assistant
         if request.backend != ChatBackend.PROVIDER or request.provider_id is None:
             raise ChatConfigurationError(
                 "harness chat requests must be dispatched through HarnessRuntimeService"
@@ -5489,7 +5546,8 @@ class ChatService:
             request.allow_agent_messaging and not subagent_child and engagement_id
         )
         work_enabled = bool(
-            engagement_id
+            not settings_only
+            and engagement_id
             and self.work.enabled(engagement_id)
             and not (session and session.metadata.get("side_chat") is True)
             and profile.tools_verified_for(selected_model)
@@ -5498,7 +5556,8 @@ class ChatService:
         # so it always routes tools, even when its task has no others.
         child_messaging = bool(subagent_child and engagement_id)
         switch_tools_enabled = bool(
-            request.tools_enabled
+            settings_only
+            or request.tools_enabled
             or subagents_enabled
             or child_messaging
             or agent_messaging_enabled
@@ -5546,9 +5605,14 @@ class ChatService:
                     engagement_id=engagement.id,
                     # Titles describe the operator's prompt, never the expanded
                     # provider payload containing selected-context envelopes.
-                    title=self._title(request.messages),
+                    title="Nebula assistant"
+                    if request.control_assistant
+                    else self._title(request.messages),
                     provider_profile_id=profile.id,
                     model=selected_model,
+                    metadata={"control_assistant": True}
+                    if request.control_assistant
+                    else {},
                 )
 
         citations: list[ChatCitation] = []
@@ -5557,7 +5621,7 @@ class ChatService:
         side_chat = bool(session and session.metadata.get("side_chat") is True)
         operator_decisions = (
             []
-            if side_chat
+            if side_chat or settings_only
             else decision_snapshot(
                 self.store, session.id if session else None, engagement_id
             )
@@ -5565,6 +5629,43 @@ class ChatService:
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
             operator_decisions
         )
+        if request.control_assistant or (
+            session and session.metadata.get("control_assistant") is True
+        ):
+            instructions += (
+                "\n\nYou are the Nebula product assistant. Answer Nebula usage questions and troubleshoot "
+                "using the packaged product index: call nebula.help.search for product behavior, cite its "
+                "source, and distinguish documented behavior from live Core facts. For host file access, "
+                "command isolation, or execution-mode "
+                "questions, call nebula.help.project_context before answering; do not assume the project's "
+                "mode from the question. If policy_source is default, describe Docker as the effective "
+                "default, not a saved policy. A stored Docker policy may be auto-created, so never claim "
+                "the operator explicitly chose it. Docker commands can access their project workspace, including a "
+                "linked host folder, but not arbitrary host paths. Host mode grants new command sessions "
+                "the Nebula server user's filesystem access after explicit confirmation; existing sessions "
+                "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
+                "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
+                "host files from this assistant; after fixing access, the operator can ask the general "
+                "assistant in a new session to make the edit. Use nebula.settings.catalog for settings and app destinations "
+                "and bounded changes. Report success only after a saved read-back. For device appearance, "
+                "the assistant UI handles common explicit theme commands immediately. For any theme change "
+                "request that reaches you, call nebula.settings.set_device_theme with one advertised value; "
+                "'Zero theme' means zero-dark. For a Docker or Host mode change, call "
+                "nebula.settings.set_project_mode with the requested mode. For a request to show a setting, call nebula.settings.open "
+                "with its catalog id. If the target is unclear, list exact actions with nebula.settings.catalog "
+                "first. For a request to open any Nebula page, including All projects and Workbench views, "
+                "call nebula.navigate.open with its destination_id from the catalog. "
+                "These browser-action tools only request an action; the active browser applies and "
+                "confirms it. Do not claim a browser action was saved from a tool result alone. Link a relevant "
+                "setting as /settings#target only when explaining where it is. The assistant window "
+                "handles explicit Docker/Host mode changes with confirmation and Core read-back. If facts "
+                "are unavailable, say what needs checking. Never claim that suggesting a change applied it."
+            )
+        else:
+            instructions += (
+                "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
+                "Do not claim to have changed a Nebula setting from this conversation."
+            )
         if work_enabled:
             instructions += "\n\n" + WORK_AVAILABLE_INSTRUCTIONS
         if subagent_child:
@@ -5591,7 +5692,9 @@ class ChatService:
             )
             instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = (
-            None if side_chat else self._project_instructions(engagement_id)
+            None
+            if side_chat or settings_only
+            else self._project_instructions(engagement_id)
         )
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
@@ -5642,7 +5745,7 @@ class ChatService:
         browser_session_id = next(iter(browser_session_ids), None)
         companion_session_id = (
             attached_session(self.store, engagement_id, request.session_id)
-            if engagement_id
+            if engagement_id and not settings_only
             else None
         )
         browser_session_id = browser_session_id or companion_session_id
@@ -5667,7 +5770,22 @@ class ChatService:
         skill_resources_selected = any(item.resources for item in skill_snapshots)
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
-        web_search_selected = not side_chat and self._web_search_selected(engagement_id)
+        web_search_selected = (
+            not settings_only
+            and not side_chat
+            and self._web_search_selected(engagement_id)
+        )
+        settings_assistant_available = bool(
+            settings_only
+            and not side_chat
+            and engagement_id
+            and self.tool_platform is not None
+            and profile.tools_verified_for(selected_model)
+            and (
+                provider.config.local
+                or (profile.privacy.permits_sensitive_data and allow_cloud_tool_results)
+            )
+        )
         # Each family sends tool inputs and results to the model; the names
         # tell the operator what a refused cloud turn was about to share.
         tool_families = [
@@ -5677,6 +5795,7 @@ class ChatService:
                 ("MCP servers", bool(mcp_profiles)),
                 ("SSH hosts", bool(ssh_environments)),
                 ("web search", web_search_selected),
+                ("Nebula product help and settings", settings_assistant_available),
                 ("browser control", bool(browser_session_id)),
                 ("project model context", model_context),
                 ("skill resources", skill_resources_selected),
@@ -5737,12 +5856,14 @@ class ChatService:
                         ssh_environments=ssh_environments,
                         include_oci=False,
                         allow_empty=True,
+                        settings_assistant=settings_only,
                     )
                     if (
                         mcp_profiles
                         or catalog_profiles
                         or ssh_environments
                         or web_search_selected
+                        or settings_assistant_available
                     )
                     and self.tool_platform is not None
                     else None
@@ -5872,7 +5993,7 @@ class ChatService:
                             scope=tool_components.scope if tool_components else None,
                         ),
                     )
-                if tool_components is not None:
+                if tool_components is not None and not settings_only:
                     # Any turn with tools can outgrow its window, so any can
                     # keep working notes. They write only this conversation's
                     # own record and add no runtime digest.
@@ -5947,7 +6068,7 @@ class ChatService:
                     always_loaded=tool_components.scope.always_loaded_tools,
                     always_loaded_sources=[f"mcp:{item.id}" for item in mcp_profiles],
                 )
-                if on_demand_enabled(tool_components.scope)
+                if not settings_only and on_demand_enabled(tool_components.scope)
                 else {}
             )
             tool_index = self._tool_index() if deferred_specs else None
@@ -5996,7 +6117,7 @@ class ChatService:
             # the operator's material, not a question to Nebula's runbooks.
             operator_help_chunks = (
                 []
-                if side_chat
+                if side_chat or settings_only
                 else self._retrieve_operator_help(
                     help_subject(
                         durable_incoming[-1].content,
@@ -6229,7 +6350,10 @@ class ChatService:
         # Older messages left this request for a derived memory, so the model
         # can look up their original wording on demand.
         conversation_search = (
-            tools_enabled and context_snapshot is not None and session is not None
+            not settings_only
+            and tools_enabled
+            and context_snapshot is not None
+            and session is not None
         )
         if tools_enabled:
             # Resolved with the runtime capabilities above.
@@ -6315,6 +6439,7 @@ class ChatService:
                         item.model_dump(mode="json") for item in ssh_environments
                     ],
                     "include_oci_tools": request.tools_enabled,
+                    "control_assistant": settings_only,
                     "available_tool_names": sorted(tool_components.specs),
                     "allowed_tool_names": request.allowed_tool_names,
                     "browser_session_id": browser_session_id,
@@ -12018,6 +12143,7 @@ class ChatService:
             )
 
         session = self.store.get(ChatSession, turn.session_id)
+        settings_only = session.metadata.get("control_assistant") is True
         if turn.provider_profile_id is None:
             raise ChatConfigurationError("chat turn no longer identifies a provider")
         profile = self.store.get(ProviderProfile, turn.provider_profile_id)
@@ -12087,17 +12213,26 @@ class ChatService:
         ):
             raise ChatConfigurationError("automation command runtime is unavailable")
         try:
-            mcp_profiles = tuple(
-                McpServerProfile.model_validate(item)
-                for key in ("mcp_snapshot", "mcp_catalog_snapshot")
-                for item in snapshot.get(key, [])
+            mcp_profiles = (
+                tuple(
+                    McpServerProfile.model_validate(item)
+                    for key in ("mcp_snapshot", "mcp_catalog_snapshot")
+                    for item in snapshot.get(key, [])
+                )
+                if not settings_only
+                else ()
             )
-            ssh_environments = tuple(
-                SshEnvironment.model_validate(item)
-                for item in snapshot.get("ssh_environment_snapshot", [])
+            ssh_environments = (
+                tuple(
+                    SshEnvironment.model_validate(item)
+                    for item in snapshot.get("ssh_environment_snapshot", [])
+                )
+                if not settings_only
+                else ()
             )
-            include_commands = bool(
-                turn.request_snapshot.get("include_oci_tools", True)
+            include_commands = (
+                bool(turn.request_snapshot.get("include_oci_tools", True))
+                and not settings_only
             )
             extra_components = (
                 self.tool_platform.chat_components(
@@ -12109,9 +12244,11 @@ class ChatService:
                     ssh_environments=ssh_environments,
                     include_oci=False,
                     allow_empty=True,
+                    settings_assistant=settings_only,
                 )
                 if (
-                    mcp_profiles
+                    settings_only
+                    or mcp_profiles
                     or ssh_environments
                     or self._web_search_selected(turn.engagement_id)
                 )
@@ -12250,14 +12387,18 @@ class ChatService:
                     components,
                     self._conversation_search_components(components, turn.session_id),
                 )
-            if components is not None:
+            if components is not None and not settings_only:
                 components = combine_tool_components(
                     components,
                     notes_components(
                         self.store, components.scope, Path(components.workspace)
                     ),
                 )
-            if components is not None and turn.request_snapshot.get("knowledge_search"):
+            if (
+                components is not None
+                and not settings_only
+                and turn.request_snapshot.get("knowledge_search")
+            ):
                 components = combine_tool_components(
                     components,
                     self._knowledge_search_components(
@@ -12266,6 +12407,17 @@ class ChatService:
                 )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
+            if settings_only:
+                components = restrict_tool_components(
+                    components,
+                    [
+                        name
+                        for name in components.specs
+                        if name.startswith(
+                            ("nebula.help.", "nebula.settings.", "nebula.navigate.")
+                        )
+                    ],
+                )
             allowed_names = turn.request_snapshot.get("allowed_tool_names")
             if isinstance(allowed_names, list):
                 components = restrict_tool_components(
