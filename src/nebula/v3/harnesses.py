@@ -9853,6 +9853,7 @@ class HarnessRuntimeService:
         provider_subagent: dict[str, Any] | None = None,
         pending_provider_subagent: dict[str, Any] | None = None,
         allow_agent_messaging: bool = False,
+        control_assistant: bool = False,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
@@ -10148,7 +10149,8 @@ class HarnessRuntimeService:
                     model=session.model,
                     metadata={
                         "context_management": "runtime_managed",
-                        "initial_title_state": "pending",
+                        "initial_title_state": "operator" if control_assistant else "pending",
+                        **({"control_assistant": True} if control_assistant else {}),
                         "allow_agent_messaging": allow_agent_messaging,
                         "harness_runtime_options": session.metadata.get(
                             "runtime_options", {}
@@ -13061,7 +13063,26 @@ class HarnessRuntimeService:
         *,
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
+        from .settings_assistant_tools import CATALOG_SCHEMA, DEFAULT_MODEL_SCHEMA, POST_TOOL_SCHEMA
+
         tools: list[dict[str, Any]] = []
+        for name, description, schema, read_only in (
+            ("nebula.settings.catalog", "List Nebula setting destinations and bounded direct changes.", CATALOG_SCHEMA, True),
+            ("nebula.settings.set_post_tool", "Change one post-tool note or next-step preference for this project's configured analysis runtime and read it back.", POST_TOOL_SCHEMA, False),
+            ("nebula.settings.models", "List enabled provider and harness profiles and their allowed or advertised models.", CATALOG_SCHEMA, True),
+            ("nebula.settings.set_default_model", "Set a listed provider or harness default model for future chats and read it back.", DEFAULT_MODEL_SCHEMA, False),
+        ):
+            tools.append({
+                "name": name,
+                "description": description,
+                "inputSchema": schema,
+                "annotations": {
+                    "readOnlyHint": read_only,
+                    "destructiveHint": False,
+                    "idempotentHint": True,
+                    "openWorldHint": False,
+                },
+            })
         current = self.store.get(HarnessSession, session.id)
         if current.metadata.get("browser_companion_session_id"):
             spec = companion_spec(image_supported=self._model_image_supported(current))
@@ -13505,6 +13526,18 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
+        if name in {"nebula.settings.catalog", "nebula.settings.set_post_tool", "nebula.settings.models", "nebula.settings.set_default_model"}:
+            from .settings_assistant_tools import catalog, model_choices, set_default_model, set_post_tool_preference
+
+            if name == "nebula.settings.catalog":
+                value = catalog()
+            elif name == "nebula.settings.models":
+                value = model_choices(self.store)
+            elif name == "nebula.settings.set_default_model":
+                value = set_default_model(self.store, arguments)
+            else:
+                value = set_post_tool_preference(self.store, self.artifact_store, turn.engagement_id, arguments)
+            return {"content": [{"type": "text", "text": json.dumps(value)}], "structuredContent": value, "isError": False}
         if name == "browser.companion":
             current = self.store.get(HarnessSession, session.id)
             companion_id = current.metadata.get("browser_companion_session_id")
