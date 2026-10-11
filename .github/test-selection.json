@@ -1,44 +1,18 @@
 {
-  "change_digest": "55d0c7ca0994f75ba5c66256eacf16e8915afa45c55432cdfc156901d3374313",
-  "reviewed_by": "Codex focused review of assistant navigation and prior settings journeys",
-  "reason": "The assistant branch adds a packaged list of 19 app destinations, direct local navigation for exact requests such as show me my projects, and a scoped nebula.navigate.open tool for provider and harness turns. The browser validates tool receipts and navigates with the selected project ID. Fourteen Python cases cover catalog, scope, knowledge index, and harness boundaries; 28 frontend cases cover exact destinations, parsed receipts, and the assistant interaction. Existing 22 selected browser journeys still cover settings and policy actions. Eight real-Core production LAN browser cases open all 19 app routes from the assistant in desktop Chromium 1440/1024 and emulated mobile Chromium/WebKit 320/390/430, then reload. Eight mocked browser cases replay the exact Grok OkayOutput navigation receipt, which previously failed at the API decoder. The new JSON resource is included in the wheel and frozen-Core data list and required by the frozen archive audit. The launcher now lives in the shared top bar, the five-item mobile Workbench navigation, and the mobile focus toolbar, avoiding the Zero dock overlay. One new component case checks the persistent assistant behind an inline launcher. Eight mocked browser profiles check placement and hide/restore; the existing explicit 320px mobile companion geometry case checks the fifth navigation action. The launcher placement follow-up does not change backend behavior. Rebased onto current main; the appearance catalog retains Zero Classic, Glacier, and Amber while the assistant theme journey checks Zero Dark. This selection covers the feature diff against main. The Playwright catalog groups the four assistant journeys per browser profile and combines the real-Core navigation journey with the existing desktop and 320px WebKit settings journeys, producing 17 focused matrix entries for 47 tests. Current main adds Glacier, Amber, and Zero Classic: the assistant now shares the UI theme list, and its tool and direct commands expose all three. Three ThemeContext cases cover appearance preference migration and storage; the existing eight-profile assistant journey exercises the new choices through visible controls.",
-  "exclusions": "No native code changed. Unrelated Python, frontend, browser journeys and full suites are excluded. Dynamic record URLs need an object ID and are outside the static route catalog. Focused pre-merge tests use an isolated throwaway Core and browser fixtures; production deployment follows the merged main commit. Physical devices are unavailable and not claimed.",
+  "change_digest": "a3fb2c81521f5df7cd80ac4b35211a45e072d8665e3991eee6d4519af131bdc1",
+  "reviewed_by": "Codex focused review of chat focus and companion geometry",
+  "reason": "Only focus-mode layout CSS and its browser regression changed. The selected empty-chat journey opens the Code companion through Chat tools on desktop, enters focus, checks that chat and editor keep their side-by-side geometry, exits focus, and checks restoration. The mobile cases check that the empty chat fills focus mode without clipping. The eight permanent browser profiles cover desktop Chromium at 1440 and 1024 px plus emulated mobile Chromium and WebKit at 320, 390, and 430 px. The changed ui.css and browser test are shared paths, so this is an explicit scoped review rather than automatic broad coverage.",
+  "exclusions": "No Python, Rust, API, persistence, or component state changed. A component test cannot measure the CSS grid regression. Real-Core, LAN-origin security checks, unrelated browser journeys, and full suites are excluded because this change only affects local presentation; a production build and focused browser journey will verify the built UI. Physical devices are unavailable and are not claimed.",
   "expected_tests": {
-    "python": 14,
-    "frontend": 28,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 47
+    "playwright": 8
   },
-  "python": [
-    "tests/v3/test_settings_assistant_tools.py",
-    "tests/v3/test_product_knowledge.py",
-    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session",
-    "tests/v3/test_packaging.py::test_artifact_member_audit_accepts_only_complete_v3_payload"
-  ],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/assistantDestinations.test.ts",
-    "ui/src/state/ThemeContext.test.tsx"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:nebula-settings-assistant/desktop",
-    "entry:nebula-settings-assistant/compact",
-    "entry:nebula-settings-assistant/mobile-chromium-small",
-    "entry:nebula-settings-assistant/mobile-chromium-ledger-390",
-    "entry:nebula-settings-assistant/mobile-chromium-wide",
-    "entry:nebula-settings-assistant/mobile-webkit-small",
-    "entry:nebula-settings-assistant/mobile-webkit",
-    "entry:nebula-settings-assistant/mobile-webkit-wide",
-    "entry:nebula-settings-assistant/assistant-real-desktop",
-    "entry:nebula-settings-assistant/assistant-real-compact",
-    "entry:nebula-settings-assistant/assistant-real-chromium-320",
-    "entry:nebula-settings-assistant/assistant-real-chromium-390",
-    "entry:nebula-settings-assistant/assistant-real-chromium-430",
-    "entry:nebula-settings-assistant/assistant-real-webkit-320",
-    "entry:nebula-settings-assistant/assistant-real-webkit-390",
-    "entry:nebula-settings-assistant/assistant-real-webkit-430",
-    "entry:phone-shell/desktop"
+    "area:focus-side-companion"
   ]
 }
