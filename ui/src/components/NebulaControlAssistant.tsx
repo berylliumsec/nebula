@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
+import { logDiagnostic } from "../diagnostics";
 import { sharesToolResultsAlways, type ToolSharingRuntime } from "../api/toolSharingConsent";
 import { useConfirmation } from "./DialogSystem";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -27,7 +28,10 @@ function readActionOutcomes(key: string): Record<string, string> {
     const value: unknown = JSON.parse(readStorage(key) ?? "{}");
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
     return Object.fromEntries(Object.entries(value).filter(([id, message]) => id.length > 0 && typeof message === "string"));
-  } catch { return {}; }
+  } catch (caught) {
+    void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.action_outcomes_invalid", message: "The saved assistant action outcomes could not be read.", outcome: "failure", stage: "history", retryable: false, exception: caught });
+    return {};
+  }
 }
 
 export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, onCloseSetting, onSavedSetting }: {
@@ -97,7 +101,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           ? [item, { role: "assistant" as const, content: outcomes[item.id] }]
           : [item]));
     })
-      .catch(() => { if (current) setError("The saved conversation could not be loaded. Retry after Core reconnects."); })
+      .catch((caught: unknown) => {
+        if (!current) return;
+        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.history_load_failed", message: "The saved assistant conversation could not be loaded.", outcome: "failure", stage: "history", retryable: true, exception: caught });
+        setError("The saved conversation could not be loaded. Retry after Core reconnects.");
+      })
       .finally(() => { if (current) setLoadingHistory(false); });
     return () => { current = false; };
   }, [api, engagement?.id, storageKey, actionOutcomesKey]);
@@ -149,7 +157,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       abort.current?.abort();
       setBusy(false);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not stop the response. Try again."); }
+    } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.stop_failed", message: "The assistant response could not be stopped.", outcome: "failure", stage: "stop", retryable: true, exception: caught });
+      setError(caught instanceof Error ? caught.message : "Could not stop the response. Try again.");
+    }
   };
 
   const applyDeviceTheme = async (requestedTheme: ThemePreference): Promise<string> => {
@@ -285,6 +296,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         const confirmation = await applyDeviceTheme(requestedTheme);
         setMessages((current) => [...current, { role: "assistant", content: confirmation }]);
       } catch (caught) {
+        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.theme_change_failed", message: "The assistant could not change this device's theme.", outcome: "failure", stage: "device-theme", retryable: true, exception: caught });
         setError(caught instanceof Error ? caught.message : "Could not change this device's theme. Check the open Appearance setting and retry.");
         setDraft(prompt);
       } finally {
@@ -303,6 +315,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         const confirmation = await applyProjectMode(modeChange);
         setMessages((current) => [...current, { role: "assistant", content: confirmation }]);
       } catch (caught) {
+        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.project_mode_failed", message: "The assistant could not change the project execution mode.", outcome: "failure", stage: "project-policy", retryable: true, exception: caught });
         setError(caught instanceof Error ? caught.message : "The project policy could not be changed. Check the open setting and retry.");
         setDraft(prompt);
       } finally {
@@ -409,7 +422,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       else if (!controller.signal.aborted) setError("The response is still running. Reopen this assistant to check its saved conversation.");
     } catch (caught) {
-      if (!controller.signal.aborted) { setDraft(prompt); setError(caught instanceof Error ? caught.message : "The assistant could not answer. Try again."); }
+      if (!controller.signal.aborted) {
+        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.turn_failed", message: "The assistant could not answer.", outcome: "failure", stage: "turn", retryable: true, exception: caught });
+        setDraft(prompt);
+        setError(caught instanceof Error ? caught.message : "The assistant could not answer. Try again.");
+      }
     } finally { setBusy(false); }
   };
 

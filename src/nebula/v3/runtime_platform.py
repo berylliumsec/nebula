@@ -370,7 +370,9 @@ class RuntimePlatform:
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
         if settings_assistant and (mcp_profiles or ssh_environments or include_oci):
-            raise RuntimePlatformError("the settings assistant cannot attach general tools")
+            raise RuntimePlatformError(
+                "the settings assistant cannot attach general tools"
+            )
         search_enabled = web_search_enabled(scope) and not settings_assistant
         if (
             not mcp_profiles
@@ -381,7 +383,9 @@ class RuntimePlatform:
             raise RuntimePlatformError("no tool source was selected")
         registry = ToolRegistry()
         if settings_assistant:
-            for plugin in settings_assistant_plugins(self.store, self.artifact_store, engagement_id):
+            for plugin in settings_assistant_plugins(
+                self.store, self.artifact_store, engagement_id
+            ):
                 registry.register(plugin)
         if search_enabled:
             registry.register(WebSearchTool(self.search_runtime, scope))

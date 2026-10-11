@@ -9536,9 +9536,7 @@ def create_app(
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
         scoped_chat = (
-            store.get(ChatSession, request.session_id)
-            if request.session_id
-            else None
+            store.get(ChatSession, request.session_id) if request.session_id else None
         )
         request = isolate_settings_assistant_request(request, scoped_chat)
         if request.session_id:
@@ -10723,9 +10721,13 @@ def create_app(
         store.get(Engagement, engagement_id)
         return next(
             (
-                item for item in store.find_entities(
-                    ChatSession, {}, engagement_id=engagement_id,
-                    newest_first=True, limit=None,
+                item
+                for item in store.find_entities(
+                    ChatSession,
+                    {},
+                    engagement_id=engagement_id,
+                    newest_first=True,
+                    limit=None,
                 )
                 if item.metadata.get("control_assistant") is True
                 and item.metadata.get("archived_at") is None
