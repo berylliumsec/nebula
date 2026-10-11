@@ -13,7 +13,7 @@ import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import type { ChatMessage } from "../api/types";
-import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
+import { assistantTurnOptions, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import styles from "./NebulaControlAssistant.module.css";
 
@@ -296,6 +296,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       } finally {
         setBusy(false);
       }
+      return;
+    }
+    if (isThemeChangeCommand(prompt)) {
+      setError("I couldn't identify that theme. Choose one in Settings → Appearance.");
       return;
     }
     const modeChange = projectModeChange(prompt);
