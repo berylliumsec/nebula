@@ -103,10 +103,35 @@ class FixtureCodexRpc:
                 ],
                 "nextCursor": None,
             }
+        if method == "skills/list":
+            return {
+                "data": [
+                    {
+                        "cwd": params["cwds"][0],
+                        "skills": [
+                            {
+                                "name": "review",
+                                "path": f"{params['cwds'][0]}/.agents/skills/review/SKILL.md",
+                                "scope": "repo",
+                                "enabled": True,
+                            },
+                            {
+                                "name": "disabled",
+                                "path": "/home/test/.codex/skills/disabled/SKILL.md",
+                                "scope": "user",
+                                "enabled": False,
+                            },
+                        ],
+                        "errors": [],
+                    }
+                ]
+            }
         if method == "thread/start":
             return {"thread": {"id": "thread-fixture"}}
         if method == "thread/resume":
             return {"thread": {"id": params["threadId"]}}
+        if method == "thread/fork":
+            return {"thread": {"id": "forked-thread-fixture"}}
         if method == "turn/start":
             await self.events.put(
                 {
@@ -320,6 +345,7 @@ def test_codex_probe_discovers_selectable_models():
         assert [item.id for item in options.reasoning_efforts] == ["low", "medium"]
         assert options.default_service_tier == "default"
         assert [item.id for item in options.service_tiers] == ["default", "fast"]
+        assert options.image_input is True
         assert [method for method, _ in rpc.calls] == [
             "initialize",
             "account/read",
@@ -327,6 +353,97 @@ def test_codex_probe_discovers_selectable_models():
         ]
         assert rpc.calls[0][1]["capabilities"] == {"requestAttestation": False}
         assert rpc.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_codex_skills_use_app_server_catalog(tmp_path):
+    async def scenario() -> None:
+        rpc = FixtureCodexRpc()
+        profile = HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+        )
+        skills = await FixtureCodexAdapter(rpc).list_available_skills(
+            profile, CredentialStore(), tmp_path
+        )
+        assert [(item.name, item.source) for item in skills] == [("review", "project")]
+        assert [method for method, _ in rpc.calls] == ["initialize", "skills/list"]
+        assert rpc.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_codex_fork_uses_stored_turn_boundary(tmp_path):
+    async def scenario() -> None:
+        rpc = FixtureCodexRpc()
+        profile = HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+        )
+        thread_id = await FixtureCodexAdapter(rpc).fork_thread(
+            profile,
+            CredentialStore(),
+            tmp_path,
+            source_thread_id="source-thread",
+            last_turn_id="completed-turn",
+        )
+        assert thread_id == "forked-thread-fixture"
+        assert [method for method, _ in rpc.calls] == ["initialize", "thread/fork"]
+        assert rpc.calls[1][1] == {
+            "threadId": "source-thread",
+            "lastTurnId": "completed-turn",
+        }
+        assert rpc.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_grok_probe_uses_structured_model_catalog_without_cli(monkeypatch):
+    class StructuredRpc(FixtureGrokRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            result = await super().request(method, params)
+            if method == "initialize":
+                result["_meta"] = {
+                    "agentVersion": "1.0.50",
+                    "modelState": {
+                        "availableModels": [
+                            {
+                                "modelId": "grok-4.7",
+                                "_meta": {
+                                    "reasoningEffort": "high",
+                                    "reasoningEfforts": [
+                                        {"id": "high", "label": "High"},
+                                        {"id": "low", "label": "Low"},
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                }
+                result.pop("agentInfo", None)
+            return result
+
+    async def no_cli(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("structured discovery must not launch the CLI")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", no_cli)
+    profile = HarnessProfile(
+        name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+    )
+
+    async def scenario() -> None:
+        health = await FixtureGrokAdapter(StructuredRpc()).probe(
+            profile, CredentialStore()
+        )
+        assert health.healthy is True
+        assert health.harness_version == "1.0.50"
+        assert health.capabilities.models == ["grok-4.7"]
+        options = health.capabilities.model_options[0]
+        assert options.default_reasoning_effort == "high"
+        assert [item.id for item in options.reasoning_efforts] == ["high", "low"]
 
     asyncio.run(scenario())
 
@@ -3289,14 +3406,64 @@ def test_grok_session_listing_timeout_kills_the_child_process(tmp_path, monkeypa
         executable=str(executable),
     )
 
+    class LegacyAdapter(GrokAcpAdapter):
+        async def _connect(self, *_args: Any, **_kwargs: Any) -> Any:
+            return FixtureGrokRpc()
+
     async def scenario() -> None:
         with pytest.raises(HarnessUnavailableError):
-            await GrokAcpAdapter().list_external_sessions(
+            await LegacyAdapter().list_external_sessions(
                 profile, CredentialStore(), tmp_path
             )
         assert len(created) == 1
         # The stalled `grok sessions list` child must not outlive the request.
         assert created[0].returncode is not None
+
+    asyncio.run(scenario())
+
+
+def test_grok_session_listing_uses_acp_timestamp_and_skips_cli(tmp_path, monkeypatch):
+    class ListingRpc(FixtureGrokRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            result = await super().request(method, params)
+            if method == "initialize":
+                result["agentCapabilities"]["sessionCapabilities"] = {"list": {}}
+            if method == "session/list":
+                assert params == {"cwd": str(tmp_path)}
+                return {
+                    "sessions": [
+                        {
+                            "sessionId": "session-1",
+                            "cwd": str(tmp_path),
+                            "title": "A saved session",
+                            "updatedAt": "2026-10-11T14:15:16.123456789+00:00",
+                        }
+                    ]
+                }
+            return result
+
+    async def no_cli(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("ACP session/list must not launch the CLI")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", no_cli)
+    rpc = ListingRpc()
+    profile = HarnessProfile(
+        name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+    )
+
+    async def scenario() -> None:
+        sessions = await FixtureGrokAdapter(rpc).list_external_sessions(
+            profile, CredentialStore(), tmp_path
+        )
+        assert [item.external_session_id for item in sessions] == ["session-1"]
+        assert sessions[0].display_name == "A saved session"
+        assert sessions[0].updated_at.microsecond == 123456
+        assert [method for method, _ in rpc.calls] == [
+            "initialize",
+            "authenticate",
+            "session/list",
+        ]
+        assert rpc.closed is True
 
     asyncio.run(scenario())
 

@@ -3941,6 +3941,99 @@ def _codex_user_input_response(questions: list[Any], response: Any) -> dict[str,
 class CodexAppServerAdapter(HarnessAdapter):
     kind = HarnessKind.CODEX_APP_SERVER
 
+    async def fork_thread(
+        self,
+        profile: HarnessProfile,
+        credential_store: CredentialStore,
+        workspace: Path,
+        *,
+        source_thread_id: str,
+        last_turn_id: str,
+    ) -> str:
+        """Branch a completed Codex turn without flattening its history."""
+
+        rpc = await self._connect(profile, credential_store, (), workspace)
+        try:
+            await self._initialize(rpc)
+            result = await asyncio.wait_for(
+                rpc.request(
+                    "thread/fork",
+                    {"threadId": source_thread_id, "lastTurnId": last_turn_id},
+                ),
+                timeout=15,
+            )
+            thread = result.get("thread") if isinstance(result, dict) else None
+            thread_id = thread.get("id") if isinstance(thread, dict) else None
+            if not isinstance(thread_id, str) or not thread_id:
+                raise HarnessTransportError("Codex thread/fork omitted the thread id")
+            if thread_id == source_thread_id:
+                raise HarnessTransportError(
+                    "Codex thread/fork reused the source thread"
+                )
+            return thread_id
+        finally:
+            await rpc.close()
+
+    async def list_available_skills(
+        self,
+        profile: HarnessProfile,
+        credential_store: CredentialStore,
+        workspace: Path,
+    ) -> list[HarnessSkillSummary]:
+        """Read the skill catalog Codex will actually use for this workspace."""
+
+        rpc = await self._connect(profile, credential_store, (), workspace)
+        try:
+            await self._initialize(rpc)
+            result = await asyncio.wait_for(
+                rpc.request(
+                    "skills/list",
+                    {"cwds": [str(workspace)], "forceReload": True},
+                ),
+                timeout=15,
+            )
+            data = result.get("data") if isinstance(result, dict) else None
+            if not isinstance(data, list):
+                raise HarnessTransportError("Codex skills/list returned invalid data")
+            summaries: list[HarnessSkillSummary] = []
+            seen: set[str] = set()
+            for group in data:
+                if not isinstance(group, dict) or group.get("cwd") != str(workspace):
+                    continue
+                skills = group.get("skills")
+                if not isinstance(skills, list):
+                    raise HarnessTransportError("Codex skills/list omitted skills")
+                for item in skills[:500]:
+                    if not isinstance(item, dict) or item.get("enabled") is False:
+                        continue
+                    name, path = item.get("name"), item.get("path")
+                    if (
+                        not isinstance(name, str)
+                        or not name
+                        or len(name) > 200
+                        or not isinstance(path, str)
+                        or not Path(path).is_absolute()
+                        or not path.endswith("/SKILL.md")
+                        or len(path) > 4_096
+                        or path in seen
+                    ):
+                        continue
+                    seen.add(path)
+                    summaries.append(
+                        HarnessSkillSummary(
+                            name=name,
+                            path=path,
+                            source=(
+                                "project"
+                                if item.get("scope") == "repo"
+                                else "installed"
+                            ),
+                        )
+                    )
+            return summaries
+        finally:
+            await rpc.close()
+
     async def _models(
         self, rpc: _CodexRpc, *, timeout: float
     ) -> tuple[list[str], list[HarnessModelOptions]]:
@@ -4015,7 +4108,14 @@ class CodexAppServerAdapter(HarnessAdapter):
                     model_options.append(
                         HarnessModelOptions(
                             model=model,
-                            image_input="image" in item.get("inputModalities", []),
+                            # Older app-server catalogs omitted this field;
+                            # Codex documents text and image as their default.
+                            image_input="image"
+                            in (
+                                item["inputModalities"]
+                                if isinstance(item.get("inputModalities"), list)
+                                else ["text", "image"]
+                            ),
                             reasoning_efforts=effort_options,
                             default_reasoning_effort=(
                                 default_effort
@@ -7176,8 +7276,72 @@ class GrokAcpConnection(HarnessConnection):
 
 async def _grok_model_catalog(
     profile: HarnessProfile,
+    initialize: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[HarnessModelOptions]]:
-    models: list[str] = []
+    # Recent Grok ACP agents expose the account's model catalog directly in
+    # initialize. Prefer that typed response over the human-readable CLI and
+    # its separately maintained on-disk cache.
+    meta = initialize.get("_meta") if isinstance(initialize, dict) else None
+    state = meta.get("modelState") if isinstance(meta, dict) else None
+    available = state.get("availableModels") if isinstance(state, dict) else None
+    if isinstance(available, list):
+        models: list[str] = []
+        options: list[HarnessModelOptions] = []
+        for entry in available[:256]:
+            if not isinstance(entry, dict):
+                continue
+            model = entry.get("modelId")
+            if (
+                not isinstance(model, str)
+                or not model
+                or len(model) > 500
+                or model in models
+            ):
+                continue
+            details = entry.get("_meta")
+            details = details if isinstance(details, dict) else {}
+            efforts: list[HarnessRuntimeOption] = []
+            raw_efforts = details.get("reasoningEfforts")
+            if isinstance(raw_efforts, list):
+                for raw in raw_efforts[:16]:
+                    if not isinstance(raw, dict):
+                        continue
+                    effort = raw.get("id") or raw.get("value")
+                    if not isinstance(effort, str) or not effort or len(effort) > 100:
+                        continue
+                    efforts.append(
+                        HarnessRuntimeOption(
+                            id=effort,
+                            label=str(raw.get("label") or effort)[:200],
+                            description=str(raw.get("description") or "")[:1_000],
+                        )
+                    )
+            default = details.get("reasoningEffort")
+            if not isinstance(default, str) or default not in {
+                item.id for item in efforts
+            }:
+                default = next(
+                    (
+                        raw.get("id") or raw.get("value")
+                        for raw in raw_efforts or []
+                        if isinstance(raw, dict) and raw.get("default") is True
+                    ),
+                    None,
+                )
+            models.append(model)
+            options.append(
+                HarnessModelOptions(
+                    model=model,
+                    reasoning_efforts=efforts,
+                    default_reasoning_effort=default
+                    if isinstance(default, str)
+                    else None,
+                )
+            )
+        if models:
+            return models, options
+
+    models = []
     if profile.executable:
         process = await asyncio.create_subprocess_exec(
             profile.executable,
@@ -7220,7 +7384,7 @@ async def _grok_model_catalog(
     for model in models:
         entry = catalog.get(model) if isinstance(catalog, dict) else None
         info = entry.get("info") if isinstance(entry, dict) else None
-        efforts: list[HarnessRuntimeOption] = []
+        efforts = []
         if isinstance(info, dict):
             for option in info.get("reasoning_efforts", []):
                 if not isinstance(option, dict):
@@ -7429,8 +7593,13 @@ class GrokAcpAdapter(HarnessAdapter):
                 if isinstance(initialize.get("agentInfo"), dict)
                 else {}
             )
-            version = str(agent_info.get("version") or "unknown")
-            models, model_options = await _grok_model_catalog(profile)
+            meta = initialize.get("_meta")
+            version = str(
+                agent_info.get("version")
+                or (meta.get("agentVersion") if isinstance(meta, dict) else None)
+                or "unknown"
+            )
+            models, model_options = await _grok_model_catalog(profile, initialize)
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=True,
@@ -7486,6 +7655,61 @@ class GrokAcpAdapter(HarnessAdapter):
         workspace: Path,
     ) -> list[ExternalHarnessSession]:
         del credential_store
+        rpc: _AcpRpc | None = None
+        try:
+            rpc = await self._connect(profile, workspace)
+            initialize = await self._initialize(rpc)
+            capabilities = initialize.get("agentCapabilities")
+            session_capabilities = (
+                capabilities.get("sessionCapabilities")
+                if isinstance(capabilities, dict)
+                else None
+            )
+            if (
+                isinstance(session_capabilities, dict)
+                and "list" in session_capabilities
+            ):
+                async with asyncio.timeout(GROK_SESSION_LIST_TIMEOUT_SECONDS):
+                    result = await rpc.request("session/list", {"cwd": str(workspace)})
+                rows = result.get("sessions") if isinstance(result, dict) else None
+                if not isinstance(rows, list):
+                    raise HarnessTransportError(
+                        "Grok ACP session/list returned invalid sessions"
+                    )
+                sessions: list[ExternalHarnessSession] = []
+                for row in rows[:500]:
+                    if not isinstance(row, dict):
+                        continue
+                    session_id = row.get("sessionId")
+                    if (
+                        not isinstance(session_id, str)
+                        or not session_id
+                        or len(session_id) > 500
+                    ):
+                        continue
+                    title = row.get("title")
+                    display_name = (
+                        re.sub(r"\s+", " ", title).strip()[:160]
+                        if isinstance(title, str)
+                        else ""
+                    )
+                    sessions.append(
+                        ExternalHarnessSession(
+                            external_session_id=session_id,
+                            display_name=display_name or "Untitled Grok session",
+                            updated_at=row.get("updatedAt"),
+                        )
+                    )
+                return sessions
+        except (OSError, TimeoutError) as exc:
+            raise HarnessUnavailableError(
+                "Grok sessions could not be listed on the Nebula host"
+            ) from exc
+        finally:
+            if rpc is not None:
+                await rpc.close()
+
+        # Older ACP agents lack session/list; keep their bounded CLI fallback.
         if not profile.executable:
             raise HarnessConfigurationError("Grok executable is required")
         executable = Path(str(profile.executable))
@@ -7517,7 +7741,7 @@ class GrokAcpAdapter(HarnessAdapter):
         if process.returncode != 0:
             detail = stderr.decode("utf-8", errors="replace").strip()
             raise HarnessUnavailableError(detail[:500] or "Grok sessions list failed")
-        sessions: list[ExternalHarnessSession] = []
+        sessions = []
         row = re.compile(
             r"^(?P<id>[0-9a-fA-F-]{36})\s+"
             r"(?P<created>\d{4}-\d{2}-\d{2})\s+"
@@ -8157,6 +8381,9 @@ class HarnessRuntimeService:
         self.adapter_factory = adapter_factory or self._default_adapter
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self._connections: dict[str, HarnessConnection] = {}
+        self._codex_skill_cache: dict[
+            tuple[str, str, int], list[HarnessSkillSummary]
+        ] = {}
         self._connection_browser_bindings: dict[str, str | None] = {}
         self._connection_subagent_bindings: dict[str, str | None] = {}
         self._connection_knowledge_bindings: dict[str, bool] = {}
@@ -8896,6 +9123,12 @@ class HarnessRuntimeService:
         from .skill_catalog import discover_skills, harness_project_skill_roots
 
         workspace = self.workspace_resolver(engagement_id)
+        if profile.kind == HarnessKind.CODEX_APP_SERVER:
+            cached = self._codex_skill_cache.get(
+                (profile.id, str(workspace), profile.revision)
+            )
+            if cached is not None:
+                return list(cached)
         roots: list[tuple[Path, Literal["project", "installed"]]] = list(
             harness_project_skill_roots(workspace)
         )
@@ -8934,6 +9167,47 @@ class HarnessRuntimeService:
             HarnessSkillSummary(name=item.name, path=item.path, source=item.source)
             for item in discover_skills(roots)
         ]
+
+    async def refresh_available_skills(
+        self,
+        *,
+        engagement_id: str,
+        profile_id: str,
+        force_reload: bool = True,
+    ) -> list[HarnessSkillSummary]:
+        profile = self.store.get(HarnessProfile, profile_id)
+        self.store.get(Engagement, engagement_id)
+        if (
+            profile.kind != HarnessKind.CODEX_APP_SERVER
+            or not profile.enabled
+            or not profile.native_capabilities.skills
+            or not profile.capabilities.skill_invocation
+        ):
+            return self.available_skills(
+                engagement_id=engagement_id, profile_id=profile_id
+            )
+        workspace = self.workspace_resolver(engagement_id)
+        cache_key = (profile.id, str(workspace), profile.revision)
+        if not force_reload and cache_key in self._codex_skill_cache:
+            return list(self._codex_skill_cache[cache_key])
+        adapter = self.adapter_factory(profile.kind)
+        if not isinstance(adapter, CodexAppServerAdapter):
+            return self.available_skills(
+                engagement_id=engagement_id, profile_id=profile_id
+            )
+        try:
+            skills = await adapter.list_available_skills(
+                profile, self.credential_store, workspace
+            )
+        except HarnessProviderError as exc:
+            if exc.code != -32601:
+                raise
+            # Older app-server releases lack skills/list.
+            return self.available_skills(
+                engagement_id=engagement_id, profile_id=profile_id
+            )
+        self._codex_skill_cache[cache_key] = skills
+        return list(skills)
 
     @staticmethod
     def _oci_snapshot(
@@ -9475,6 +9749,101 @@ class HarnessRuntimeService:
                 "harness session cannot be forked while a turn is active"
             )
         return self._fork_session(session, reason=reason)
+
+    async def maybe_fork_native_codex_chat(
+        self,
+        *,
+        source: ChatSession,
+        fork: ChatSession,
+        through_message_id: str | None,
+    ) -> ChatSession:
+        """Use Codex's stored turn boundary when it exactly matches the chat."""
+
+        if (
+            through_message_id is None
+            or source.backend != ChatBackend.HARNESS
+            or fork.metadata.get("side_chat") is True
+            or not source.harness_profile_id
+            or not source.harness_session_id
+            or not fork.harness_session_id
+            or source.metadata.get("harness_context_handoff_applied") is True
+            or source.metadata.get("harness_context_handoff_pending") is True
+        ):
+            return fork
+        profile = self.store.get(HarnessProfile, source.harness_profile_id)
+        if profile.kind != HarnessKind.CODEX_APP_SERVER:
+            return fork
+        source_session = self.store.get(HarnessSession, source.harness_session_id)
+        fork_session = self.store.get(HarnessSession, fork.harness_session_id)
+        if (
+            not source_session.external_session_id
+            or source_session.metadata.get("external_import") is True
+            or (
+                source_session.metadata.get("forked_from_session_id")
+                and source_session.metadata.get("native_codex_fork") is not True
+            )
+            or fork_session.external_session_id
+        ):
+            return fork
+        boundary = self.store.get(ChatMessage, through_message_id)
+        harness_turn_id = boundary.metadata.get("harness_turn_id")
+        if (
+            boundary.session_id != source.id
+            or boundary.role != ChatRole.ASSISTANT
+            or not isinstance(harness_turn_id, str)
+        ):
+            return fork
+        source_turn = self.store.get(HarnessTurn, harness_turn_id)
+        if (
+            source_turn.harness_session_id != source_session.id
+            or source_turn.status != HarnessTurnStatus.COMPLETE
+            or not source_turn.external_turn_id
+        ):
+            return fork
+        adapter = self.adapter_factory(profile.kind)
+        if not isinstance(adapter, CodexAppServerAdapter):
+            return fork
+        try:
+            native_thread_id = await adapter.fork_thread(
+                profile,
+                self.credential_store,
+                self.workspace_resolver(source.engagement_id),
+                source_thread_id=source_session.external_session_id,
+                last_turn_id=source_turn.external_turn_id,
+            )
+        except (
+            HarnessError,
+            OSError,
+            TimeoutError,
+        ):  # diagnostic-expected: native fork failure uses the persisted bounded handoff
+            return fork
+        with self.store.transaction() as transaction:
+            transaction.update(
+                HarnessSession,
+                fork_session.id,
+                {
+                    "external_session_id": native_thread_id,
+                    "metadata": {
+                        **fork_session.metadata,
+                        "native_codex_fork": True,
+                        "native_codex_fork_turn_id": source_turn.external_turn_id,
+                    },
+                },
+                expected_revision=fork_session.revision,
+            )
+            transaction.update(
+                ChatSession,
+                fork.id,
+                {
+                    "metadata": {
+                        **fork.metadata,
+                        "harness_context_handoff_pending": False,
+                        "harness_native_fork": True,
+                    }
+                },
+                expected_revision=fork.revision,
+            )
+        return self.store.get(ChatSession, fork.id)
 
     def rewind_chat_session(
         self, chat: ChatSession, *, reason: str = "operator_edit"
