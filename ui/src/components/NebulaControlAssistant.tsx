@@ -22,7 +22,7 @@ const THEMES: { value: ThemePreference; label: string }[] = [
 export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedSetting }: {
   onOpenSetting: (entry: SettingCatalogEntry) => void;
   onCloseSetting?: () => void;
-  onSavedSetting?: (entry: SettingCatalogEntry, status: string) => void;
+  onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode: "docker" | "host") => void;
 }) {
   const { api, engagement, providers, harnesses } = useWorkspace();
   const confirm = useConfirmation();
@@ -144,7 +144,7 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
           throw new Error(`${projectName} is already in ${currentMode === "host" ? "Host" : "Docker"} mode. Its policy was not changed. Check the open setting and try again.`);
         }
         if (currentMode === modeChange.mode) {
-          onSavedSetting?.(entry, `${projectName} is already in ${modeLabel} mode.`);
+          onSavedSetting?.(entry, `${projectName} is already in ${modeLabel} mode.`, modeChange.mode);
           setMessages((current) => [...current, { role: "assistant", content: `${projectName} is already in ${modeLabel} mode. No change was needed.` }]);
         } else {
           const approved = await confirm({
@@ -169,12 +169,29 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
             });
             const observed = await api.getAutomationPolicy(projectId);
             if (observed.executionMode !== modeChange.mode) throw new Error("Core did not confirm the new execution mode. Reopen Project Policy before retrying.");
-            onSavedSetting?.(entry, `${projectName} saved in ${modeLabel} mode for new sessions.`);
+            onSavedSetting?.(entry, `${projectName} saved in ${modeLabel} mode for new sessions.`, modeChange.mode);
             setMessages((current) => [...current, { role: "assistant", content: `${projectName} is now in ${modeLabel} mode for new sessions. Existing sessions keep their previous policy.` }]);
           }
         }
-        // Keep the updated Settings control visible long enough to inspect the result.
-        await new Promise((resolve) => window.setTimeout(resolve, 1800));
+        // Close only after the refreshed control shows the mode Core read back.
+        if (document.querySelector(".settings-lens")) {
+          const visible = await new Promise<boolean>((resolve) => {
+            const started = Date.now();
+            const interval = window.setInterval(() => {
+              const lens = document.querySelector(".settings-lens");
+              const control = lens?.querySelector<HTMLSelectElement>('select[aria-label="Project execution mode"]');
+              if (control?.value === modeChange.mode && !control.disabled) {
+                window.clearInterval(interval);
+                resolve(true);
+              } else if (!lens || Date.now() - started > 8000) {
+                window.clearInterval(interval);
+                resolve(false);
+              }
+            }, 50);
+          });
+          if (!visible) setError(`Core saved ${modeLabel} mode, but the setting did not refresh. Reopen Project Policy to inspect it.`);
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : "The project policy could not be changed. Check the open setting and retry.");
         setDraft(prompt);

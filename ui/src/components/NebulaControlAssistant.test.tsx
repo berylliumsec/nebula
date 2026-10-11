@@ -110,7 +110,7 @@ describe("NebulaControlAssistant", () => {
       networkEnabled: true, runnerProfileId: "runner", vpnProfileId: "vpn",
       maxTimeoutMs: 120000, expectedRevision: 3,
     }));
-    await waitFor(() => expect(onSavedSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" }), "Project saved in Host mode for new sessions."));
+    await waitFor(() => expect(onSavedSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" }), "Project saved in Host mode for new sessions.", "host"));
     await waitFor(() => expect(onCloseSetting).toHaveBeenCalled(), { timeout: 4000 });
     expect(getAutomationPolicy).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/Project is now in Host mode for new sessions/)).toBeInTheDocument();

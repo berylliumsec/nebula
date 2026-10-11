@@ -56,7 +56,7 @@ export function AppShell() {
   const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
-  const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null; refreshKey: number; status?: string }>();
+  const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null; refreshKey: number; status?: string; statusMode?: "docker" | "host" }>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem("nebula.sidebar.collapsed");
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
@@ -76,9 +76,9 @@ export function AppShell() {
   const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
     setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
   }, []);
-  const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string) => {
+  const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string, mode: "docker" | "host") => {
     setSettingLens((current) => current?.entry.id === entry.id
-      ? { ...current, refreshKey: current.refreshKey + 1, status }
+      ? { ...current, refreshKey: current.refreshKey + 1, status, statusMode: mode }
       : current);
   }, []);
   const openProjectPicker = useCallback(() => {
@@ -235,7 +235,7 @@ export function AppShell() {
                 onToggleSidebar={toggleSidebar}
                 onOpenSetting={openSetting}
               />
-              {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} onClose={() => setSettingLens(undefined)} />}
+              {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} statusMode={settingLens.statusMode} onClose={() => setSettingLens(undefined)} />}
             </div>
             </GuideProvider>
           </ChromeProvider>

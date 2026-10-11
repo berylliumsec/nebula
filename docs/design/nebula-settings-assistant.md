@@ -45,7 +45,8 @@ operator sees the existing control and approves Host access before Core saves.
 The requested source mode, when supplied, must match Core's current policy;
 the assistant preserves unrelated policy fields and uses revision checks. A
 failure leaves the policy unchanged and keeps a retryable draft. The saved
-mode must be read back before the assistant claims success. Existing sessions
+mode must be read back, and the visible control must reflect it before the lens
+closes. Existing sessions
 retain their frozen policy revision; new sessions use the new mode.
 Provider turns request low effort; Core's provider adapter maps or omits that
 control for the selected model. Harness model options determine low effort and
