@@ -7,13 +7,11 @@ Nebula is a cybersecurity harness built around the operator. Test manually in it
 
 ![Nebula Workbench Assistant in the default Quiet Lens theme, with its navigation and composer controls at rest](docs/images/quiet-lens-assistant.png)
 
-*Illustrative Workbench conversation shown in the real Nebula interface.*
-
 ## Nebula assistant
 
 <img src="docs/images/nebula-assistant-icon.svg" alt="Nebula assistant bot icon" width="36" height="36">
 
-Find the bot icon in Nebula's upper-right corner. It opens setup help and navigation; connect a model or harness to ask questions.
+Find the bot icon in Nebula's upper-right corner. It helps you find and open settings or pages; with a connected model or harness, you can ask questions about Nebula and troubleshoot setup or workflow issues.
 
 ## Acknowledgement
 
