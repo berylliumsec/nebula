@@ -3,8 +3,6 @@
   <p>Cybersecurity harness built around the operator</p>
 </div>
 
-Investigate in a browser and Kali terminal, or direct agents within a scoped project. Set approvals, preserve evidence, and turn findings into reports.
-
 ![Nebula Workbench Assistant in the default Quiet Lens theme, with its navigation and composer controls at rest](docs/images/quiet-lens-assistant.png)
 
 ## Acknowledgement
