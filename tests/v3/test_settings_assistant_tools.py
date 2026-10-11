@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from nebula.v3.api import create_app
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.domain import ChatSession, Engagement, HarnessCapabilities, HarnessKind, HarnessProfile, ProviderProfile
+from nebula.v3.storage import NebulaStore
+from nebula.v3.settings_assistant_tools import (
+    SETTING_DESTINATIONS,
+    catalog,
+    provider_plugins,
+    model_choices,
+    set_default_model,
+    set_post_tool_preference,
+)
+
+
+def test_catalog_covers_settings_destinations_without_secrets():
+    result = catalog()
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 17
+    assert {item["id"] for item in result["settings"]} == {
+        item[0] for item in SETTING_DESTINATIONS
+    }
+    assert all(item["url"].startswith("/settings#") for item in result["settings"])
+    assert all("credential" not in str(item.get("direct_changes", [])) for item in result["settings"])
+
+
+def test_post_tool_change_reads_back_from_core(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    project = store.create(Engagement(name="Bounded project"))
+    result = set_post_tool_preference(
+        store, artifacts, project.id, {"setting": "take_notes", "enabled": False}
+    )
+    assert result == {
+        "setting": "take_notes", "enabled": False, "project_id": project.id,
+        "project_name": "Bounded project", "saved": True,
+    }
+    with pytest.raises(Exception):
+        set_post_tool_preference(
+            store, artifacts, project.id,
+            {"setting": "take_notes", "enabled": True},
+        )
+    assert store.get(Engagement, project.id).metadata["post_tool_assistant"]["take_notes"] is False
+
+
+def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    project = store.create(Engagement(name="Project A"))
+    names = {plugin.spec.name for plugin in provider_plugins(store, artifacts, project.id)}
+    assert names == {
+        "nebula.settings.catalog", "nebula.settings.set_post_tool",
+        "nebula.settings.models", "nebula.settings.set_default_model",
+    }
+
+
+def test_default_model_change_requires_advertised_value_and_reads_back(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    provider = store.create(ProviderProfile(
+        name="Local model", provider_type="ollama", is_local=True,
+        model_allowlist=["small", "large"],
+    ))
+    harness = store.create(HarnessProfile(
+        name="Codex", kind=HarnessKind.CODEX_APP_SERVER,
+        executable="/usr/bin/true",
+        capabilities=HarnessCapabilities(models=["model-a", "model-b"]),
+    ))
+    choices = model_choices(store)
+    assert choices["providers"][0]["models"] == ["small", "large"]
+    assert choices["harnesses"][0]["models"] == ["model-a", "model-b"]
+    assert set_default_model(store, {
+        "kind": "provider", "profile_id": provider.id, "model": "large",
+    })["default_model"] == "large"
+    assert set_default_model(store, {
+        "kind": "harness", "profile_id": harness.id, "model": "model-b",
+    })["default_model"] == "model-b"
+    with pytest.raises(ValueError):
+        set_default_model(store, {
+            "kind": "provider", "profile_id": provider.id, "model": "unlisted",
+        })
+    assert store.get(ProviderProfile, provider.id).metadata["default_model"] == "large"
+
+
+def test_control_session_lookup_is_authenticated_and_project_scoped(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    first = store.create(Engagement(name="First"))
+    second = store.create(Engagement(name="Second"))
+    provider = store.create(ProviderProfile(name="Local", provider_type="ollama", is_local=True))
+    ordinary = store.create(ChatSession(
+        engagement_id=first.id, title="Ordinary", provider_profile_id=provider.id, model="small",
+    ))
+    control = store.create(ChatSession(
+        engagement_id=first.id, title="Nebula assistant", provider_profile_id=provider.id,
+        model="small", metadata={"control_assistant": True},
+    ))
+    store.create(ChatSession(
+        engagement_id=second.id, title="Other project", provider_profile_id=provider.id,
+        model="small", metadata={"control_assistant": True},
+    ))
+    client = TestClient(create_app(store, auth_token="test-token"))
+    url = f"/api/v1/chat/control-assistant/session?engagement_id={first.id}"
+    assert client.get(url).status_code == 401
+    response = client.get(url, headers={"Authorization": "Bearer test-token"})
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == control.id
+    assert response.json()["id"] != ordinary.id

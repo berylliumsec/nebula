@@ -65,6 +65,7 @@ from .tools import (
 )
 from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
 from .working_notes import WriteNotesTool
+from .settings_assistant_tools import provider_plugins as settings_assistant_plugins
 
 
 LOGGER = logging.getLogger(__name__)
@@ -376,6 +377,8 @@ class RuntimePlatform:
         ):
             raise RuntimePlatformError("no tool source was selected")
         registry = ToolRegistry()
+        for plugin in settings_assistant_plugins(self.store, self.artifact_store, engagement_id):
+            registry.register(plugin)
         if search_enabled:
             registry.register(WebSearchTool(self.search_runtime, scope))
         if mcp_profiles:
