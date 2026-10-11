@@ -9,6 +9,8 @@ import os
 import subprocess
 import sys
 import tempfile
+from fnmatch import fnmatchcase
+from itertools import pairwise
 from pathlib import Path
 
 MAX_FILES = 80
@@ -17,6 +19,16 @@ MAX_TOTAL_BYTES = 1024 * 1024
 MAX_REVIEW_CHARS = 2 * 1024
 REVIEW_OVERLAP_CHARS = 256
 TIMEOUT_SECONDS = 240
+CONFIG_FILENAME = "nebula-public-commit-review.json"
+BYPASS_TREE_ENV = "NEBULA_PUBLIC_COMMIT_BYPASS_TREE"
+BYPASS_REASON_ENV = "NEBULA_PUBLIC_COMMIT_BYPASS_REASON"
+BYPASS_TRAILER = "Public-Review-Bypass: "
+DEFAULT_CONFIG = {
+    "exclude_globs": ["*.css"],
+    "max_files": MAX_FILES,
+    "max_file_bytes": MAX_FILE_BYTES,
+    "max_total_bytes": MAX_TOTAL_BYTES,
+}
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -43,6 +55,60 @@ def git(*args: str) -> bytes:
     if result.returncode:
         raise GuardError(f"Git could not inspect the staged index ({args[0]}).")
     return result.stdout
+
+
+def load_config() -> dict:
+    common_dir = Path(git("rev-parse", "--git-common-dir").decode("utf-8").strip())
+    path = common_dir / "hooks" / CONFIG_FILENAME
+    if not path.exists() and not path.is_symlink():
+        return dict(DEFAULT_CONFIG)
+    if not path.is_file():
+        raise GuardError(f"Local review configuration is not a file: {path}")
+    try:
+        configured = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise GuardError(f"Invalid local review configuration: {path}") from exc
+    if not isinstance(configured, dict) or set(configured) - set(DEFAULT_CONFIG):
+        raise GuardError(f"Unknown local review configuration keys: {path}")
+    config = {**DEFAULT_CONFIG, **configured}
+    globs = config["exclude_globs"]
+    if not isinstance(globs, list) or any(
+        not isinstance(pattern, str) or not pattern or len(pattern) > 200
+        for pattern in globs
+    ):
+        raise GuardError("exclude_globs must be a list of nonempty path patterns.")
+    for key in ("max_files", "max_file_bytes", "max_total_bytes"):
+        value = config[key]
+        if type(value) is not int or not 1 <= value <= 50 * 1024 * 1024:
+            raise GuardError(f"{key} must be a positive integer no greater than 50 MiB.")
+    return config
+
+
+def excluded_path(raw_path: bytes, patterns: list[str]) -> bool:
+    try:
+        path = raw_path.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise GuardError("A staged filename is not UTF-8 and needs manual review.") from exc
+    return any(fnmatchcase(path.lower(), pattern.lower()) for pattern in patterns)
+
+
+def authorized_bypass(tree: str, message: bytes | None) -> bool:
+    approved_tree = os.environ.get(BYPASS_TREE_ENV)
+    reason = os.environ.get(BYPASS_REASON_ENV)
+    if approved_tree is None and reason is None:
+        return False
+    if approved_tree != tree or not reason or not 10 <= len(reason) <= 200:
+        raise GuardError("Bypass requires the exact staged tree and a 10-200 character reason.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in reason):
+        raise GuardError("Bypass reason must be printable on one line.")
+    if message is not None:
+        try:
+            lines = message.decode("utf-8").splitlines()
+        except UnicodeDecodeError as exc:
+            raise GuardError("Commit message is not UTF-8.") from exc
+        if BYPASS_TRAILER + reason not in lines:
+            raise GuardError("Bypassed commits require a matching Public-Review-Bypass trailer.")
+    return True
 
 
 def staged_tree() -> str:
@@ -88,10 +154,11 @@ def staged_entry(path: bytes) -> tuple[str, str]:
 
 
 def write_snapshot(
-    directory: Path, paths: list[bytes], deleted: list[str], message: bytes | None
+    directory: Path, paths: list[bytes], deleted: list[str], message: bytes | None,
+    config: dict,
 ) -> list[str]:
-    if len(paths) > MAX_FILES:
-        raise GuardError(f"More than {MAX_FILES} files are staged; review in smaller commits.")
+    if len(paths) > config["max_files"]:
+        raise GuardError(f"More than {config['max_files']} files are staged; review in smaller commits.")
     files = directory / "files"
     files.mkdir()
     manifest = []
@@ -103,10 +170,10 @@ def write_snapshot(
             raise GuardError("A staged filename is not UTF-8 and needs manual review.") from exc
         mode, oid = staged_entry(raw_path)
         size = int(git("cat-file", "-s", oid))
-        if size > MAX_FILE_BYTES:
-            raise GuardError(f"Staged file exceeds {MAX_FILE_BYTES} bytes: {path}")
+        if size > config["max_file_bytes"]:
+            raise GuardError(f"Staged file exceeds {config['max_file_bytes']} bytes: {path}")
         total += size
-        if total > MAX_TOTAL_BYTES:
+        if total > config["max_total_bytes"]:
             raise GuardError("Staged content exceeds the review limit; use smaller commits.")
         content = git("cat-file", "blob", oid)
         if len(content) != size or b"\0" in content:
@@ -179,7 +246,7 @@ def split_review_parts(item: dict, content: str) -> list[dict]:
         prior_line = content.rfind("\n", start, overlap_start)
         start = prior_line + 1 if prior_line >= start else overlap_start
     if spans[0][0] != 0 or spans[-1][1] != len(content) or any(
-        left[1] < right[0] for left, right in zip(spans, spans[1:])
+        left[1] < right[0] for left, right in pairwise(spans)
     ):
         raise GuardError("Staged text could not be fully divided for review.")
     return [
@@ -208,6 +275,8 @@ def review(directory: Path, expected_ids: list[str], codex: str) -> dict:
                      if public_text is None or part["content"] not in public_text)
     if [item["id"] for item in manifest["files"]] != expected_ids:
         raise GuardError("Staged manifest and index do not match.")
+    if not parts and not manifest["deleted_paths"] and not manifest["message_included"]:
+        return {"decision": "allow", "category": "none", "reviewed_files": expected_ids}
     batches: list[list[dict]] = []
     current: list[dict] = []
     size = 0
@@ -285,24 +354,30 @@ def main() -> int:
     args = parser.parse_args()
     try:
         before = staged_tree()
-        paths = staged_paths()
-        deleted = deleted_paths()
         message = args.message.read_bytes() if args.message else None
-        with tempfile.TemporaryDirectory(prefix="nebula-public-commit-review-") as temporary:
-            directory = Path(temporary)
-            ids = write_snapshot(directory, paths, deleted, message)
-            verdict = review(directory, ids, "codex")
+        bypassed = authorized_bypass(before, message)
+        if not bypassed:
+            config = load_config()
+            paths = [path for path in staged_paths() if not excluded_path(path, config["exclude_globs"])]
+            deleted = [path for path in deleted_paths() if not excluded_path(path.encode("utf-8"), config["exclude_globs"])]
+            with tempfile.TemporaryDirectory(prefix="nebula-public-commit-review-") as temporary:
+                directory = Path(temporary)
+                ids = write_snapshot(directory, paths, deleted, message, config)
+                verdict = review(directory, ids, "codex")
         if staged_tree() != before:
             raise GuardError("The staged index changed during review; retry the commit.")
         if args.message and args.message.read_bytes() != message:
             raise GuardError("The commit message changed during review; retry the commit.")
-        if verdict["decision"] != "allow":
+        if not bypassed and verdict["decision"] != "allow":
             parts = ", ".join(verdict.get("review_part_ids", []))
             raise GuardError(f"Codex marked the commit {verdict['decision']} ({verdict['category']}) in review part {parts}.")
     except (GuardError, OSError) as exc:
         print(f"Nebula public commit blocked: {exc}", file=sys.stderr)
         return 1
-    print("Nebula public commit: Codex review passed.", file=sys.stderr)
+    if bypassed:
+        print(f"Nebula public commit: review bypass authorized for staged tree {before}.", file=sys.stderr)
+    else:
+        print("Nebula public commit: Codex review passed.", file=sys.stderr)
     return 0
 
 
