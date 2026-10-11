@@ -1,7 +1,7 @@
 {
-  "change_digest": "6e12c0423a9db8d7572385f714840f2312e87ea1735c859c9cdeeeb1b4d76071",
+  "change_digest": "1ac5abc2b1d787021e1f140b4ebc48ef79de7710c0c26c1991a04e42ce51e707",
   "reviewed_by": "Codex focused review of Nebula settings assistant worktree",
-  "reason": "The assistant follow-up adds a bounded Project Policy execution-mode command. It opens the shared Settings lens, asks for explicit Host access confirmation, preserves unrelated policy fields with a revision check, reads the saved mode from Core, and shows the result before closing. The catalog and provider/harness prompt now locate the mode. Select five Core settings tests, eleven focused UI tests, the assistant interaction in eight browser profiles, and the production LAN real-Core mode-change journey in desktop Chromium and 320 px WebKit.",
+  "reason": "The assistant switches Project Policy execution mode through a visible Settings lens and explicit Host confirmation, preserves unrelated policy fields with revision checks, reads Core back, and waits for the refreshed control to show the saved value before closing. The catalog and provider/harness prompt locate the mode. Select five Core settings tests, eleven focused UI tests, the assistant interaction in eight browser profiles, and the production LAN real-Core mode-change journey in desktop Chromium and 320 px WebKit.",
   "exclusions": "No native code changed. Unrelated Python, frontend, and Playwright journeys and full suites are excluded. The eight-profile UI journey uses mocked Core for interaction and viewport behavior; the two real-Core browser runs prove durable policy and production LAN behavior. Physical-device testing is unavailable and not claimed.",
   "expected_tests": {
     "python": 5,
