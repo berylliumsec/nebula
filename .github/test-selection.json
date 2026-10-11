@@ -1,35 +1,16 @@
 {
-  "change_digest": "d65ee88fbeef00c45c2a3fc0062e992f83f8f05cd34ce271dfb6a4ad98bff5fd",
-  "reviewed_by": "Codex scoped review of Grok ACP and Codex app-server discovery paths",
-  "reason": "The diff consumes Grok initialize model metadata and ACP session/list, consumes Codex app-server skills/list, applies the documented Codex image-input default, and uses Codex thread/fork when a chat branch maps to a completed assistant turn. Eleven exact Python adapter/runtime tests exercise structured replies, legacy fallbacks, native turn boundaries, and skill selection. Six catalogued mock UI runs cover external-session discovery and skill selection at desktop Chromium, mobile Chromium, and mobile WebKit widths. The disposable production Core/LAN journey checks the visible result and native adapter integration.",
-  "exclusions": "No frontend or native source changes warrant their unit/native suites. Browser tests use fixture API responses for UI behavior; live adapter replies and durable behavior are checked separately against the disposable production Core. Full suites, unrelated assistant journeys, paid multimodal inference, and OpenRouter image routing are excluded. Side chats and non-assistant boundaries retain the existing bounded handoff because they do not map exactly to a Codex turn.",
+  "change_digest": "3f2f11a0ec73d3e31f6339e60a0584ffb16171aa996717a3bb84776e18677432",
+  "reviewed_by": "Codex review of README assistant discovery and recorded product demo",
+  "reason": "The diff changes README copy and adds a Playwright-recorded GIF and MP4. The recording used a temporary real Core, the production UI bundle, an authenticated Codex app server, and desktop Chromium at 1280x800. It exercised the upper-right Nebula assistant, a sourced product answer, the Model providers setting, and Files navigation. The media was trimmed only to remove idle model wait. No product implementation, API, settings catalog, or test code changed.",
+  "exclusions": "No Python, frontend, native, or catalogued Playwright tests cover a documentation-only media change, so zero tests are selected. Full suites and unrelated journeys are excluded. The one recorded desktop walkthrough does not establish mobile, LAN, physical-device, deployed-build, or broader product acceptance.",
   "expected_tests": {
-    "python": 11,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_harness_adapters.py::test_codex_probe_discovers_selectable_models",
-    "tests/v3/test_harness_adapters.py::test_codex_skills_use_app_server_catalog",
-    "tests/v3/test_harness_adapters.py::test_grok_probe_uses_structured_model_catalog_without_cli",
-    "tests/v3/test_harness_adapters.py::test_grok_probe_negotiates_cached_token_without_credentials",
-    "tests/v3/test_harness_adapters.py::test_grok_catalog_uses_selected_account_for_command_and_cache",
-    "tests/v3/test_harness_adapters.py::test_grok_session_listing_timeout_kills_the_child_process",
-    "tests/v3/test_harness_adapters.py::test_grok_session_listing_uses_acp_timestamp_and_skips_cli",
-    "tests/v3/test_harnesses.py::test_harness_skill_catalog_is_bounded_and_invocation_is_validated",
-    "tests/v3/test_harnesses.py::test_codex_native_skill_catalog_is_selectable_for_a_chat",
-    "tests/v3/test_harness_adapters.py::test_codex_fork_uses_stored_turn_boundary",
-    "tests/v3/test_harnesses.py::test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:advanced-session-binding/desktop",
-    "entry:advanced-session-binding/mobile-chromium-small",
-    "entry:advanced-session-binding/mobile-webkit-small",
-    "entry:chat-stream-scroll/desktop",
-    "entry:chat-stream-scroll/mobile-chromium-ledger-390",
-    "entry:chat-stream-scroll/mobile-webkit"
-  ]
+  "playwright": []
 }
