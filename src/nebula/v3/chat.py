@@ -725,31 +725,33 @@ def isolate_settings_assistant_request(
         )
     if not request.control_assistant:
         return request
-    if any((
-        request.tools_enabled,
-        request.mcp_server_ids,
-        request.ssh_environment_ids,
-        request.hook_ids,
-        request.goal_id,
-        request.skill,
-        request.skill_selections,
-        request.harness_skill,
-        request.context_attachments,
-        any(message.content_blocks for message in request.messages),
-        request.allow_subagents,
-        request.allow_agent_messaging,
-        request.max_active_subagents,
-        request.subagent_reasoning_effort,
-        request.subagent_provider_id,
-        request.subagent_harness_profile_id,
-        request.subagent_model,
-        request.pending_provider_subagent,
-        request.allowed_tool_names,
-        request.allow_cloud_knowledge,
-        request.max_artifact_queries,
-        request.harness_mode,
-        request.harness_cyber_access_program,
-    )):
+    if any(
+        (
+            request.tools_enabled,
+            request.mcp_server_ids,
+            request.ssh_environment_ids,
+            request.hook_ids,
+            request.goal_id,
+            request.skill,
+            request.skill_selections,
+            request.harness_skill,
+            request.context_attachments,
+            any(message.content_blocks for message in request.messages),
+            request.allow_subagents,
+            request.allow_agent_messaging,
+            request.max_active_subagents,
+            request.subagent_reasoning_effort,
+            request.subagent_provider_id,
+            request.subagent_harness_profile_id,
+            request.subagent_model,
+            request.pending_provider_subagent,
+            request.allowed_tool_names,
+            request.allow_cloud_knowledge,
+            request.max_artifact_queries,
+            request.harness_mode,
+            request.harness_cyber_access_program,
+        )
+    ):
         raise ChatConfigurationError(
             "The Nebula assistant accepts Nebula help and settings tools only; remove general tools and attached context."
         )
@@ -5545,8 +5547,7 @@ class ChatService:
         )
         work_enabled = bool(
             not settings_only
-            and
-            engagement_id
+            and engagement_id
             and self.work.enabled(engagement_id)
             and not (session and session.metadata.get("side_chat") is True)
             and profile.tools_verified_for(selected_model)
@@ -5604,10 +5605,14 @@ class ChatService:
                     engagement_id=engagement.id,
                     # Titles describe the operator's prompt, never the expanded
                     # provider payload containing selected-context envelopes.
-                    title="Nebula assistant" if request.control_assistant else self._title(request.messages),
+                    title="Nebula assistant"
+                    if request.control_assistant
+                    else self._title(request.messages),
                     provider_profile_id=profile.id,
                     model=selected_model,
-                    metadata={"control_assistant": True} if request.control_assistant else {},
+                    metadata={"control_assistant": True}
+                    if request.control_assistant
+                    else {},
                 )
 
         citations: list[ChatCitation] = []
@@ -5624,7 +5629,9 @@ class ChatService:
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
             operator_decisions
         )
-        if request.control_assistant or (session and session.metadata.get("control_assistant") is True):
+        if request.control_assistant or (
+            session and session.metadata.get("control_assistant") is True
+        ):
             instructions += (
                 "\n\nYou are the Nebula product assistant. Answer Nebula usage questions and troubleshoot "
                 "using the packaged product index: call nebula.help.search for product behavior, cite its "
@@ -5685,7 +5692,9 @@ class ChatService:
             )
             instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = (
-            None if side_chat or settings_only else self._project_instructions(engagement_id)
+            None
+            if side_chat or settings_only
+            else self._project_instructions(engagement_id)
         )
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
@@ -5762,7 +5771,9 @@ class ChatService:
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
         web_search_selected = (
-            not settings_only and not side_chat and self._web_search_selected(engagement_id)
+            not settings_only
+            and not side_chat
+            and self._web_search_selected(engagement_id)
         )
         settings_assistant_available = bool(
             settings_only
@@ -6339,8 +6350,10 @@ class ChatService:
         # Older messages left this request for a derived memory, so the model
         # can look up their original wording on demand.
         conversation_search = (
-            not settings_only and tools_enabled
-            and context_snapshot is not None and session is not None
+            not settings_only
+            and tools_enabled
+            and context_snapshot is not None
+            and session is not None
         )
         if tools_enabled:
             # Resolved with the runtime capabilities above.
@@ -12200,18 +12213,27 @@ class ChatService:
         ):
             raise ChatConfigurationError("automation command runtime is unavailable")
         try:
-            mcp_profiles = tuple(
-                McpServerProfile.model_validate(item)
-                for key in ("mcp_snapshot", "mcp_catalog_snapshot")
-                for item in snapshot.get(key, [])
-            ) if not settings_only else ()
-            ssh_environments = tuple(
-                SshEnvironment.model_validate(item)
-                for item in snapshot.get("ssh_environment_snapshot", [])
-            ) if not settings_only else ()
-            include_commands = bool(
-                turn.request_snapshot.get("include_oci_tools", True)
-            ) and not settings_only
+            mcp_profiles = (
+                tuple(
+                    McpServerProfile.model_validate(item)
+                    for key in ("mcp_snapshot", "mcp_catalog_snapshot")
+                    for item in snapshot.get(key, [])
+                )
+                if not settings_only
+                else ()
+            )
+            ssh_environments = (
+                tuple(
+                    SshEnvironment.model_validate(item)
+                    for item in snapshot.get("ssh_environment_snapshot", [])
+                )
+                if not settings_only
+                else ()
+            )
+            include_commands = (
+                bool(turn.request_snapshot.get("include_oci_tools", True))
+                and not settings_only
+            )
             extra_components = (
                 self.tool_platform.chat_components(
                     engagement_id=turn.engagement_id,
@@ -12226,8 +12248,7 @@ class ChatService:
                 )
                 if (
                     settings_only
-                    or
-                    mcp_profiles
+                    or mcp_profiles
                     or ssh_environments
                     or self._web_search_selected(turn.engagement_id)
                 )
@@ -12373,7 +12394,11 @@ class ChatService:
                         self.store, components.scope, Path(components.workspace)
                     ),
                 )
-            if components is not None and not settings_only and turn.request_snapshot.get("knowledge_search"):
+            if (
+                components is not None
+                and not settings_only
+                and turn.request_snapshot.get("knowledge_search")
+            ):
                 components = combine_tool_components(
                     components,
                     self._knowledge_search_components(
@@ -12385,7 +12410,13 @@ class ChatService:
             if settings_only:
                 components = restrict_tool_components(
                     components,
-                    [name for name in components.specs if name.startswith(("nebula.help.", "nebula.settings.", "nebula.navigate."))],
+                    [
+                        name
+                        for name in components.specs
+                        if name.startswith(
+                            ("nebula.help.", "nebula.settings.", "nebula.navigate.")
+                        )
+                    ],
                 )
             allowed_names = turn.request_snapshot.get("allowed_tool_names")
             if isinstance(allowed_names, list):
