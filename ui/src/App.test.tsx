@@ -115,9 +115,10 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   });
 
-  it("defaults to Dark and preserves the selected shell preference", () => {
+  it("defaults to Quiet Lens and preserves the selected shell preference", () => {
     const firstRender = renderApp();
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.documentElement).toHaveAttribute("data-theme", "quiet-lens");
+    expect(document.querySelector(".app-shell")).toHaveClass("quiet-lens-shell");
     expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
     expect(screen.getByRole("complementary", { name: "Primary navigation" })).toHaveAttribute("data-shell", "shared");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
@@ -216,6 +217,7 @@ describe("Nebula workspace", () => {
   });
 
   it("persists the collapsible sidebar and exposes legacy labels through command search", async () => {
+    localStorage.setItem("nebula.theme", "dark");
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Hide sidebar" }));

@@ -20,8 +20,8 @@ describe("ThemeProvider", () => {
 
     render(<ThemeProvider><Probe /></ThemeProvider>);
 
-    expect(screen.getByTestId("preference")).toHaveTextContent("dark");
-    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(screen.getByTestId("preference")).toHaveTextContent("quiet-lens");
+    expect(document.documentElement.dataset.theme).toBe("quiet-lens");
 
   });
 
