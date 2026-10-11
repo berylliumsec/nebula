@@ -11,6 +11,7 @@ import { expect, request as playwrightRequest, test, type Page, type TestInfo } 
 import {startApprovalCore} from "./fixtures/approval-core";
 import {OwnedCleanupError, withOwnedCleanup} from "./fixtures/owned-cleanup";
 import {settingCatalog} from "../src/settingsCatalog";
+import {assistantDestinations, assistantDestinationPath} from "../src/assistantDestinations";
 
 interface RealCore {
   process: ChildProcessWithoutNullStreams;
@@ -5153,7 +5154,7 @@ test("project execution mode settings assistant opens every catalog setting from
     await composer.fill("open a setting named pineapple moon");
     const unknownStarted = Date.now();
     await composer.press("Enter");
-    await expect(assistant).toContainText("I couldn't identify one setting");
+    await expect(assistant).toContainText("I couldn't identify a Nebula destination");
     expect(Date.now() - unknownStarted).toBeLessThan(2000);
     await expect(assistant.getByText("Settings I can help with")).toBeVisible();
     expect(new URL(page.url()).pathname).toContain(`/projects/${projectId}/workbench`);
@@ -5163,6 +5164,47 @@ test("project execution mode settings assistant opens every catalog setting from
     });
     await info.attach("settings-assistant-catalog-final-screen", { body: await page.screenshot(), contentType: "image/png" });
     console.log(`settings assistant catalog timings ${JSON.stringify(timings)}`);
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
+test("project execution mode assistant navigates every app destination on production LAN Core", async ({ page }, info) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const created = await api.post("engagements", { data: {
+      name: "Navigation Catalog Acceptance", description: "", client_name: null, status: "active",
+      tags: [], workspace_path: null, metadata: {},
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = ((await created.json()) as { id: string }).id;
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
+    const timings: {destination: string; elapsedMs: number}[] = [];
+    for (const destination of assistantDestinations) {
+      await page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ }).click();
+      const composer = page.getByRole("dialog", { name: "Nebula assistant" }).getByRole("textbox", { name: "Ask Nebula a question" });
+      await composer.fill(destination.id === "projects" ? "show me my projects" : `open ${destination.label}`);
+      const started = Date.now();
+      await composer.press("Enter");
+      const expected = assistantDestinationPath(destination, projectId)!;
+      await expect.poll(() => `${new URL(page.url()).pathname}${new URL(page.url()).search}`).toBe(expected);
+      await expect(page.locator("#main-content")).toBeVisible();
+      await expect(page.locator(".route-loading")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+      if (destination.id === "projects") await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
+      timings.push({destination: destination.id, elapsedMs: Date.now() - started});
+    }
+    await page.reload();
+    await expect(page.locator("#main-content")).toBeVisible();
+    await info.attach("assistant-navigation-catalog", {
+      body: Buffer.from(JSON.stringify({origin: core.origin, build: "ui/dist production", browser: info.project.name, viewport: page.viewportSize(), timings}, null, 2)),
+      contentType: "application/json",
+    });
+    await info.attach("assistant-navigation-final-screen", { body: await page.screenshot(), contentType: "image/png" });
   }, [
     { name: "API context", dispose: () => api.dispose() },
     { name: "Core fixture", dispose: () => stopRealCore(core) },
