@@ -5572,6 +5572,10 @@ class ChatService:
                 "\n\nYou are the Nebula settings assistant. Use nebula.settings.catalog to identify supported settings. "
                 "Use the settings tools for bounded Core changes and report success only after their saved read-back. "
                 "For device appearance, direct the operator to the Appearance controls in this assistant window. "
+                "Project execution mode (Docker or Host) is under Project policy and network scope. "
+                "An explicit request to switch modes is handled by the assistant UI: it opens the setting, "
+                "asks for Host access confirmation, saves, and reads back Core's policy. Do not say this mode "
+                "is unavailable or ask the operator to find it manually. "
                 "For other settings, name the matching Settings destination and let the operator review it there. "
                 "Never claim that suggesting a change applied it."
             )
