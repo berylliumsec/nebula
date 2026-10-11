@@ -189,6 +189,7 @@ export function AppShell() {
           <ChromeProvider value={chrome}>
             <GuideProvider>
             <BrowserAutomationWorker />
+            <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
               <SideNav collapsed={sidebarCollapsed} open={projectPickerOpen} setOpen={setProjectPickerOpen} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
@@ -224,7 +225,6 @@ export function AppShell() {
                 <Outlet />
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />
-              <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting} />
               <CommandPalette
                 api={api}
                 activeProjectId={engagement?.id}
@@ -237,6 +237,7 @@ export function AppShell() {
               />
               {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} statusMode={settingLens.statusMode} onClose={() => setSettingLens(undefined)} />}
             </div>
+            </NebulaControlAssistant>
             </GuideProvider>
           </ChromeProvider>
         </WorkbenchDraftProvider>

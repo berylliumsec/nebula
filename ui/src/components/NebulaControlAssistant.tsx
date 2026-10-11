@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, GripHorizontal, Minimize2, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,6 +13,7 @@ import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import type { ChatMessage } from "../api/types";
 import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
+import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import styles from "./NebulaControlAssistant.module.css";
 
 const THEMES: { value: ThemePreference; label: string }[] = [
@@ -29,7 +30,8 @@ function readActionOutcomes(key: string): Record<string, string> {
   } catch { return {}; }
 }
 
-export function NebulaControlAssistant({ onOpenSetting, onNavigate, onCloseSetting, onSavedSetting }: {
+export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, onCloseSetting, onSavedSetting }: {
+  children?: ReactNode;
   onOpenSetting: (entry: SettingCatalogEntry) => void;
   onNavigate: (path: string) => void;
   onCloseSetting?: () => void;
@@ -416,7 +418,7 @@ export function NebulaControlAssistant({ onOpenSetting, onNavigate, onCloseSetti
   const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
     [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up"]);
-  const panelContent = open ? <div ref={panel} className={styles.panel} role="dialog" aria-label="Nebula assistant" style={{ left: position.x, top: position.y }} hidden={hidden}>
+  const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Nebula assistant" style={{ left: position.x, top: position.y }} hidden={hidden}>
     <div className={styles.header}>
       <button className="icon-button subtle" type="button" aria-label="Move Nebula assistant" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
       <strong>Nebula assistant</strong><small>{engagement?.name ?? "Choose a project"}</small>
@@ -448,5 +450,9 @@ export function NebulaControlAssistant({ onOpenSetting, onNavigate, onCloseSetti
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Nebula a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about Nebula or open a page or setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
   </div> : null;
 
-  return <>{!open || hidden ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}{panelContent && createPortal(panelContent, document.body)}</>;
+  return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, toggle: () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } } }}>
+    {children}
+    {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}
+    {panelContent && createPortal(panelContent, document.body)}
+  </NebulaAssistantLauncherContext.Provider>;
 }

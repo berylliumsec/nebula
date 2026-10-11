@@ -7,6 +7,7 @@ The operator may open Settings from a catalog result without losing the draft.
 | Journey | Observable invariant | Authority | Test layer |
 | --- | --- | --- | --- |
 | Discover and open | Icon is reachable on every route and at phone widths | Shell React state | Component and browser |
+| Launcher placement | The assistant icon lives in the shared top bar, the phone Workbench navigation, or the phone focus toolbar; it never overlays the Zero dock or page content | Shell chrome and one persistent assistant conversation | Desktop and mobile browser geometry |
 | Select runtime | Healthy configured provider or harness is chosen and named | Core profiles, shell selection | Component and real Core |
 | Ask and stream | One durable control conversation receives ordered output | Core transcript and provider or harness turn | Real Core |
 | Change setting | Exact target and value are validated; saved state is read back | Browser preference or Core entity | Browser and real Core |

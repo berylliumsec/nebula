@@ -6,6 +6,7 @@ import type { ChatStreamEvent } from "../api/types";
 import { ThemeProvider } from "../state/ThemeContext";
 import { DialogProvider } from "./DialogSystem";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
+import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: vi.fn(),
@@ -15,6 +16,21 @@ describe("NebulaControlAssistant", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.mocked(useWorkspace).mockReturnValue({ api: undefined, engagement: undefined, providers: [], harnesses: [] } as unknown as ReturnType<typeof useWorkspace>);
+  });
+
+  it("keeps one conversation behind the shell launcher without a floating overlay", async () => {
+    const user = userEvent.setup();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+      <header><NebulaAssistantLauncherButton /></header>
+    </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+    const launcher = screen.getByRole("button", { name: "Open Nebula assistant" });
+    expect(launcher.closest("header")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Open Nebula assistant" })).toHaveLength(1);
+    await user.click(launcher);
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "Help me find a setting");
+    await user.click(screen.getByRole("button", { name: "Hide Nebula assistant" }));
+    await user.click(screen.getByRole("button", { name: "Show Nebula assistant" }));
+    expect(screen.getByRole("textbox", { name: "Ask Nebula a question" })).toHaveValue("Help me find a setting");
   });
 
   it("opens from the global icon, applies a device theme, and keeps the setting catalog reachable", async () => {
