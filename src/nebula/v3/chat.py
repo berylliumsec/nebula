@@ -5639,14 +5639,16 @@ class ChatService:
                 "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
                 "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
                 "host files from this assistant; after fixing access, the operator can ask the general "
-                "assistant in a new session to make the edit. Use nebula.settings.catalog for destinations "
+                "assistant in a new session to make the edit. Use nebula.settings.catalog for settings and app destinations "
                 "and bounded changes. Report success only after a saved read-back. For device appearance, "
                 "the assistant UI handles common explicit theme commands immediately. For any theme change "
                 "request that reaches you, call nebula.settings.set_device_theme with one advertised value; "
                 "'Zero theme' means zero-dark. For a Docker or Host mode change, call "
                 "nebula.settings.set_project_mode with the requested mode. For a request to show a setting, call nebula.settings.open "
                 "with its catalog id. If the target is unclear, list exact actions with nebula.settings.catalog "
-                "first. These browser-action tools only request an action; the active browser applies and "
+                "first. For a request to open any Nebula page, including All projects and Workbench views, "
+                "call nebula.navigate.open with its destination_id from the catalog. "
+                "These browser-action tools only request an action; the active browser applies and "
                 "confirms it. Do not claim a browser action was saved from a tool result alone. Link a relevant "
                 "setting as /settings#target only when explaining where it is. The assistant window "
                 "handles explicit Docker/Host mode changes with confirmation and Core read-back. If facts "
@@ -12383,7 +12385,7 @@ class ChatService:
             if settings_only:
                 components = restrict_tool_components(
                     components,
-                    [name for name in components.specs if name.startswith(("nebula.help.", "nebula.settings."))],
+                    [name for name in components.specs if name.startswith(("nebula.help.", "nebula.settings.", "nebula.navigate."))],
                 )
             allowed_names = turn.request_snapshot.get("allowed_tool_names")
             if isinstance(allowed_names, list):
