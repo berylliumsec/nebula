@@ -98,8 +98,8 @@ export function projectModeChange(prompt: string): { mode: ProjectMode; from?: P
   return { mode: target, ...(from ? { from } : {}) };
 }
 
-/** Device appearance is browser-owned, so an explicit change is handled in this window. */
-export function themeChange(prompt: string): ThemePreference | undefined {
+/** Keep explicit device-theme commands in the browser, including unknown themes. */
+function themeCommandTarget(prompt: string): string | undefined {
   const text = normalized(prompt);
   const command = text.match(/^(?:(?:please|can you|could you|would you)\s+)?(?:change|switch|set|use|make)\s+(.+)$/);
   if (!command) return undefined;
@@ -107,8 +107,21 @@ export function themeChange(prompt: string): ThemePreference | undefined {
   const target = request.match(/\b(?:to|into|as)\s+(.+)$/)?.[1]
     ?? request.replace(/^(?:(?:the|my|this device)\s+)?(?:theme|appearance)\s+/, "")
       .replace(/^(?:it\s+)?(?:to|into|as)\s+/, "");
-  if (!/\b(?:theme|appearance|zero|studio|glacier|amber)\b/.test(text)) return undefined;
-  const value = target.replace(/\s+theme$/, "");
+  const value = target.replace(/^(?:(?:the|my|this device)\s+)+/, "").replace(/\s+(?:theme|appearance)$/, "");
+  if (!/\b(?:theme|appearance)\b/.test(text)
+    && value !== "zero"
+    && !THEME_OPTIONS.some((theme) => normalized(theme.label) === value)) return undefined;
+  return value;
+}
+
+export function isThemeChangeCommand(prompt: string): boolean {
+  return themeCommandTarget(prompt) !== undefined;
+}
+
+/** Device appearance is browser-owned, so a known theme is applied in this window. */
+export function themeChange(prompt: string): ThemePreference | undefined {
+  const value = themeCommandTarget(prompt);
+  if (!value) return undefined;
   if (value === "zero") return "zero-dark";
   return THEME_OPTIONS.find((theme) => normalized(theme.label) === value)?.value;
 }

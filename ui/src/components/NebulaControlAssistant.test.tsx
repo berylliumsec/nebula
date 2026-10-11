@@ -48,7 +48,7 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("button", { name: "Show Nebula assistant" })).toBeInTheDocument();
   });
 
-  it("changes to Zero Dark from a text request without a project or model", async () => {
+  it("changes device themes from natural text requests without a project or model", async () => {
     const user = userEvent.setup();
     const onOpenSetting = vi.fn();
     const onCloseSetting = vi.fn();
@@ -62,6 +62,13 @@ describe("NebulaControlAssistant", () => {
     expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");
     await waitFor(() => expect(onCloseSetting).toHaveBeenCalled(), { timeout: 4000 });
     expect(screen.getByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "change it to the light theme{enter}");
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    expect(localStorage.getItem("nebula.theme")).toBe("light");
+    await waitFor(() => expect(screen.getByText("Changed this device to Light. The choice is saved in this browser.")).toBeInTheDocument(), { timeout: 4000 });
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "change it to the rainbow theme{enter}");
+    expect(screen.getByText("I couldn't identify that theme. Choose one in Settings → Appearance.")).toBeInTheDocument();
+    expect(document.documentElement.dataset.theme).toBe("light");
   });
 
   it("applies a model-selected theme action on this browser and confirms it after readback", async () => {

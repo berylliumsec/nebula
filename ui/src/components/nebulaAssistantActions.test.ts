@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatStreamEvent, HarnessProfile } from "../api/types";
-import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
+import { assistantTurnOptions, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
   it("maps explicit device-theme commands to bounded values without taking over questions", () => {
@@ -12,7 +12,15 @@ describe("settings assistant actions", () => {
     expect(themeChange("set theme to Glacier")).toBe("glacier");
     expect(themeChange("switch to Amber")).toBe("amber");
     expect(themeChange("change to Zero Classic")).toBe("zero-classic");
+    expect(themeChange("change it to the light theme")).toBe("light");
+    expect(themeChange("could you switch this device to the Light theme")).toBe("light");
+    expect(themeChange("change it to light")).toBe("light");
+    expect(isThemeChangeCommand("change it to the rainbow theme")).toBe(true);
+    expect(themeChange("change it to the rainbow theme")).toBeUndefined();
+    expect(isThemeChangeCommand("how do I change to zero theme?")).toBe(false);
     expect(themeChange("how do I change to zero theme?")).toBeUndefined();
+    expect(isThemeChangeCommand("could you make the screen look like Nebula Zero?")).toBe(false);
+    expect(themeChange("could you make the screen look like Nebula Zero?")).toBeUndefined();
     expect(themeChange("open the theme setting")).toBeUndefined();
     expect(themeChange("change project execution mode to host")).toBeUndefined();
   });

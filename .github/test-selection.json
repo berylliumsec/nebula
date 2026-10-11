@@ -1,18 +1,19 @@
 {
-  "change_digest": "08578c39a09740e69ebfa053940c820d8d5789c9066c6dd8a4f2bd18b6af7d73",
-  "reviewed_by": "Codex focused Quiet Lens UI review",
-  "reason": "The rebased branch makes Quiet Lens the first-run default, retains saved appearance choices, and adds a real-interface README animation of an empty chat plus a short Assistant launcher guide. ThemeContext component tests cover default selection, blocked storage, migration, and saved choices. Two focused App component cases for the new default and existing dark-sidebar preference passed locally; the broad App file has eight unrelated failures on current origin/main, so the selected CI frontend file is limited to ThemeContext. The dedicated Quiet Lens interface journey covers navigation contours, pointer leave, keyboard focus, composer, Session rail, focus controls, draft retention, and touch presentation in desktop/compact Chromium and Chromium/WebKit phone profiles at 320, 390, and 430 px. The first-run default case is added on desktop and compact. The top lens pointer-exit fix and focus preservation are covered by the selected interface journey. The production UI was built and reviewed against a disposable Core on a LAN origin; the README animation shows the blank chat and each lens revealing on hover.",
-  "exclusions": "No backend, API, or native implementation changes, so Python and native tests are unrelated. No full frontend or Playwright suite, unrelated catalog journeys, provider turns, or physical-device run is selected. The full App.test.tsx file is excluded from CI selection because eight cases fail unchanged on an isolated origin/main baseline; the two cases relevant to this default change passed by exact name locally and the browser journey covers the integration. The README animation and copy received visual/manual review. The Session rail exists only at wide desktop width, and the focus toolbar hiding rule only applies to fine-pointer devices; touch controls remain visible.",
+  "change_digest": "1adedd988b77affcaa61ab934e38984b589102bfab8dc2136ebfa9e00101321d",
+  "reviewed_by": "Codex focused Nebula assistant theme-command review",
+  "reason": "The live control-assistant turn for 'change it to the light theme' saved a model claim of pending browser confirmation with no settings-tool call. This change recognizes that explicit phrase locally, applies the device theme through the visible Appearance setting, and confirms only after browser theme and storage readback. Unknown explicit theme commands now stop locally with a clear path to Appearance instead of inviting an unverified model claim. The two assistant component files contain 23 collected cases for command parsing, local application, persistence, and scoped tool receipts. The selected browser journey exercises the exact phrase, visible Appearance transition, confirmation, and reload on desktop Chromium and 390 px mobile Chromium/WebKit in a production preview served from the LAN origin.",
+  "exclusions": "No backend, API, schema, or native implementation changed, so Python and native tests are unrelated. No full frontend or Playwright suite, unrelated assistant journeys, live provider turn, or physical-device run is selected. The theme is owned by this browser; the selected production browser journey uses mocked API responses, while the previously observed Core turn establishes the missing tool receipt in the reported incident.",
   "expected_tests": {
     "python": 0,
-    "frontend": 4,
+    "frontend": 23,
     "native": 0,
-    "playwright": 10
+    "playwright": 3
   },
   "python": [],
   "frontend": [
-    "ui/src/state/ThemeContext.test.tsx"
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/components/NebulaControlAssistant.test.tsx"
   ],
   "native": [],
-  "playwright": ["area:quiet-lens"]
+  "playwright": ["area:nebula-theme-command"]
 }

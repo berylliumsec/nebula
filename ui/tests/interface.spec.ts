@@ -2144,6 +2144,16 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("change it to the light theme");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  const lightLens = page.getByRole("dialog", { name: "Appearance and theme" });
+  await expect(lightLens).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(lightLens).toHaveCount(0, { timeout: 4000 });
+  await expect(reopenedAssistant).toContainText("Changed this device to Light. The choice is saved in this browser.");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
   await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("open MCP servers");
   await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
   await expect(page.getByRole("dialog", { name: "MCP servers" })).toBeVisible();
