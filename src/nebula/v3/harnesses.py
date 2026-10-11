@@ -10416,10 +10416,15 @@ class HarnessRuntimeService:
             "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
             "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
             "host files from this assistant; after fixing access, the operator can ask the general "
-            "assistant in a new session to make the edit. Use nebula.settings.catalog for destinations "
-            "and bounded changes. Call only nebula.help and nebula.settings tools. Confirm a change "
-            "only after a saved read-back. Link a relevant setting as /settings#target so its controls "
-            "open in the assistant UI. The assistant window handles explicit Docker/Host mode changes "
+            "assistant in a new session to make the edit. Call only nebula.help and nebula.settings "
+            "tools. For a theme change, call nebula.settings.set_device_theme; 'Zero theme' means zero-dark. "
+            "For a Docker or Host mode change, call nebula.settings.set_project_mode. "
+            "For a request to show a setting, call nebula.settings.open with its catalog id. If unsure, "
+            "call nebula.settings.catalog to list exact actions. Browser-action tools only request an "
+            "action; the active browser applies and confirms it. Do not claim that a requested browser "
+            "action was saved from the tool result alone. Confirm Core changes only after a saved "
+            "read-back. Link a relevant setting as /settings#target only when explaining where it is. "
+            "The assistant window handles explicit Docker/Host mode changes "
             "with confirmation and Core read-back. If facts are unavailable, say what needs checking."
             if control_assistant else
             "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
@@ -13160,7 +13165,7 @@ class HarnessRuntimeService:
         *,
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
-        from .settings_assistant_tools import CATALOG_SCHEMA, DEFAULT_MODEL_SCHEMA, POST_TOOL_SCHEMA, SEARCH_SCHEMA
+        from .settings_assistant_tools import CATALOG_SCHEMA, DEFAULT_MODEL_SCHEMA, OPEN_SCHEMA, POST_TOOL_SCHEMA, PROJECT_MODE_SCHEMA, SEARCH_SCHEMA, THEME_SCHEMA
 
         current = self.store.get(HarnessSession, session.id)
         settings_only = current.metadata.get("control_assistant") is True
@@ -13169,6 +13174,9 @@ class HarnessRuntimeService:
             ("nebula.help.search", "Search the bundled source-linked Nebula product knowledge index for usage and troubleshooting answers.", SEARCH_SCHEMA, True),
             ("nebula.help.project_context", "Read the selected project's Docker or Host mode and linked workspace before troubleshooting host-path or isolation problems.", CATALOG_SCHEMA, True),
             ("nebula.settings.catalog", "List Nebula setting destinations and bounded direct changes.", CATALOG_SCHEMA, True),
+            ("nebula.settings.open", "Open one listed Nebula setting on the requesting browser. Call with its setting_id; use the catalog first if unsure. Returns a pending browser action.", OPEN_SCHEMA, False),
+            ("nebula.settings.set_device_theme", "Request a listed theme on the requesting browser. 'Zero theme' means zero-dark. The browser applies and confirms this pending action.", THEME_SCHEMA, False),
+            ("nebula.settings.set_project_mode", "Request Docker or Host mode for the selected project's future sessions. The browser opens Project Policy, confirms Host access if needed, saves and reads back. Returns a pending browser action.", PROJECT_MODE_SCHEMA, False),
             ("nebula.settings.set_post_tool", "Change one post-tool note or next-step preference for this project's configured analysis runtime and read it back.", POST_TOOL_SCHEMA, False),
             ("nebula.settings.models", "List enabled provider and harness profiles and their allowed or advertised models.", CATALOG_SCHEMA, True),
             ("nebula.settings.set_default_model", "Set a listed provider or harness default model for future chats and read it back.", DEFAULT_MODEL_SCHEMA, False),
@@ -13633,8 +13641,8 @@ class HarnessRuntimeService:
         settings_only = self.store.get(HarnessSession, session.id).metadata.get("control_assistant") is True
         if (name.startswith(("nebula.settings.", "nebula.help."))) != settings_only:
             raise HarnessConfigurationError("This tool is not available to this assistant.")
-        if name in {"nebula.help.search", "nebula.help.project_context", "nebula.settings.catalog", "nebula.settings.set_post_tool", "nebula.settings.models", "nebula.settings.set_default_model"}:
-            from .settings_assistant_tools import catalog, model_choices, project_context, set_default_model, set_post_tool_preference
+        if name in {"nebula.help.search", "nebula.help.project_context", "nebula.settings.catalog", "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool", "nebula.settings.models", "nebula.settings.set_default_model"}:
+            from .settings_assistant_tools import catalog, model_choices, open_setting, project_context, request_device_theme, request_project_execution_mode, set_default_model, set_post_tool_preference
 
             if name == "nebula.help.search":
                 from .product_knowledge import search_product_knowledge
@@ -13647,6 +13655,12 @@ class HarnessRuntimeService:
                 value = project_context(self.store, turn.engagement_id)
             elif name == "nebula.settings.catalog":
                 value = catalog()
+            elif name == "nebula.settings.open":
+                value = open_setting(arguments)
+            elif name == "nebula.settings.set_device_theme":
+                value = request_device_theme(arguments)
+            elif name == "nebula.settings.set_project_mode":
+                value = request_project_execution_mode(arguments)
             elif name == "nebula.settings.models":
                 value = model_choices(self.store)
             elif name == "nebula.settings.set_default_model":

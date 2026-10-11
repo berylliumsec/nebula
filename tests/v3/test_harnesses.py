@@ -2521,7 +2521,7 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
     assert turn.metadata["knowledge_access"] is False
     assert {item["name"] for item in runtime._gateway_catalog(session, turn=turn)["tools"]} == {
         "nebula.help.search", "nebula.help.project_context",
-        "nebula.settings.catalog", "nebula.settings.set_post_tool",
+        "nebula.settings.catalog", "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
     session = store.update(
@@ -2561,7 +2561,7 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
     assert host_session.metadata["native_capabilities"] == HarnessNativeCapabilities().model_dump(mode="json")
     assert {item["name"] for item in runtime._gateway_catalog(host_session, turn=turn)["tools"]} == {
         "nebula.help.search", "nebula.help.project_context",
-        "nebula.settings.catalog", "nebula.settings.set_post_tool",
+        "nebula.settings.catalog", "nebula.settings.open", "nebula.settings.set_device_theme", "nebula.settings.set_project_mode", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
     with pytest.raises(Exception, match="settings assistant"):
