@@ -1,13 +1,13 @@
 # Quiet Lens theme study
 
 Quiet Lens is the first-run default. A saved appearance choice on the device
-continues to take precedence. The README hero image is a production UI capture
-at a LAN origin with illustrative conversation text; its controls are in their
-resting state.
+continues to take precedence. The README animation shows an empty chat in the
+production UI at a LAN origin, starting with the controls at rest and revealing
+each surface on hover.
 
 Status: proposed default theme in the real Nebula UI, submitted for design and
 code review. The earlier Figma frames remain an editable record of the concept;
-the live Workbench and README capture show the current interaction.
+the live Workbench and README animation show the current interaction.
 
 [Open the Figma file](https://www.figma.com/design/S5skJUufDSwOKyhSWw0C9u).
 

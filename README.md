@@ -3,7 +3,7 @@
   <p>Cybersecurity harness built around the operator</p>
 </div>
 
-![Nebula Workbench Assistant in the default Quiet Lens theme, with its navigation and composer controls at rest](docs/images/quiet-lens-assistant.png)
+![Quiet Lens in an empty Nebula chat, revealing the separate navigation, Session rail, composer, and top menu on hover](docs/images/quiet-lens-blank-tour.gif)
 
 ## Acknowledgement
 
@@ -18,8 +18,6 @@ First, I would like to thank Almighty God, who is the source of all knowledge. W
 Find the bot icon in Nebula's upper-right corner. It helps you find and open settings or pages; with a connected model or harness, you can ask questions about Nebula and troubleshoot setup or workflow issues.
 
 ## Work
-
-Set project scope, tool access, approvals, execution mode, and mission budgets. Monitor, steer, or stop supported runs. The explicit **Allow all** setting bypasses Nebula's managed-tool checks.
 
 Use Codex or Grok as harnesses, or connect Claude, OpenRouter, Ollama, or vLLM. Docker or Podman powers Kali and container-mode automation; Host mode uses the host's filesystem and network after explicit acknowledgement. Optional OpenVPN routes container traffic, while [Mercury](https://github.com/berylliumsec/mercury) can add independent controls when enrolled.
 

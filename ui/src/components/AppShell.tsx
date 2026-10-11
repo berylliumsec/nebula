@@ -120,6 +120,10 @@ export function AppShell() {
       setQuietPointerActive(true);
       if (quietPointerTimer.current) clearTimeout(quietPointerTimer.current);
       quietPointerTimer.current = setTimeout(() => setQuietPointerActive(false), 2600);
+      if (event.target instanceof Element && !event.target.closest(".top-bar")) {
+        const topBar = document.querySelector(".top-bar");
+        if (!topBar?.contains(document.activeElement)) setQuietTopOpen(false);
+      }
     };
     window.addEventListener("pointermove", onPointerMove, { passive: true });
     return () => {

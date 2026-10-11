@@ -2394,6 +2394,14 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     await terminalTab.hover();
     await expect(top).toHaveAttribute("data-lens-open", "true");
     await expect(side.locator(".nav-list")).toBeHidden();
+    await page.mouse.move(360, 310);
+    await expect(top).toHaveAttribute("data-lens-open", "false");
+    await topHandle.focus();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await page.mouse.move(370, 320);
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await topHandle.evaluate(element => (element as HTMLButtonElement).blur());
+    await expect(top).toHaveAttribute("data-lens-open", "false");
     await sideHandle.hover();
   } else {
     await topHandle.tap();
