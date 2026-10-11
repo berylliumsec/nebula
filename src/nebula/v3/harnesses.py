@@ -9811,8 +9811,7 @@ class HarnessRuntimeService:
                 source_thread_id=source_session.external_session_id,
                 last_turn_id=source_turn.external_turn_id,
             )
-        except (HarnessError, OSError, TimeoutError):
-            # A missing/older app-server still has Nebula's bounded handoff.
+        except (HarnessError, OSError, TimeoutError):  # diagnostic-expected: native fork failure uses the persisted bounded handoff
             return fork
         with self.store.transaction() as transaction:
             transaction.update(
