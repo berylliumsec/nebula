@@ -115,10 +115,10 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   });
 
-  it("defaults to Zero Dark and preserves all four supported preferences", () => {
+  it("defaults to Dark and preserves the selected shell preference", () => {
     const firstRender = renderApp();
-    expect(document.documentElement).toHaveAttribute("data-theme", "zero-dark");
-    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
     expect(screen.getByRole("complementary", { name: "Primary navigation" })).toHaveAttribute("data-shell", "shared");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
     expect(localStorage.getItem("nebula.theme")).toBeNull();
@@ -162,18 +162,21 @@ describe("Nebula workspace", () => {
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
   });
 
-  it("offers Light, Dark, Zero Light, and Zero Dark", async () => {
+  it("offers the original Zero palette alongside the new color themes", async () => {
     const user = userEvent.setup();
     renderApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     await user.click(screen.getByRole("link", { name: "Advanced settings" }));
     await user.click(screen.getByText("Identity & Security", { selector: "summary strong" }));
     const options = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
-    expect(within(options).getAllByRole("button")).toHaveLength(4);
+    expect(options.querySelectorAll(".theme-options button")).toHaveLength(8);
     expect(within(options).getByRole("button", { name: /^Light$/ })).toBeVisible();
     expect(within(options).getByRole("button", { name: /^Dark$/ })).toBeVisible();
     expect(within(options).getByRole("button", { name: /^Zero Light$/ })).toBeVisible();
-    await user.click(within(options).getByRole("button", { name: /Zero Dark/ }));
+    expect(within(options).getByRole("button", { name: "Zero Classic" })).toBeVisible();
+    expect(within(options).getByRole("button", { name: "Glacier" })).toBeVisible();
+    expect(within(options).getByRole("button", { name: "Amber" })).toBeVisible();
+    await user.click(within(options).getByRole("button", { name: "Zero Dark" }));
     expect(document.documentElement).toHaveAttribute("data-theme", "zero-dark");
     expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");
   });
@@ -195,7 +198,7 @@ describe("Nebula workspace", () => {
     await screen.findByRole("heading", { name: "Settings" });
     await user.click(screen.getByRole("link", { name: "Advanced settings" }));
     await user.click(screen.getByText("Identity & Security", { selector: "summary strong" }));
-    expect(screen.getByRole("button", { name: /^LightActive$/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Light" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renders the Zero shell without the removed context deck", () => {

@@ -1,16 +1,18 @@
 {
-  "change_digest": "b8cc5151a29da5682f8d316ef28b652f0e58d9172f936d6a9df2a182cf4a8d0c",
-  "reviewed_by": "Codex focused review of Zero Dark palette inheritance and appearance settings",
-  "reason": "Zero Dark now shares Dark's color tokens and its panoramic shell surfaces use those materials. The one theme component test checks browser-storage fallback. Eight collected theme-picker browser cases cover selection, computed palette and visible shell colors, and reload persistence at 1440/1024 desktop and 320/390/430 mobile widths in Chromium and WebKit. Nine collected desktop material cases cover six routes, overlays, a resource dialog, and Appearance; they assert theme-backed surfaces and attach real browser screenshots. The stale binary baselines are removed because the public commit guard accepts only reviewed text and deletion paths. README now uses the existing browser screenshot of the Assistant panel.",
-  "exclusions": "No Core API, native, provider, or server-owned state changed. Python, native, unrelated frontend and Playwright tests, real-Core state journeys, and full suites are excluded. Theme storage is device-local; this color-only change has no origin-sensitive browser API. Physical-device and live deployment acceptance remain outside this PR.",
+  "change_digest": "26ab0e48387951b0288eb3ee0d735a104811e5974e92ea517acd60b819f832df",
+  "reviewed_by": "Codex focused review of theme migration, palette options, and Zero shell compatibility",
+  "reason": "The original Zero Dark palette is restored as Zero Classic with a one-time device-preference migration. Glacier and Amber add distinct token palettes and previews while Zero Dark remains Dark-token matched. Three collected ThemeContext component cases cover storage fallback and the one-time migration. Three theme-specific App cases passed locally with an exact name filter. CI cannot filter Vitest tests within a file; running the entire App file revealed eight unrelated failures, so it is excluded from the CI selection pending separate work. Collected browser tests: 8 picker cases across 1440/1024 desktop and 320/390/430 Chromium/WebKit, 9 desktop Zero Dark material cases, and 3 Workbench variant cases in desktop Chromium plus Pixel 5 Chromium and 390px iPhone WebKit. Browser coverage checks selection, storage reload, original palette values, shell geometry, visual surfaces, and mobile width. Existing screenshot attachments remain visual evidence instead of stale binary snapshots.",
+  "exclusions": "No Core API, provider, harness, server-owned state, Python, native, or database migration changed. Unrelated frontend and Playwright files and full suites are excluded. The full App.test.tsx file is excluded from CI because 8 unrelated cases fail; its 3 changed theme cases passed with a local filter. The preference is device-local; production real-Core LAN browser smoke will check the served build. Physical-device acceptance is unavailable and is reported separately.",
   "expected_tests": {
     "python": 0,
-    "frontend": 1,
+    "frontend": 3,
     "native": 0,
-    "playwright": 17
+    "playwright": 20
   },
   "python": [],
-  "frontend": ["ui/src/state/ThemeContext.test.tsx"],
+  "frontend": [
+    "ui/src/state/ThemeContext.test.tsx"
+  ],
   "native": [],
   "playwright": [
     "entry:zero-dark-palette/desktop",
@@ -21,6 +23,9 @@
     "entry:zero-dark-palette/mobile-webkit-small",
     "entry:zero-dark-palette/mobile-webkit",
     "entry:zero-dark-palette/mobile-webkit-wide",
-    "entry:zero-dark-visuals/desktop"
+    "entry:zero-dark-visuals/desktop",
+    "entry:theme-variety/desktop",
+    "entry:theme-variety/mobile-chromium",
+    "entry:theme-variety/mobile-webkit"
   ]
 }

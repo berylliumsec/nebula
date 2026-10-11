@@ -45,7 +45,7 @@ export function AppShell() {
     setupStatus,
     workspaceState,
   } = useWorkspace();
-  const zero = resolvedTheme === "zero-dark" || resolvedTheme === "zero-light";
+  const zero = resolvedTheme.startsWith("zero-");
   // Phones hide the shell top bar on the Workbench, which draws its own header.
   // It stays for "Choose a project" and for a failed Core, where it carries recovery.
   const workbenchRoute = (location.pathname === "/" || /^\/projects\/[^/]+\/workbench\/?$/.test(location.pathname))
