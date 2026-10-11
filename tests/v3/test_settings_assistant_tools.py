@@ -5,7 +5,9 @@ from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.domain import ChatSession, Engagement, HarnessCapabilities, HarnessKind, HarnessProfile, ProviderProfile
+from nebula.v3.chat import ChatCompletionRequest, ChatConfigurationError, ChatHistoryConflict, ChatRequestMessage, isolate_settings_assistant_request
+from nebula.v3.domain import ChatRole, ChatSession, Engagement, HarnessCapabilities, HarnessKind, HarnessProfile, ProviderProfile
+from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
 from nebula.v3.settings_assistant_tools import (
     SETTING_DESTINATIONS,
@@ -58,6 +60,42 @@ def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
         "nebula.settings.catalog", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
+
+
+def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    project = store.create(Engagement(name="Bounded project"))
+    runtime = RuntimePlatform(store=store, artifact_store=artifacts, data_root=tmp_path / "runtime")
+    common = dict(engagement_id=project.id, turn_id="turn", provider=None, model="small", allow_empty=True)
+    ordinary = runtime.chat_components(**common)
+    settings = runtime.chat_components(**common, settings_assistant=True)
+    assert not any(name.startswith("nebula.settings.") for name in ordinary.specs)
+    assert set(settings.specs) == {
+        "nebula.settings.catalog", "nebula.settings.set_post_tool",
+        "nebula.settings.models", "nebula.settings.set_default_model",
+    }
+
+
+def test_settings_session_cannot_be_reused_as_general_chat_or_attach_general_tools():
+    message = ChatRequestMessage(role=ChatRole.USER, content="Show project policy")
+    settings = ChatCompletionRequest(
+        provider_id="provider", model="small", control_assistant=True,
+        messages=[message], include_knowledge=True,
+    )
+    scoped = isolate_settings_assistant_request(settings)
+    assert scoped.include_knowledge is False
+    assert scoped.allow_mcp_catalog is False
+    with pytest.raises(ChatConfigurationError):
+        isolate_settings_assistant_request(settings.model_copy(update={"tools_enabled": True}))
+    saved = ChatSession(
+        engagement_id="project", title="Nebula assistant", provider_profile_id="provider",
+        model="small", metadata={"control_assistant": True},
+    )
+    with pytest.raises(ChatHistoryConflict):
+        isolate_settings_assistant_request(settings.model_copy(update={"control_assistant": False}), saved)
+    with pytest.raises(ChatHistoryConflict):
+        isolate_settings_assistant_request(settings, saved.model_copy(update={"metadata": {}}))
 
 
 def test_default_model_change_requires_advertised_value_and_reads_back(tmp_path):

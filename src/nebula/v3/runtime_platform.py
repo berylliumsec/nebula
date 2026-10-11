@@ -353,6 +353,7 @@ class RuntimePlatform:
         ssh_environments: tuple[SshEnvironment, ...] = (),
         include_oci: bool = False,
         allow_empty: bool = False,
+        settings_assistant: bool = False,
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
         """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
@@ -368,7 +369,9 @@ class RuntimePlatform:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
-        search_enabled = web_search_enabled(scope)
+        if settings_assistant and (mcp_profiles or ssh_environments or include_oci):
+            raise RuntimePlatformError("the settings assistant cannot attach general tools")
+        search_enabled = web_search_enabled(scope) and not settings_assistant
         if (
             not mcp_profiles
             and not ssh_environments
@@ -377,8 +380,9 @@ class RuntimePlatform:
         ):
             raise RuntimePlatformError("no tool source was selected")
         registry = ToolRegistry()
-        for plugin in settings_assistant_plugins(self.store, self.artifact_store, engagement_id):
-            registry.register(plugin)
+        if settings_assistant:
+            for plugin in settings_assistant_plugins(self.store, self.artifact_store, engagement_id):
+                registry.register(plugin)
         if search_enabled:
             registry.register(WebSearchTool(self.search_runtime, scope))
         if mcp_profiles:
@@ -395,10 +399,11 @@ class RuntimePlatform:
                 raise RuntimePlatformError(str(exc)) from exc
         for plugin in build_ssh_tool_plugins(ssh_environments):
             registry.register(plugin)
-        register_artifact_retrieval_tools(
-            registry,
-            output_service=ToolOutputService(self.store, self.artifact_store),
-        )
+        if not settings_assistant:
+            register_artifact_retrieval_tools(
+                registry,
+                output_service=ToolOutputService(self.store, self.artifact_store),
+            )
         broker = ToolBroker(
             registry=registry,
             policy_engine=PolicyEngine(),

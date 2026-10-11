@@ -162,6 +162,7 @@ from .chat import (
     ChatRuntimeSwitchPreflightRequest,
     ChatRuntimeSwitchRequest,
     ChatService,
+    isolate_settings_assistant_request,
     unarchive_chat_session,
 )
 from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
@@ -9534,6 +9535,12 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
+        scoped_chat = (
+            store.get(ChatSession, request.session_id)
+            if request.session_id
+            else None
+        )
+        request = isolate_settings_assistant_request(request, scoped_chat)
         if request.session_id:
             selected_chat = store.get(ChatSession, request.session_id)
             if selected_chat.metadata.get("side_chat") is True:
@@ -9570,16 +9577,6 @@ def create_app(
                 )
             prompt = request.messages[-1].content
             runtime_context = ""
-            if request.control_assistant:
-                runtime_context += (
-                    "Nebula settings assistant: use nebula.settings.catalog before claiming a setting can change. "
-                    "Use bounded settings tools and report success only after a saved read-back. "
-                    "Device appearance is changed in the assistant window. Project execution mode "
-                    "(Docker or Host) is under Project policy and network scope; explicit mode-change "
-                    "requests are handled by the assistant UI, which opens the setting, confirms Host access, "
-                    "saves and reads back Core policy. Do not say this mode is unavailable. "
-                    "Other settings open in Settings."
-                )
             if request.context_attachments:
                 selected = [
                     {
