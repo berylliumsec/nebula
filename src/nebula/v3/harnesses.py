@@ -9908,7 +9908,7 @@ class HarnessRuntimeService:
                 allow_agent_messaging, harness_mode,
             )):
                 raise HarnessConfigurationError(
-                    "The settings assistant accepts settings tools only."
+                    "The Nebula assistant accepts Nebula help and settings tools only."
                 )
             include_knowledge = False
             allow_cloud_knowledge = False
@@ -10403,13 +10403,24 @@ class HarnessRuntimeService:
         )
         runtime_context = (runtime_context or "") + decision_instructions(operator_decisions)
         assistant_scope = (
-            "\n\nYou are the Nebula settings assistant. Help only with Nebula settings. "
-            "Use nebula.settings.catalog to find the supported destinations and direct changes. "
-            "Call only nebula.settings tools. Confirm a change only after a saved read-back. "
-            "Device appearance is controlled in the assistant window. Docker and Host execution modes "
-            "are under Project policy and network scope; the assistant window handles explicit mode "
-            "changes with confirmation and a Core read-back. Do not say those modes are unavailable. "
-            "If a change has no direct tool, name its setting so the operator can use the open controls."
+            "\n\nYou are the Nebula product assistant. Answer Nebula usage questions and troubleshoot "
+            "using the packaged product index: call nebula.help.search for product behavior, cite its "
+            "source, and distinguish documented behavior from live Core facts. For host file access, "
+            "command isolation, or execution-mode "
+            "questions, call nebula.help.project_context before answering; do not assume the project's "
+            "mode from the question. If policy_source is default, describe Docker as the effective "
+            "default, not a saved policy. A stored Docker policy may be auto-created, so never claim "
+            "the operator explicitly chose it. Docker commands can access their project workspace, including a "
+            "linked host folder, but not arbitrary host paths. Host mode grants new command sessions "
+            "the Nebula server user's filesystem access after explicit confirmation; existing sessions "
+            "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
+            "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
+            "host files from this assistant; after fixing access, the operator can ask the general "
+            "assistant in a new session to make the edit. Use nebula.settings.catalog for destinations "
+            "and bounded changes. Call only nebula.help and nebula.settings tools. Confirm a change "
+            "only after a saved read-back. Link a relevant setting as /settings#target so its controls "
+            "open in the assistant UI. The assistant window handles explicit Docker/Host mode changes "
+            "with confirmation and Core read-back. If facts are unavailable, say what needs checking."
             if control_assistant else
             "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
             "Do not claim to have changed a Nebula setting from this conversation."
@@ -13149,12 +13160,14 @@ class HarnessRuntimeService:
         *,
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
-        from .settings_assistant_tools import CATALOG_SCHEMA, DEFAULT_MODEL_SCHEMA, POST_TOOL_SCHEMA
+        from .settings_assistant_tools import CATALOG_SCHEMA, DEFAULT_MODEL_SCHEMA, POST_TOOL_SCHEMA, SEARCH_SCHEMA
 
         current = self.store.get(HarnessSession, session.id)
         settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
         for name, description, schema, read_only in ((
+            ("nebula.help.search", "Search the bundled source-linked Nebula product knowledge index for usage and troubleshooting answers.", SEARCH_SCHEMA, True),
+            ("nebula.help.project_context", "Read the selected project's Docker or Host mode and linked workspace before troubleshooting host-path or isolation problems.", CATALOG_SCHEMA, True),
             ("nebula.settings.catalog", "List Nebula setting destinations and bounded direct changes.", CATALOG_SCHEMA, True),
             ("nebula.settings.set_post_tool", "Change one post-tool note or next-step preference for this project's configured analysis runtime and read it back.", POST_TOOL_SCHEMA, False),
             ("nebula.settings.models", "List enabled provider and harness profiles and their allowed or advertised models.", CATALOG_SCHEMA, True),
@@ -13618,12 +13631,21 @@ class HarnessRuntimeService:
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
         settings_only = self.store.get(HarnessSession, session.id).metadata.get("control_assistant") is True
-        if (name.startswith("nebula.settings.")) != settings_only:
+        if (name.startswith(("nebula.settings.", "nebula.help."))) != settings_only:
             raise HarnessConfigurationError("This tool is not available to this assistant.")
-        if name in {"nebula.settings.catalog", "nebula.settings.set_post_tool", "nebula.settings.models", "nebula.settings.set_default_model"}:
-            from .settings_assistant_tools import catalog, model_choices, set_default_model, set_post_tool_preference
+        if name in {"nebula.help.search", "nebula.help.project_context", "nebula.settings.catalog", "nebula.settings.set_post_tool", "nebula.settings.models", "nebula.settings.set_default_model"}:
+            from .settings_assistant_tools import catalog, model_choices, project_context, set_default_model, set_post_tool_preference
 
-            if name == "nebula.settings.catalog":
+            if name == "nebula.help.search":
+                from .product_knowledge import search_product_knowledge
+
+                query = arguments.get("query")
+                if not isinstance(query, str) or not 3 <= len(query) <= 1000:
+                    raise HarnessConfigurationError("provide a product-help query of 3 to 1000 characters")
+                value = {"matches": search_product_knowledge(query), "source": "bundled Nebula product knowledge"}
+            elif name == "nebula.help.project_context":
+                value = project_context(self.store, turn.engagement_id)
+            elif name == "nebula.settings.catalog":
                 value = catalog()
             elif name == "nebula.settings.models":
                 value = model_choices(self.store)

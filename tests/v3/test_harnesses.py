@@ -2501,7 +2501,7 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
     )
     normal_session = store.get(HarnessSession, normal_turn.harness_session_id)
     assert not any(
-        item["name"].startswith("nebula.settings.")
+        item["name"].startswith(("nebula.settings.", "nebula.help."))
         for item in runtime._gateway_catalog(normal_session, turn=normal_turn)["tools"]
     )
     chat, chat_turn, turn = runtime.prepare_chat(
@@ -2515,10 +2515,12 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
     assert session.metadata["command_runtime_enabled"] is False
     assert session.metadata["native_capabilities"] == HarnessNativeCapabilities().model_dump(mode="json")
     assert chat_turn.tools_enabled is True
-    assert "You are the Nebula settings assistant" in turn.prompt
-    assert "Call only nebula.settings tools" in turn.prompt
+    assert "You are the Nebula product assistant" in turn.prompt
+    assert "call nebula.help.project_context before answering" in turn.prompt
+    assert "Call only nebula.help and nebula.settings tools" in turn.prompt
     assert turn.metadata["knowledge_access"] is False
     assert {item["name"] for item in runtime._gateway_catalog(session, turn=turn)["tools"]} == {
+        "nebula.help.search", "nebula.help.project_context",
         "nebula.settings.catalog", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
@@ -2558,6 +2560,7 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
     assert host_session.metadata["command_runtime_enabled"] is False
     assert host_session.metadata["native_capabilities"] == HarnessNativeCapabilities().model_dump(mode="json")
     assert {item["name"] for item in runtime._gateway_catalog(host_session, turn=turn)["tools"]} == {
+        "nebula.help.search", "nebula.help.project_context",
         "nebula.settings.catalog", "nebula.settings.set_post_tool",
         "nebula.settings.models", "nebula.settings.set_default_model",
     }
