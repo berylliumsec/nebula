@@ -2363,7 +2363,11 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
   }] }));
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
-  await page.getByText("Identity & Security", { exact: true }).click();
+  const identityGroup = page.locator("#identity-security-settings");
+  const identitySummary = identityGroup.locator("summary");
+  if (testInfo.project.name.startsWith("mobile-")) await identitySummary.tap();
+  else await identitySummary.click();
+  await expect(identityGroup).toHaveAttribute("open", "");
   await page.locator("#appearance-settings").getByRole("button", { name: "Quiet Lens" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "quiet-lens");
   await page.goto("/?view=chat");
