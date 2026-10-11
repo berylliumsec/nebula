@@ -63,9 +63,11 @@ export function AppShell() {
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
   });
   const [quietPointerActive, setQuietPointerActive] = useState(false);
+  const [quietRailActive, setQuietRailActive] = useState(false);
   const [quietSideOpen, setQuietSideOpen] = useState(false);
   const [quietTopOpen, setQuietTopOpen] = useState(false);
   const quietPointerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quietRailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quietSideRevealSuppressed = useRef(false);
   const quietTopRevealSuppressed = useRef(false);
   const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
@@ -106,8 +108,15 @@ export function AppShell() {
 
   useEffect(() => {
     if (!quietLens) return;
+    const refreshRail = () => {
+      setQuietRailActive(true);
+      if (quietRailTimer.current) clearTimeout(quietRailTimer.current);
+      quietRailTimer.current = setTimeout(() => setQuietRailActive(false), 60_000);
+    };
+    setQuietRailActive(false);
     const onPointerMove = (event: PointerEvent) => {
       if (event.pointerType === "touch") return;
+      refreshRail();
       setQuietPointerActive(true);
       if (quietPointerTimer.current) clearTimeout(quietPointerTimer.current);
       quietPointerTimer.current = setTimeout(() => setQuietPointerActive(false), 2600);
@@ -116,6 +125,7 @@ export function AppShell() {
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       if (quietPointerTimer.current) clearTimeout(quietPointerTimer.current);
+      if (quietRailTimer.current) clearTimeout(quietRailTimer.current);
     };
   }, [quietLens]);
 
@@ -253,7 +263,7 @@ export function AppShell() {
             <GuideProvider>
             <BrowserAutomationWorker />
             <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
-            <div className={`app-shell${zero ? " zero-layer-shell" : ""}${quietLens ? " quiet-lens-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed && !quietLens ? " sidebar-collapsed" : ""}`} data-quiet-pointer={quietPointerActive ? "active" : "idle"}>
+            <div className={`app-shell${zero ? " zero-layer-shell" : ""}${quietLens ? " quiet-lens-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed && !quietLens ? " sidebar-collapsed" : ""}`} data-quiet-pointer={quietPointerActive ? "active" : "idle"} data-quiet-rail={quietRailActive ? "active" : "idle"}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
               <SideNav collapsed={sidebarCollapsed && !quietLens} open={projectPickerOpen} setOpen={setProjectPickerOpen} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} lensOpen={quietLens && (quietSideOpen || projectPickerOpen)} onToggleLens={quietLens ? () => setQuietSideOpen((value) => !value) : undefined} onRevealLens={quietLens ? () => { if (!quietSideRevealSuppressed.current) setQuietSideOpen(true); } : undefined} onLeaveLens={quietLens && !projectPickerOpen ? () => { quietSideRevealSuppressed.current = false; setQuietSideOpen(false); } : undefined} />
               <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={toggleSidebar} />

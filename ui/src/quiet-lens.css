@@ -184,6 +184,23 @@
 :root[data-theme="quiet-lens"] .chat-composer .chat-composer-submit { min-width: 60px; border-radius: 50% / 68%; }
 :root[data-theme="quiet-lens"] .chat-composer footer .chat-composer-icon { border-radius: 50%; }
 
+/* The composer has a stable hover footprint; pointer movement elsewhere only
+   reveals the Session rail. Keyboard focus and actionable states stay visible. */
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail {
+    transition: opacity 180ms ease;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer:not(:hover):not(:focus-within):not([data-quiet-attention="true"]),
+  :root[data-theme="quiet-lens"] .quiet-lens-shell[data-quiet-rail="idle"] .chat-studio > .chat-studio-rail:not(:focus-within):not([data-quiet-attention="true"]) {
+    opacity: 0;
+    pointer-events: none;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) {
+    pointer-events: auto;
+  }
+}
+
 @media (max-width: 760px) {
   :root[data-theme="quiet-lens"] { --side-width: 0px; --top-height: 64px; }
   :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell,
@@ -275,5 +292,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="quiet-lens"] .quiet-lens-handle,
-  :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav { transition: none; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail { transition: none; }
 }
