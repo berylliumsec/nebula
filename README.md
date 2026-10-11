@@ -5,6 +5,14 @@
 
 Nebula is a cybersecurity harness built around the operator. Test manually in its browser and Kali terminal, or let agents code and test autonomously in Assistant or Missions. Set project scope, tools, and approvals, then preserve evidence, develop findings, and produce reports.
 
+## Start with the Nebula assistant
+
+Click the bot icon in the upper-right corner to ask how Nebula works, get help with setup, or find your way around. The dedicated Nebula assistant can open pages and settings for you, including Model providers, Terminal, and Files. Connect a model or harness for conversational answers.
+
+![Playwright walkthrough of the Nebula assistant answering a product question, opening Model providers, and navigating to Files](docs/images/nebula-assistant-getting-started.gif)
+
+[Watch the walkthrough video](docs/videos/nebula-assistant-getting-started.mp4).
+
 ## Acknowledgement
 
 First, I would like to thank Almighty God, who is the source of all knowledge. Without Him, this would not be possible.
