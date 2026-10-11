@@ -1,20 +1,26 @@
 {
-  "change_digest": "34e354cdd6b08665844b0b15dd0a16baf2ab17986750fd158e446cd3a6cd2396",
-  "reviewed_by": "Codex review of desktop release deployment status recording",
-  "reason": "The daily release driver currently records unsuccessful candidate attempts as desktop-release deployments, while successful release and updater jobs suppress deployment records. The change keeps preparation gated without creating a deployment and records a successful deployment only after the published release and updater Pages deployment succeed. The selected tests verify the gate, the existing no-deployment policy for preparation jobs, and the exact-tag publication record.",
-  "exclusions": "No Nebula product UI, browser journey, frontend unit, native code, or packaged binary changes. Playwright, frontend, native, unrelated Python tests, and full suites are excluded. Local collection and focused execution use Python 3.11.7; CI uses selected Python 3.12.",
+  "change_digest": "b8cc5151a29da5682f8d316ef28b652f0e58d9172f936d6a9df2a182cf4a8d0c",
+  "reviewed_by": "Codex focused review of Zero Dark palette inheritance and appearance settings",
+  "reason": "Zero Dark now shares Dark's color tokens and its panoramic shell surfaces use those materials. The one theme component test checks browser-storage fallback. Eight collected theme-picker browser cases cover selection, computed palette and visible shell colors, and reload persistence at 1440/1024 desktop and 320/390/430 mobile widths in Chromium and WebKit. Nine collected desktop material cases cover six routes, overlays, a resource dialog, and Appearance; they assert theme-backed surfaces and attach real browser screenshots. The stale binary baselines are removed because the public commit guard accepts only reviewed text and deletion paths. README now uses the existing browser screenshot of the Assistant panel.",
+  "exclusions": "No Core API, native, provider, or server-owned state changed. Python, native, unrelated frontend and Playwright tests, real-Core state journeys, and full suites are excluded. Theme storage is device-local; this color-only change has no origin-sensitive browser API. Physical-device and live deployment acceptance remain outside this PR.",
   "expected_tests": {
-    "python": 3,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 1,
     "native": 0,
-    "playwright": 0
+    "playwright": 17
   },
-  "python": [
-    "tests/test_daily_stable_release.py::test_workflow_checks_initiator_before_exposing_app_key",
-    "tests/v3/test_packaging.py::test_protected_release_jobs_do_not_create_deployment_records",
-    "tests/v3/test_packaging.py::test_desktop_release_record_follows_successful_updater_deployment_and_uses_tag"
-  ],
-  "frontend": [],
+  "python": [],
+  "frontend": ["ui/src/state/ThemeContext.test.tsx"],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "zero-dark-palette/desktop",
+    "zero-dark-palette/compact",
+    "zero-dark-palette/mobile-chromium-small",
+    "zero-dark-palette/mobile-chromium",
+    "zero-dark-palette/mobile-chromium-wide",
+    "zero-dark-palette/mobile-webkit-small",
+    "zero-dark-palette/mobile-webkit",
+    "zero-dark-palette/mobile-webkit-wide",
+    "zero-dark-visuals/desktop"
+  ]
 }

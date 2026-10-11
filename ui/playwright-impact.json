@@ -1689,6 +1689,19 @@
       {"area":"themes","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"theme","runtime":"mock","shard":"1/1"},
       {"area":"themes","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"theme","runtime":"mock","shard":"1/1"}
     ],
+    "zero-dark-palette": [
+      {"area":"zero-dark-palette","project":"desktop","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"},
+      {"area":"zero-dark-palette","project":"compact","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"},
+      {"area":"zero-dark-palette","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"},
+      {"area":"zero-dark-palette","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"},
+      {"area":"zero-dark-palette","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"},
+      {"area":"zero-dark-palette","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"},
+      {"area":"zero-dark-palette","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"},
+      {"area":"zero-dark-palette","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection","runtime":"mock","shard":"1/1"}
+    ],
+    "zero-dark-visuals": [
+      {"area":"zero-dark-visuals","project":"desktop","test_match":"tests/interface.spec.ts","grep":"Zero Dark preserves","runtime":"mock","shard":"1/1"}
+    ],
     "studio-dark-vision": [
       {"area":"studio-dark-vision","project":"desktop","test_match":"tests/interface.spec.ts","grep":"theme picker Studio Dark keeps|theme picker offers Studio Dark|stabilization studio conversation keeps context and thinking readable|Studio Dark is the first-run default theme","runtime":"mock","shard":"1/1"},
       {"area":"studio-dark-vision","project":"compact","test_match":"tests/interface.spec.ts","grep":"theme picker Studio Dark keeps|theme picker offers Studio Dark","runtime":"mock","shard":"1/1"},
