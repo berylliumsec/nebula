@@ -2350,6 +2350,7 @@ test("theme picker previews and persists every color palette", async ({ page }, 
 });
 
 reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline chat visible", async ({ page }, testInfo) => {
+  await page.clock.install();
   await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({ json: [{
     ...entity, id: "quiet-lens-harness", name: "Review harness", kind: "codex_app_server",
     connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
@@ -2399,8 +2400,24 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
   await page.keyboard.press("Escape");
   await expect(side.locator(".nav-list")).toBeHidden();
   await page.getByRole("button", { name: "Start new chat", exact: true }).click();
-  const composer = page.locator(".chat-composer textarea");
+  const composerFrame = page.locator(".chat-studio > .chat-panel > .chat-composer");
+  const composerInput = composerFrame.locator(".chat-composer-input");
+  const composer = composerFrame.getByRole("textbox", { name: "Message the analyst assistant" });
   await expect(composer).toBeVisible();
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await page.mouse.move(360, 310);
+    await expect(composerInput).toHaveCSS("opacity", "0");
+    await expect.poll(() => composerFrame.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0.72");
+    expect(await composerFrame.evaluate(element => Number.parseFloat(getComputedStyle(element, "::before").height))).toBeLessThanOrEqual(12);
+    await composerFrame.hover();
+    await expect(composerInput).toHaveCSS("opacity", "1");
+    await page.mouse.move(360, 310);
+    await expect(composerInput).toHaveCSS("opacity", "0");
+    await composer.focus();
+    await expect(composerInput).toHaveCSS("opacity", "1");
+  } else {
+    await expect(composerInput).toHaveCSS("opacity", "1");
+  }
   await composer.fill("First line\n\nThird line");
   await expect(composer).toHaveValue("First line\n\nThird line");
   await expect.poll(() => composer.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(2);
@@ -2412,6 +2429,60 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
   await expect(page.locator(".chat-composer-submit")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("quiet-lens-multiline-chat.png") });
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await composer.evaluate(element => (element as HTMLTextAreaElement).blur());
+    await expect(composerInput).toHaveCSS("opacity", "0");
+    await composerFrame.hover();
+    await expect(composerInput).toHaveCSS("opacity", "1");
+    await expect(composer).toHaveValue(Array.from({ length: 16 }, (_, index) => `Line ${index + 1}`).join("\n"));
+  }
+
+  if (testInfo.project.name === "desktop") {
+    const sessionId = "quiet-lens-rail-review";
+    let pendingRailAction = false;
+    await page.route(/\/api\/v1\/chat-sessions(?:\?|$)/, route => route.fulfill({ json: [{
+      ...entity, id: sessionId, engagement_id: "scratch-project", title: "Quiet Lens rail review",
+      backend: "harness", harness_profile_id: "quiet-lens-harness", harness_session_id: null,
+      model: "review-model", metadata: {},
+    }] }));
+    await page.route(/\/api\/v1\/chat\/sessions\/quiet-lens-rail-review\/(messages|pending-turn|state)(?:\?|$)/, route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages")) return route.fulfill({ json: [] });
+      if (path.endsWith("/pending-turn")) return route.fulfill({ json: null });
+      return route.fulfill({ json: {
+        schema: "nebula.session-state/v1", session_id: sessionId, revision: 1, turn_id: null,
+        harness_turn_id: null, execution: pendingRailAction ? "waiting_approval" : "idle",
+        busy: pendingRailAction, detail: pendingRailAction ? "Review the requested action." : "Ready for a message.",
+        connection: "connected", actions: [], pending: pendingRailAction
+          ? [{ id: "quiet-review-approval", turn_id: "quiet-review-turn", kind: "approval", text: "Review the requested action" }]
+          : [], decisions: [],
+      } });
+    });
+    await page.goto(`/projects/scratch-project/workbench?view=chat&session=${sessionId}`);
+    const rail = page.locator(".chat-studio > .chat-studio-rail");
+    await expect(rail).toBeVisible();
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await page.mouse.move(360, 310);
+    await expect(rail).toHaveCSS("opacity", "1");
+    await page.clock.fastForward(59_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "active");
+    await page.clock.fastForward(1_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await expect(rail).toHaveCSS("opacity", "0");
+    await page.mouse.move(370, 320);
+    await expect(rail).toHaveCSS("opacity", "1");
+    await rail.getByRole("button", { name: /Session details/ }).focus();
+    await page.clock.fastForward(60_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await expect(rail).toHaveCSS("opacity", "1");
+
+    pendingRailAction = true;
+    await page.goto(`/projects/scratch-project/workbench?view=chat&session=${sessionId}`);
+    await expect(rail).toHaveAttribute("data-quiet-attention", "true");
+    await expect(rail).toHaveCSS("opacity", "1");
+    await expect(composerFrame).toHaveAttribute("data-quiet-attention", "true");
+    await expect(composerInput).toHaveCSS("opacity", "1");
+  }
 });
 
 test("theme picker keeps Zero Classic, Glacier, and Amber Workbench colors across viewports", async ({ page }, testInfo) => {
