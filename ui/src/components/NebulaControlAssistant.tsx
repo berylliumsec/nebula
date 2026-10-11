@@ -8,7 +8,7 @@ import { logDiagnostic } from "../diagnostics";
 import { sharesToolResultsAlways, type ToolSharingRuntime } from "../api/toolSharingConsent";
 import { useConfirmation } from "./DialogSystem";
 import { useWorkspace } from "../state/WorkspaceContext";
-import { useTheme, type ThemePreference } from "../state/ThemeContext";
+import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeContext";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
@@ -16,12 +16,6 @@ import type { ChatMessage } from "../api/types";
 import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import styles from "./NebulaControlAssistant.module.css";
-
-const THEMES: { value: ThemePreference; label: string }[] = [
-  { value: "light", label: "Light" }, { value: "dark", label: "Dark" },
-  { value: "studio-dark", label: "Studio Dark" },
-  { value: "zero-light", label: "Zero Light" }, { value: "zero-dark", label: "Zero Dark" },
-];
 
 function readActionOutcomes(key: string): Record<string, string> {
   try {
@@ -165,7 +159,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   const applyDeviceTheme = async (requestedTheme: ThemePreference): Promise<string> => {
     const entry = settingCatalog.find((item) => item.id === "settings.appearance")!;
-    const label = THEMES.find((item) => item.value === requestedTheme)!.label;
+    const label = THEME_OPTIONS.find((item) => item.value === requestedTheme)!.label;
     setHidden(true);
     onOpenSetting(entry);
     try {
@@ -457,7 +451,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       </details>
       <details ref={catalogRef} className={styles.catalog}><summary>Settings I can help with</summary><input aria-label="Find a setting" placeholder="Find a setting" value={query} onChange={(event) => setQuery(event.target.value)} />
         <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setHidden(true); }}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
-        <div className={styles.themes}>{THEMES.map((theme) => <button key={theme.value} className="button quiet" type="button" aria-pressed={preference === theme.value} onClick={() => setPreference(theme.value)}>{theme.label}</button>)}</div>
+        <div className={styles.themes}>{THEME_OPTIONS.map((theme) => <button key={theme.value} className="button quiet" type="button" aria-pressed={preference === theme.value} onClick={() => setPreference(theme.value)}>{theme.label}</button>)}</div>
       </details>
       {error && <p role="alert">{error}</p>}
       {loadingHistory && <p role="status">Restoring your saved conversation…</p>}

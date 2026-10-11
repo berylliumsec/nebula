@@ -9,6 +9,9 @@ describe("settings assistant actions", () => {
     expect(themeChange("switch my appearance to Studio Dark")).toBe("studio-dark");
     expect(themeChange("use dark theme")).toBe("dark");
     expect(themeChange("set theme to light")).toBe("light");
+    expect(themeChange("set theme to Glacier")).toBe("glacier");
+    expect(themeChange("switch to Amber")).toBe("amber");
+    expect(themeChange("change to Zero Classic")).toBe("zero-classic");
     expect(themeChange("how do I change to zero theme?")).toBeUndefined();
     expect(themeChange("open the theme setting")).toBeUndefined();
     expect(themeChange("change project execution mode to host")).toBeUndefined();
@@ -20,6 +23,10 @@ describe("settings assistant actions", () => {
       receipt: { state: "pending_browser_apply", client_action: { kind: "device_theme", theme: "zero-dark" } },
     };
     expect(settingClientAction(event)).toEqual({ kind: "device_theme", theme: "zero-dark" });
+    for (const theme of ["glacier", "amber", "zero-classic"]) {
+      expect(settingClientAction({ ...event, receipt: { state: "pending_browser_apply", client_action: { kind: "device_theme", theme } } }))
+        .toEqual({ kind: "device_theme", theme });
+    }
     expect(settingClientAction({ ...event, capability: "nebula_settings_open_1234567890abcdef",
       receipt: { state: "pending_browser_apply", client_action: { kind: "open_setting", setting_id: "appearance" } } }))
       .toMatchObject({ kind: "open_setting", setting: { id: "settings.appearance" } });

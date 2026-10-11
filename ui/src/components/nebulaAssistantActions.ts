@@ -1,5 +1,5 @@
 import type { ChatStreamEvent, HarnessProfile } from "../api/types";
-import type { ThemePreference } from "../state/ThemeContext";
+import { THEME_OPTIONS, isThemePreference, type ThemePreference } from "../state/ThemeContext";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestination, type AssistantDestination } from "../assistantDestinations";
 
@@ -27,9 +27,8 @@ export function settingClientAction(event: ChatStreamEvent): SettingClientAction
     || /^nebula_settings_set_project_mode_[0-9a-f]{10,}$/.test(event.capability);
   const navigateTool = event.capability === "nebula.navigate.open"
     || /^nebula_navigate_open_[0-9a-f]{10,}$/.test(event.capability);
-  if (themeTool && value.kind === "device_theme"
-      && ["light", "dark", "studio-dark", "zero-light", "zero-dark"].includes(String(value.theme))) {
-    return { kind: "device_theme", theme: value.theme as ThemePreference };
+  if (themeTool && value.kind === "device_theme" && isThemePreference(value.theme)) {
+    return { kind: "device_theme", theme: value.theme };
   }
   if (openTool && value.kind === "open_setting" && typeof value.setting_id === "string") {
     const setting = settingCatalog.find((entry) => entry.id === `settings.${value.setting_id}`);
@@ -105,16 +104,13 @@ export function themeChange(prompt: string): ThemePreference | undefined {
   const command = text.match(/^(?:(?:please|can you|could you|would you)\s+)?(?:change|switch|set|use|make)\s+(.+)$/);
   if (!command) return undefined;
   const request = command[1];
-  const target = request.match(/\b(?:to|into|as)\s+((?:zero(?: dark| light)?|studio dark|dark|light)(?: theme)?)$/)?.[1]
+  const target = request.match(/\b(?:to|into|as)\s+(.+)$/)?.[1]
     ?? request.replace(/^(?:(?:the|my|this device)\s+)?(?:theme|appearance)\s+/, "")
       .replace(/^(?:it\s+)?(?:to|into|as)\s+/, "");
-  if (!/\b(?:theme|appearance|zero|studio)\b/.test(text)) return undefined;
+  if (!/\b(?:theme|appearance|zero|studio|glacier|amber)\b/.test(text)) return undefined;
   const value = target.replace(/\s+theme$/, "");
-  const themes: Record<string, ThemePreference> = {
-    light: "light", dark: "dark", "studio dark": "studio-dark",
-    zero: "zero-dark", "zero light": "zero-light", "zero dark": "zero-dark",
-  };
-  return themes[value];
+  if (value === "zero") return "zero-dark";
+  return THEME_OPTIONS.find((theme) => normalized(theme.label) === value)?.value;
 }
 
 /** Route an explicit navigation request through the same Settings lens as search. */

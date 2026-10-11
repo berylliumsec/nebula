@@ -48,7 +48,7 @@ it opens the same Settings lens as a catalog result, even without a configured
 model. Ambiguous or conversational requests continue to the selected runtime.
 An explicit device-theme command follows that same local path, including when
 no project or model is selected. The assistant shows the Appearance lens, applies
-one of its five advertised values, checks the active theme, and reports whether
+an advertised theme, checks the active theme, and reports whether
 browser storage retained it. A question about how themes work remains a model
 question. The legacy “Zero theme” name resolves to Zero Dark on this device.
 For requests that reach a model, `nebula.settings.open`,

@@ -9,7 +9,18 @@ import {
 } from "react";
 import { readStorage, writeStorage } from "./browserStorage";
 
-export type ThemePreference = "light" | "dark" | "glacier" | "amber" | "zero-light" | "zero-dark" | "zero-classic" | "studio-dark";
+export const THEME_OPTIONS = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "glacier", label: "Glacier" },
+  { value: "amber", label: "Amber" },
+  { value: "zero-light", label: "Zero Light" },
+  { value: "zero-dark", label: "Zero Dark" },
+  { value: "zero-classic", label: "Zero Classic" },
+  { value: "studio-dark", label: "Studio Dark" },
+] as const;
+
+export type ThemePreference = typeof THEME_OPTIONS[number]["value"];
 
 interface ThemeContextValue {
   preference: ThemePreference;
@@ -23,11 +34,15 @@ const STORAGE_KEY = "nebula.theme";
 const PALETTE_VERSION_KEY = "nebula.theme.paletteVersion";
 const PALETTE_VERSION = "2";
 const DEFAULT_PREFERENCE: ThemePreference = "dark";
-const THEME_ORDER: ThemePreference[] = ["light", "dark", "glacier", "amber", "zero-light", "zero-dark", "zero-classic", "studio-dark"];
+const THEME_ORDER: ThemePreference[] = THEME_OPTIONS.map(({ value }) => value);
+
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return typeof value === "string" && THEME_ORDER.some((theme) => theme === value);
+}
 
 
 function normalizePreference(value: string | null): ThemePreference | undefined {
-  if (THEME_ORDER.some((theme) => theme === value)) return value as ThemePreference;
+  if (isThemePreference(value)) return value;
   if (value === "zero") return "zero-classic";
   if (value === "high-contrast" || value === "system") return "dark";
   return undefined;

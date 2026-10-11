@@ -2118,6 +2118,10 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   await assistant.getByText("Settings I can help with").click();
   await assistant.getByRole("button", { name: "Light", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  for (const [label, theme] of [["Glacier", "glacier"], ["Amber", "amber"], ["Zero Classic", "zero-classic"], ["Light", "light"]] as const) {
+    await assistant.getByRole("button", { name: label, exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+  }
   await assistant.getByRole("button", { name: "Hide Nebula assistant" }).click();
   await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
   await page.goto("/");

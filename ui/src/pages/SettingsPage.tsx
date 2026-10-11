@@ -16,7 +16,7 @@ import { EnvironmentSettings } from "../components/EnvironmentSettings";
 import { HarnessSettings } from "../components/HarnessSettings";
 import { PostToolAssistantSettings } from "../components/PostToolAssistantSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
-import { useTheme, type ThemePreference } from "../state/ThemeContext";
+import { THEME_OPTIONS, useTheme } from "../state/ThemeContext";
 import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
 import { useCredentialVault, vaultUnavailableNote } from "../hooks/useCredentialVault";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -29,17 +29,6 @@ import { isTauriRuntime } from "../api/runtime";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { CompactSettingsList } from "../components/CompactSettingsList";
-
-const themeOptions: { value: ThemePreference; label: string }[] = [
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-  { value: "glacier", label: "Glacier" },
-  { value: "amber", label: "Amber" },
-  { value: "zero-light", label: "Zero Light" },
-  { value: "zero-dark", label: "Zero Dark" },
-  { value: "zero-classic", label: "Zero Classic" },
-  { value: "studio-dark", label: "Studio Dark" },
-];
 
 const settingsSections = [
   ["setup-settings", "Setup", "Setup"],
@@ -869,7 +858,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         <section className="panel appearance-panel" id="appearance-settings">
           <header className="panel-header compact"><div><h2>Appearance</h2><p>Saved on this device</p></div><Contrast size={19} /></header>
           <div className="theme-options" role="group" aria-label="Color theme">
-            {themeOptions.map(({ value, label }) => (
+            {THEME_OPTIONS.map(({ value, label }) => (
               <button key={value} type="button" data-theme-choice={value} aria-label={label} aria-pressed={preference === value} onClick={() => setPreference(value)}><span className="theme-preview" aria-hidden="true"><i /><i /></span><strong>{label}</strong>{preference === value && <small aria-hidden="true">Active</small>}</button>
             ))}
           </div>
