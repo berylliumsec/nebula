@@ -2088,7 +2088,22 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-test("stabilization Nebula settings assistant opens from every screen and changes this device theme", async ({ page }) => {
+reloadTest("stabilization Nebula settings assistant opens from every screen and changes this device theme", async ({ page }) => {
+  let policyMode: "docker" | "host" = "docker";
+  let savedRequest: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/engagements/scratch-project/automation-policy", async (route) => {
+    if (route.request().method() === "PUT") {
+      savedRequest = route.request().postDataJSON() as Record<string, unknown>;
+      policyMode = savedRequest.execution_mode === "host" ? "host" : "docker";
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ...entity, revision: policyMode === "host" ? 2 : 1, id: "automation-policy-scratch",
+      engagement_id: "scratch-project", execution_mode: policyMode,
+      host_access_acknowledged: policyMode === "host", approval_policy: "always",
+      network_enabled: false, runner_profile_id: "local", vpn_profile_id: null,
+      max_timeout_ms: 300000,
+    }) });
+  });
   await openWorkspace(page, "/settings", "Settings");
   const open = page.getByRole("button", { name: "Open Nebula assistant" });
   await expect(open).toBeVisible();
@@ -2113,6 +2128,22 @@ test("stabilization Nebula settings assistant opens from every screen and change
   await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula to change a setting" }).press("Enter");
   await expect(page.getByRole("dialog", { name: "MCP servers" })).toBeVisible();
   expect(new URL(page.url()).pathname).not.toBe("/settings");
+  await page.getByRole("button", { name: "Close setting" }).click();
+  await page.getByRole("button", { name: "Show Nebula assistant" }).click();
+  await expect(page.getByRole("dialog", { name: "Nebula settings assistant" })).toContainText("Scratch Project");
+  const modeComposer = page.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+  await modeComposer.fill("open project policy and change from dockermode to host mode");
+  await modeComposer.press("Enter");
+  const policyLens = page.getByRole("dialog", { name: "Project policy and network scope" });
+  await expect(policyLens).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Switch Scratch Project to Host mode?" })).toBeVisible();
+  expect(savedRequest).toBeUndefined();
+  await page.getByRole("button", { name: "Switch to Host mode" }).click();
+  await expect(policyLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("host");
+  await expect(policyLens.getByText("Scratch Project saved in Host mode for new sessions.")).toBeVisible();
+  expect(savedRequest).toMatchObject({ execution_mode: "host", host_access_acknowledged: true, approval_policy: "always", expected_revision: 1 });
+  await expect(policyLens).toHaveCount(0, { timeout: 5000 });
+  await expect(page.getByRole("dialog", { name: "Nebula settings assistant" })).toContainText("Scratch Project is now in Host mode for new sessions");
 });
 
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
