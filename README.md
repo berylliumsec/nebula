@@ -1,115 +1,37 @@
 <div align="center">
-  <br />
   <h1>Nebula</h1>
-  <p>AI Powered Pentesting</p>
-  <br />
+  <p>Cybersecurity harness built around the operator</p>
 </div>
 
-<p align="center">
-  <img src="docs/images/nebula-3-assistant.png" alt="Screenshot of the Nebula Assistant panel with a sample assessment conversation" width="100%" />
-</p>
-
-<p align="center"><sub>The Assistant workbench with a sample conversation</sub></p>
-
-<br />
+Nebula is a cybersecurity harness built around the operator. Test manually in its browser and Kali terminal, or let agents code and test autonomously in Assistant or Missions. Set project scope, tools, and approvals, then preserve evidence, develop findings, and produce reports.
 
 ## Acknowledgement
 
 First, I would like to thank Almighty God, who is the source of all knowledge. Without Him, this would not be possible.
 
-
-Nebula brings the working parts of a security engagement into one desktop surface: terminal, code, browser, assistant, files, notes, missions, findings, and reports.
-
-AI can investigate, organize, and write. The operator defines the scope, grants authority, and decides what runs.
-
-## Designed around the operator
-
-**Work in one place.** Move from research to a contained terminal, preserve useful output as evidence, and carry it into findings and reports without losing context.
-
-**Keep authority explicit.** Scope enforcement, approval pauses, hard budgets, and isolated OCI execution sit between AI assistance and the systems under test.
-
-**Leave a durable trail.** Content-addressed artifacts, append-only events, execution provenance, and integrity-manifested exports preserve how a conclusion was reached.
-
-```text
-intent  →  assistance  →  approval  →  execution  →  evidence
-```
-
-Nebula supports hosted, local, and OpenAI-compatible model runtimes. A model provider is optional; the human terminal, evidence workflow, notes, findings, and reports remain available without one.
-
 > Use Nebula only on systems and networks you own or are explicitly authorized to test.
+
+## Operator control
+
+Choose scope, tool access, approvals, execution mode, and mission budgets. Nebula applies the configured scope and approval policy to its managed tools; the explicit **Allow all** option bypasses those checks. You can monitor and stop runs, and steer supported harness turns.
+
+Upload an OpenVPN profile to route project container commands and Kali terminal traffic through a VPN. Host mode uses the host's network; container VPN routing does not apply there.
+
+[Mercury](https://github.com/berylliumsec/mercury) is optional. When Nebula Core and its agent processes are enrolled under Mercury, Mercury can add independent file, process, and network controls. Nebula does not automatically enroll a separately started Core service.
+
+## Choose your runtime
+
+Bring Codex or Grok as external harnesses, or run Nebula's agent with Anthropic's Claude, OpenRouter, or a local model served by Ollama or vLLM. On supported routes, Nebula uses prompt caching and shows the cache reads providers report. Hit rates vary by model and workload.
 
 ## Install the preview
 
-Install the Linux x86_64 preview through the signed [Nebula APT repository](https://berylliumsec.github.io/nebula-apt/). Docker or Podman is required for the container terminal and Docker-mode automation. Features in a source checkout may be ahead of the published preview. The archive-key fingerprint is:
+The current preview targets Linux x86_64. Follow the [signed APT installation guide](https://berylliumsec.github.io/nebula-apt/) or download a DEB or AppImage from [GitHub Releases](https://github.com/BerylliumSec/nebula/releases). Check the release notes and back up engagement data before upgrading.
 
-```console
-1D90 1EB3 4C8C 1065 F118 680D 1C5C 924C B4B5 823D
-```
-
-Verify that fingerprint, add the current preview channel, and install:
-
-```console
-sudo apt update
-sudo apt install -y ca-certificates curl gnupg
-curl -fsSL https://berylliumsec.github.io/nebula-apt/nebula-archive-keyring.asc |
-  gpg --show-keys --fingerprint
-curl -fsSL https://berylliumsec.github.io/nebula-apt/nebula-archive-keyring.asc |
-  sudo gpg --dearmor --batch --yes -o /usr/share/keyrings/nebula-archive-keyring.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/nebula-archive-keyring.gpg] https://berylliumsec.github.io/nebula-apt prerelease main" |
-  sudo tee /etc/apt/sources.list.d/nebula.list >/dev/null
-sudo apt update
-sudo apt install nebula
-nebula
-```
-
-The `prerelease` channel is intentional while Nebula 3 is in preview. The DEB
-supports Debian, Ubuntu, Kali, and compatible systems. Future updates remain
-under administrator control through the normal APT workflow.
-
-<details>
-<summary>Install a downloaded DEB manually instead</summary>
-
-Download the DEB and `SHA256SUMS-linux-x64.txt` from [GitHub Releases](https://github.com/BerylliumSec/nebula/releases), then verify and install (replace `<version>` with the published release version):
-
-```console
-sha256sum --check --ignore-missing SHA256SUMS-linux-x64.txt
-sudo apt install ./Nebula-<version>-linux-x86_64.deb
-```
-
-</details>
-
-<details>
-<summary>Use the portable AppImage instead</summary>
-
-Download the AppImage and checksum file from the same release, then run:
-
-```console
-sha256sum --check --ignore-missing SHA256SUMS-linux-x64.txt
-chmod +x Nebula-<version>-linux-x86_64.AppImage
-./Nebula-<version>-linux-x86_64.AppImage
-```
-
-The AppImage requires no system-wide installation and uses Nebula's signed direct-update channel.
-
-</details>
-
-After launch, inspect the bundled Core and local runtime boundary:
-
-```console
-nebula-core doctor --json
-```
-
-> **First launch:** Nebula may need to download, prepare, and verify the official Kali image before terminal and automation features are ready. This can take several minutes depending on your connection and container runtime.
-
-> **About preview builds**
->
-> A build exists only when a `nebula-v3.*` entry and its native artifacts appear on [GitHub Releases](https://github.com/BerylliumSec/nebula/releases). Back up engagement data and review the release notes and checksums before use. Do not use `pip install nebula-ai` to install Nebula 3.
-
-macOS, Windows, and Linux arm64 installers are not part of the current release matrix.
+Docker or Podman is needed for the Kali terminal and Docker-mode automation. Host-mode agent commands run directly on the Nebula host without a container runtime after you acknowledge host filesystem and network access. Kali image preparation may take several minutes. A source checkout may contain features ahead of the published preview.
 
 ## Run from source
 
-Install Python 3.11–3.13, Poetry 2.1.3, Node.js 20 with npm, the stable Rust toolchain, and the [Tauri prerequisites for your operating system](https://v2.tauri.app/start/prerequisites/).
+Install Python 3.11–3.13, Poetry 2.1.3, Node.js 20 with npm, Rust, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then run:
 
 ```console
 git clone https://github.com/BerylliumSec/nebula.git
@@ -120,55 +42,11 @@ npm --prefix ui ci
 npm --prefix ui run dev:desktop
 ```
 
-The Playwright browser renders JavaScript-driven URL knowledge sources. Signed
-Linux installers include the locked Chromium headless runtime used by the
-packaged desktop. Source checkouts require the explicit installation step above;
-Nebula can also use an existing system Chrome or Chromium browser. The final
-command builds the local Nebula Core sidecar, starts the UI development server,
-and opens the native desktop directly from the checkout.
-
-<details>
-<summary>Browser-only development and focused checks</summary>
-
-Build the workspace and let Core choose an available loopback port:
-
-```console
-npm --prefix ui run build
-poetry run nebula-core ui
-```
-
-Check version metadata and the UI build. Select and collect tests for the changed
-journey using the [focused test policy](docs/TEST_SELECTION.md); a routine change
-does not run the complete backend or UI suites.
-
-```console
-python scripts/nebula3_version.py check
-npm --prefix ui run build
-```
-
-</details>
-
-## Migrate from Nebula 2
-
-Quit Nebula 2, preserve a backup of the engagement directory, and import it without modifying the source:
-
-```console
-nebula-core import-2x "/path/to/nebula-2-engagement"
-```
-
-Verify the imported project and its evidence before deleting the original data. See [Migrating from Nebula 2](docs/MIGRATING-2-TO-3.md) for the complete integrity and recovery procedure.
+For Core administration, browser-only development, and diagnostics, see the [Nebula 3 guide](docs/NEBULA3.md).
 
 ## Read more
 
-- [Nebula 3 guide](docs/NEBULA3.md)
 - [Usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md)
 - [Automation runtime](docs/AUTOMATION-RUNTIME.md)
 - [Local diagnostics](docs/NEBULA3_DIAGNOSTICS.md)
 - [Release notes](docs/releases/)
-- [Release process](packaging/RELEASING.md)
-
-<br />
-
----
-
-<p align="center"><sub>Built for deliberate security work.</sub></p>
