@@ -26,7 +26,7 @@ export function ChatStudioRail({
   const counts = subagentSummary(subagents);
   const agents = [...subagents].sort((left, right) =>
     Number(activeStatuses.has(right.status)) - Number(activeStatuses.has(left.status))).slice(0, 3);
-  return <aside className="chat-studio-rail" aria-label="Conversation context">
+  return <aside className="chat-studio-rail" aria-label="Conversation context" data-quiet-attention={pendingRequests > 0 || goalStatus === "blocked" ? "true" : undefined}>
     <h2>Session</h2>
     <section className="chat-studio-goal" aria-label="Goal">
       <div className="chat-studio-goal-state">

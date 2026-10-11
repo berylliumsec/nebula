@@ -115,9 +115,10 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   });
 
-  it("defaults to Dark and preserves the selected shell preference", () => {
+  it("defaults to Quiet Lens and preserves the selected shell preference", () => {
     const firstRender = renderApp();
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.documentElement).toHaveAttribute("data-theme", "quiet-lens");
+    expect(document.querySelector(".app-shell")).toHaveClass("quiet-lens-shell");
     expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
     expect(screen.getByRole("complementary", { name: "Primary navigation" })).toHaveAttribute("data-shell", "shared");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
@@ -169,13 +170,14 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("link", { name: "Advanced settings" }));
     await user.click(screen.getByText("Identity & Security", { selector: "summary strong" }));
     const options = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
-    expect(options.querySelectorAll(".theme-options button")).toHaveLength(8);
+    expect(options.querySelectorAll(".theme-options button")).toHaveLength(9);
     expect(within(options).getByRole("button", { name: /^Light$/ })).toBeVisible();
     expect(within(options).getByRole("button", { name: /^Dark$/ })).toBeVisible();
     expect(within(options).getByRole("button", { name: /^Zero Light$/ })).toBeVisible();
     expect(within(options).getByRole("button", { name: "Zero Classic" })).toBeVisible();
     expect(within(options).getByRole("button", { name: "Glacier" })).toBeVisible();
     expect(within(options).getByRole("button", { name: "Amber" })).toBeVisible();
+    expect(within(options).getByRole("button", { name: "Quiet Lens" })).toBeVisible();
     await user.click(within(options).getByRole("button", { name: "Zero Dark" }));
     expect(document.documentElement).toHaveAttribute("data-theme", "zero-dark");
     expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");
@@ -215,6 +217,7 @@ describe("Nebula workspace", () => {
   });
 
   it("persists the collapsible sidebar and exposes legacy labels through command search", async () => {
+    localStorage.setItem("nebula.theme", "dark");
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole("button", { name: "Hide sidebar" }));

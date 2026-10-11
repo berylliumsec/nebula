@@ -36,6 +36,10 @@ interface TopBarProps {
   setTrailingToolbarHost?: (element: HTMLDivElement | null) => void;
   sidebarCollapsed: boolean;
   variant?: "standard" | "zero";
+  lensOpen?: boolean;
+  onToggleLens?: () => void;
+  onRevealLens?: () => void;
+  onLeaveLens?: () => void;
 }
 
 export function TopBar({
@@ -48,6 +52,10 @@ export function TopBar({
   setTrailingToolbarHost,
   sidebarCollapsed,
   variant = "standard",
+  lensOpen = false,
+  onToggleLens,
+  onRevealLens,
+  onLeaveLens,
 }: TopBarProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -106,7 +114,10 @@ export function TopBar({
   };
 
   return (
-    <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared">
+    <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
+      {onToggleLens && <button className="quiet-lens-handle quiet-lens-top-handle" type="button" aria-label="Open top menu" aria-expanded={lensOpen} title="Open top menu" onMouseEnter={onRevealLens} onFocus={onRevealLens} onClick={onRevealLens}>
+        <svg viewBox="0 0 800 44" preserveAspectRatio="none" aria-hidden="true"><ellipse cx="400" cy="22" rx="390" ry="6" /></svg>
+      </button>}
       <div className="top-bar-leading">
         {/* Phones reach these pages from the Workbench More tab; this is the way back. */}
         <button className="button quiet top-bar-back" type="button" onClick={() => navigate(engagement ? projectSurface(engagement.id, "workbench") : "/")}>

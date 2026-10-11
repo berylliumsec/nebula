@@ -389,6 +389,10 @@
 .theme-options [data-theme-choice="zero-light"] { --preview-canvas: #edf3f8; --preview-surface: #fff; --preview-accent: #2769ad; }
 .theme-options [data-theme-choice="zero-classic"] { --preview-canvas: #191b1e; --preview-surface: #30343a; --preview-accent: #68a8ff; }
 .theme-options [data-theme-choice="studio-dark"] { --preview-canvas: #080d11; --preview-surface: #172229; --preview-accent: #b3c7d4; }
+.theme-options [data-theme-choice="quiet-lens"] { --preview-canvas: #090d11; --preview-surface: #152229; --preview-accent: #91acb4; }
+.theme-options [data-theme-choice="quiet-lens"] .theme-preview::before { inset: 4px 5px 16px 14px; border: 1px solid var(--preview-accent); border-radius: 50%; background: transparent; }
+.theme-options [data-theme-choice="quiet-lens"] .theme-preview i:first-child { inset: 4px auto 4px 5px; width: 3px; border: 1px solid var(--preview-accent); border-radius: 50%; background: transparent; }
+.theme-options [data-theme-choice="quiet-lens"] .theme-preview i:last-child { display: none; }
 .theme-options strong { font-size: 11px; }
 .theme-options small { position: absolute; bottom: 5px; color: var(--blue); font-size: 11px; }
 .appearance-help { margin: 0; padding: 0 14px 13px; color: var(--muted); font-size: 11px; line-height: 1.5; }

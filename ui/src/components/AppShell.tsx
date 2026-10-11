@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { WorkbenchEditorProvider } from "../state/WorkbenchEditorContext";
@@ -47,6 +47,7 @@ export function AppShell() {
     workspaceState,
   } = useWorkspace();
   const zero = resolvedTheme.startsWith("zero-");
+  const quietLens = resolvedTheme === "quiet-lens";
   // Phones hide the shell top bar on the Workbench, which draws its own header.
   // It stays for "Choose a project" and for a failed Core, where it carries recovery.
   const workbenchRoute = (location.pathname === "/" || /^\/projects\/[^/]+\/workbench\/?$/.test(location.pathname))
@@ -61,6 +62,14 @@ export function AppShell() {
     const stored = localStorage.getItem("nebula.sidebar.collapsed");
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
   });
+  const [quietPointerActive, setQuietPointerActive] = useState(false);
+  const [quietRailActive, setQuietRailActive] = useState(false);
+  const [quietSideOpen, setQuietSideOpen] = useState(false);
+  const [quietTopOpen, setQuietTopOpen] = useState(false);
+  const quietPointerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quietRailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quietSideRevealSuppressed = useRef(false);
+  const quietTopRevealSuppressed = useRef(false);
   const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
   const [trailingToolbarHost, setTrailingToolbarHost] = useState<HTMLElement | null>(null);
   const [contextualCommands, setContextualCommands] = useState<ContextualCommand[]>([]);
@@ -68,10 +77,16 @@ export function AppShell() {
     ? browserAuthorizationRecovery(window.location.hostname)
     : undefined;
   const toggleActivity = useCallback(() => setActivityOpen((value) => !value), []);
-  const toggleSidebar = useCallback(() => setSidebarCollapsed((value) => {
-    localStorage.setItem("nebula.sidebar.collapsed", String(!value));
-    return !value;
-  }), []);
+  const toggleSidebar = useCallback(() => {
+    if (quietLens) {
+      setQuietSideOpen((value) => !value);
+      return;
+    }
+    setSidebarCollapsed((value) => {
+      localStorage.setItem("nebula.sidebar.collapsed", String(!value));
+      return !value;
+    });
+  }, [quietLens]);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
     setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
@@ -82,12 +97,65 @@ export function AppShell() {
       : current);
   }, []);
   const openProjectPicker = useCallback(() => {
-    setSidebarCollapsed(false);
+    if (quietLens) setQuietSideOpen(true);
+    else setSidebarCollapsed(false);
     setProjectPickerOpen(true);
-  }, []);
+  }, [quietLens]);
   const closeMobileSidebar = useCallback(() => {
-    if (!sidebarCollapsed && window.matchMedia("(max-width: 760px)").matches) toggleSidebar();
-  }, [sidebarCollapsed, toggleSidebar]);
+    if (quietLens) setQuietSideOpen(false);
+    else if (!sidebarCollapsed && window.matchMedia("(max-width: 760px)").matches) toggleSidebar();
+  }, [quietLens, sidebarCollapsed, toggleSidebar]);
+
+  useEffect(() => {
+    if (!quietLens) return;
+    const refreshRail = () => {
+      setQuietRailActive(true);
+      if (quietRailTimer.current) clearTimeout(quietRailTimer.current);
+      quietRailTimer.current = setTimeout(() => setQuietRailActive(false), 60_000);
+    };
+    setQuietRailActive(false);
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      refreshRail();
+      setQuietPointerActive(true);
+      if (quietPointerTimer.current) clearTimeout(quietPointerTimer.current);
+      quietPointerTimer.current = setTimeout(() => setQuietPointerActive(false), 2600);
+      if (event.target instanceof Element && !event.target.closest(".top-bar")) {
+        const topBar = document.querySelector(".top-bar");
+        if (!topBar?.contains(document.activeElement)) setQuietTopOpen(false);
+      }
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      if (quietPointerTimer.current) clearTimeout(quietPointerTimer.current);
+      if (quietRailTimer.current) clearTimeout(quietRailTimer.current);
+    };
+  }, [quietLens]);
+
+  useEffect(() => {
+    setQuietSideOpen(false);
+    setQuietTopOpen(false);
+    quietSideRevealSuppressed.current = false;
+    quietTopRevealSuppressed.current = false;
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!quietLens) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (!event.target.closest(".side-nav, .engagement-menu")) {
+        quietSideRevealSuppressed.current = false;
+        setQuietSideOpen(false);
+      }
+      if (!event.target.closest(".top-bar")) {
+        quietTopRevealSuppressed.current = false;
+        setQuietTopOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [quietLens]);
   const runContextualNew = useCallback(() => {
     (document.querySelector<HTMLButtonElement>(".top-bar-trailing-actions .button.primary:not(:disabled)")
       ?? document.querySelector<HTMLButtonElement>(".top-bar-page-actions .button.primary:not(:disabled)"))?.click();
@@ -133,11 +201,20 @@ export function AppShell() {
         event.preventDefault();
         toggleActivity();
       }
-      if (event.key === "Escape" && paletteOpen) setPaletteOpen(false);
+      if (event.key === "Escape") {
+        if (paletteOpen) setPaletteOpen(false);
+        if (quietLens) {
+          const hovering = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+          quietSideRevealSuppressed.current = hovering;
+          quietTopRevealSuppressed.current = hovering;
+          setQuietSideOpen(false);
+          setQuietTopOpen(false);
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [engagement, navigate, paletteOpen, runContextualNew, toggleActivity, toggleSidebar]);
+  }, [engagement, navigate, paletteOpen, quietLens, runContextualNew, toggleActivity, toggleSidebar]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -190,9 +267,9 @@ export function AppShell() {
             <GuideProvider>
             <BrowserAutomationWorker />
             <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
-            <div className={`app-shell${zero ? " zero-layer-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+            <div className={`app-shell${zero ? " zero-layer-shell" : ""}${quietLens ? " quiet-lens-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed && !quietLens ? " sidebar-collapsed" : ""}`} data-quiet-pointer={quietPointerActive ? "active" : "idle"} data-quiet-rail={quietRailActive ? "active" : "idle"}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
-              <SideNav collapsed={sidebarCollapsed} open={projectPickerOpen} setOpen={setProjectPickerOpen} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
+              <SideNav collapsed={sidebarCollapsed && !quietLens} open={projectPickerOpen} setOpen={setProjectPickerOpen} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} lensOpen={quietLens && (quietSideOpen || projectPickerOpen)} onToggleLens={quietLens ? () => setQuietSideOpen((value) => !value) : undefined} onRevealLens={quietLens ? () => { if (!quietSideRevealSuppressed.current) setQuietSideOpen(true); } : undefined} onLeaveLens={quietLens && !projectPickerOpen ? () => { quietSideRevealSuppressed.current = false; setQuietSideOpen(false); } : undefined} />
               <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={toggleSidebar} />
               <TopBar
                 activityOpen={activityOpen}
@@ -202,8 +279,12 @@ export function AppShell() {
                 onOpenPalette={openPalette}
                 setToolbarHost={setToolbarHost}
                 setTrailingToolbarHost={setTrailingToolbarHost}
-                sidebarCollapsed={sidebarCollapsed}
+                sidebarCollapsed={sidebarCollapsed && !quietLens}
                 variant={zero ? "zero" : "standard"}
+                lensOpen={quietLens && quietTopOpen}
+                onToggleLens={quietLens ? () => setQuietTopOpen((value) => !value) : undefined}
+                onRevealLens={quietLens ? () => { if (!quietTopRevealSuppressed.current) setQuietTopOpen(true); } : undefined}
+                onLeaveLens={quietLens ? () => { quietTopRevealSuppressed.current = false; setQuietTopOpen(false); } : undefined}
               />
               <main id="main-content" className="main-content" tabIndex={-1}>
                 {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}

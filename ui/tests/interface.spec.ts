@@ -57,7 +57,7 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
-const firstRunThemeTest = "Dark is the first-run default theme";
+const firstRunThemeTest = "Quiet Lens is the first-run default theme";
 
 
 const entity = {
@@ -698,7 +698,7 @@ async function openWorkspace(page: Page, route: string, heading: string) {
   await page.waitForTimeout(120);
 }
 
-async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark" | "studio-dark") {
+async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark" | "studio-dark" | "quiet-lens") {
   await page.evaluate((value) => {
     const oldValue = localStorage.getItem("nebula.theme");
     localStorage.setItem("nebula.theme", value);
@@ -2080,9 +2080,13 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 });
 
 test(firstRunThemeTest, async ({ page }) => {
-  await openWorkspace(page, "/", "Workbench");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim())).toBe("#0b111a");
+  await page.goto("/");
+  await expect(page.locator("#nebula-boot")).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "quiet-lens");
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim())).toBe("#090d11");
+  await expect(page.locator(".app-shell")).toHaveClass(/quiet-lens-shell/);
+  await expect(page.getByRole("button", { name: "Open top menu" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
 
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
@@ -2303,6 +2307,7 @@ test("theme picker previews and persists every color palette", async ({ page }, 
     ["Zero Dark", "zero-dark", true],
     ["Zero Classic", "zero-classic", true],
     ["Studio Dark", "studio-dark", false],
+    ["Quiet Lens", "quiet-lens", false],
   ] as const) {
     const option = appearance.getByRole("button", { name: label, exact: true });
     await expect(option.locator(".theme-preview")).toBeVisible();
@@ -2346,6 +2351,188 @@ test("theme picker previews and persists every color palette", async ({ page }, 
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+});
+
+reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline chat visible", async ({ page }, testInfo) => {
+  await page.clock.install();
+  await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({ json: [{
+    ...entity, id: "quiet-lens-harness", name: "Review harness", kind: "codex_app_server",
+    connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
+    enabled: true, default_model: "review-model", privacy: { local_only: true, permits_sensitive_data: true },
+    capabilities: { models: ["review-model"], checked_at: entity.updated_at, authentication_state: "verified" },
+  }] }));
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings" }).click();
+  const identityGroup = page.locator("#identity-security-settings");
+  const identitySummary = identityGroup.locator("summary");
+  if (testInfo.project.name.startsWith("mobile-")) await identitySummary.tap();
+  else await identitySummary.click();
+  await expect(identityGroup).toHaveAttribute("open", "");
+  await page.locator("#appearance-settings").getByRole("button", { name: "Quiet Lens" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "quiet-lens");
+  await page.goto("/?view=chat");
+  await expect(page.getByRole("button", { name: "Start new chat", exact: true })).toBeVisible({ timeout: 20_000 });
+  const shell = page.locator(".quiet-lens-shell");
+  const top = shell.locator(".top-bar");
+  const side = shell.locator(".side-nav");
+  const topHandle = top.getByRole("button", { name: "Open top menu" });
+  const sideHandle = side.getByRole("button", { name: "Open navigation" });
+  await expect(topHandle).toBeVisible();
+  await expect(sideHandle).toBeVisible();
+  expectTouchTarget((await topHandle.boundingBox())?.height, "Top lens target height");
+  expectTouchTarget((await sideHandle.boundingBox())?.width, "Side lens target width");
+  const topBounds = await topHandle.boundingBox();
+  const sideBounds = await sideHandle.boundingBox();
+  expect(topBounds && sideBounds && topBounds.y + topBounds.height < sideBounds.y).toBe(true);
+  await expect(side.locator(".nav-list")).toBeHidden();
+
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await topHandle.hover();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    const terminalTab = page.getByRole("tab", { name: "Terminal", exact: true });
+    await expect(terminalTab).toBeVisible();
+    await terminalTab.hover();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await expect(side.locator(".nav-list")).toBeHidden();
+    await page.mouse.move(360, 310);
+    await expect(top).toHaveAttribute("data-lens-open", "false");
+    await topHandle.focus();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await page.mouse.move(370, 320);
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await topHandle.evaluate(element => (element as HTMLButtonElement).blur());
+    await expect(top).toHaveAttribute("data-lens-open", "false");
+    await sideHandle.hover();
+  } else {
+    await topHandle.tap();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await sideHandle.tap();
+  }
+  await expect(side.locator(".nav-list")).toBeVisible();
+  await expect(side.getByRole("link", { name: "Findings" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("quiet-lens-navigation.png") });
+
+  await page.keyboard.press("Escape");
+  await expect(side.locator(".nav-list")).toBeHidden();
+  await page.getByRole("button", { name: "Start new chat", exact: true }).click();
+  const composerFrame = page.locator(".chat-studio > .chat-panel > .chat-composer");
+  const composerInput = composerFrame.locator(".chat-composer-input");
+  const composer = composerFrame.getByRole("textbox", { name: "Message the analyst assistant" });
+  await expect(composer).toBeVisible();
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await page.mouse.move(360, 310);
+    await expect(composerInput).toHaveCSS("opacity", "0");
+    await expect.poll(() => composerFrame.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0.72");
+    expect(await composerFrame.evaluate(element => Number.parseFloat(getComputedStyle(element, "::before").height))).toBeLessThanOrEqual(12);
+    await composerFrame.hover();
+    await expect(composerInput).toHaveCSS("opacity", "1");
+    await page.mouse.move(360, 310);
+    await expect(composerInput).toHaveCSS("opacity", "0");
+    await composer.focus();
+    await expect(composerInput).toHaveCSS("opacity", "1");
+  } else {
+    await expect(composerInput).toHaveCSS("opacity", "1");
+  }
+  await composer.fill("First line\n\nThird line");
+  await expect(composer).toHaveValue("First line\n\nThird line");
+  await expect.poll(() => composer.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(2);
+  await composer.fill(Array.from({ length: 16 }, (_, index) => `Line ${index + 1}`).join("\n"));
+  await expect.poll(() => composer.evaluate((element) => getComputedStyle(element).overflowY)).toBe("auto");
+  const longDraft = await composer.evaluate((element) => ({ scrollHeight: element.scrollHeight, clientHeight: element.clientHeight, overflow: getComputedStyle(element).overflowY }));
+  expect(longDraft.scrollHeight).toBeGreaterThan(longDraft.clientHeight);
+  expect(longDraft.overflow).toBe("auto");
+  await expect(page.locator(".chat-composer-submit")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("quiet-lens-multiline-chat.png") });
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await composer.evaluate(element => (element as HTMLTextAreaElement).blur());
+    await expect(composerInput).toHaveCSS("opacity", "0");
+    await composerFrame.hover();
+    await expect(composerInput).toHaveCSS("opacity", "1");
+    await expect(composer).toHaveValue(Array.from({ length: 16 }, (_, index) => `Line ${index + 1}`).join("\n"));
+
+    await topHandle.hover();
+    await page.getByRole("button", { name: "Enter focus mode" }).click();
+    const focusToolbar = page.locator(".sessions-page.full-screen > .session-toolbar");
+    const focusTabs = focusToolbar.locator(".session-tabs");
+    await page.mouse.move(400, 400);
+    await expect(focusTabs).toHaveCSS("opacity", "0");
+    await expect(focusToolbar.locator(".toolbar-actions")).toHaveCSS("opacity", "0");
+    await expect.poll(() => focusToolbar.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0.72");
+    expect(await focusToolbar.evaluate(element => Number.parseFloat(getComputedStyle(element, "::before").height))).toBeLessThanOrEqual(12);
+    await page.keyboard.press("Shift+Tab");
+    await expect(focusTabs).toHaveCSS("opacity", "1");
+    await page.mouse.click(700, 700);
+    await focusToolbar.hover();
+    await expect(focusTabs).toHaveCSS("opacity", "1");
+    await expect(focusToolbar.locator(".toolbar-actions")).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Escape");
+    await expect(focusToolbar).toHaveCount(0);
+    await expect(composer).toHaveValue(Array.from({ length: 16 }, (_, index) => `Line ${index + 1}`).join("\n"));
+  }
+
+  if (testInfo.project.name === "desktop") {
+    const sessionId = "quiet-lens-rail-review";
+    let pendingRailAction = false;
+    await page.route(/\/api\/v1\/chat-sessions(?:\?|$)/, route => route.fulfill({ json: [{
+      ...entity, id: sessionId, engagement_id: "scratch-project", title: "Quiet Lens rail review",
+      backend: "harness", harness_profile_id: "quiet-lens-harness", harness_session_id: null,
+      model: "review-model", metadata: {},
+    }] }));
+    await page.route(/\/api\/v1\/chat\/sessions\/quiet-lens-rail-review\/(messages|pending-turn|state)(?:\?|$)/, route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/messages")) return route.fulfill({ json: [] });
+      if (path.endsWith("/pending-turn")) return route.fulfill({ json: null });
+      return route.fulfill({ json: {
+        schema: "nebula.session-state/v1", session_id: sessionId, revision: 1, turn_id: null,
+        harness_turn_id: null, execution: pendingRailAction ? "waiting_approval" : "idle",
+        busy: pendingRailAction, detail: pendingRailAction ? "Review the requested action." : "Ready for a message.",
+        connection: "connected", actions: [], pending: pendingRailAction
+          ? [{ id: "quiet-review-approval", turn_id: "quiet-review-turn", kind: "approval", text: "Review the requested action" }]
+          : [], decisions: [],
+      } });
+    });
+    await page.goto(`/projects/scratch-project/workbench?view=chat&session=${sessionId}`);
+    const rail = page.locator(".chat-studio > .chat-studio-rail");
+    await expect(rail).toBeVisible();
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await page.mouse.move(360, 310);
+    await expect(rail).toHaveCSS("opacity", "1");
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "0");
+    await expect.poll(() => rail.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0.72");
+    expect(await rail.evaluate(element => Number.parseFloat(getComputedStyle(element, "::before").width))).toBeLessThanOrEqual(12);
+    await page.clock.fastForward(59_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "active");
+    await page.clock.fastForward(1_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await expect(rail).toHaveCSS("opacity", "0");
+    await page.mouse.move(370, 320);
+    await expect(rail).toHaveCSS("opacity", "1");
+    const railBounds = await rail.boundingBox();
+    expect(railBounds).not.toBeNull();
+    await page.mouse.move(railBounds!.x + 8, railBounds!.y + railBounds!.height / 2);
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "0");
+    await rail.hover();
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "1");
+    await expect.poll(() => rail.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0");
+    await page.clock.fastForward(60_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await expect(rail).toHaveCSS("opacity", "1");
+    await page.mouse.move(370, 320);
+    await expect(rail.getByRole("heading", { name: "Session" })).toHaveCSS("opacity", "0");
+    await rail.getByRole("button", { name: /Session details/ }).focus();
+    await page.clock.fastForward(60_000);
+    await expect(shell).toHaveAttribute("data-quiet-rail", "idle");
+    await expect(rail).toHaveCSS("opacity", "1");
+
+    pendingRailAction = true;
+    await page.goto(`/projects/scratch-project/workbench?view=chat&session=${sessionId}`);
+    await expect(rail).toHaveAttribute("data-quiet-attention", "true");
+    await expect(rail).toHaveCSS("opacity", "1");
+    await expect(composerFrame).toHaveAttribute("data-quiet-attention", "true");
+    await expect(composerInput).toHaveCSS("opacity", "1");
+  }
 });
 
 test("theme picker keeps Zero Classic, Glacier, and Amber Workbench colors across viewports", async ({ page }, testInfo) => {

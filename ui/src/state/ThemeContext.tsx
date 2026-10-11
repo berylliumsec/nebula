@@ -18,6 +18,7 @@ export const THEME_OPTIONS = [
   { value: "zero-dark", label: "Zero Dark" },
   { value: "zero-classic", label: "Zero Classic" },
   { value: "studio-dark", label: "Studio Dark" },
+  { value: "quiet-lens", label: "Quiet Lens" },
 ] as const;
 
 export type ThemePreference = typeof THEME_OPTIONS[number]["value"];
@@ -33,7 +34,7 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const STORAGE_KEY = "nebula.theme";
 const PALETTE_VERSION_KEY = "nebula.theme.paletteVersion";
 const PALETTE_VERSION = "2";
-const DEFAULT_PREFERENCE: ThemePreference = "dark";
+const DEFAULT_PREFERENCE: ThemePreference = "quiet-lens";
 const THEME_ORDER: ThemePreference[] = THEME_OPTIONS.map(({ value }) => value);
 
 export function isThemePreference(value: unknown): value is ThemePreference {

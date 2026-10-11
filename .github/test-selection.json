@@ -1,16 +1,18 @@
 {
-  "change_digest": "3f2f11a0ec73d3e31f6339e60a0584ffb16171aa996717a3bb84776e18677432",
-  "reviewed_by": "Codex review of README assistant discovery and recorded product demo",
-  "reason": "The diff changes README copy and adds a Playwright-recorded GIF and MP4. The recording used a temporary real Core, the production UI bundle, an authenticated Codex app server, and desktop Chromium at 1280x800. It exercised the upper-right Nebula assistant, a sourced product answer, the Model providers setting, and Files navigation. The media was trimmed only to remove idle model wait. No product implementation, API, settings catalog, or test code changed.",
-  "exclusions": "No Python, frontend, native, or catalogued Playwright tests cover a documentation-only media change, so zero tests are selected. Full suites and unrelated journeys are excluded. The one recorded desktop walkthrough does not establish mobile, LAN, physical-device, deployed-build, or broader product acceptance.",
+  "change_digest": "08578c39a09740e69ebfa053940c820d8d5789c9066c6dd8a4f2bd18b6af7d73",
+  "reviewed_by": "Codex focused Quiet Lens UI review",
+  "reason": "The rebased branch makes Quiet Lens the first-run default, retains saved appearance choices, and adds a real-interface README animation of an empty chat plus a short Assistant launcher guide. ThemeContext component tests cover default selection, blocked storage, migration, and saved choices. Two focused App component cases for the new default and existing dark-sidebar preference passed locally; the broad App file has eight unrelated failures on current origin/main, so the selected CI frontend file is limited to ThemeContext. The dedicated Quiet Lens interface journey covers navigation contours, pointer leave, keyboard focus, composer, Session rail, focus controls, draft retention, and touch presentation in desktop/compact Chromium and Chromium/WebKit phone profiles at 320, 390, and 430 px. The first-run default case is added on desktop and compact. The top lens pointer-exit fix and focus preservation are covered by the selected interface journey. The production UI was built and reviewed against a disposable Core on a LAN origin; the README animation shows the blank chat and each lens revealing on hover.",
+  "exclusions": "No backend, API, or native implementation changes, so Python and native tests are unrelated. No full frontend or Playwright suite, unrelated catalog journeys, provider turns, or physical-device run is selected. The full App.test.tsx file is excluded from CI selection because eight cases fail unchanged on an isolated origin/main baseline; the two cases relevant to this default change passed by exact name locally and the browser journey covers the integration. The README animation and copy received visual/manual review. The Session rail exists only at wide desktop width, and the focus toolbar hiding rule only applies to fine-pointer devices; touch controls remain visible.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 4,
     "native": 0,
-    "playwright": 0
+    "playwright": 10
   },
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/state/ThemeContext.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": ["area:quiet-lens"]
 }
