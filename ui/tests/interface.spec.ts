@@ -2088,7 +2088,7 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-reloadTest("stabilization Nebula settings assistant opens from every screen and changes this device theme", async ({ page }) => {
+reloadTest("stabilization Nebula assistant opens from every screen and changes this device theme", async ({ page }) => {
   let policyMode: "docker" | "host" = "docker";
   let savedRequest: Record<string, unknown> | undefined;
   await page.route("**/api/v1/engagements/scratch-project/automation-policy", async (route) => {
@@ -2111,9 +2111,9 @@ reloadTest("stabilization Nebula settings assistant opens from every screen and 
   expectTouchTarget(target?.width, "Nebula assistant launcher width");
   expectTouchTarget(target?.height, "Nebula assistant launcher height");
   await open.click();
-  const assistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
+  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
   await expect(assistant).toBeVisible();
-  const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Nebula settings assistant"]').analyze();
+  const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Nebula assistant"]').analyze();
   expect(assistantA11y.violations).toEqual([]);
   await assistant.getByText("Settings I can help with").click();
   await assistant.getByRole("button", { name: "Light", exact: true }).click();
@@ -2123,17 +2123,17 @@ reloadTest("stabilization Nebula settings assistant opens from every screen and 
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
   await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  const reopenedAssistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
+  const reopenedAssistant = page.getByRole("dialog", { name: "Nebula assistant" });
   await expect(reopenedAssistant).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula to change a setting" }).fill("open MCP servers");
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula to change a setting" }).press("Enter");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("open MCP servers");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
   await expect(page.getByRole("dialog", { name: "MCP servers" })).toBeVisible();
   expect(new URL(page.url()).pathname).not.toBe("/settings");
   await page.getByRole("button", { name: "Close setting" }).click();
   await page.getByRole("button", { name: "Show Nebula assistant" }).click();
-  await expect(page.getByRole("dialog", { name: "Nebula settings assistant" })).toContainText("Scratch Project");
-  const modeComposer = page.getByRole("textbox", { name: "Ask Nebula to change a setting" });
+  await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("Scratch Project");
+  const modeComposer = page.getByRole("textbox", { name: "Ask Nebula a question" });
   await modeComposer.fill("open project policy and change from dockermode to host mode");
   await modeComposer.press("Enter");
   const policyLens = page.getByRole("dialog", { name: "Project policy and network scope" });
@@ -2145,7 +2145,7 @@ reloadTest("stabilization Nebula settings assistant opens from every screen and 
   await expect(policyLens.getByText("Scratch Project saved in Host mode for new sessions.")).toBeVisible();
   expect(savedRequest).toMatchObject({ execution_mode: "host", host_access_acknowledged: true, approval_policy: "always", expected_revision: 1 });
   await expect(policyLens).toHaveCount(0, { timeout: 5000 });
-  await expect(page.getByRole("dialog", { name: "Nebula settings assistant" })).toContainText("Scratch Project is now in Host mode for new sessions");
+  await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("Scratch Project is now in Host mode for new sessions");
 });
 
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
