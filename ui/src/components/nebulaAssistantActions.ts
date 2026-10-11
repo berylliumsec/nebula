@@ -1,11 +1,13 @@
 import type { ChatStreamEvent, HarnessProfile } from "../api/types";
 import type { ThemePreference } from "../state/ThemeContext";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
+import { assistantDestination, type AssistantDestination } from "../assistantDestinations";
 
 type Runtime = { kind: "provider" | "harness"; id: string; model: string };
 export type ProjectMode = "docker" | "host";
 export type SettingClientAction =
   | { kind: "open_setting"; setting: SettingCatalogEntry }
+  | { kind: "navigate"; destination: AssistantDestination }
   | { kind: "device_theme"; theme: ThemePreference }
   | { kind: "project_execution_mode"; mode: ProjectMode; from?: ProjectMode };
 
@@ -23,6 +25,8 @@ export function settingClientAction(event: ChatStreamEvent): SettingClientAction
     || /^nebula_settings_open_[0-9a-f]{10,}$/.test(event.capability);
   const modeTool = event.capability === "nebula.settings.set_project_mode"
     || /^nebula_settings_set_project_mode_[0-9a-f]{10,}$/.test(event.capability);
+  const navigateTool = event.capability === "nebula.navigate.open"
+    || /^nebula_navigate_open_[0-9a-f]{10,}$/.test(event.capability);
   if (themeTool && value.kind === "device_theme"
       && ["light", "dark", "studio-dark", "zero-light", "zero-dark"].includes(String(value.theme))) {
     return { kind: "device_theme", theme: value.theme as ThemePreference };
@@ -30,6 +34,10 @@ export function settingClientAction(event: ChatStreamEvent): SettingClientAction
   if (openTool && value.kind === "open_setting" && typeof value.setting_id === "string") {
     const setting = settingCatalog.find((entry) => entry.id === `settings.${value.setting_id}`);
     if (setting) return { kind: "open_setting", setting };
+  }
+  if (navigateTool && value.kind === "navigate" && typeof value.destination_id === "string") {
+    const destination = assistantDestination(value.destination_id);
+    if (destination) return { kind: "navigate", destination };
   }
   if (modeTool && value.kind === "project_execution_mode"
       && (value.mode === "docker" || value.mode === "host")
@@ -44,10 +52,10 @@ function normalized(value: string): string {
 }
 
 const NAVIGATION_WORDS = new Set([
-  "a", "about", "an", "and", "are", "bring", "can", "control", "controls",
-  "do", "find", "for", "go", "i", "in", "is", "locate", "me", "my", "of",
-  "open", "page", "please", "screen", "see", "setting", "settings", "show",
-  "take", "the", "to", "up", "where", "which", "would", "you",
+  "a", "about", "all", "an", "and", "are", "bring", "can", "control", "controls",
+  "do", "everything", "find", "for", "go", "i", "in", "is", "it", "list", "lists", "locate", "me", "my", "of",
+  "open", "page", "place", "please", "screen", "see", "setting", "settings", "show",
+  "take", "that", "the", "this", "to", "up", "where", "which", "with", "would", "you",
 ]);
 
 export function isSettingNavigationRequest(prompt: string): boolean {
@@ -75,7 +83,7 @@ export function settingNavigationCandidates(prompt: string): SettingCatalogEntry
       return total;
     }, 0);
     return { entry, score };
-  }).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score);
+  }).filter(({ score }) => score >= 3).sort((a, b) => b.score - a.score);
   return scored.slice(0, 3).map(({ entry }) => entry);
 }
 

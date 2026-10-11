@@ -10,6 +10,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
+import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import type { ChatMessage } from "../api/types";
 import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import styles from "./NebulaControlAssistant.module.css";
@@ -28,8 +29,9 @@ function readActionOutcomes(key: string): Record<string, string> {
   } catch { return {}; }
 }
 
-export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedSetting }: {
+export function NebulaControlAssistant({ onOpenSetting, onNavigate, onCloseSetting, onSavedSetting }: {
   onOpenSetting: (entry: SettingCatalogEntry) => void;
+  onNavigate: (path: string) => void;
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode: "docker" | "host") => void;
 }) {
@@ -39,6 +41,7 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [query, setQuery] = useState("");
+  const [destinationQuery, setDestinationQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [suggestions, setSuggestions] = useState<SettingCatalogEntry[]>([]);
@@ -55,6 +58,7 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
   const panel = useRef<HTMLDivElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const catalogRef = useRef<HTMLDetailsElement>(null);
+  const destinationCatalogRef = useRef<HTMLDetailsElement>(null);
   const runtime = sessionRuntime ?? defaultModelRuntime(providers, harnesses);
   const toolRuntime: ToolSharingRuntime | undefined = runtime?.kind === "provider"
     ? (() => { const profile = providers.find((item) => item.id === runtime.id); return profile ? { kind: "provider", profile } : undefined; })()
@@ -250,9 +254,19 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
     if (action.kind === "project_execution_mode") return applyProjectMode(action);
+    if (action.kind === "navigate") return openDestination(action.destination);
     onOpenSetting(action.setting);
     setHidden(true);
     return `Opened ${action.setting.label}.`;
+  };
+
+  const openDestination = (destination: AssistantDestination): string => {
+    const path = assistantDestinationPath(destination, engagement?.id);
+    setHidden(true);
+    onNavigate(path ?? "/projects");
+    return path
+      ? `Opened ${destination.label}.`
+      : `Choose a project in All projects to open ${destination.label}.`;
   };
 
   const send = async (currentText = draft) => {
@@ -294,6 +308,13 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
       }
       return;
     }
+    const destination = destinationToOpen(prompt);
+    if (destination) {
+      setDraft("");
+      const confirmation = openDestination(destination);
+      setMessages((current) => [...current, { role: "user", content: prompt }, { role: "assistant", content: confirmation }]);
+      return;
+    }
     const setting = settingToOpen(prompt);
     if (setting) {
       setDraft("");
@@ -301,7 +322,7 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
       setHidden(true);
       return;
     }
-    if (isSettingNavigationRequest(prompt)) {
+    if (isSettingNavigationRequest(prompt) && (!api || !engagement || !runtime || settingNavigationCandidates(prompt).length > 0)) {
       const candidates = settingNavigationCandidates(prompt);
       setDraft("");
       setError("");
@@ -309,10 +330,13 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
         { role: "user", content: prompt },
         { role: "assistant", content: candidates.length
           ? "Choose the setting you want to open."
-          : "I couldn't identify one setting. Browse the settings list below." },
+          : "I couldn't identify a Nebula destination. Browse the places and settings below." },
       ]);
       setSuggestions(candidates);
-      if (!candidates.length) catalogRef.current?.setAttribute("open", "");
+      if (!candidates.length) {
+        catalogRef.current?.setAttribute("open", "");
+        destinationCatalogRef.current?.setAttribute("open", "");
+      }
       return;
     }
     if (!api || !engagement || !runtime) return;
@@ -389,6 +413,8 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
 
   const matches = query.trim() ? settingCatalog.filter((entry) =>
     [entry.label, entry.description, ...entry.keywords].join(" ").toLowerCase().includes(query.toLowerCase())) : settingCatalog;
+  const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
+    [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up"]);
   const panelContent = open ? <div ref={panel} className={styles.panel} role="dialog" aria-label="Nebula assistant" style={{ left: position.x, top: position.y }} hidden={hidden}>
     <div className={styles.header}>
@@ -400,11 +426,16 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
     <div className={styles.body}>
       <div ref={transcript} className={styles.transcript} role="log" aria-label="Nebula assistant conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children, ...props }) => {
         const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
+        const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, engagement?.id));
         return setting
           ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); setHidden(true); }}>{children}</a>
+          : destination ? <a href={href} onClick={(event) => { event.preventDefault(); openDestination(destination); }}>{children}</a>
           : <a href={href} {...props}>{children}</a>;
       } }}>{message.content}</ReactMarkdown></div>)}</div>
       {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setSuggestions([]); setHidden(true); }}>{entry.label}</button>)}</div>}
+      <details ref={destinationCatalogRef} className={styles.catalog}><summary>Places I can open</summary><input aria-label="Find a place" placeholder="Find a place" value={destinationQuery} onChange={(event) => setDestinationQuery(event.target.value)} />
+        <div className={styles.settingList}>{destinationMatches.length ? destinationMatches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { const confirmation = openDestination(entry); setMessages((current) => [...current, { role: "assistant", content: confirmation }]); }}><span>{entry.label}</span><small>{entry.path.includes("{project_id}") ? "Selected project" : "Open page"}</small></button>) : <p>No place found.</p>}</div>
+      </details>
       <details ref={catalogRef} className={styles.catalog}><summary>Settings I can help with</summary><input aria-label="Find a setting" placeholder="Find a setting" value={query} onChange={(event) => setQuery(event.target.value)} />
         <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setHidden(true); }}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
         <div className={styles.themes}>{THEMES.map((theme) => <button key={theme.value} className="button quiet" type="button" aria-pressed={preference === theme.value} onClick={() => setPreference(theme.value)}>{theme.label}</button>)}</div>
@@ -414,7 +445,7 @@ export function NebulaControlAssistant({ onOpenSetting, onCloseSetting, onSavedS
       {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
       {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
     </div>
-    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Nebula a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about Nebula or open a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
+    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Nebula a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about Nebula or open a page or setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
   </div> : null;
 
   return <>{!open || hidden ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}{panelContent && createPortal(panelContent, document.body)}</>;

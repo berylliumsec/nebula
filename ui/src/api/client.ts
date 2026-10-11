@@ -9814,8 +9814,9 @@ export class ApiClient {
         let receipt = wire.receipt ?? (wire.payload?.receipt && typeof wire.payload.receipt === "object"
           && !Array.isArray(wire.payload.receipt) ? wire.payload.receipt as Record<string, unknown> : undefined);
         // Grok's MCP adapter places the structured tool result in OkayOutput.
-        // Decode only a scoped Nebula settings result, never arbitrary tool text.
-        if (!receipt && wire.server_id === "nebula" && /^nebula_settings_/.test(capability)) {
+        // Decode only scoped Nebula settings or navigation results, never arbitrary tool text.
+        if (!receipt && wire.server_id === "nebula" && (/^nebula_settings_/.test(capability)
+          || /^nebula_navigate_open_[0-9a-f]{10,}$/.test(capability))) {
           const raw = wire.payload?.rawOutput;
           const output = raw && typeof raw === "object" && !Array.isArray(raw)
             ? (raw as Record<string, unknown>).output : undefined;

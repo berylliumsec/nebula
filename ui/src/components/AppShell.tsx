@@ -224,7 +224,7 @@ export function AppShell() {
                 <Outlet />
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />
-              <NebulaControlAssistant onOpenSetting={openSetting} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting} />
+              <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting} />
               <CommandPalette
                 api={api}
                 activeProjectId={engagement?.id}

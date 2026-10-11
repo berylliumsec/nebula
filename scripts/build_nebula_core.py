@@ -162,6 +162,9 @@ def main() -> None:
     diagnostic_guidance = root / "src" / "nebula" / "v3" / "diagnostic_guidance.json"
     if not diagnostic_guidance.is_file():
         raise RuntimeError("the bundled diagnostic guidance catalog is required")
+    assistant_destinations = root / "src" / "nebula" / "v3" / "assistant_destinations.json"
+    if not assistant_destinations.is_file():
+        raise RuntimeError("the bundled assistant navigation catalog is required")
     kali_tool_inventory = root / "src" / "nebula" / "v3" / "kali_tool_inventory.py"
     if not kali_tool_inventory.is_file():
         raise RuntimeError("the Kali security-tool inventory helper is required")
@@ -241,6 +244,8 @@ def main() -> None:
         f"{product_knowledge}:nebula/v3",
         "--add-data",
         f"{diagnostic_guidance}:nebula/v3",
+        "--add-data",
+        f"{assistant_destinations}:nebula/v3",
         "--add-data",
         f"{kali_tool_inventory}:nebula/v3",
         "--add-data",

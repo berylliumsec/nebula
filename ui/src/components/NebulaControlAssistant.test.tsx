@@ -20,7 +20,7 @@ describe("NebulaControlAssistant", () => {
   it("opens from the global icon, applies a device theme, and keeps the setting catalog reachable", async () => {
     const user = userEvent.setup();
     const onOpenSetting = vi.fn();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.click(screen.getByText("Settings I can help with"));
     await user.click(screen.getByRole("button", { name: "Light" }));
@@ -36,7 +36,7 @@ describe("NebulaControlAssistant", () => {
     const user = userEvent.setup();
     const onOpenSetting = vi.fn();
     const onCloseSetting = vi.fn();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "change to zero theme");
     expect(screen.getByRole("button", { name: "Send to Nebula assistant" })).toBeEnabled();
@@ -72,7 +72,7 @@ describe("NebulaControlAssistant", () => {
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
     } as unknown as ReturnType<typeof useWorkspace>);
-    const mounted = render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
+    const mounted = render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "could you make the screen look like Nebula Zero?{enter}");
     await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
@@ -82,7 +82,7 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
     getControlAssistantSession.mockResolvedValue({ id: "control", engagementId: "project", backend: "harness", harnessProfileId: "local", model: "model" });
     mounted.unmount();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await waitFor(() => expect(listChatMessages).toHaveBeenCalledWith("control"));
     expect(await screen.findByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
@@ -108,7 +108,7 @@ describe("NebulaControlAssistant", () => {
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
     } as unknown as ReturnType<typeof useWorkspace>);
     const onOpenSetting = vi.fn();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} onCloseSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "could you get this project's commands running on the host for me?{enter}");
     await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" })));
@@ -123,7 +123,7 @@ describe("NebulaControlAssistant", () => {
 
   it("hides, restores, and closes without discarding the draft", async () => {
     const user = userEvent.setup();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "Help me choose a theme");
     await user.click(screen.getByRole("button", { name: "Hide Nebula assistant" }));
@@ -137,22 +137,59 @@ describe("NebulaControlAssistant", () => {
   it("opens a named setting from Enter through the settings lens callback", async () => {
     const user = userEvent.setup();
     const onOpenSetting = vi.fn();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "open MCP servers{enter}");
     expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.mcp" }));
     expect(screen.getByRole("button", { name: "Show Nebula assistant" })).toBeInTheDocument();
   });
 
+  it("opens All projects immediately from 'show me my projects', without a model or selected project", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "show me my projects{enter}");
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("/projects");
+    expect(screen.getByRole("button", { name: "Show Nebula assistant" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show Nebula assistant" }));
+    expect(screen.getByText("Opened All projects.")).toBeInTheDocument();
+  });
+
+  it("applies a model-selected page action only from its scoped tool receipt", async () => {
+    const user = userEvent.setup();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({ type: "tool_completed", turnId: "turn", toolCallId: "nav-call", capability: "nebula.navigate.open",
+        status: "complete", summary: "Navigation requested", evidenceIds: [], artifacts: [], step: 0,
+        receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "projects" } } });
+      return { sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: { role: "assistant", content: "Opening the Projects list." } };
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    const onNavigate = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    const composer = screen.getByRole("textbox", { name: "Ask Nebula a question" });
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "locate the place with everything I've built{enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledExactlyOnceWith("/projects"));
+  });
+
   it("keeps the catalog available from a navigation prompt without a model", async () => {
     const user = userEvent.setup();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "open pineapple moon");
     const send = screen.getByRole("button", { name: "Send to Nebula assistant" });
     expect(send).toBeEnabled();
     await user.click(send);
-    expect(screen.getByText("I couldn't identify one setting. Browse the settings list below.")).toBeInTheDocument();
+    expect(screen.getByText("I couldn't identify a Nebula destination. Browse the places and settings below.")).toBeInTheDocument();
   });
 
   it("sends once on Enter, keeps Shift+Enter as a newline, and ignores composition", async () => {
@@ -167,7 +204,7 @@ describe("NebulaControlAssistant", () => {
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
     } as unknown as ReturnType<typeof useWorkspace>);
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     const composer = screen.getByRole("textbox", { name: "Ask Nebula a question" });
     await waitFor(() => expect(composer).toBeEnabled());
@@ -193,7 +230,7 @@ describe("NebulaControlAssistant", () => {
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
     } as unknown as ReturnType<typeof useWorkspace>);
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     const composer = screen.getByRole("textbox", { name: "Ask Nebula a question" });
     await waitFor(() => expect(composer).toBeEnabled());
@@ -223,7 +260,7 @@ describe("NebulaControlAssistant", () => {
     const onOpenSetting = vi.fn();
     const onCloseSetting = vi.fn();
     const onSavedSetting = vi.fn();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} onSavedSetting={onSavedSetting} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} onSavedSetting={onSavedSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     const composer = screen.getByRole("textbox", { name: "Ask Nebula a question" });
     await waitFor(() => expect(composer).toBeEnabled());
@@ -251,7 +288,7 @@ describe("NebulaControlAssistant", () => {
         getAutomationPolicy: vi.fn().mockResolvedValue({ executionMode: "host" }), updateAutomationPolicy },
       engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
     } as unknown as ReturnType<typeof useWorkspace>);
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={vi.fn()} onCloseSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} onCloseSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     const composer = screen.getByRole("textbox", { name: "Ask Nebula a question" });
     await waitFor(() => expect(composer).toBeEnabled());
