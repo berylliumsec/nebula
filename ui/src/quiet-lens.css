@@ -1,0 +1,279 @@
+/* Review theme: the two independent lenses disclose Nebula's real shell. */
+:root[data-theme="quiet-lens"] {
+  color-scheme: dark;
+  --canvas: #090d11;
+  --surface: #10171c;
+  --surface-muted: #0c1216;
+  --surface-raised: #182228;
+  --surface-overlay: #182228;
+  --surface-hover: #243239;
+  --text: #dae2e4;
+  --text-strong: #f2f5f4;
+  --muted: #94a4a9;
+  --muted-strong: #b9c8cc;
+  --border: #50636b;
+  --border-soft: #293a41;
+  --blue: #9ebac2;
+  --blue-bright: #c3d8db;
+  --blue-muted: #21343b;
+  --green: #91b9a4;
+  --green-muted: #20342c;
+  --orange: #e2b17e;
+  --red: #ef9995;
+  --red-muted: #422624;
+  --focus: #c4dde0;
+  --on-accent: #101c20;
+  --action-primary: #9ebac2;
+  --action-primary-hover: #c3d8db;
+  --action-primary-pressed: #879fa7;
+  --action-primary-text: #101c20;
+  --brand-start: #9ebac2;
+  --brand-end: #7999a3;
+  --side-width: 64px;
+  --top-height: 86px;
+  --radius-control: 18px;
+  --radius-panel: 16px;
+}
+
+:root[data-theme="quiet-lens"] body { background: var(--canvas); }
+:root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell,
+:root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.with-activity {
+  grid-template-columns: 64px minmax(0, 1fr) 0;
+  grid-template-rows: 86px minmax(0, 1fr);
+}
+:root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.with-activity {
+  grid-template-columns: 64px minmax(0, 1fr) var(--activity-width);
+}
+:root[data-theme="quiet-lens"] .quiet-lens-shell > .main-content { background: var(--canvas); }
+
+:root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav {
+  position: relative;
+  z-index: 70;
+  width: 64px;
+  min-width: 64px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: width 180ms ease, background-color 180ms ease;
+}
+:root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav[data-lens-open="true"] {
+  width: 252px;
+  border-right: 1px solid var(--border-soft);
+  border-radius: 0 28px 28px 0;
+  background: var(--surface);
+  box-shadow: 12px 0 40px rgb(0 0 0 / 20%);
+}
+:root[data-theme="quiet-lens"] .quiet-lens-shell:has(> .side-nav[data-lens-open="true"]) > .sidebar-scrim {
+  position: fixed;
+  z-index: 65;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: rgb(0 0 0 / 32%);
+}
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="false"] > :not(.quiet-lens-handle) { display: none; }
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] > :not(.quiet-lens-handle) { position: relative; z-index: 2; }
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .brand-lockup {
+  min-height: 76px;
+  padding-left: 55px;
+  border-bottom: 0;
+}
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .brand-mark {
+  color: var(--blue);
+  background: transparent;
+}
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .alpha-label { display: none; }
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .nav-item { min-height: 44px; }
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .nav-item.active {
+  background: var(--blue-muted);
+}
+
+:root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar {
+  position: relative;
+  z-index: 68;
+  min-width: 0;
+  min-height: 86px;
+  padding: 0 22px;
+  border: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar[data-lens-open="true"] {
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0 0 38px 38px;
+  background: var(--surface);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 18%);
+}
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > :is(.top-bar-leading, .top-bar-page-actions) { display: none; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > .top-bar-actions > :not(.approval-trigger):not(.connection-chip) { display: none; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > .top-bar-actions > .connection-chip.ready { display: none; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > .top-bar-actions { margin-left: auto; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-leading { min-width: 145px; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > :not(.quiet-lens-handle) { position: relative; z-index: 2; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-page-actions { overflow-x: auto; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] .top-bar-title strong { color: var(--text-strong); }
+:root[data-theme="quiet-lens"] .top-bar-trailing-actions > .button.primary,
+:root[data-theme="quiet-lens"] .top-bar-page-actions .button.primary {
+  min-height: 44px;
+  padding-inline: 22px;
+  border-radius: 50% / 65%;
+}
+
+:root[data-theme="quiet-lens"] .quiet-lens-handle {
+  position: absolute;
+  z-index: 3;
+  display: block;
+  padding: 0;
+  border: 0;
+  color: var(--blue);
+  background: transparent;
+  cursor: pointer;
+  opacity: .18;
+  transition: opacity 180ms ease;
+}
+:root[data-theme="quiet-lens"] .quiet-lens-shell[data-quiet-pointer="active"] .quiet-lens-handle,
+:root[data-theme="quiet-lens"] .quiet-lens-handle:is(:hover, :focus-visible),
+:root[data-theme="quiet-lens"] [data-lens-open="true"] > .quiet-lens-handle { opacity: .85; }
+:root[data-theme="quiet-lens"] .quiet-lens-handle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+:root[data-theme="quiet-lens"] .quiet-lens-handle svg { display: block; width: 100%; height: 100%; overflow: visible; }
+:root[data-theme="quiet-lens"] .quiet-lens-handle ellipse { fill: rgb(158 186 194 / 3%); stroke: currentColor; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+:root[data-theme="quiet-lens"] .quiet-lens-side-handle {
+  top: clamp(118px, 15vh, 180px);
+  left: 8px;
+  width: 44px;
+  height: min(61vh, 610px);
+}
+:root[data-theme="quiet-lens"] .quiet-lens-top-handle {
+  top: 21px;
+  left: 50%;
+  width: clamp(300px, 67vw, 930px);
+  height: 44px;
+  transform: translateX(-50%);
+}
+:root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav[data-lens-open="true"] > .quiet-lens-side-handle:not(:focus-visible) {
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+:root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar[data-lens-open="true"] > .quiet-lens-top-handle:not(:focus-visible) {
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+:root[data-theme="quiet-lens"] [data-lens-open="true"] > .quiet-lens-handle:focus-visible { opacity: .85; pointer-events: auto; }
+
+/* Quiet surfaces use the same tapered contour while keeping readable content. */
+:root[data-theme="quiet-lens"] .button.primary { border: 1px solid var(--blue); border-radius: 50% / 68%; }
+:root[data-theme="quiet-lens"] .button.secondary { border-radius: 50% / 68%; }
+:root[data-theme="quiet-lens"] .panel { background: color-mix(in srgb, var(--surface) 78%, var(--canvas)); }
+:root[data-theme="quiet-lens"] .page-header h1 { letter-spacing: -.045em; }
+:root[data-theme="quiet-lens"] .chat-composer {
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+}
+:root[data-theme="quiet-lens"] .chat-composer:focus-within { border-color: var(--focus); }
+:root[data-theme="quiet-lens"] .chat-composer textarea { color: var(--text-strong); background: transparent; }
+:root[data-theme="quiet-lens"] .chat-composer .chat-composer-submit { min-width: 60px; border-radius: 50% / 68%; }
+:root[data-theme="quiet-lens"] .chat-composer footer .chat-composer-icon { border-radius: 50%; }
+
+@media (max-width: 760px) {
+  :root[data-theme="quiet-lens"] { --side-width: 0px; --top-height: 64px; }
+  :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell,
+  :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.with-activity {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 64px minmax(0, 1fr) auto;
+  }
+  :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.workbench-route { --top-height: 64px; --shell-top-row: 64px; }
+  :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.workbench-route > .top-bar { display: flex; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar {
+    grid-column: 1;
+    min-height: 64px;
+    padding: env(safe-area-inset-top, 0px) 12px 0;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar[data-lens-open="true"] {
+    min-height: 64px;
+    border-radius: 0 0 24px 24px;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-top-handle {
+    top: calc(9px + env(safe-area-inset-top, 0px));
+    width: min(62vw, 275px);
+  }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .quiet-lens-top-handle { display: none; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-leading { min-width: 0; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-leading .toolbar-button { display: none; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-page-actions { display: none; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-actions { gap: 4px; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] .command-trigger kbd { display: none; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] .command-trigger span { display: none; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] .command-trigger { width: 44px; padding: 0; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav {
+    position: fixed;
+    z-index: 80;
+    inset: 82px auto calc(58px + env(safe-area-inset-bottom, 0px)) 0;
+    display: flex;
+    width: 56px;
+    min-width: 56px;
+    height: auto;
+    padding-top: 0;
+    visibility: visible;
+    transform: none;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav[data-lens-open="true"] {
+    width: min(300px, calc(100vw - 44px));
+    border-radius: 0 24px 24px 0;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-side-handle {
+    top: 12%;
+    left: 4px;
+    height: 53%;
+    opacity: .72;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .sidebar-scrim { display: none; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell:has(> .side-nav[data-lens-open="true"]) > .sidebar-scrim { display: block; z-index: 75; inset: 64px 0 0; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar { z-index: 76; }
+  :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .brand-lockup { display: flex; }
+  :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .nav-list { display: flex; }
+  :root[data-theme="quiet-lens"] .mobile-companion-nav {
+    border-top-color: transparent;
+    background: var(--canvas);
+  }
+  :root[data-theme="quiet-lens"] .mobile-companion-nav button {
+    min-width: 44px;
+    min-height: 50px;
+    border: 1px solid var(--border-soft);
+    border-radius: 50% / 58%;
+    background: var(--surface);
+  }
+  :root[data-theme="quiet-lens"] .mobile-companion-nav button[aria-current="page"] { border-color: var(--blue); }
+  :root[data-theme="quiet-lens"] .sessions-page .chat-composer { border-radius: 24px; }
+  :root[data-theme="quiet-lens"] .mobile-conversation-title {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+    overflow: hidden;
+  }
+  :root[data-theme="quiet-lens"] .mobile-conversation-title strong,
+  :root[data-theme="quiet-lens"] .mobile-conversation-title small { display: block; width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+  :root[data-theme="quiet-lens"] .sessions-page .chat-scroll { padding-left: 44px; padding-right: 16px; }
+  :root[data-theme="quiet-lens"] .sessions-page .chat-composer {
+    width: calc(100% - 48px);
+    margin-left: 36px;
+    margin-right: 12px;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  :root[data-theme="quiet-lens"] .quiet-lens-handle { opacity: .72; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="quiet-lens"] .quiet-lens-handle,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav { transition: none; }
+}

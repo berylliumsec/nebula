@@ -18,9 +18,13 @@ interface SideNavProps {
   setOpen: Dispatch<SetStateAction<boolean>>;
   onNavigate: () => void;
   variant?: "standard" | "zero";
+  lensOpen?: boolean;
+  onToggleLens?: () => void;
+  onRevealLens?: () => void;
+  onLeaveLens?: () => void;
 }
 
-export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "standard" }: SideNavProps) {
+export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "standard", lensOpen = false, onToggleLens, onRevealLens, onLeaveLens }: SideNavProps) {
   const location = useLocation();
   const navigate = useNavigate();
   // Detail and tab routes (findings/<id>, assets, …) belong to their section, as in the top bar.
@@ -169,7 +173,10 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
     }
   };
   return (
-    <aside className={`side-nav${variant === "zero" ? " zero-anchor-dock" : ""}`} data-shell="shared" aria-label="Primary navigation">
+    <aside className={`side-nav${variant === "zero" ? " zero-anchor-dock" : ""}`} data-shell="shared" aria-label="Primary navigation" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
+      {onToggleLens && <button className="quiet-lens-handle quiet-lens-side-handle" type="button" aria-label="Open navigation" aria-expanded={lensOpen} title="Open navigation" onMouseEnter={onRevealLens} onFocus={onRevealLens} onClick={onRevealLens}>
+        <svg viewBox="0 0 44 600" preserveAspectRatio="none" aria-hidden="true"><ellipse cx="22" cy="300" rx="6" ry="290" /></svg>
+      </button>}
       <div className="brand-lockup">
         <span className="brand-mark" aria-hidden="true">
           <Orbit size={24} strokeWidth={1.8} />

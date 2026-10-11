@@ -698,7 +698,7 @@ async function openWorkspace(page: Page, route: string, heading: string) {
   await page.waitForTimeout(120);
 }
 
-async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark" | "studio-dark") {
+async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark" | "studio-dark" | "quiet-lens") {
   await page.evaluate((value) => {
     const oldValue = localStorage.getItem("nebula.theme");
     localStorage.setItem("nebula.theme", value);
@@ -2303,6 +2303,7 @@ test("theme picker previews and persists every color palette", async ({ page }, 
     ["Zero Dark", "zero-dark", true],
     ["Zero Classic", "zero-classic", true],
     ["Studio Dark", "studio-dark", false],
+    ["Quiet Lens", "quiet-lens", false],
   ] as const) {
     const option = appearance.getByRole("button", { name: label, exact: true });
     await expect(option.locator(".theme-preview")).toBeVisible();
@@ -2346,6 +2347,71 @@ test("theme picker previews and persists every color palette", async ({ page }, 
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+});
+
+reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline chat visible", async ({ page }, testInfo) => {
+  await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({ json: [{
+    ...entity, id: "quiet-lens-harness", name: "Review harness", kind: "codex_app_server",
+    connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
+    enabled: true, default_model: "review-model", privacy: { local_only: true, permits_sensitive_data: true },
+    capabilities: { models: ["review-model"], checked_at: entity.updated_at, authentication_state: "verified" },
+  }] }));
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings" }).click();
+  await page.getByText("Identity & Security", { exact: true }).click();
+  await page.locator("#appearance-settings").getByRole("button", { name: "Quiet Lens" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "quiet-lens");
+  await page.goto("/?view=chat");
+  await expect(page.getByRole("button", { name: "Start new chat", exact: true })).toBeVisible({ timeout: 20_000 });
+  const shell = page.locator(".quiet-lens-shell");
+  const top = shell.locator(".top-bar");
+  const side = shell.locator(".side-nav");
+  const topHandle = top.getByRole("button", { name: "Open top menu" });
+  const sideHandle = side.getByRole("button", { name: "Open navigation" });
+  await expect(topHandle).toBeVisible();
+  await expect(sideHandle).toBeVisible();
+  expectTouchTarget((await topHandle.boundingBox())?.height, "Top lens target height");
+  expectTouchTarget((await sideHandle.boundingBox())?.width, "Side lens target width");
+  const topBounds = await topHandle.boundingBox();
+  const sideBounds = await sideHandle.boundingBox();
+  expect(topBounds && sideBounds && topBounds.y + topBounds.height < sideBounds.y).toBe(true);
+  await expect(side.locator(".nav-list")).toBeHidden();
+
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await topHandle.hover();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    const terminalTab = page.getByRole("tab", { name: "Terminal", exact: true });
+    await expect(terminalTab).toBeVisible();
+    await terminalTab.hover();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await expect(side.locator(".nav-list")).toBeHidden();
+    await sideHandle.hover();
+  } else {
+    await topHandle.tap();
+    await expect(top).toHaveAttribute("data-lens-open", "true");
+    await sideHandle.tap();
+  }
+  await expect(side.locator(".nav-list")).toBeVisible();
+  await expect(side.getByRole("link", { name: "Findings" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("quiet-lens-navigation.png") });
+
+  await page.keyboard.press("Escape");
+  await expect(side.locator(".nav-list")).toBeHidden();
+  await page.getByRole("button", { name: "Start new chat", exact: true }).click();
+  const composer = page.locator(".chat-composer textarea");
+  await expect(composer).toBeVisible();
+  await composer.fill("First line\n\nThird line");
+  await expect(composer).toHaveValue("First line\n\nThird line");
+  await expect.poll(() => composer.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(2);
+  await composer.fill(Array.from({ length: 16 }, (_, index) => `Line ${index + 1}`).join("\n"));
+  await expect.poll(() => composer.evaluate((element) => getComputedStyle(element).overflowY)).toBe("auto");
+  const longDraft = await composer.evaluate((element) => ({ scrollHeight: element.scrollHeight, clientHeight: element.clientHeight, overflow: getComputedStyle(element).overflowY }));
+  expect(longDraft.scrollHeight).toBeGreaterThan(longDraft.clientHeight);
+  expect(longDraft.overflow).toBe("auto");
+  await expect(page.locator(".chat-composer-submit")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("quiet-lens-multiline-chat.png") });
 });
 
 test("theme picker keeps Zero Classic, Glacier, and Amber Workbench colors across viewports", async ({ page }, testInfo) => {

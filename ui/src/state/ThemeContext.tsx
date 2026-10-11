@@ -18,6 +18,7 @@ export const THEME_OPTIONS = [
   { value: "zero-dark", label: "Zero Dark" },
   { value: "zero-classic", label: "Zero Classic" },
   { value: "studio-dark", label: "Studio Dark" },
+  { value: "quiet-lens", label: "Quiet Lens" },
 ] as const;
 
 export type ThemePreference = typeof THEME_OPTIONS[number]["value"];

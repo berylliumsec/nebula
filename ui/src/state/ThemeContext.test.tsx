@@ -45,4 +45,13 @@ describe("ThemeProvider", () => {
     expect(screen.getByTestId("preference")).toHaveTextContent("zero-dark");
     expect(document.documentElement.dataset.theme).toBe("zero-dark");
   });
+
+  it("restores the Quiet Lens device preference", () => {
+    localStorage.setItem("nebula.theme", "quiet-lens");
+
+    render(<ThemeProvider><Probe /></ThemeProvider>);
+
+    expect(screen.getByTestId("preference")).toHaveTextContent("quiet-lens");
+    expect(document.documentElement.dataset.theme).toBe("quiet-lens");
+  });
 });

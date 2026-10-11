@@ -1,16 +1,28 @@
 {
-  "change_digest": "3f2f11a0ec73d3e31f6339e60a0584ffb16171aa996717a3bb84776e18677432",
-  "reviewed_by": "Codex review of README assistant discovery and recorded product demo",
-  "reason": "The diff changes README copy and adds a Playwright-recorded GIF and MP4. The recording used a temporary real Core, the production UI bundle, an authenticated Codex app server, and desktop Chromium at 1280x800. It exercised the upper-right Nebula assistant, a sourced product answer, the Model providers setting, and Files navigation. The media was trimmed only to remove idle model wait. No product implementation, API, settings catalog, or test code changed.",
-  "exclusions": "No Python, frontend, native, or catalogued Playwright tests cover a documentation-only media change, so zero tests are selected. Full suites and unrelated journeys are excluded. The one recorded desktop walkthrough does not establish mobile, LAN, physical-device, deployed-build, or broader product acceptance.",
+  "change_digest": "d7e418d5cf6e41ca5ad688020e774670cc88230d89da0e9f3a6e6bb9adaba444",
+  "reviewed_by": "Codex focused Quiet Lens UI review",
+  "reason": "The branch adds an opt-in Quiet Lens theme to the actual Nebula shell and chat composer styling. App and ThemeContext component files cover Appearance discovery and preference restoration. The dedicated interface journey selects the theme, opens the separate top and side lenses, reaches real navigation, and checks multiline textarea sizing and scroll behavior in configured desktop, Chromium phone, and WebKit phone profiles. A disposable production Core is reviewed separately for real navigation and rendering.",
+  "exclusions": "No backend, API, or native implementation changes; Python and native tests are unrelated. No full frontend or Playwright suite, unrelated catalog journeys, provider turns, or physical-device run is selected. Real-Core visual review supplements rather than replaces the focused mocked browser regression.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 46,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/App.test.tsx",
+    "ui/src/state/ThemeContext.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "quiet-lens/desktop",
+    "quiet-lens/compact",
+    "quiet-lens/mobile-chromium-small",
+    "quiet-lens/mobile-chromium",
+    "quiet-lens/mobile-chromium-wide",
+    "quiet-lens/mobile-webkit-small",
+    "quiet-lens/mobile-webkit",
+    "quiet-lens/mobile-webkit-wide"
+  ]
 }
