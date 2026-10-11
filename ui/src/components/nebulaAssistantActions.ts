@@ -1,8 +1,43 @@
-import type { HarnessProfile } from "../api/types";
+import type { ChatStreamEvent, HarnessProfile } from "../api/types";
+import type { ThemePreference } from "../state/ThemeContext";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 
 type Runtime = { kind: "provider" | "harness"; id: string; model: string };
 export type ProjectMode = "docker" | "host";
+export type SettingClientAction =
+  | { kind: "open_setting"; setting: SettingCatalogEntry }
+  | { kind: "device_theme"; theme: ThemePreference }
+  | { kind: "project_execution_mode"; mode: ProjectMode; from?: ProjectMode };
+
+/** Accept only a completed, scoped tool receipt as a browser action. */
+export function settingClientAction(event: ChatStreamEvent): SettingClientAction | undefined {
+  if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
+  const receipt = event.receipt;
+  if (receipt?.state !== "pending_browser_apply") return undefined;
+  const action = receipt.client_action;
+  if (!action || typeof action !== "object" || Array.isArray(action)) return undefined;
+  const value = action as Record<string, unknown>;
+  const themeTool = event.capability === "nebula.settings.set_device_theme"
+    || /^nebula_settings_set_device_theme_[0-9a-f]{10,}$/.test(event.capability);
+  const openTool = event.capability === "nebula.settings.open"
+    || /^nebula_settings_open_[0-9a-f]{10,}$/.test(event.capability);
+  const modeTool = event.capability === "nebula.settings.set_project_mode"
+    || /^nebula_settings_set_project_mode_[0-9a-f]{10,}$/.test(event.capability);
+  if (themeTool && value.kind === "device_theme"
+      && ["light", "dark", "studio-dark", "zero-light", "zero-dark"].includes(String(value.theme))) {
+    return { kind: "device_theme", theme: value.theme as ThemePreference };
+  }
+  if (openTool && value.kind === "open_setting" && typeof value.setting_id === "string") {
+    const setting = settingCatalog.find((entry) => entry.id === `settings.${value.setting_id}`);
+    if (setting) return { kind: "open_setting", setting };
+  }
+  if (modeTool && value.kind === "project_execution_mode"
+      && (value.mode === "docker" || value.mode === "host")
+      && (value.from === undefined || value.from === "docker" || value.from === "host")) {
+    return { kind: "project_execution_mode", mode: value.mode, ...(value.from ? { from: value.from } : {}) };
+  }
+  return undefined;
+}
 
 function normalized(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -54,6 +89,24 @@ export function projectModeChange(prompt: string): { mode: ProjectMode; from?: P
   if (target !== "docker" && target !== "host") return undefined;
   if (!text.includes("project policy") && !text.includes("execution mode") && !from) return undefined;
   return { mode: target, ...(from ? { from } : {}) };
+}
+
+/** Device appearance is browser-owned, so an explicit change is handled in this window. */
+export function themeChange(prompt: string): ThemePreference | undefined {
+  const text = normalized(prompt);
+  const command = text.match(/^(?:(?:please|can you|could you|would you)\s+)?(?:change|switch|set|use|make)\s+(.+)$/);
+  if (!command) return undefined;
+  const request = command[1];
+  const target = request.match(/\b(?:to|into|as)\s+((?:zero(?: dark| light)?|studio dark|dark|light)(?: theme)?)$/)?.[1]
+    ?? request.replace(/^(?:(?:the|my|this device)\s+)?(?:theme|appearance)\s+/, "")
+      .replace(/^(?:it\s+)?(?:to|into|as)\s+/, "");
+  if (!/\b(?:theme|appearance|zero|studio)\b/.test(text)) return undefined;
+  const value = target.replace(/\s+theme$/, "");
+  const themes: Record<string, ThemePreference> = {
+    light: "light", dark: "dark", "studio dark": "studio-dark",
+    zero: "zero-dark", "zero light": "zero-light", "zero dark": "zero-dark",
+  };
+  return themes[value];
 }
 
 /** Route an explicit navigation request through the same Settings lens as search. */

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "../state/WorkspaceContext";
+import type { ChatStreamEvent } from "../api/types";
 import { ThemeProvider } from "../state/ThemeContext";
 import { DialogProvider } from "./DialogSystem";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
@@ -29,6 +30,95 @@ describe("NebulaControlAssistant", () => {
     await user.click(screen.getByRole("button", { name: /Model providers.*Direct actions available/ }));
     expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.providers" }));
     expect(screen.getByRole("button", { name: "Show Nebula assistant" })).toBeInTheDocument();
+  });
+
+  it("changes to Zero Dark from a text request without a project or model", async () => {
+    const user = userEvent.setup();
+    const onOpenSetting = vi.fn();
+    const onCloseSetting = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "change to zero theme");
+    expect(screen.getByRole("button", { name: "Send to Nebula assistant" })).toBeEnabled();
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "{enter}");
+    await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.appearance" })));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("zero-dark"));
+    expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");
+    await waitFor(() => expect(onCloseSetting).toHaveBeenCalled(), { timeout: 4000 });
+    expect(screen.getByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
+  });
+
+  it("applies a model-selected theme action on this browser and confirms it after readback", async () => {
+    const user = userEvent.setup();
+    const onOpenSetting = vi.fn();
+    const onCloseSetting = vi.fn();
+    const getControlAssistantSession = vi.fn().mockResolvedValue(null);
+    const listChatMessages = vi.fn().mockResolvedValue([
+      { id: "question", role: "user", content: "could you make the screen look like Nebula Zero?" },
+      { id: "answer", role: "assistant", content: "The theme request is pending in the browser." },
+    ]);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({
+        type: "tool_completed", turnId: "turn", toolCallId: "theme-call", capability: "nebula.settings.set_device_theme",
+        status: "complete", summary: "Action requested", evidenceIds: [], artifacts: [], step: 0,
+        receipt: { state: "pending_browser_apply", client_action: { kind: "device_theme", theme: "zero-dark" } },
+      });
+      return { sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: { id: "answer", role: "assistant", content: "Applying Zero Dark on this device." } };
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession, listChatMessages, streamChat },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    const mounted = render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "could you make the screen look like Nebula Zero?{enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.appearance" })));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("zero-dark"));
+    await waitFor(() => expect(onCloseSetting).toHaveBeenCalled(), { timeout: 4000 });
+    expect(screen.getByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
+    getControlAssistantSession.mockResolvedValue({ id: "control", engagementId: "project", backend: "harness", harnessProfileId: "local", model: "model" });
+    mounted.unmount();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={onCloseSetting} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await waitFor(() => expect(listChatMessages).toHaveBeenCalledWith("control"));
+    expect(await screen.findByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
+  });
+
+  it("routes a model-selected Host action through confirmation and Core readback", async () => {
+    const user = userEvent.setup();
+    const original = { executionMode: "docker", approvalPolicy: "always", networkEnabled: false, revision: 2 };
+    const saved = { ...original, executionMode: "host", revision: 3 };
+    const getAutomationPolicy = vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(saved);
+    const updateAutomationPolicy = vi.fn().mockResolvedValue(saved);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({ type: "tool_completed", turnId: "turn", toolCallId: "mode-call", capability: "nebula.settings.set_project_mode",
+        status: "complete", summary: "Action requested", evidenceIds: [], artifacts: [], step: 0,
+        receipt: { state: "pending_browser_apply", client_action: { kind: "project_execution_mode", mode: "host" } } });
+      return { sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: { role: "assistant", content: "I requested the Host mode change." } };
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getAutomationPolicy, updateAutomationPolicy },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    const onOpenSetting = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onOpenSetting={onOpenSetting} onCloseSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "could you get this project's commands running on the host for me?{enter}");
+    await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" })));
+    expect(updateAutomationPolicy).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Switch to Host mode" }));
+    await waitFor(() => expect(updateAutomationPolicy).toHaveBeenCalledWith("project", expect.objectContaining({
+      executionMode: "host", hostAccessAcknowledged: true, expectedRevision: 2,
+    })));
+    await waitFor(() => expect(getAutomationPolicy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText(/Project is now in Host mode for new sessions/)).toBeInTheDocument(), { timeout: 4000 });
   });
 
   it("hides, restores, and closes without discarding the draft", async () => {

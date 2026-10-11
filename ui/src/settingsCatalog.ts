@@ -18,7 +18,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Identity & Security",
     scope: "Device",
     target: "appearance-settings",
-    keywords: ["appearance", "theme", "light", "dark", "zero dark", "zero classic", "glacier", "amber", "color scheme", "display"],
+    keywords: ["appearance", "theme", "light", "dark", "studio dark", "zero light", "zero dark", "zero classic", "zero theme", "glacier", "amber", "color scheme", "display"],
   },
   {
     id: "settings.providers",

@@ -9791,11 +9791,13 @@ export class ApiClient {
       if (wire.type === "tool_started") {
         const turnId = wire.turn_id ?? wire.harness_turn_id;
         const capability = wire.capability ?? wire.tool_name;
-        if (!turnId || !wire.tool_call_id || !capability) return;
+        const toolCallId = wire.tool_call_id ?? wire.item_id ??
+          (typeof wire.payload?.toolCallId === "string" ? wire.payload.toolCallId : undefined);
+        if (!turnId || !toolCallId || !capability) return;
         onEvent({
           type: "tool_started",
           turnId,
-          toolCallId: wire.tool_call_id,
+          toolCallId,
           capability,
           displayName: wire.display_name ?? undefined,
           arguments: wire.arguments ?? wire.payload ?? {},
@@ -9806,7 +9808,26 @@ export class ApiClient {
       if (wire.type === "tool_completed") {
         const turnId = wire.turn_id ?? wire.harness_turn_id;
         const capability = wire.capability ?? wire.tool_name;
-        if (!turnId || !wire.tool_call_id || !capability) return;
+        const toolCallId = wire.tool_call_id ?? wire.item_id ??
+          (typeof wire.payload?.toolCallId === "string" ? wire.payload.toolCallId : undefined);
+        if (!turnId || !toolCallId || !capability) return;
+        let receipt = wire.receipt ?? (wire.payload?.receipt && typeof wire.payload.receipt === "object"
+          && !Array.isArray(wire.payload.receipt) ? wire.payload.receipt as Record<string, unknown> : undefined);
+        // Grok's MCP adapter places the structured tool result in OkayOutput.
+        // Decode only a scoped Nebula settings result, never arbitrary tool text.
+        if (!receipt && wire.server_id === "nebula" && /^nebula_settings_/.test(capability)) {
+          const raw = wire.payload?.rawOutput;
+          const output = raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>).output : undefined;
+          const serialized = output && typeof output === "object" && !Array.isArray(output)
+            ? (output as Record<string, unknown>).OkayOutput : undefined;
+          if (typeof serialized === "string") {
+            try {
+              const parsed: unknown = JSON.parse(serialized);
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) receipt = parsed as Record<string, unknown>;
+            } catch { /* diagnostic-expected: keep the tool event without a receipt when ACP output is not JSON. */ }
+          }
+        }
         const payloadArtifacts = Array.isArray(wire.payload?.artifacts)
           ? (wire.payload.artifacts as WireChatStreamEvent["artifacts"])
           : [];
@@ -9814,7 +9835,7 @@ export class ApiClient {
         onEvent({
           type: "tool_completed",
           turnId,
-          toolCallId: wire.tool_call_id,
+          toolCallId,
           capability,
           displayName: wire.display_name ?? undefined,
           status:
@@ -9833,13 +9854,7 @@ export class ApiClient {
             (typeof wire.payload?.result_artifact_id === "string"
               ? wire.payload.result_artifact_id
               : undefined),
-          receipt:
-            wire.receipt ??
-            (wire.payload?.receipt &&
-            typeof wire.payload.receipt === "object" &&
-            !Array.isArray(wire.payload.receipt)
-              ? (wire.payload.receipt as Record<string, unknown>)
-              : undefined),
+          receipt,
           artifacts: artifacts.map((artifact) => ({
             artifactId: artifact.artifact_id,
             kind: artifact.kind,

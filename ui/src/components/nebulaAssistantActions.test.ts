@@ -1,8 +1,34 @@
 import { describe, expect, it } from "vitest";
-import type { HarnessProfile } from "../api/types";
-import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingToOpen } from "./nebulaAssistantActions";
+import type { ChatStreamEvent, HarnessProfile } from "../api/types";
+import { assistantTurnOptions, isSettingNavigationRequest, projectModeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("maps explicit device-theme commands to bounded values without taking over questions", () => {
+    expect(themeChange("change to zero theme")).toBe("zero-dark");
+    expect(themeChange("set the theme to Zero Light")).toBe("zero-light");
+    expect(themeChange("switch my appearance to Studio Dark")).toBe("studio-dark");
+    expect(themeChange("use dark theme")).toBe("dark");
+    expect(themeChange("set theme to light")).toBe("light");
+    expect(themeChange("how do I change to zero theme?")).toBeUndefined();
+    expect(themeChange("open the theme setting")).toBeUndefined();
+    expect(themeChange("change project execution mode to host")).toBeUndefined();
+  });
+  it("accepts only validated browser actions from scoped settings-tool receipts", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.settings.set_device_theme",
+      status: "complete", summary: "Action requested", evidenceIds: [], artifacts: [], step: 0,
+      receipt: { state: "pending_browser_apply", client_action: { kind: "device_theme", theme: "zero-dark" } },
+    };
+    expect(settingClientAction(event)).toEqual({ kind: "device_theme", theme: "zero-dark" });
+    expect(settingClientAction({ ...event, capability: "nebula_settings_open_1234567890abcdef",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "open_setting", setting_id: "appearance" } } }))
+      .toMatchObject({ kind: "open_setting", setting: { id: "settings.appearance" } });
+    expect(settingClientAction({ ...event, capability: "other.tool" })).toBeUndefined();
+    expect(settingClientAction({ ...event, capability: "nebula_settings_set_project_mode_1234567890abcdef",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "project_execution_mode", mode: "host", from: "docker" } } }))
+      .toEqual({ kind: "project_execution_mode", mode: "host", from: "docker" });
+    expect(settingClientAction({ ...event, receipt: { state: "pending_browser_apply", client_action: { kind: "device_theme", theme: "unlisted" } } })).toBeUndefined();
+  });
   it("recognizes explicit project mode changes without treating questions as commands", () => {
     expect(projectModeChange("open project policy and change from dockermode to host mode"))
       .toEqual({ from: "docker", mode: "host" });
