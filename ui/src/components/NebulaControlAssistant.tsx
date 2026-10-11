@@ -10,6 +10,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import type { ChatMessage } from "../api/types";
+import { assistantTurnOptions, settingToOpen } from "./nebulaAssistantActions";
 import styles from "./NebulaControlAssistant.module.css";
 
 const THEMES: { value: ThemePreference; label: string }[] = [
@@ -118,7 +119,16 @@ export function NebulaControlAssistant({ onOpenSetting }: { onOpenSetting: (entr
 
   const send = async () => {
     const prompt = draft.trim();
-    if (!api || !engagement || !runtime || !prompt || busy || loadingHistory) return;
+    if (!prompt) return;
+    const setting = settingToOpen(prompt);
+    if (setting) {
+      setDraft("");
+      onOpenSetting(setting);
+      setHidden(true);
+      return;
+    }
+    if (!api || !engagement || !runtime || busy || loadingHistory) return;
+    const turnOptions = assistantTurnOptions(runtime, harnesses);
     let allowCloudToolResults = false;
     if (toolRuntime && !(toolRuntime.kind === "provider" ? toolRuntime.profile.local : toolRuntime.profile.localOnly)) {
       if (!toolRuntime.profile.permitsSensitiveData) {
@@ -147,7 +157,10 @@ export function NebulaControlAssistant({ onOpenSetting }: { onOpenSetting: (entr
         backend: runtime.kind,
         providerId: runtime.kind === "provider" ? runtime.id : undefined,
         harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
-        model: runtime.model,
+        model: turnOptions.model,
+        reasoningEffort: turnOptions.reasoningEffort,
+        harnessReasoningEffort: turnOptions.harnessReasoningEffort,
+        harnessServiceTier: turnOptions.harnessServiceTier,
         messages: [{ role: "user", content: prompt }],
         toolsEnabled: false,
         allowCloudToolResults,
@@ -189,7 +202,7 @@ export function NebulaControlAssistant({ onOpenSetting }: { onOpenSetting: (entr
       {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
       {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
     </div>
-    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(); }}><textarea ref={input} aria-label="Ask Nebula to change a setting" value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} maxLength={4000} placeholder="Ask about a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || !engagement || !runtime || loadingHistory}><Send size={18} /></button>}</form>
+    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(); }}><textarea ref={input} aria-label="Ask Nebula to change a setting" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} rows={2} maxLength={4000} placeholder="Ask about or open a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Nebula assistant" disabled={!draft.trim() || (!settingToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
   </div> : null;
 
   return <>{!open || hidden ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}{panelContent && createPortal(panelContent, document.body)}</>;

@@ -2106,8 +2106,13 @@ test("stabilization Nebula settings assistant opens from every screen and change
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
   await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  await expect(page.getByRole("dialog", { name: "Nebula settings assistant" })).toBeVisible();
+  const reopenedAssistant = page.getByRole("dialog", { name: "Nebula settings assistant" });
+  await expect(reopenedAssistant).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula to change a setting" }).fill("open MCP servers");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula to change a setting" }).press("Enter");
+  await expect(page.getByRole("dialog", { name: "MCP servers" })).toBeVisible();
+  expect(new URL(page.url()).pathname).not.toBe("/settings");
 });
 
 test("theme picker previews and persists every color palette", async ({ page }, testInfo) => {
