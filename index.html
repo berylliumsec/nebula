@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Nebula is a native, local-first security testing workbench with isolated terminals, reviewed automation, evidence, and reporting."
+      content="Nebula is a cybersecurity harness built around the operator, with autonomous agents, project controls, evidence, findings, and reports."
     />
-    <title>Nebula – Security Testing Workbench</title>
+    <title>Nebula – Cybersecurity Harness</title>
     <style>
       :root {
         color-scheme: dark;
@@ -26,8 +26,9 @@
       nav img { width: 3rem; height: 3rem; object-fit: contain; }
       nav a, .actions a { color: #9ec5ff; }
       .hero { max-width: 52rem; padding: 7rem 0 4rem; }
-      h1 { margin: 0; font-size: clamp(3rem, 8vw, 6rem); line-height: .95; letter-spacing: -.05em; }
+      h1 { margin: 0; font-size: clamp(2.25rem, 8vw, 6rem); line-height: .95; letter-spacing: -.05em; }
       .lead { margin: 2rem 0; max-width: 45rem; color: #b9c7da; font-size: 1.25rem; line-height: 1.7; }
+      .availability { margin: 1rem 0 0; color: #aebdd1; font-size: .95rem; line-height: 1.5; }
       .actions { display: flex; flex-wrap: wrap; gap: .75rem; }
       .actions a { border: 1px solid #31527d; border-radius: .65rem; padding: .8rem 1rem; text-decoration: none; }
       .actions a:first-child { background: #dceaff; color: #0b1b30; border-color: #dceaff; font-weight: 700; }
@@ -35,7 +36,14 @@
       article { padding: 1.25rem; border: 1px solid #202c3d; border-radius: .8rem; background: #0c1320; }
       article h2 { margin-top: 0; font-size: 1.05rem; }
       article p { margin-bottom: 0; color: #aebdd1; line-height: 1.6; }
+      .mercury { margin: 1.5rem 0 0; max-width: 52rem; color: #aebdd1; line-height: 1.6; }
+      .mercury a { color: #9ec5ff; }
       footer { margin-top: 5rem; color: #8190a5; font-size: .9rem; }
+      @media (max-width: 600px) {
+        main { padding: 2rem 0; }
+        .hero { padding: 4rem 0 3rem; }
+        .lead { font-size: 1.1rem; }
+      }
     </style>
   </head>
   <body>
@@ -47,31 +55,34 @@
         <a href="https://github.com/BerylliumSec/nebula">GitHub</a>
       </nav>
       <section class="hero">
-        <h1>Security work, under control.</h1>
+        <h1>Nebula is a cybersecurity harness.</h1>
         <p class="lead">
-          Nebula is a native, local-first workbench for authorized security
-          testing: isolated terminals, optional AI assistance, reviewed
-          automation, immutable evidence, and reporting in one application.
+          Built around the operator, Nebula supports manual testing in the browser
+          and Kali terminal or autonomous coding and testing by agents in Assistant
+          or Missions. Set project scope, tools, and approvals; carry evidence into
+          findings and reports.
         </p>
         <div class="actions">
-          <a href="https://berylliumsec.github.io/nebula-apt/">Install Nebula</a>
+          <a href="https://berylliumsec.github.io/nebula-apt/">Install Linux preview</a>
           <a href="https://github.com/BerylliumSec/nebula/blob/main/docs/NEBULA3.md">Read the guide</a>
         </div>
+        <p class="availability">Linux x86_64 preview. Host mode runs without Docker or Podman; the Kali terminal and Docker mode require a container runtime.</p>
       </section>
       <section class="features" aria-label="Nebula capabilities">
         <article>
-          <h2>Isolated terminal</h2>
-          <p>Keep human terminal work inside a verified Docker or Podman runtime without host-shell fallback.</p>
+          <h2>Run agents autonomously</h2>
+          <p>Bring Codex or Grok harnesses, or run Nebula's agent with Anthropic's Claude, OpenRouter, or local models. Inspect reported token and cache use.</p>
         </article>
         <article>
-          <h2>Review-first automation</h2>
-          <p>Apply explicit scope, policy, and approval boundaries before commands execute.</p>
+          <h2>Choose the boundaries</h2>
+          <p>Set scope, tools, approvals, and Host or Docker mode. Route container traffic through an OpenVPN profile when needed.</p>
         </article>
         <article>
-          <h2>Durable evidence</h2>
-          <p>Preserve immutable artifacts, provenance, findings, validation, and signed-off reports.</p>
+          <h2>Keep the evidence</h2>
+          <p>Preserve output, link it to findings, and produce reports in the same project.</p>
         </article>
       </section>
+      <p class="mercury"><a href="https://github.com/berylliumsec/mercury">Mercury</a> is optional. When Nebula Core and its agent processes are enrolled under Mercury, Mercury can add a separate runtime policy layer.</p>
       <footer>Use Nebula only on systems you own or are authorized to test.</footer>
     </main>
   </body>

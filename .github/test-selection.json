@@ -1,18 +1,16 @@
 {
-  "change_digest": "a3fb2c81521f5df7cd80ac4b35211a45e072d8665e3991eee6d4519af131bdc1",
-  "reviewed_by": "Codex focused review of chat focus and companion geometry",
-  "reason": "Only focus-mode layout CSS and its browser regression changed. The selected empty-chat journey opens the Code companion through Chat tools on desktop, enters focus, checks that chat and editor keep their side-by-side geometry, exits focus, and checks restoration. The mobile cases check that the empty chat fills focus mode without clipping. The eight permanent browser profiles cover desktop Chromium at 1440 and 1024 px plus emulated mobile Chromium and WebKit at 320, 390, and 430 px. The changed ui.css and browser test are shared paths, so this is an explicit scoped review rather than automatic broad coverage.",
-  "exclusions": "No Python, Rust, API, persistence, or component state changed. A component test cannot measure the CSS grid regression. Real-Core, LAN-origin security checks, unrelated browser journeys, and full suites are excluded because this change only affects local presentation; a production build and focused browser journey will verify the built UI. Physical devices are unavailable and are not claimed.",
+  "change_digest": "346730358e26ea826a049d2f4bd1ceb98b0f852d0a031062bab2cf055edde40e",
+  "reviewed_by": "Codex review of operator control, autonomous work, runtime choice, prompt caching, VPN and Mercury wording",
+  "reason": "The diff changes only the repository-root static homepage and README copy, plus responsive homepage CSS. Source inspection confirms multi-step Assistant turns and durable Missions, operator scope and approval choices including the Allow all bypass, container-only OpenVPN routing, and conditional Mercury enrollment. Only Codex and Grok are offered as new external harnesses; Anthropic, OpenRouter, Ollama and vLLM are model-provider options. OpenRouter requests use a chat session routing key, Claude routes receive cache breakpoints, and the UI displays cache reads reported by the provider. No measured high cache-hit rate or general efficiency claim is made. The README acknowledgement remains near the top. The Mercury mention links to the public repository URL supplied by the user. The standalone homepage has no catalogued Playwright entry. Eight direct static-page browser checks are collected in /tmp/nebula-homepage-smoke.cjs: Chromium desktop 1440/1024, Chromium mobile 320/390/430, and WebKit mobile 320/390/430. They check the heading, feature cards, Mercury link and availability copy, installation destination, legacy-copy absence, and horizontal overflow.",
+  "exclusions": "No Core, SPA, native, provider, or API code changed. No relevant Python, frontend, native, or catalogued Playwright tests are selected; all full suites and unrelated journeys are excluded. The direct file:// browser check does not establish a deployed site, real-Core workflow, LAN-origin behavior, physical-device acceptance, or Mercury enrollment coverage.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:focus-side-companion"
-  ]
+  "playwright": []
 }
