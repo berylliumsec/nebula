@@ -2435,6 +2435,25 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     await composerFrame.hover();
     await expect(composerInput).toHaveCSS("opacity", "1");
     await expect(composer).toHaveValue(Array.from({ length: 16 }, (_, index) => `Line ${index + 1}`).join("\n"));
+
+    await topHandle.hover();
+    await page.getByRole("button", { name: "Enter focus mode" }).click();
+    const focusToolbar = page.locator(".sessions-page.full-screen > .session-toolbar");
+    const focusTabs = focusToolbar.locator(".session-tabs");
+    await page.mouse.move(400, 400);
+    await expect(focusTabs).toHaveCSS("opacity", "0");
+    await expect(focusToolbar.locator(".toolbar-actions")).toHaveCSS("opacity", "0");
+    await expect.poll(() => focusToolbar.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0.72");
+    expect(await focusToolbar.evaluate(element => Number.parseFloat(getComputedStyle(element, "::before").height))).toBeLessThanOrEqual(12);
+    await page.keyboard.press("Shift+Tab");
+    await expect(focusTabs).toHaveCSS("opacity", "1");
+    await page.mouse.click(700, 700);
+    await focusToolbar.hover();
+    await expect(focusTabs).toHaveCSS("opacity", "1");
+    await expect(focusToolbar.locator(".toolbar-actions")).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Escape");
+    await expect(focusToolbar).toHaveCount(0);
+    await expect(composer).toHaveValue(Array.from({ length: 16 }, (_, index) => `Line ${index + 1}`).join("\n"));
   }
 
   if (testInfo.project.name === "desktop") {

@@ -88,6 +88,21 @@ Primary buttons use the tapered oval language while keeping their labels readabl
 | Handle an approval or failure | Items requiring action stay explicit and visible even when navigation is collapsed. | Core and provider or harness session. |
 | Reload or reconnect | The selected conversation and transcript return; lens reveal state may reset. | URL and Core, with local presentation state transient. |
 
+### Focus mode refinement
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Enter focus mode from Workbench | Quiet Lens replaces the full-width focus toolbar with a thin top outline. The selected view and its content stay in place. | React owns the temporary focus state; the URL owns project, view, and conversation identity. | Mocked desktop and mobile browser; real Core visual review. |
+| Reveal focus controls | Hovering the top outline reveals the existing tabs and actions. Keyboard focus reveals them too, and the exit control remains operable. Pointer movement elsewhere does not expand them. | React owns focus state; CSS owns transient presentation. | Desktop pointer, keyboard, and accessibility checks. |
+| Use or leave focus mode | Switching views still works, Escape and Exit focus mode close focus, and the prior work surface returns without losing the unsent draft. Touch keeps controls visible because it has no hover. | URL and Core own the selected conversation and transcript; React owns unsent input and focus state. | Desktop and phone browser journeys, plus real Core. |
+| Refresh or reconnect | Focus may reset, while the selected view and saved conversation return. The theme remains selected on this device. | URL, Core, and device theme storage. | Real Core reload. |
+
+Creation, streaming, interruption, retry, and deletion use the existing Workbench
+and Core controls; this focus-toolbar change does not alter those operations.
+Approval and failure messages in the work surface remain visible while the
+toolbar is minimized. Test the production bundle at desktop 1440 and 1024 px,
+emulated 320–430 px Chromium and WebKit phone widths, and the disposable LAN Core.
+
 Lifecycle scope: discover theme in Appearance; select and persist it; navigate,
 focus, and use existing actions; create and select a conversation; type a draft,
 send, stream, interrupt, retry, and reconnect; reload and restore the theme;

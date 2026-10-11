@@ -260,6 +260,48 @@
     opacity: 0;
     pointer-events: none;
   }
+
+  /* Focus mode uses the same top contour as the main shell. Its full toolbar
+     returns on its own hover, keyboard focus, or an expanded control. */
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar {
+    position: relative;
+    clip-path: inset(0);
+    transition: background-color 180ms ease, border-color 180ms ease, clip-path 180ms ease;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar::before {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: min(82%, 900px);
+    height: 12px;
+    border: 1px solid var(--blue);
+    border-radius: 50%;
+    background: rgb(158 186 194 / 3%);
+    content: "";
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    transition: opacity 180ms ease;
+  }
+  /* Toolbar content uses display: contents, so opacity belongs on its rendered
+     children rather than on that wrapper. */
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar > .toolbar-content > *,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar > .toolbar-actions {
+    transition: opacity 180ms ease;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar:not(:hover):not(:has(:focus-visible)):not(:has([aria-expanded="true"])) {
+    border-color: transparent;
+    background: transparent;
+    clip-path: inset(0 max(0px, calc(50% - 470px)));
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar:not(:hover):not(:has(:focus-visible)):not(:has([aria-expanded="true"]))::before {
+    opacity: .72;
+  }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar:not(:hover):not(:has(:focus-visible)):not(:has([aria-expanded="true"])) > .toolbar-content > *,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar:not(:hover):not(:has(:focus-visible)):not(:has([aria-expanded="true"])) > .toolbar-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
 @media (max-width: 760px) {
@@ -359,5 +401,9 @@
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer > *,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail::before,
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > * { transition: none; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > *,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar::before,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar > .toolbar-content > *,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar > .toolbar-actions { transition: none; }
 }
