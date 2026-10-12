@@ -5962,6 +5962,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Unsent source draft");
   await page.locator(".chat-scroll").evaluate(element => {element.scrollTop = 150; element.dispatchEvent(new Event("scroll"));});
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
+  await expect.poll(() => page.evaluate((id) => performance.getEntriesByName(`nebula.chat_image.ready:${id}`, "mark").length, sourceSessionId)).toBeGreaterThan(0);
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations", exact: true }).click();
   else await page.getByRole("button", { name: "Show conversations" }).click();
   await page.locator(".session-select").filter({ hasText: "Target conversation" }).click();
@@ -6007,6 +6008,16 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   // Hold the network response: preview visibility must not depend on a timer.
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
+  const imagePreview = page.getByTestId("chat-image-preview");
+  await expect(imagePreview).toBeVisible();
+  expect(await imagePreview.locator("img").count()).toBeGreaterThan(1);
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    // Tap the visible viewport. Locator.tap() targets the center of the entire
+    // tall image and scrolls it before the gesture, changing the reading place.
+    const viewport = await page.locator(".chat-scroll").boundingBox();
+    if (!viewport) throw new Error("Expected a visible chat viewport");
+    await page.touchscreen.tap(viewport.x + viewport.width / 2, viewport.y + Math.min(viewport.height / 2, 120));
+  } else { await imagePreview.focus(); await imagePreview.press("Enter"); }
   const readingAnchor = page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true});
   await expect(readingAnchor).toBeAttached();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
@@ -6027,6 +6038,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   freshTarget = true;
   targetPendingGate = new Promise<void>(resolve => { releaseTargetPending = resolve; });
   await selectChat("Target conversation");
+  if (await page.getByTestId("chat-image-preview").isVisible()) await page.getByTestId("chat-image-preview").click();
   await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
   releaseTargetPending(); targetPendingGate = undefined;
@@ -6043,6 +6055,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await selectChat("Target conversation");
   failPending = true;
   await selectChat("Source conversation");
+  await page.locator(".chat-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expect(page.getByText("Fresh source transcript", {exact: true})).toBeVisible();
   await expect(page.getByText("Conversation messages loaded, but Nebula could not verify its active response state.")).toBeVisible();
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeDisabled();
@@ -6054,7 +6067,9 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
-  await expect(page.getByText("Fresh source transcript", {exact: true})).toBeAttached();
+  if (await page.getByTestId("chat-image-preview").isVisible()) await page.getByTestId("chat-image-preview").click();
+  await page.locator(".chat-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect(page.getByText("Fresh source transcript", {exact: true})).toBeVisible();
   await selectChat("Target conversation");
   releaseRefresh(); refreshGate = undefined;
   await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();

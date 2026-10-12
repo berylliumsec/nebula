@@ -1,20 +1,16 @@
 {
-  "change_digest": "ee41e79f521edbab5dcc8099ba3c42d8d49e2bd34f80d299fb78b1afdb91b759",
-  "reviewed_by": "Codex focused runtime-usage change review",
-  "reason": "The changed journey is Settings Usage for model providers and agent harnesses. The Python file covers vendor payload scope, read-only Codex account RPC, authenticated Core aggregation, refresh caching, and secret redaction. The three frontend files cover the new usage presentation and refresh recovery, mobile settings discovery, and URL-controlled Settings routing. The catalogued Playwright area exercises the new view, refresh, reload, mobile geometry, accessibility, and a disposable real Core on a production LAN origin. Shared API/client/config/test files were reviewed against this exact read-only feature; the selected tests cross every changed integration boundary without running unrelated journeys.",
-  "exclusions": "No Rust or native code changed, so native selection is empty. No full Python, frontend, or Playwright suite is authorized. Unrelated provider chat, missions, diagnostics, and browser research journeys are excluded. Vendor calls use mocked responses in automated tests; account-specific live balances need configured credentials and are not assumed from the fixtures. Physical device testing is not available in this selection.",
+  "change_digest": "bc163311594d7842af00a9cd44e70a45e9163e879c5fc6586b1c14f3b7761a30",
+  "reviewed_by": "Codex focused conversation image-preview review",
+  "reason": "The change adds a canvas-tile preview to warm conversation switching and changes transcript presentation while Core refreshes. Three collected unit cases cover invalidation, complete multi-tile rasterization, and cache disposal. The selected browser journey exercises held history refresh, keyboard/touch text reveal, scroll restoration, retry and rapid switching at 1440/1024 px desktop and 320/390/430 px emulated Chromium and WebKit widths. Its real-Core entry exercises durable history and reload through the production bundle.",
+  "exclusions": "No Python backend, database schema, API route, or native runtime changes are present, so Python and native tests are unrelated. No full frontend or browser suite, unrelated workspace/provider journeys, live provider execution, or physical-device run is selected. The image is a transient presentation cache; the real-Core case checks the existing durable authority.",
   "expected_tests": {
-    "python": 3,
-    "frontend": 16,
+    "python": 0,
+    "frontend": 3,
     "native": 0,
-    "playwright": 11
+    "playwright": 9
   },
-  "python": ["tests/v3/test_runtime_usage.py"],
-  "frontend": [
-    "ui/src/components/RuntimeUsagePanel.test.tsx",
-    "ui/src/components/CompactSettingsList.test.tsx",
-    "ui/src/pages/SettingsPage.test.tsx"
-  ],
+  "python": [],
+  "frontend": ["ui/src/pages/chatImagePreview.test.ts"],
   "native": [],
-  "playwright": ["area:runtime-usage"]
+  "playwright": ["area:conversation-switch-performance"]
 }

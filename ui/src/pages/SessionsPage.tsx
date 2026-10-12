@@ -105,6 +105,7 @@ import {
 } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import { ChatPreviewCache } from "./chatPreviewCache";
+import { chatImageKey, chatImagePalette, chatImageWidth, ChatImagePreviewCache, renderChatImagePreview, type ChatImagePreview } from "./chatImagePreview";
 import { groupByAssistantId } from "./chatRenderGroups";
 import { startHarnessActivityPolling } from "./harnessActivityPolling";
 import { Link, useSearchParams, type NavigateOptions } from "react-router-dom";
@@ -1571,10 +1572,20 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     messages: ConversationMessage[];
     toolCards: ToolLifecycleCard[];
     scrollTop: number;
+    scrollHeight: number;
     followBottom: boolean;
   }>(), [api, engagement?.id]);
+  const chatImagePreviews = useMemo(() => new ChatImagePreviewCache(), [api, engagement?.id]);
+  const imageBuildsRef = useRef(new Map<string, {key: string; controller: AbortController}>());
+  const [activeImagePreview, setActiveImagePreview] = useState<ChatImagePreview>();
+  const imageRevealRef = useRef<{image: ChatImagePreview; scrollTop: number} | undefined>(undefined);
   const previewOwnerRef = useRef("");
-  const restoredScrollRef = useRef<{scrollTop: number; followBottom: boolean} | undefined>(undefined);
+  const restoredScrollRef = useRef<{scrollTop: number; scrollHeight: number; followBottom: boolean} | undefined>(undefined);
+  useEffect(() => () => {
+    imageBuildsRef.current.forEach(({controller}) => controller.abort());
+    imageBuildsRef.current.clear();
+    chatImagePreviews.clear();
+  }, [chatImagePreviews]);
   const [reloadingConversation, setReloadingConversation] = useState(false);
   const [chatError, setChatError] = useState<unknown>();
   const [chatReconnecting, setChatReconnecting] = useState(false);
@@ -1754,15 +1765,20 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       chatFollowBottomRef.current = position.followBottom;
       setHasNewerMessages(!position.followBottom);
       if (chatViewportRef.current && !position.followBottom) {
-        chatViewportRef.current.scrollTop = position.scrollTop;
-        transcriptVirtualizer.scrollToOffset(position.scrollTop);
+        const viewport = chatViewportRef.current;
+        const imageTop = activeImagePreview
+          ? position.scrollTop / Math.max(1, position.scrollHeight - viewport.clientHeight)
+            * Math.max(0, activeImagePreview.height - viewport.clientHeight)
+          : position.scrollTop;
+        viewport.scrollTop = imageTop;
+        if (!activeImagePreview) transcriptVirtualizer.scrollToOffset(position.scrollTop);
       }
       setHasOlderMessages((chatViewportRef.current?.scrollTop ?? 0) > 24);
     };
     restore();
     const frame = requestAnimationFrame(restore);
     return () => cancelAnimationFrame(frame);
-  }, [conversationOpen, sessionId]);
+  }, [conversationOpen, sessionId, activeImagePreview]);
   useLayoutEffect(() => {
     const runStarted = sending && !previousChatSendingRef.current;
     previousChatSendingRef.current = sending;
@@ -2489,6 +2505,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     sessionSelectionGenerationRef.current += 1;
     previewOwnerRef.current = "";
     restoredScrollRef.current = undefined;
+    setActiveImagePreview(undefined);
     setSessionReadReady(true);
     historicalActivityAbortRef.current.forEach((controller) => controller.abort());
     historicalActivityAbortRef.current.clear();
@@ -2795,6 +2812,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const resetConversation = (open: boolean, options: { discardDraft?: boolean } = {}) => {
     previewOwnerRef.current = "";
     restoredScrollRef.current = undefined;
+    setActiveImagePreview(undefined);
     setSessionReadReady(true);
     sessionSelectionGenerationRef.current += 1;
     setApprovalDecisionBusy(false);
@@ -2872,6 +2890,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         // request is already in the operator's requested end state.
       }
       chatPreviews.delete(session.id);
+      chatImagePreviews.delete(session.id);
       if (engagement) {
         draftStore.clear(chatDraftStorageKey(engagement.id, session.id));
         clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, session.id));
@@ -2910,7 +2929,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     });
     const failedIds = new Set(failures.map(({ session }) => session.id));
     const deletedIds = new Set(targets.filter((session) => !failedIds.has(session.id)).map((session) => session.id));
-    deletedIds.forEach(id => chatPreviews.delete(id));
+    deletedIds.forEach(id => { chatPreviews.delete(id); chatImagePreviews.delete(id); });
     if (engagement) {
       for (const deletedId of deletedIds) {
         draftStore.clear(chatDraftStorageKey(engagement.id, deletedId));
@@ -3526,6 +3545,44 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
   }, [api, sessionId, messages.length, loadingHistory, coreState]);
 
+  const prepareChatImage = (id: string, settled: ConversationMessage[]) => {
+    const viewport = chatViewportRef.current;
+    if (!viewport || !settled.length || embeddedSideChat) return;
+    const width = chatImageWidth(viewport);
+    if (width < 160) return;
+    const palette = chatImagePalette(viewport);
+    const key = chatImageKey(settled, width, palette);
+    const revision = sessions.find((item) => item.id === id)?.revision;
+    if (chatImagePreviews.get(id)?.key === key && chatImagePreviews.get(id)?.revision === revision) return;
+    const previous = imageBuildsRef.current.get(id);
+    if (previous?.key === key) return;
+    previous?.controller.abort();
+    const controller = new AbortController();
+    imageBuildsRef.current.set(id, {key, controller});
+    void renderChatImagePreview(settled, width, palette, revision, controller.signal).then((image) => {
+      if (!image) return;
+      if (controller.signal.aborted || imageBuildsRef.current.get(id)?.controller !== controller) image.dispose();
+      else {
+        chatImagePreviews.set(id, image);
+        performance.mark(`nebula.chat_image.ready:${id}`);
+      }
+    }).catch((error) => {
+      void logCaughtDiagnostic("interface.chat.image_preview_failed", "A conversation image preview could not be rendered.", error, "sessions_page");
+    }).finally(() => {
+      if (imageBuildsRef.current.get(id)?.controller === controller) imageBuildsRef.current.delete(id);
+    });
+  };
+
+  useEffect(() => {
+    if (!sessionId || loadingHistory || !sessionReadReady || sending || pendingResponse || waitingCallback || pendingSubagentApproval
+      || harnessInteractions.some((item) => item.status === "pending") || embeddedSideChat || !messages.some((item) => item.durable)) return;
+    const settled = messages.filter((item) => item.durable);
+    // Text measurement is deferred until the operator is idle; a cold chat
+    // switch never waits for rasterization.
+    const timer = window.setTimeout(() => prepareChatImage(sessionId, settled), 500);
+    return () => window.clearTimeout(timer);
+  }, [sessionId, loadingHistory, sessionReadReady, sending, pendingResponse, waitingCallback, pendingSubagentApproval, harnessInteractions, messages, embeddedSideChat, sessions, chatImagePreviews]);
+
   const selectSession = async (id: string, updateUrl = true, preserveTranscript = false) => {
     explicitNewConversationRef.current = false;
     if (!id) {
@@ -3546,10 +3603,22 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         messages: durable,
         toolCards: toolCards.filter(card => durableIds.has(card.assistantId)),
         scrollTop: visibleViewport ? viewport!.scrollTop : lastPosition?.scrollTop ?? 0,
+        scrollHeight: visibleViewport ? viewport!.scrollHeight : viewport?.scrollHeight ?? 0,
         followBottom: visibleViewport ? chatFollowBottomRef.current : lastPosition?.followBottom ?? true,
       });
+      if (!sending && !pendingResponse && !waitingCallback && !pendingSubagentApproval
+        && !harnessInteractions.some((item) => item.status === "pending")) prepareChatImage(sessionId, durable);
+      else chatImagePreviews.delete(sessionId);
     }
     const preview = chatPreviews.get(id);
+    imageRevealRef.current = undefined;
+    const summary = sessions.find((session) => session.id === id);
+    const image = preview && !preserveTranscript ? chatImagePreviews.get(id) : undefined;
+    const viewport = chatViewportRef.current;
+    const imageWidth = image && viewport && mobileListOpen ? image.width : viewport ? chatImageWidth(viewport) : 0;
+    const matchingImage = image && viewport && image.revision === summary?.revision
+      && image.key === chatImageKey(preview!.messages, imageWidth, chatImagePalette(viewport)) ? image : undefined;
+    setActiveImagePreview(matchingImage);
     restoredScrollRef.current = preview;
     previewOwnerRef.current = "";
     // Cached durable messages remain usable while Core reconciles authoritative
@@ -3607,7 +3676,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHistoricalActivityErrors({});
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
-    const summary = sessions.find((session) => session.id === id);
     if (summary) {
       setRuntimeKind(summary.backend);
       setProviderId(summary.providerId ?? "");
@@ -3655,10 +3723,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           expectedMessageIds: recoveredHistory.map((message) => message.id),
         });
       }
+      if (matchingImage && chatViewportRef.current) imageRevealRef.current = {image: matchingImage, scrollTop: chatViewportRef.current.scrollTop};
       startTransition(() => {
         setReplacedMessages(replacedHistory);
         setMessages(recoveredHistory);
         setToolCards(restoredToolCards);
+        setActiveImagePreview(undefined);
       });
       authoritativeHistoryLoaded = true;
       const pendingResult = await pendingTurnResult;
@@ -3922,6 +3992,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setSessionReadReady(false);
       if (!authoritativeHistoryLoaded || (error instanceof ApiError && [401, 403, 404].includes(error.status))) {
         chatPreviews.delete(id);
+        chatImagePreviews.delete(id);
+        setActiveImagePreview(undefined);
         setMessages([]);
         setToolCards([]);
       }
@@ -4017,6 +4089,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       try { await api.discardTemporaryChat(closingId); }
       catch (error) { if (!(error instanceof ApiError && error.status === 404)) throw error; }
       chatPreviews.delete(closingId);
+      chatImagePreviews.delete(closingId);
       if (engagement) {
         draftStore.clear(chatDraftStorageKey(engagement.id, closingId));
         clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, closingId));
@@ -4182,6 +4255,33 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   // scroll, especially in WebKit. Only rows wholly above need compensation.
   transcriptVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) =>
     item.end <= (instance.scrollOffset ?? 0) && instance.scrollDirection !== "backward";
+  const revealImageText = () => {
+    if (!activeImagePreview) return;
+    imageRevealRef.current = {image: activeImagePreview, scrollTop: chatViewportRef.current?.scrollTop ?? 0};
+    setActiveImagePreview(undefined);
+  };
+  useLayoutEffect(() => {
+    const reveal = imageRevealRef.current;
+    if (activeImagePreview || !reveal) return;
+    imageRevealRef.current = undefined;
+    if (chatFollowBottomRef.current) {
+      transcriptVirtualizer.scrollToEnd();
+      return;
+    }
+    const saved = restoredScrollRef.current;
+    const viewportHeight = chatViewportRef.current?.clientHeight ?? 0;
+    if (saved?.scrollHeight) {
+      const imageRange = Math.max(1, reveal.image.height - viewportHeight);
+      const textRange = Math.max(1, saved.scrollHeight - viewportHeight);
+      const originalImageTop = saved.scrollTop / textRange * imageRange;
+      transcriptVirtualizer.scrollToOffset(Math.max(0, saved.scrollTop + (reveal.scrollTop - originalImageTop) * textRange / imageRange));
+      return;
+    }
+    const tops = reveal.image.messageTops;
+    let index = 0;
+    while (index + 1 < tops.length && tops[index + 1] <= reveal.scrollTop) index += 1;
+    transcriptVirtualizer.scrollToIndex(index + virtualMessageOffset, {align: "start"});
+  }, [activeImagePreview, sessionId]);
   const transcriptHeight = transcriptVirtualizer.getTotalSize();
   useLayoutEffect(() => {
     if (chatScrollJumpRef.current === "turn") {
@@ -6110,7 +6210,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     requestAnimationFrame(scrollToTurn);
                   });
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
-                {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
+                {activeImagePreview ? <div className="chat-image-preview" data-testid="chat-image-preview" role="button" tabIndex={0} aria-label="Conversation image preview. Activate to read, copy, or edit the text." style={{width: activeImagePreview.width, minHeight: activeImagePreview.height}} onClick={revealImageText} onKeyDown={(event) => {if (event.key === "Enter" || event.key === " ") {event.preventDefault(); revealImageText();}}}>
+                  {activeImagePreview.tiles.map((tile, index) => <img key={tile.url} src={tile.url} alt="" aria-hidden="true" width={activeImagePreview.width} height={tile.height} loading={index < 2 ? "eager" : "lazy"} decoding="async" />)}
+                </div> : loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
                   const itemStyle: CSSProperties = {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)`};
                   if (showHistoryHeader && virtualItem.index === 0) return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
                     {hasOlderHistory && (!embeddedSideChat || showInheritedHistory) && <div className="chat-older-history">
