@@ -97,6 +97,16 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
       const session = await electronDesktop()!.resolveBackendConnection();
       return { baseUrl: session.endpoint, token: session.token, mode: "desktop", state: "ready" };
     } catch (error) {
+      void logDiagnostic({
+        level: "error",
+        eventCode: "interface.runtime.electron_unavailable",
+        message: "The Electron interface could not connect to its supervised Core.",
+        outcome: "failure",
+        stage: "runtime-resolution",
+        retryable: true,
+        safeFailureCause: "The local Core did not become ready.",
+        exception: error,
+      });
       return { mode: "desktop", state: "unavailable",
         message: error instanceof Error ? error.message : String(error) };
     }

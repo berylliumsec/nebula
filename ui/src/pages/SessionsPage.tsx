@@ -5952,7 +5952,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     let current = true;
     void api.request<{ one_browser_cutover: boolean }>("desktop-browser-mode")
       .then((mode) => { if (current) setOneBrowserCutover(mode.one_browser_cutover); })
-      .catch(() => { if (current) setOneBrowserCutover(isElectronRuntime()); });
+      .catch((caught) => {
+        void logCaughtDiagnostic("interface.sessions.browser_mode_failed", "The desktop browser mode could not be loaded.", caught, "sessions_page");
+        if (current) setOneBrowserCutover(isElectronRuntime());
+      });
     return () => { current = false; };
   }, [api]);
   const browserEngine = oneBrowserCutover ? "electron" : searchParams.get("browserEngine") === "native" || (!searchParams.has("browserEngine") && searchParams.has("browserTool")) ? "native" : "managed";

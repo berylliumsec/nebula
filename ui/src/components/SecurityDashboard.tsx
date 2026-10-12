@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Square } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { SecurityBrowserAutomationStatus, SecurityBrowserResearchWorkspace, SecurityBrowserWorkspace } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 interface DashboardState {
   workspace: SecurityBrowserWorkspace;
@@ -23,6 +24,7 @@ export function SecurityDashboard({ api, projectId }: { api: ApiClient; projectI
       ]);
       setData({ workspace, research, automation }); setError("");
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_dashboard.refresh_failed", "The agent security dashboard could not refresh.", caught, "security_dashboard");
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally { setLoading(false); }
   }, [api, projectId]);
@@ -53,7 +55,10 @@ export function SecurityDashboard({ api, projectId }: { api: ApiClient; projectI
         await api.stopSecurityBrowserAutomation(runId);
       }
       await refresh();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_dashboard.stop_failed", "The agent security session could not be stopped.", caught, "security_dashboard");
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
     finally { setBusy(false); }
   };
   const decide = async (interceptId: string, decision: "forward" | "drop") => {
@@ -61,7 +66,10 @@ export function SecurityDashboard({ api, projectId }: { api: ApiClient; projectI
     if (!intercept) return;
     setBusy(true); setError("");
     try { await api.decideSecurityBrowserIntercept(intercept, decision); await refresh(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
+    catch (caught) {
+      void logCaughtDiagnostic("interface.security_dashboard.intercept_decision_failed", "The intercept decision could not be saved.", caught, "security_dashboard");
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
     finally { setBusy(false); }
   };
 

@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Globe2, MessageSquareText, Plus, RefreshCw, Shie
 import type { ApiClient } from "../api/client";
 import { electronDesktop, type ElectronBrowserState, type ElectronRect } from "../api/electronDesktop";
 import { normalizeBrowserInput } from "../api/workbenchBrowser";
+import { logCaughtDiagnostic } from "../diagnostics";
 import type { NebulaDraftRequest } from "../state/WorkbenchDraftContext";
 import { SecurityDashboard } from "./SecurityDashboard";
 
@@ -44,7 +45,10 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
     api.request<T>(path, { method, ...(body === undefined ? {} : {
       body: JSON.stringify(body), headers: { "Content-Type": "application/json" },
     }) }), [api]);
-  const failure = (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught));
+  const logCaughtDiagnosticAndShow = (caught: unknown) => {
+    void logCaughtDiagnostic("interface.browser.visible_operation_failed", "The visible browser could not complete an operation.", caught, "electron_browser");
+    setError(caught instanceof Error ? caught.message : String(caught));
+  };
 
   useEffect(() => {
     if (!desktop) return;
@@ -76,7 +80,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
         request<ApprovalChoice>(`engagements/${encodeURIComponent(projectId)}/browser-security-approval`),
       ]);
       if (current) { setPaused(control.paused); setApproval(choice); }
-    })().catch((caught) => { if (current) failure(caught); })
+    })().catch((caught) => { if (current) logCaughtDiagnosticAndShow(caught); })
       .finally(() => { if (current) setBusy(false); });
     return () => { current = false; };
   }, [active, api, conversationId, desktop, draftId, projectId]);
@@ -94,7 +98,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
   useEffect(() => {
     if (!session || !state?.activeTabId) return;
     void request(`browser-companion/${session.session_id}/active-tab/${state.activeTabId}`, {}, "PUT")
-      .catch(failure);
+      .catch((caught) => logCaughtDiagnosticAndShow(caught));
   }, [request, session?.session_id, state?.activeTabId]);
 
   useEffect(() => {
@@ -102,7 +106,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
     let current = true;
     const refresh = () => void request<PendingAction[]>(`browser-companion/${session.session_id}/actions`)
       .then((next) => { if (current) setActions(next.filter((item) => item.status === "pending")); })
-      .catch((caught) => { if (current) failure(caught); });
+      .catch((caught) => { if (current) logCaughtDiagnosticAndShow(caught); });
     refresh();
     const timer = window.setInterval(refresh, 1200);
     return () => { current = false; clearInterval(timer); };
@@ -149,33 +153,33 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
     setBusy(true); setError("");
     try {
       setState(await desktop.browser.navigate(projectId, state.activeTabId, normalizeBrowserInput(address)));
-    } catch (caught) { failure(caught); }
+    } catch (caught) { logCaughtDiagnosticAndShow(caught); }
     finally { setBusy(false); }
   };
   const move = async (action: "back" | "forward" | "reload") => {
     if (!desktop || !state?.activeTabId) return;
     try { setState(await desktop.browser.command(projectId, state.activeTabId, action)); }
-    catch (caught) { failure(caught); }
+    catch (caught) { logCaughtDiagnosticAndShow(caught); }
   };
   const selectTab = async (tabId: string) => {
     if (!desktop) return;
     try {
       setState(await desktop.browser.selectTab(projectId, tabId));
-    } catch (caught) { failure(caught); }
+    } catch (caught) { logCaughtDiagnosticAndShow(caught); }
   };
   const setControl = async (nextPaused: boolean) => {
     if (!session) return;
     try {
       await request(`browser-companion/${session.session_id}/control?paused=${nextPaused}`, {}, "PUT");
       setPaused(nextPaused);
-    } catch (caught) { failure(caught); }
+    } catch (caught) { logCaughtDiagnosticAndShow(caught); }
   };
   const decide = async (action: PendingAction, decision: "approve" | "reject") => {
     if (!session) return;
     try {
       await request(`browser-companion/${session.session_id}/actions/${action.id}`, { decision }, "POST");
       setActions((current) => current.filter((item) => item.id !== action.id));
-    } catch (caught) { failure(caught); }
+    } catch (caught) { logCaughtDiagnosticAndShow(caught); }
   };
   const setAllowAll = async (allowAll: boolean) => {
     if (!approval) return;
@@ -185,7 +189,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
         { allow_all: allowAll, expected_revision: approval.revision }, "PUT");
       setApproval(next); setConfirmAllowAll(false);
       if (session) await setControl(!allowAll);
-    } catch (caught) { failure(caught); }
+    } catch (caught) { logCaughtDiagnosticAndShow(caught); }
     finally { setApprovalBusy(false); }
   };
   const capture = async () => {
@@ -197,7 +201,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
       onContext({ text: `BROWSER CONTENT\nURL: ${page.url}\nTitle: ${page.title}\nPage revision: ${page.page_revision}\n\n${page.text}`,
         sourceKind: "browser_companion", sourceId: session.session_id,
         sourceLabel: page.title || page.url, truncated: page.text.length >= 12000 });
-    } catch (caught) { failure(caught); }
+    } catch (caught) { logCaughtDiagnosticAndShow(caught); }
   };
 
   useEffect(() => {
@@ -206,7 +210,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
     if (openedRequest.current === key) return;
     openedRequest.current = key;
     void desktop.browser.navigate(projectId, state.activeTabId, initialOpenUrl)
-      .then(setState).catch(failure);
+      .then(setState).catch((caught) => logCaughtDiagnosticAndShow(caught));
   }, [desktop, initialOpenRequest, initialOpenUrl, projectId, session?.session_id, state?.activeTabId]);
 
   if (!desktop) return <><div className="electron-browser-handoff">Open this Project in the Nebula desktop app to use its visible browser. The browser-security-testing-tools MCP and research results remain available here.</div><SecurityDashboard api={api} projectId={projectId} /></>;
@@ -217,10 +221,10 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
           <button type="button" role="tab" aria-selected={tab.id === state.activeTabId}
             onClick={() => void selectTab(tab.id)} title={tab.title}>{tab.title || "New tab"}</button>
           <button className="icon-button subtle" type="button" aria-label={`Close ${tab.title || "New tab"}`}
-            title={`Close ${tab.title || "New tab"}`} onClick={() => void desktop.browser.closeTab(projectId, tab.id).then(setState).catch(failure)}><X size={14} aria-hidden="true" /></button>
+            title={`Close ${tab.title || "New tab"}`} onClick={() => void desktop.browser.closeTab(projectId, tab.id).then(setState).catch((caught) => logCaughtDiagnosticAndShow(caught))}><X size={14} aria-hidden="true" /></button>
         </div>)}
         <button className="icon-button subtle" type="button" aria-label="New browser tab" title="New browser tab"
-          onClick={() => void desktop.browser.newTab(projectId).then(setState).catch(failure)}><Plus size={17} aria-hidden="true" /></button>
+          onClick={() => void desktop.browser.newTab(projectId).then(setState).catch((caught) => logCaughtDiagnosticAndShow(caught))}><Plus size={17} aria-hidden="true" /></button>
       </div>
       <form className="electron-browser-navigation" onSubmit={(event) => void navigate(event)}>
         <button className="icon-button subtle" type="button" aria-label="Back" title="Back" onClick={() => void move("back")}><ArrowLeft size={17} aria-hidden="true" /></button>
@@ -241,7 +245,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
               : <button className="button secondary" type="button" disabled={approvalBusy} onClick={() => setConfirmAllowAll(true)}>Allow all browser and security actions until revoked</button>}</div>
         </details>
       </div>
-      {error && <div className="electron-browser-error" role="alert">{error} <button type="button" className="button quiet" onClick={() => { setError(""); void desktop.browser.open(projectId).then(setState).catch(failure); }}>Retry browser</button></div>}
+      {error && <div className="electron-browser-error" role="alert">{error} <button type="button" className="button quiet" onClick={() => { setError(""); void desktop.browser.open(projectId).then(setState).catch((caught) => logCaughtDiagnosticAndShow(caught)); }}>Retry browser</button></div>}
       {selected?.error && <div className="electron-browser-error" role="alert">{selected.error}</div>}
       {actions.map((action) => <div className="electron-browser-action" key={action.id} role="group" aria-label="Browser action approval">
         <strong>Assistant requests {action.request.operation}</strong><span>{action.request.url || action.request.element_id || "Current page"}</span>

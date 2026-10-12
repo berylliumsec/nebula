@@ -45,9 +45,7 @@ class AgentSecuritySessions:
         self._project_locks = self._locks.setdefault(store, {})
         artifact_store = getattr(host, "artifact_store", None)
         self.security = BrowserSecurityService(store, artifact_store)
-        self.research = BrowserResearchService(
-            store, self.security, artifact_store
-        )
+        self.research = BrowserResearchService(store, self.security, artifact_store)
 
     async def ensure(self, project_id: str) -> BrowserSession:
         """Create or reconnect one project-isolated headless identity.
