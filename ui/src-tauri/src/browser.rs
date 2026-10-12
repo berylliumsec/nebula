@@ -671,24 +671,66 @@ fn appkit_scaled_bounds(bounds: BrowserBounds, page_zoom: f64) -> BrowserBounds 
 }
 
 #[cfg(target_os = "macos")]
-fn appkit_browser_frame(parent: &NSView, bounds: &BrowserBounds, page_zoom: f64) -> NSRect {
-    let parent_bounds = parent.bounds();
+fn appkit_browser_frame(main: &NSView, bounds: &BrowserBounds, page_zoom: f64) -> NSRect {
+    let main_bounds = main.bounds();
     let bounds = appkit_scaled_bounds(*bounds, page_zoom);
-    // Use Wry's original child parent: the main WKWebView can have a different
-    // origin inside that parent, even though DOM bounds begin at the viewport.
+    // The DOM rectangle is local to the main WKWebView. The caller converts
+    // this frame to Wry's child parent before setting an AppKit view frame.
     NSRect::new(
         NSPoint::new(
-            parent_bounds.origin.x + bounds.x,
+            main_bounds.origin.x + bounds.x,
             appkit_child_y(
-                parent_bounds.origin.y,
-                parent_bounds.size.height,
+                main_bounds.origin.y,
+                main_bounds.size.height,
                 bounds.y,
                 bounds.height,
-                parent.isFlipped(),
+                main.isFlipped(),
             ),
         ),
         NSSize::new(bounds.width, bounds.height),
     )
+}
+
+#[cfg(all(target_os = "macos", debug_assertions))]
+fn trace_macos_browser_frame(
+    stage: &str,
+    bounds: &BrowserBounds,
+    page_zoom: f64,
+    main: &NSView,
+    root: &NSView,
+    frame: NSRect,
+) {
+    if std::env::var_os("NEBULA_BROWSER_GEOMETRY").is_none() {
+        return;
+    }
+    let main_frame = main.frame();
+    let main_bounds = main.bounds();
+    let root_bounds = root.bounds();
+    eprintln!(
+        "browser geometry {stage}: css=({:.1},{:.1},{:.1},{:.1}) zoom={:.2} main_frame=({:.1},{:.1},{:.1},{:.1}) main_bounds=({:.1},{:.1},{:.1},{:.1}) root_bounds=({:.1},{:.1},{:.1},{:.1}) safe_top={:.1} native=({:.1},{:.1},{:.1},{:.1})",
+        bounds.x,
+        bounds.y,
+        bounds.width,
+        bounds.height,
+        page_zoom,
+        main_frame.origin.x,
+        main_frame.origin.y,
+        main_frame.size.width,
+        main_frame.size.height,
+        main_bounds.origin.x,
+        main_bounds.origin.y,
+        main_bounds.size.width,
+        main_bounds.size.height,
+        root_bounds.origin.x,
+        root_bounds.origin.y,
+        root_bounds.size.width,
+        root_bounds.size.height,
+        main.safeAreaInsets().top,
+        frame.origin.x,
+        frame.origin.y,
+        frame.size.width,
+        frame.size.height,
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -752,10 +794,15 @@ fn install_macos_browser_container<R: tauri::Runtime>(
                 }
                 // SAFETY: `parent` is Nebula's main WKWebView on the AppKit main thread.
                 let page_zoom: f64 = unsafe { objc2::msg_send![parent, pageZoom] };
-                let container = NSClipView::initWithFrame(
-                    NSClipView::alloc(marker),
-                    appkit_browser_frame(&root, &bounds, page_zoom),
+                // The DOM rectangle belongs to the main WKWebView. Convert its native
+                // frame to Wry's shared parent before attaching the clipping view.
+                let frame = parent.convertRect_toView(
+                    appkit_browser_frame(parent, &bounds, page_zoom),
+                    Some(&root),
                 );
+                #[cfg(debug_assertions)]
+                trace_macos_browser_frame("create", &bounds, page_zoom, parent, &root, frame);
+                let container = NSClipView::initWithFrame(NSClipView::alloc(marker), frame);
                 container.setWantsLayer(true);
                 container.setDrawsBackground(false);
                 container.setClipsToBounds(true);
@@ -846,7 +893,13 @@ fn resize_macos_browser_container<R: tauri::Runtime>(
                     .ok_or_else(|| "The browser clipping container is unavailable.".to_string())?;
                 let root = unsafe { container.superview() }
                     .ok_or_else(|| "The Nebula browser surface is unavailable.".to_string())?;
-                container.setFrame(appkit_browser_frame(&root, &bounds, page_zoom));
+                let frame = main.convertRect_toView(
+                    appkit_browser_frame(main, &bounds, page_zoom),
+                    Some(&root),
+                );
+                #[cfg(debug_assertions)]
+                trace_macos_browser_frame("resize", &bounds, page_zoom, main, &root, frame);
+                container.setFrame(frame);
                 child.setFrame(container.bounds());
                 Ok(())
             })();
@@ -2847,7 +2900,7 @@ mod tests {
     }
 
     #[test]
-    fn macos_browser_frame_uses_the_wry_parent_coordinate_space() {
+    fn macos_browser_frame_uses_the_main_webview_coordinate_space() {
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, true), 120.0);
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, false), 180.0);
         assert_eq!(appkit_child_y(12.0, 900.0, 120.0, 600.0, false), 192.0);

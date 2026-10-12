@@ -91,8 +91,8 @@ Mac development app at `579ff9ec`, the white page still covers part of the URL
 field, both with and without Assistant open. That build attached the clip to
 Nebula's main WKWebView, although Wry created the browser tab beside it in the
 window's native content view. The follow-up keeps the clip under that original
-parent and checks both webviews share it before showing the page. Its placement
-remains a hypothesis until the operator tests the rebuilt Mac app.
+parent and checks both webviews share it before showing the page. At that point,
+its placement was a hypothesis pending the next Mac run, recorded below.
 
 For this follow-up, the two exact Rust frame tests passed, all nine selected
 desktop Chromium Browser cases passed against this worktree's development server
@@ -102,3 +102,30 @@ bounds and native command dispatch, but cannot observe AppKit's rendered page.
 Repeat the real Browser journey at 100% and a nondefault Text size, including
 resize, Assistant open/closed, tab switching, hide/show, and input at each clipped
 edge before native containment can be called verified.
+
+## Source comparison and next Mac check
+
+The operator's next Mac screenshot still showed the page covering the lower part
+of the address bar after the clip moved to Wry's parent. This rejects the parent
+change as a complete fix. In that image, the white page begins about one macOS
+title-bar height above the expected Browser surface. The React rectangle is
+measured in the main WKWebView, while the clip is attached to its parent. Passing
+the same numbers to that parent skips the offset between those views. The next
+revision converts the frame between those two AppKit coordinate systems with
+`convertRect:toView:` on create and resize. An opt-in `NEBULA_BROWSER_GEOMETRY`
+debug trace prints the DOM bounds, both native view geometries, and the converted
+frame for the affected Mac build. This is a code-level diagnosis supported by the
+screenshots; only a rebuilt Mac run can confirm the rendered result.
+
+Browser Use Desktop measures the browser slot and sets a separate Electron
+`WebContentsView` to exactly that rectangle before attaching it. OpenHands and
+Cline render browser screenshots in their UI, avoiding a live native page
+composited over their controls. VS Code's Simple Browser uses an iframe and
+cannot serve as a general arbitrary-site replacement. Sources:
+[Browser Use slot](https://github.com/browser-use/desktop/blob/f073b7574f7927185ebbebd87556391d5cb0cfd1/app/src/renderer/hub/AgentPane.tsx#L722-L736),
+[Browser Use native view](https://github.com/browser-use/desktop/blob/f073b7574f7927185ebbebd87556391d5cb0cfd1/app/src/main/sessions/BrowserPool.ts#L619-L696),
+[OpenHands panel](https://github.com/OpenHands/OpenHands/blob/02e02ae0c92ebb033afcf2fb399bd3683df82ca8/src/components/features/browser/browser.tsx#L6-L25),
+[Cline browser](https://github.com/cline/cline/blob/a48408909bf9b2ff7f620d420be8547fb509e8ed/apps/vscode/src/services/browser/BrowserSession.ts#L212-L225),
+[Cline screenshot panel](https://github.com/cline/cline/blob/a48408909bf9b2ff7f620d420be8547fb509e8ed/apps/vscode/webview-ui/src/components/chat/BrowserSessionRow.tsx#L140-L186),
+[VS Code Simple Browser](https://github.com/microsoft/vscode/blob/72b3e1558739d58ace9bcb200578d4508c7c00d5/extensions/simple-browser/src/simpleBrowserView.ts#L143-L170),
+[AppKit coordinates](https://developer.apple.com/documentation/appkit/nsview/convert%28_%3Ato%3A%29-3cqqt).
