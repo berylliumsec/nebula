@@ -27,10 +27,12 @@ interface NotesPanelProps {
   engagementId: string;
   initialNotes?: ObservationSummary[];
   initialNotesReady?: boolean;
+  initialNotesLoading?: boolean;
   panelSessionKey?: string;
 
   evidenceOptions?: LinkOption[];
   assetOptions?: LinkOption[];
+  linksLoading?: boolean;
   providers?: ProviderHealth[];
   harnesses?: HarnessProfile[];
   initialDraft?: SelectionActionDraft;
@@ -53,14 +55,29 @@ const blank = {
   assetIds: [] as string[],
   metadata: {} as Record<string, unknown>,
 };
+const LINK_RESULT_LIMIT = 40;
+
+function matchingLinkOptions(options: LinkOption[], query: string, selectedIds: string[]) {
+  const selected = new Set(selectedIds);
+  const selectedMatches: LinkOption[] = [];
+  const otherMatches: LinkOption[] = [];
+  let total = 0;
+  for (const option of options) {
+    if (query && !option.label.toLowerCase().includes(query)) continue;
+    total += 1;
+    if (selected.has(option.id)) selectedMatches.push(option);
+    else if (otherMatches.length < LINK_RESULT_LIMIT) otherMatches.push(option);
+  }
+  return { total, items: [...selectedMatches, ...otherMatches].slice(0, LINK_RESULT_LIMIT) };
+}
 
 const NoteBodyEditor = memo(function NoteBodyEditor({ body, onChange }: { body: string; onChange: (body: string) => void }) {
   const [value, setValue] = useState(body);
   useEffect(() => setValue(body), [body]);
-  return <label>Markdown<textarea aria-label="Note body" rows={18} value={value} placeholder="Capture observations, test ideas, or conclusions…" onChange={(event) => {
+  return <textarea aria-label="Note body" rows={18} value={value} placeholder="Capture observations, test ideas, or conclusions…" onChange={(event) => {
     setValue(event.target.value);
     onChange(event.target.value);
-  }} /></label>;
+  }} />;
 });
 interface NotePanelState {
   selectedId?: string;
@@ -84,10 +101,12 @@ export function NotesPanel({
   engagementId,
   initialNotes = [],
   initialNotesReady = false,
+  initialNotesLoading = false,
   panelSessionKey,
 
   evidenceOptions = [],
   assetOptions = [],
+  linksLoading = false,
   providers = [],
   harnesses = [],
   initialDraft,
@@ -137,6 +156,8 @@ export function NotesPanel({
   const savingRef = useRef(false);
   const [error, setError] = useState<string>();
   const [writingOpen, setWritingOpen] = useState(false);
+  const [linksOpen, setLinksOpen] = useState(false);
+  const [linkQuery, setLinkQuery] = useState("");
   const [deleteBlocker, setDeleteBlocker] = useState<ObservationDependencies>();
   const consumedInitialDraftRef = useRef<SelectionActionDraft | undefined>(undefined);
   const capturedNoteRef = useRef<ObservationSummary | undefined>(undefined);
@@ -175,6 +196,13 @@ export function NotesPanel({
     () => aiRuntimeOptions(providers, harnesses),
     [harnesses, providers],
   );
+  const normalizedLinkQuery = linkQuery.trim().toLowerCase();
+  const matchingEvidence = useMemo(() => linksOpen
+    ? matchingLinkOptions(evidenceOptions, normalizedLinkQuery, draft.evidenceIds)
+    : { total: 0, items: [] }, [linksOpen, evidenceOptions, normalizedLinkQuery, draft.evidenceIds]);
+  const matchingAssets = useMemo(() => linksOpen
+    ? matchingLinkOptions(assetOptions, normalizedLinkQuery, draft.assetIds)
+    : { total: 0, items: [] }, [linksOpen, assetOptions, normalizedLinkQuery, draft.assetIds]);
 
   useEffect(() => setDeleteBlocker(undefined), [selectedId]);
 
@@ -202,11 +230,11 @@ export function NotesPanel({
   }, [api, engagementId]);
 
   useEffect(() => {
-    if (initialNotesReady) return;
+    if (initialNotesReady || initialNotesLoading) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [initialNotesReady, load]);
+  }, [initialNotesReady, initialNotesLoading, load]);
 
   useEffect(() => {
     if (!cachedNotesReady) return;
@@ -441,16 +469,23 @@ export function NotesPanel({
               {selected && <IconAction icon={Trash2} label="Delete" title="Delete note" onClick={() => void remove()} />}
               <button className="button quiet" type="button" disabled={!hasBody || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
               <button className="button quiet" type="button" disabled={!hasBody || !onAskNebula} onClick={() => onAskNebula?.({ text: draftBodyRef.current, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
-              <span className="note-save-status" role="status" aria-live="polite">{saving ? "Saving…" : saveStatus === "failed" ? "Save failed" : saveStatus === "unsaved" ? "Unsaved changes" : "Saved"}</span>
               <button className="button primary" type="button" disabled={saving || !draft.title.trim() || saveStatus === "saved"} onClick={() => void save()}><Save size={14} /> {saveStatus === "failed" ? "Retry save" : "Save"}</button>
             </div>
           </header>
           <div className="note-editor-body">
+            <div className="note-editor-caption"><span>Markdown</span><span className="note-save-status" role="status" aria-live="polite">{saving ? "Saving…" : saveStatus === "failed" ? "Save failed" : saveStatus === "unsaved" ? "Unsaved changes" : creating ? "Not saved" : "Saved"}</span></div>
             <NoteBodyEditor key={creating ? "new" : selected?.id} body={draft.body} onChange={onBodyChange} />
           </div>
-          {(evidenceOptions.length > 0 || assetOptions.length > 0) && <details><summary>Links · {draft.evidenceIds.length} evidence · {draft.assetIds.length} assets</summary>
-            {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
-            {assetOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.assetIds.includes(option.id)} onChange={() => toggleLink("assetIds", option.id)} /> {option.label}</label>)}
+          {(linksLoading || evidenceOptions.length > 0 || assetOptions.length > 0 || draft.evidenceIds.length > 0 || draft.assetIds.length > 0) && <details onToggle={(event) => setLinksOpen(event.currentTarget.open)}><summary>Links · {draft.evidenceIds.length} evidence · {draft.assetIds.length} assets</summary>
+            {linksOpen && <div className="note-link-picker">
+              <input type="search" aria-label="Search note links" placeholder="Search evidence and assets" value={linkQuery} onChange={(event) => setLinkQuery(event.target.value)} />
+              {linksLoading && <p role="status">Loading links…</p>}
+              {matchingEvidence.items.length > 0 && <div className="note-link-results" role="group" aria-label="Evidence links">{matchingEvidence.items.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}</div>}
+              {matchingEvidence.total > matchingEvidence.items.length && <p>Showing {matchingEvidence.items.length} of {matchingEvidence.total} evidence matches. Search to narrow.</p>}
+              {matchingAssets.items.length > 0 && <div className="note-link-results" role="group" aria-label="Asset links">{matchingAssets.items.map((option) => <label key={option.id}><input type="checkbox" checked={draft.assetIds.includes(option.id)} onChange={() => toggleLink("assetIds", option.id)} /> {option.label}</label>)}</div>}
+              {matchingAssets.total > matchingAssets.items.length && <p>Showing {matchingAssets.items.length} of {matchingAssets.total} asset matches. Search to narrow.</p>}
+              {!linksLoading && matchingEvidence.total + matchingAssets.total === 0 && <p>No matching links.</p>}
+            </div>}
           </details>}
         </> : <div className="note-initial-state">
           {loading ? <LoadingSurface label="Loading saved notes" /> : <StandardEmptyState className="note-empty-state" icon={<NotebookPen size={24} aria-hidden="true" />} title="Start a project note" explanation="Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence." />}

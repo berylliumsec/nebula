@@ -1257,6 +1257,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     uploadEvidence,
     updateObservation,
   } = useWorkspace();
+  const evidenceLinkOptions = useMemo(() => evidence.map((item) => ({ id: item.id, label: item.title })), [evidence]);
+  const assetLinkOptions = useMemo(() => assets.map((item) => ({ id: item.id, label: item.displayName })), [assets]);
   // The editor's IndexedDB recovery is keyed by this draft identity. Keep the
   // identity through reloads and scope it to the project workspace.
   const editorDraftStorageKey = engagement ? `nebula.editor.draft-key.${engagement.id}` : "";
@@ -6575,8 +6577,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               engagementId={engagement.id}
               initialNotes={observations}
               initialNotesReady={resourceStatus.notes.state === "ready" || resourceStatus.notes.state === "empty"}
-              evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
-              assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
+              initialNotesLoading={resourceStatus.notes.state === "loading"}
+              evidenceOptions={evidenceLinkOptions}
+              assetOptions={assetLinkOptions}
+              linksLoading={resourceStatus.evidence.state === "loading" || resourceStatus.assets.state === "loading"}
               providers={providers}
               harnesses={harnesses}
               initialDraft={view === "notes" || (chatSideVisible && sideView === "notes") ? noteDraft : undefined}
