@@ -1,32 +1,23 @@
 {
-  "change_digest": "58bdcfac4f98209c7dc0bb2deb8304d9caab7c5aeeceb7fa7aea8df01b870a34",
-  "reviewed_by": "Codex focused review for Quiet Lens logo rollout",
-  "reason": "The changed journey is seeing one upright Quiet Lens mark at launch, in navigation, and in browser, install, and packaged app icons. The 25 collected SideNav component cases cover the shared navigation component. Ten catalogued Quiet Lens browser cases cover launch, navigation reveal and panel width, theme selection, SVG and raster asset loading, and desktop/mobile geometry in permanent Chromium and WebKit profiles. A production build and generated-icon inspection cover bundle and package assets.",
-  "exclusions": "No Core database, Python, Rust behavior, provider, harness, or workspace state changed, so those test layers and unrelated UI journeys are excluded. Browser tests use mocked API responses; production LAN asset loading is checked separately. Physical-device behavior and installed desktop packaging remain unverified. Full suites are excluded.",
+  "change_digest": "9c35fd942fc17e563fc29f9f2ec8fddcd6a2059b8b378ee585efd387c8fa86b7",
+  "reviewed_by": "Codex focused review for assistant direct-request guidance",
+  "reason": "A clear operator command should reach the provider or harness with guidance to act without repeat confirmation. Six collected Python tests cover the shared instruction in provider and harness prompts, distinct approvals, and tool availability. One production-LAN real-Core assistant journey is selected in desktop Chromium, mobile Chromium, and mobile WebKit; it checks the actual model request and visible reply.",
+  "exclusions": "No React component, styling, native runtime, or browser-origin contract changed, so frontend unit and native tests are excluded. The three selected real-Core browser cases cover the changed assistant journey; unrelated chat, harness, settings, and full suites are excluded. A model stub verifies prompt delivery and UI completion, not live model compliance or physical-device behavior.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 25,
+    "python": 6,
+    "frontend": 0,
     "native": 0,
-    "playwright": 10
+    "playwright": 3
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/SideNav.test.tsx"
-  ],
+  "python": ["tests/v3/test_minimal_agent_instructions.py"],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:quiet-lens/desktop",
-    "entry:quiet-lens/compact",
-    "entry:quiet-lens/mobile-chromium-small",
-    "entry:quiet-lens/mobile-chromium",
-    "entry:quiet-lens/mobile-chromium-wide",
-    "entry:quiet-lens/mobile-webkit-small",
-    "entry:quiet-lens/mobile-webkit",
-    "entry:quiet-lens/mobile-webkit-wide"
+    "entry:assistant-direct-request/assistant-real-desktop",
+    "entry:assistant-direct-request/assistant-real-chromium-390",
+    "entry:assistant-direct-request/assistant-real-webkit-390"
   ]
 }

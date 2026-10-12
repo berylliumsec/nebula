@@ -6,7 +6,10 @@ records contain only normalized, bounded events and credential-free snapshots.
 
 from __future__ import annotations
 
-from .application_model.workflow import BROWSER_MODEL_WORKFLOW
+from .application_model.workflow import (
+    BROWSER_MODEL_WORKFLOW,
+    DIRECT_REQUEST_WORKFLOW,
+)
 from .approval_delivery import (
     approval_harness_turn,
     pending_deliveries,
@@ -924,6 +927,8 @@ def _harness_developer_instructions(
             if capabilities.skills
             else ""
         )
+        + DIRECT_REQUEST_WORKFLOW
+        + " "
         + BROWSER_MODEL_WORKFLOW
     )
 
