@@ -98,7 +98,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       if (!mounted.current) return;
       setTabs(currentTabs.tabs);
       if (currentTabRef.current === tabId) setAddress(opened.url);
-      try { sessionStorage.setItem(`nebula.assistant-browser-link.${session.session_id}`, requestId); } catch { /* A blocked storage area only affects reload deduplication. */ }
+      try { sessionStorage.setItem(`nebula.assistant-browser-link.${session.session_id}`, requestId); } catch { /* diagnostic-expected: blocked storage only affects reload deduplication. */ }
     } catch (caught) {
       if (!mounted.current) return;
       void logCaughtDiagnostic("interface.browser_companion.link_navigation_failed", "A linked page could not open in the Assistant browser.", caught, "browser_companion");
@@ -112,7 +112,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     if (openedLinkedUrlRef.current === requestId) return;
     openedLinkedUrlRef.current = requestId;
     let handled = false;
-    try { handled = sessionStorage.getItem(`nebula.assistant-browser-link.${session.session_id}`) === requestId; } catch { /* Continue with Core's tab state. */ }
+    try { handled = sessionStorage.getItem(`nebula.assistant-browser-link.${session.session_id}`) === requestId; } catch { /* diagnostic-expected: Core's tab state remains authoritative. */ }
     if (!session.page_state_reset && handled) return;
     void openLinkedPage(initialOpenUrl, requestId);
   }, [active, initialOpenRequest, initialOpenUrl, openLinkedPage, projectId, session, tabId]);
