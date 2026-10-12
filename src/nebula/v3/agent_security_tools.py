@@ -31,7 +31,6 @@ from .browser_security import BrowserCaptureSettingsRequest, BrowserSecurityServ
 from .browserd import BrowserdSecurityRequest
 from .domain import (
     BrowserAttack,
-    BrowserCaptureMode,
     BrowserCrawlJob,
     BrowserInterceptItem,
     BrowserSession,
@@ -47,6 +46,7 @@ from .domain import (
     utc_now,
 )
 from .storage import NebulaStore, NotFoundError
+from .security_upstream import parse_upstream_settings
 
 
 PROFILE_ID = "nebula-security-tools-v1"
@@ -93,6 +93,19 @@ _TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         "intercept",
         "Enable or disable flow interception in the headless security proxy.",
         _object({"enabled": {"type": "boolean"}}, ["enabled"]),
+        False,
+    ),
+    (
+        "upstream_proxy",
+        "Route new headless security connections through an HTTP(S) or SOCKS5 proxy using an optional protected credential reference.",
+        _object(
+            {
+                "enabled": {"type": "boolean"},
+                "url": _URL,
+                "credential_ref": _STRING,
+            },
+            ["enabled"],
+        ),
         False,
     ),
     (
@@ -427,6 +440,9 @@ class SecurityToolsRuntime:
                     "interception_enabled": session.interception_enabled
                     if session
                     else False,
+                    "upstream_proxy_configured": bool(
+                        session and session.upstream_proxy_enabled
+                    ),
                     "traffic_count": sum(map(owned, security.traffic)),
                     "paused_intercepts": [
                         item.model_dump(mode="json")
@@ -631,10 +647,13 @@ class SecurityToolsRuntime:
                 session.id,
                 BrowserCaptureSettingsRequest(
                     expected_revision=session.revision,
-                    capture_mode=BrowserCaptureMode.HEADERS,
+                    capture_mode=session.capture_mode,
                     proxy_enabled=True,
                     trust_acknowledged=True,
                     interception_enabled=bool(arguments["enabled"]),
+                    upstream_proxy_enabled=session.upstream_proxy_enabled,
+                    upstream_proxy_url=session.upstream_proxy_url,
+                    upstream_proxy_credential_ref=session.upstream_proxy_credential_ref,
                 ),
                 _ACTOR,
             )
@@ -643,6 +662,67 @@ class SecurityToolsRuntime:
                     "session_id": session.id,
                     "enabled": capture_session.interception_enabled,
                 }
+            )
+        if name == "upstream_proxy":
+            if self._project_tasks.get(project_id):
+                raise ValueError(
+                    "Stop active security work before changing the upstream proxy"
+                )
+            paused = self.store.find_entities(
+                BrowserInterceptItem,
+                {"session_id": session.id, "state": "paused"},
+                engagement_id=project_id,
+                limit=1,
+            )
+            if paused:
+                raise ValueError(
+                    "Decide paused intercepts before changing the upstream proxy"
+                )
+            enabled = bool(arguments["enabled"])
+            proxy_url = str(arguments.get("url") or "") if enabled else None
+            reference = (
+                str(arguments["credential_ref"])
+                if enabled and arguments.get("credential_ref")
+                else None
+            )
+            if enabled:
+                if not proxy_url:
+                    raise ValueError("An enabled upstream proxy requires a URL")
+                credentials = self.sessions.host.credentials
+                credential = (
+                    credentials.resolve(reference).get_secret_value()
+                    if reference and credentials is not None
+                    else None
+                )
+                if reference and credential is None:
+                    raise ValueError(
+                        "The protected upstream proxy credential is unavailable"
+                    )
+                parse_upstream_settings(proxy_url, credential)
+            self.security.update_capture_settings(
+                session.id,
+                BrowserCaptureSettingsRequest(
+                    expected_revision=session.revision,
+                    capture_mode=session.capture_mode,
+                    proxy_enabled=True,
+                    trust_acknowledged=True,
+                    interception_enabled=session.interception_enabled,
+                    upstream_proxy_enabled=enabled,
+                    upstream_proxy_url=proxy_url,
+                    upstream_proxy_credential_ref=reference,
+                ),
+                _ACTOR,
+            )
+            try:
+                await self.sessions.host.close_identity(session.identity_id)
+                await self.sessions.ensure(project_id)
+            except Exception:
+                await self.sessions.stop(
+                    project_id, reason="Upstream proxy reconfiguration failed"
+                )
+                raise
+            return self._result(
+                {"session_id": session.id, "upstream_proxy_configured": enabled}
             )
         if name == "repeater":
             tab = self.research.create_repeater_tab(

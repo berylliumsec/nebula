@@ -7,7 +7,7 @@ import hashlib
 import os
 import secrets
 import socket
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import yaml
@@ -25,12 +25,16 @@ class AgentMitmProxy:
         identity_id: str,
         root: Path,
         authorize: Callable[[str], None],
+        connect: Callable[
+            [str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
+        ]
+        | None = None,
     ) -> None:
         self.store = store
         self.session_id = session_id
         self.identity_id = identity_id
         self.root = root / hashlib.sha256(identity_id.encode()).hexdigest()
-        self.upstream = BrowserHostProxy(authorize)
+        self.upstream = BrowserHostProxy(authorize, connect=connect)
         self.bridge = SecurityFlowBridge(store, session_id)
         self.password = secrets.token_urlsafe(32)
         self._process: asyncio.subprocess.Process | None = None

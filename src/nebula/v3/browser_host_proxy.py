@@ -6,13 +6,21 @@ import asyncio
 import base64
 import hmac
 import secrets
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 
 class BrowserHostProxy:
-    def __init__(self, authorize: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        authorize: Callable[[str], None],
+        connect: Callable[
+            [str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
+        ]
+        | None = None,
+    ) -> None:
         self.authorize = authorize
+        self.connect = connect or asyncio.open_connection
         self.password = secrets.token_urlsafe(32)
         self._authorization = "Basic " + base64.b64encode(
             ("nebula:" + self.password).encode("ascii")
@@ -103,7 +111,7 @@ class BrowserHostProxy:
             )
             self.authorize(destination)
             remote_reader, upstream = await asyncio.wait_for(
-                asyncio.open_connection(parsed.hostname, port), 10
+                self.connect(parsed.hostname, port), 10
             )
             assert upstream is not None
             # Revalidate after DNS/connect; no bytes reach a newly revoked scope.

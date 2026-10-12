@@ -1786,7 +1786,10 @@ def create_app(
     managed_skill_root.chmod(0o700)
     managed_browser_host = ManagedBrowserHost(store, browser_root / "managed-browser")
     agent_security_host = ManagedBrowserHost(
-        store, browser_root / "agent-security-browser", headless=True
+        store,
+        browser_root / "agent-security-browser",
+        headless=True,
+        credentials=credentials,
     )
     from .agent_security import AgentSecuritySessions
     from .agent_security_tools import SecurityToolsRuntime

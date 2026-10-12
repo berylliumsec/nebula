@@ -18,7 +18,9 @@ from .browser_host_proxy import BrowserHostProxy
 from .agent_proxy import AgentMitmProxy
 from .browser_security import BrowserSecurityService
 from .browserd import BrowserdManager, BrowserdSettings, create_browserd_app
+from .credentials import CredentialStore
 from .domain import BrowserIdentity, RiskClass
+from .security_upstream import SecurityUpstreamConnector
 from .storage import NebulaStore, NotFoundError
 
 
@@ -31,11 +33,17 @@ class _PrivateBrowserServer(uvicorn.Server):
 
 class ManagedBrowserHost:
     def __init__(
-        self, store: NebulaStore, root: Path, *, headless: bool = False
+        self,
+        store: NebulaStore,
+        root: Path,
+        *,
+        headless: bool = False,
+        credentials: CredentialStore | None = None,
     ) -> None:
         self.store = store
         self.root = root
         self.headless = headless
+        self.credentials = credentials
         self._lock = asyncio.Lock()
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task | None = None
@@ -193,12 +201,18 @@ class ManagedBrowserHost:
                     raise ValueError(
                         "The headless security identity has no Core session."
                     )
+                if self.credentials is None:
+                    self.credentials = CredentialStore()
+                connector = SecurityUpstreamConnector(
+                    self.store, sessions[0].id, self.credentials
+                )
                 self._proxies[identity_id] = AgentMitmProxy(
                     self.store,
                     sessions[0].id,
                     identity_id,
                     self.root / "proxies",
                     authorize,
+                    connector.connect,
                 )
             else:
                 self._proxies[identity_id] = BrowserHostProxy(authorize)
