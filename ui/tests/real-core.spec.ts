@@ -1628,8 +1628,10 @@ test("assistant upgrade conversation switching restores durable Core history pro
     expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
     const pairing = await pairingResponse.json() as {secret: string; confirmation_code: string};
     await page.goto(`${core.origin}/?view=chat&session=${sourceId}#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    const redeemed = page.waitForResponse(response => response.url().endsWith("/auth/pairings/redeem") && response.request().method() === "POST");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    expect((await redeemed).ok()).toBe(true);
+    await page.waitForURL(url => url.pathname === "/" && !url.search && !url.hash, {waitUntil: "load"});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sourceId}`);
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
     // Phones pick conversations from a drawer that closes after each choice.
@@ -1656,6 +1658,8 @@ test("assistant upgrade conversation switching restores durable Core history pro
       await route.continue();
     });
     await selectConversation(sourceId);
+    const imagePreview = page.getByTestId("chat-image-preview");
+    if (await imagePreview.isVisible()) await imagePreview.click();
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
     await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
     releaseHistory();
