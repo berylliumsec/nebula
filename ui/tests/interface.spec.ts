@@ -989,7 +989,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
           }
           if (command === "desktop_device_id") return "desktop-playwright";
           if (command === "browser_capabilities") {
-            return { engine: "Playwright native-bounds mock", projectStorage: "persistent" };
+            return { engine: "Playwright native-bounds mock", projectStorage: "persistent", interceptionProxy: true, http2Capture: true, websocketCapture: true };
           }
           if (command === "plugin:event|listen") {
             eventHandlers.set(String(args.event), Number(args.handler));
@@ -1137,6 +1137,53 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
     return calls.slice(start).some((call) => call.command === "browser_set_visible" && call.args.visible === false);
   }, callsBeforeResearch)).toBe(false);
+  const nativeVisibility = () => page.evaluate(() => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    return calls.filter((call) => call.command === "browser_set_visible").at(-1)?.args.visible;
+  });
+  const toggleAssistant = page.getByRole("button", { name: "Assistant", exact: true });
+  await toggleAssistant.click();
+  await expect.poll(() => page.locator(".workbench-browser").evaluate((element) => element.getBoundingClientRect().width)).toBeLessThan(1100);
+  await expect(securityResize).toHaveCount(0);
+  await expect(page.locator(".workbench-browser > .browser-surface")).toHaveCSS("visibility", "hidden");
+  await expect.poll(nativeVisibility).toBe(false);
+  const compactGeometry = await page.evaluate(() => {
+    const root = document.querySelector(".workbench-browser")!.getBoundingClientRect();
+    const panel = document.querySelector(".browser-research-panel")!.getBoundingClientRect();
+    return { root: { left: root.left, right: root.right }, panel: { left: panel.left, right: panel.right } };
+  });
+  expect(compactGeometry.panel.left).toBeGreaterThanOrEqual(compactGeometry.root.left);
+  expect(compactGeometry.panel.right).toBeLessThanOrEqual(compactGeometry.root.right + 1);
+  await securityWorkspace.getByRole("button", { name: "Session", exact: true }).click();
+  const sessionPanel = securityWorkspace.locator(".browser-session-workbench");
+  await expect(securityWorkspace.locator(".security-browser-assessment-rail")).toHaveCSS("display", "none");
+  await expect(sessionPanel.locator(".browser-session-status")).toContainText("Capture proxy: Off · Interception: Off");
+  const proxyAction = sessionPanel.getByRole("button", { name: "I trust the CA · enable capture proxy" });
+  await expect(proxyAction).toBeVisible();
+  const upstream = sessionPanel.locator(".browser-upstream-disclosure");
+  await expect(upstream.locator("summary")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("browser-session-top.png") });
+  await upstream.locator("summary").click();
+  await expect(upstream.getByRole("textbox", { name: "Proxy URL" })).toBeDisabled();
+  const settingsGeometry = await sessionPanel.evaluate((panel) => {
+    const action = panel.querySelector<HTMLElement>(".browser-proxy-controls > button")!.getBoundingClientRect();
+    const upstream = panel.querySelector<HTMLElement>(".browser-upstream-disclosure")!.getBoundingClientRect();
+    const inputs = Array.from(panel.querySelectorAll<HTMLElement>(".browser-upstream-controls input:not([type=checkbox])"))
+      .map((input) => input.getBoundingClientRect());
+    return { actionBottom: action.bottom, upstreamTop: upstream.top, panelRight: panel.getBoundingClientRect().right, inputs: inputs.map((rect) => ({ left: rect.left, right: rect.right })) };
+  });
+  expect(settingsGeometry.actionBottom).toBeLessThanOrEqual(settingsGeometry.upstreamTop);
+  for (const input of settingsGeometry.inputs) {
+    expect(input.left).toBeGreaterThanOrEqual(0);
+    expect(input.right).toBeLessThanOrEqual(settingsGeometry.panelRight + 1);
+  }
+  await page.screenshot({ path: testInfo.outputPath("browser-session-compact.png") });
+  await securityWorkspace.getByRole("button", { name: "Target", exact: true }).click();
+  await expect(securityWorkspace.locator(".security-browser-assessment-rail")).toBeVisible();
+  await securityWorkspace.getByRole("button", { name: "Session", exact: true }).click();
+  await toggleAssistant.click();
+  await expect(securityResize).toBeVisible();
+  await expect.poll(nativeVisibility).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });
 
   await page.getByRole("button", { name: "Security research workbench" }).click();
@@ -1146,6 +1193,32 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
     return bounds?.width ?? 0;
   })).toBeGreaterThan(narrowedBrowserWidth);
+  const showSidebar = page.getByRole("button", { name: "Show sidebar" });
+  if (await showSidebar.isVisible()) {
+    await showSidebar.click();
+    await expect.poll(() => page.evaluate(() => {
+      const surface = document.querySelector(".browser-surface")!.getBoundingClientRect();
+      const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+      const native = calls.filter((call) => call.command === "browser_set_bounds").at(-1)?.args.bounds as { x: number; width: number } | undefined;
+      return !!native && native.x >= surface.left && native.x + native.width <= surface.right + 1;
+    })).toBe(true);
+    await page.getByRole("button", { name: "Hide sidebar" }).click();
+  }
+  const nativeBoundsCount = () => page.evaluate(() => (
+    (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string }> }).__NEBULA_BROWSER_CALLS__ ?? []
+  ).filter((call) => call.command === "browser_set_bounds").length);
+  const beforeZoom = await nativeBoundsCount();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("nebula:ui-zoom", { detail: 1.25 })));
+  await expect.poll(nativeBoundsCount).toBeGreaterThan(beforeZoom);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect.poll(() => page.evaluate(() => {
+    const surface = document.querySelector(".browser-surface")!.getBoundingClientRect();
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    const native = calls.filter((call) => call.command === "browser_set_bounds").at(-1)?.args.bounds as { x: number; y: number; width: number; height: number } | undefined;
+    return !!native && native.x >= surface.left && native.y >= surface.top
+      && native.x + native.width <= surface.right + 1 && native.y + native.height <= surface.bottom + 1;
+  })).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole("button", { name: "Ask Nebula about the live page" }).click();
   await expect(page).toHaveURL(/view=browser/);
   const popup = page.getByRole("dialog", { name: "Ask Nebula" });
