@@ -71,7 +71,7 @@ export function SecurityDashboard({ api, projectId }: { api: ApiClient; projectI
       <button className="button secondary" type="button" disabled={(!activeLeases.length && !securitySessions.some((item) => item.status === "active")) || busy} onClick={() => void stop()}><Square size={15} aria-hidden="true" /> Emergency stop</button>
     </header>
     {error && <div role="alert">Security dashboard could not refresh: {error} <button className="button quiet" onClick={() => void refresh()}>Retry</button></div>}
-    {!loading && !securitySessions.length && <p className="security-dashboard-empty">No agent security session yet. Enable Security Tools in Chat to start authorized research.</p>}
+    {!loading && !securitySessions.length && <p className="security-dashboard-empty">No agent security session yet. Enable browser-security-testing-tools in Chat to start authorized research.</p>}
     <div className="security-dashboard-counts" role="status"><span>{traffic.length} HTTP exchanges</span><span>{frames.length} WebSocket frames</span><span>{intercepts.filter((item) => item.state === "paused").length} paused</span><span>{repeater.length} Repeater results</span><span>{attacks.length} Intruder runs</span></div>
     {intercepts.filter((item) => item.state === "paused").map((item) => <div className="security-dashboard-intercept" key={item.id}>
       <strong>{item.phase === "request" ? "Request paused" : "Response paused"}</strong><span>{item.method} {item.url}</span>

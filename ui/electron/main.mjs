@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { BrowserHost } from "./browser-host.mjs";
@@ -115,14 +115,19 @@ function boundedHandshake(child) {
 async function startCore(bridge) {
   const bundled = app.isPackaged;
   const staticDir = bundled ? join(process.resourcesPath, "ui-dist") : join(uiRoot, "dist");
+  const devPython = bundled ? null : process.env.NEBULA_DESKTOP_PYTHON;
+  if (devPython && !isAbsolute(devPython)) {
+    throw new Error("NEBULA_DESKTOP_PYTHON must be an absolute path to the selected Python interpreter.");
+  }
   const executable = bundled
     ? join(dirname(process.execPath), process.platform === "win32" ? "nebula-core.exe" : "nebula-core")
-    : "poetry";
+    : devPython || "poetry";
+  const serveArgs = ["serve", "--host", "127.0.0.1", "--port", "0", "--handshake-stdout", "--data-dir", join(dataRoot(), "core"), "--static-dir", staticDir];
   const args = bundled
-    ? ["serve", "--host", "127.0.0.1", "--port", "0", "--handshake-stdout", "--data-dir", join(dataRoot(), "core"), "--static-dir", staticDir]
-    : ["-C", repoRoot, "run", "nebula-core", "serve", "--host", "127.0.0.1", "--port", "0",
-      "--handshake-stdout", "--data-dir", join(dataRoot(), "core"), "--static-dir", staticDir];
+    ? serveArgs
+    : devPython ? ["-m", "nebula.v3.cli", ...serveArgs] : ["-C", repoRoot, "run", "nebula-core", ...serveArgs];
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => environmentKeys.has(key)));
+  if (!bundled) env.PYTHONPATH = join(repoRoot, "src");
   env.NEBULA_ONE_BROWSER_CUTOVER = "1";
   env.NEBULA_VISIBLE_BROWSER_URL = bridge.url;
   env.NEBULA_VISIBLE_BROWSER_TOKEN = bridge.token;

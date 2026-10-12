@@ -6,6 +6,7 @@ from nebula.v3.agent_security_tools import (
     SecurityToolsRuntime,
     _attack_payloads,
     PROFILE_ID,
+    PROFILE_NAME,
 )
 from nebula.v3.browserd import BrowserdSecurityResponse
 from nebula.v3.browser_security import (
@@ -92,6 +93,7 @@ def test_security_tools_profile_is_optional_and_schemas_are_valid(tmp_path):
     runtime = SecurityToolsRuntime(store, StubSessions(session))
     profile = runtime.register_profile()
     assert profile.id == PROFILE_ID
+    assert profile.name == PROFILE_NAME
     assert profile.transport == McpTransport.BUILTIN
     assert profile.enabled is True
     assert profile.required is False
@@ -104,11 +106,13 @@ def test_security_tools_profile_is_optional_and_schemas_are_valid(tmp_path):
         McpServerProfile,
         PROFILE_ID,
         {
+            "name": "security-tools",
             "capabilities": {"protocol_version": "2025-06-18", "tools": []},
         },
         expected_revision=profile.revision,
     )
     refreshed = runtime.register_profile()
+    assert refreshed.name == PROFILE_NAME
     assert {item.name for item in refreshed.capabilities.tools} >= {
         "traffic",
         "har_export",

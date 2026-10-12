@@ -179,15 +179,24 @@ export class BrowserHost {
 
   place() {
     if (this.window.isDestroyed()) return;
-    const bounds = this.layout && pageBounds(this.layout, this.window.getContentBounds());
+    const contentBounds = this.window.getContentBounds();
+    const bounds = this.layout && pageBounds(this.layout, contentBounds);
+    if (process.env.NEBULA_BROWSER_GEOMETRY === "1") {
+      const message = JSON.stringify({ layout: this.layout, contentBounds, bounds });
+      if (message !== this.lastGeometryLog) {
+        process.stderr.write(`electron browser geometry: ${message}\n`);
+        this.lastGeometryLog = message;
+      }
+    }
     for (const [projectId, project] of this.projects) {
       for (const tab of project.tabs.values()) {
         const selected = bounds && projectId === this.activeProject && tab.id === project.activeTabId;
         const mounted = this.window.contentView.children.includes(tab.view);
+        if (!mounted) this.window.contentView.addChildView(tab.view);
         if (selected) {
           tab.view.setBounds(bounds);
-          if (!mounted) this.window.contentView.addChildView(tab.view);
-        } else if (mounted) this.window.contentView.removeChildView(tab.view);
+          tab.view.setVisible(true);
+        } else tab.view.setVisible(false);
       }
     }
   }

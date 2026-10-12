@@ -8,7 +8,7 @@ working security workflow.
 
 | Journey step | Operator-visible invariant | State authority | Test layer |
 | --- | --- | --- | --- |
-| Discover | Desktop Browser offers one normal browser; Chat offers its existing browser tool and one optional Security Tools MCP. Web/mobile explains the desktop handoff. | Core catalog and desktop capability; React presents them | Component, desktop Electron, mobile Chromium/WebKit |
+| Discover | Desktop Browser offers one normal browser; Chat offers its existing browser tool and one optional browser-security-testing-tools MCP. Web/mobile explains the desktop handoff. | Core catalog and desktop capability; React presents them | Component, desktop Electron, mobile Chromium/WebKit |
 | Create | Opening the Browser creates one sandboxed visible tab for the selected Project. Starting security work creates a distinct headless identity and run. | Electron for visible tabs and storage; Core for run and policy | Electron, real Core/proxy |
 | Select and use | Browser URL bar, selected tab, and chat browser action refer to the same visible page. Security MCP actions affect only the headless run. | Electron tab identity; Core project/conversation attachment and tool ledger | Electron plus real Core |
 | Isolation | Visible navigation never enters security capture and shares no cookies, proxy, or request interception with the headless identity. | Electron session partition; Core worker and proxy | Electron plus proxy integration |

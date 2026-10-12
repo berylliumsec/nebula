@@ -50,6 +50,7 @@ from .storage import NebulaStore, NotFoundError
 
 
 PROFILE_ID = "nebula-security-tools-v1"
+PROFILE_NAME = "browser-security-testing-tools"
 _ACTOR = "security-tools-mcp"
 _CURATED: dict[str, list[str]] = {
     "booleans": ["true", "false", "1", "0", "null"],
@@ -355,7 +356,7 @@ class SecurityToolsRuntime:
             return self.store.create(
                 McpServerProfile(
                     id=PROFILE_ID,
-                    name="security-tools",
+                    name=PROFILE_NAME,
                     description="Headless Project security testing: interception, Repeater, Intruder and crawl.",
                     transport=McpTransport.BUILTIN,
                     enabled=True,
@@ -370,14 +371,15 @@ class SecurityToolsRuntime:
         ):
             raise ValueError("Security Tools profile ID is occupied by another server")
         fresh = self.capabilities()
-        if [
+        definition_changed = [
             tool.model_dump(exclude={"checked_at"})
             for tool in profile.capabilities.tools
-        ] != [tool.model_dump(exclude={"checked_at"}) for tool in fresh.tools]:
+        ] != [tool.model_dump(exclude={"checked_at"}) for tool in fresh.tools]
+        if profile.name != PROFILE_NAME or definition_changed:
             profile = self.store.update(
                 McpServerProfile,
                 PROFILE_ID,
-                {"capabilities": fresh.model_dump(mode="json")},
+                {"name": PROFILE_NAME, "capabilities": fresh.model_dump(mode="json")},
                 expected_revision=profile.revision,
             )
         return profile
@@ -637,7 +639,10 @@ class SecurityToolsRuntime:
                 _ACTOR,
             )
             return self._result(
-                {"session_id": session.id, "enabled": capture_session.interception_enabled}
+                {
+                    "session_id": session.id,
+                    "enabled": capture_session.interception_enabled,
+                }
             )
         if name == "repeater":
             tab = self.research.create_repeater_tab(

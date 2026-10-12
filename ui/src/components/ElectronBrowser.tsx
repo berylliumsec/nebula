@@ -209,7 +209,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
       .then(setState).catch(failure);
   }, [desktop, initialOpenRequest, initialOpenUrl, projectId, session?.session_id, state?.activeTabId]);
 
-  if (!desktop) return <><div className="electron-browser-handoff">Open this Project in the Nebula desktop app to use its visible browser. Chat Security Tools and research results remain available here.</div><SecurityDashboard api={api} projectId={projectId} /></>;
+  if (!desktop) return <><div className="electron-browser-handoff">Open this Project in the Nebula desktop app to use its visible browser. The browser-security-testing-tools MCP and research results remain available here.</div><SecurityDashboard api={api} projectId={projectId} /></>;
   return <section className="electron-browser" ref={rootRef} aria-label="Project browser">
     <div className="electron-browser-controls" ref={controlsRef}>
       <div className="electron-browser-tabs" role="tablist" aria-label="Browser tabs">
@@ -253,7 +253,7 @@ export function ElectronBrowser({ active, api, projectId, conversationId, draftI
     <div className="electron-browser-page" ref={pageRef} aria-label="Live browser page" />
     {confirmAllowAll && <div className="electron-browser-confirm" role="alertdialog" aria-modal="true" aria-label="Allow all browser and security actions">
       <strong>Allow all browser and security actions until revoked?</strong>
-      <p>Agents can act in the visible browser and run Security Tools without repeated prompts. Project scope, high-risk grants, limits, and audit still apply.</p>
+      <p>Agents can act in the visible browser and run browser-security-testing-tools without repeated prompts. Project scope, high-risk grants, limits, and audit still apply.</p>
       <button className="button primary" type="button" disabled={approvalBusy} onClick={() => void setAllowAll(true)}>Allow all until revoked</button>
       <button className="button quiet" type="button" onClick={() => setConfirmAllowAll(false)}>Cancel</button>
     </div>}
