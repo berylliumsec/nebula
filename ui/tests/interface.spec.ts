@@ -1131,13 +1131,13 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await expect(securityResize).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const boundsCalls = calls.filter((call) => call.command === "browser_present_tab" && call.args.tabId !== null);
     const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
     return bounds?.width ?? 0;
   })).toBeLessThan(geometry.bounds.width);
   const narrowedBrowserWidth = await page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const boundsCalls = calls.filter((call) => call.command === "browser_present_tab" && call.args.tabId !== null);
     const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
     return bounds?.width ?? 0;
   });
@@ -1148,17 +1148,18 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.security-browser-workspace.width"))).not.toBeNull();
   await expect.poll(() => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const boundsCalls = calls.filter((call) => call.command === "browser_present_tab" && call.args.tabId !== null);
     const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
     return bounds?.width ?? 0;
   })).toBeGreaterThan(narrowedBrowserWidth);
   expect(await page.evaluate((start) => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    return calls.slice(start).some((call) => call.command === "browser_set_visible" && call.args.visible === false);
+    return calls.slice(start).some((call) => call.command === "browser_present_tab" && call.args.tabId === null);
   }, callsBeforeResearch)).toBe(false);
   const nativeVisibility = () => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    return calls.filter((call) => call.command === "browser_set_visible").at(-1)?.args.visible;
+    const last = calls.filter((call) => call.command === "browser_present_tab").at(-1);
+    return last ? last.args.tabId !== null : undefined;
   });
   const toggleAssistant = page.getByRole("button", { name: "Assistant", exact: true });
   await toggleAssistant.click();
@@ -1208,7 +1209,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await page.getByRole("button", { name: "Security research workbench" }).click();
   await expect.poll(() => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const boundsCalls = calls.filter((call) => call.command === "browser_present_tab" && call.args.tabId !== null);
     const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
     return bounds?.width ?? 0;
   })).toBeGreaterThan(narrowedBrowserWidth);
@@ -1218,14 +1219,14 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     await expect.poll(() => page.evaluate(() => {
       const surface = document.querySelector(".browser-surface")!.getBoundingClientRect();
       const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-      const native = calls.filter((call) => call.command === "browser_set_bounds").at(-1)?.args.bounds as { x: number; width: number } | undefined;
+      const native = calls.filter((call) => call.command === "browser_present_tab" && call.args.tabId !== null).at(-1)?.args.bounds as { x: number; width: number } | undefined;
       return !!native && native.x >= surface.left && native.x + native.width <= surface.right + 1;
     })).toBe(true);
     await page.getByRole("button", { name: "Hide sidebar" }).click();
   }
   const nativeBoundsCount = () => page.evaluate(() => (
-    (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string }> }).__NEBULA_BROWSER_CALLS__ ?? []
-  ).filter((call) => call.command === "browser_set_bounds").length);
+    (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? []
+  ).filter((call) => call.command === "browser_present_tab" && call.args.tabId !== null).length);
   const beforeZoom = await nativeBoundsCount();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("nebula:ui-zoom", { detail: 1.25 })));
   await expect.poll(nativeBoundsCount).toBeGreaterThan(beforeZoom);
@@ -1233,7 +1234,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await expect.poll(() => page.evaluate(() => {
     const surface = document.querySelector(".browser-surface")!.getBoundingClientRect();
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    const native = calls.filter((call) => call.command === "browser_set_bounds").at(-1)?.args.bounds as { x: number; y: number; width: number; height: number } | undefined;
+    const native = calls.filter((call) => call.command === "browser_present_tab" && call.args.tabId !== null).at(-1)?.args.bounds as { x: number; y: number; width: number; height: number } | undefined;
     return !!native && native.x >= surface.left && native.y >= surface.top
       && native.x + native.width <= surface.right + 1 && native.y + native.height <= surface.bottom + 1;
   })).toBe(true);
@@ -1245,7 +1246,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await expect(popup).toContainText("Browser · Mock target account");
   const nativeBounds = () => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    return calls.filter(call => call.command === "browser_set_bounds").at(-1)?.args.bounds as { x: number; y: number; width: number; height: number } | undefined;
+    return calls.filter(call => call.command === "browser_present_tab" && call.args.tabId !== null).at(-1)?.args.bounds as { x: number; y: number; width: number; height: number } | undefined;
   });
   const expectNativeClearOfPopup = async () => {
     let latest: { clear: boolean; native: Awaited<ReturnType<typeof nativeBounds>>; overlay: Awaited<ReturnType<typeof popup.boundingBox>> } | undefined;
@@ -1265,7 +1266,8 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   };
   const nativeVisible = () => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
-    return calls.filter(call => call.command === "browser_set_visible").at(-1)?.args.visible;
+    const last = calls.filter(call => call.command === "browser_present_tab").at(-1);
+    return last ? last.args.tabId !== null : undefined;
   });
   await expect.poll(nativeVisible).toBe(true);
   await expectNativeClearOfPopup();
