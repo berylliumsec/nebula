@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 160" role="img" aria-labelledby="title desc">
+  <title id="title">Nebula Quiet Lens logo</title>
+  <desc id="desc">An upright tapered lens with a softly luminous blue edge.</desc>
+  <defs>
+    <linearGradient id="edge" x1="18" y1="150" x2="82" y2="10" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#789BA6"/>
+      <stop offset=".48" stop-color="#B7DDE4"/>
+      <stop offset=".8" stop-color="#DCF5F7"/>
+      <stop offset="1" stop-color="#82B6C5"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-25%" width="220%" height="150%">
+      <feGaussianBlur stdDeviation="3.5"/>
+    </filter>
+  </defs>
+  <path d="M50 8C81 42 81 118 50 152C19 118 19 42 50 8Z" fill="none" stroke="#76B6C5" stroke-width="9" opacity=".35" filter="url(#glow)"/>
+  <path d="M50 8C81 42 81 118 50 152C19 118 19 42 50 8Z" fill="none" stroke="url(#edge)" stroke-width="3.5" stroke-linejoin="round"/>
+</svg>
