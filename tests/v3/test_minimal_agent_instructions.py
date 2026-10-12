@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from nebula.v3.application_model.workflow import BROWSER_MODEL_WORKFLOW
+from nebula.v3.application_model.workflow import (
+    BROWSER_MODEL_WORKFLOW,
+    DIRECT_REQUEST_WORKFLOW,
+)
 from nebula.v3.chat import (
     _CHAT_BASE_INSTRUCTIONS,
     _CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS,
@@ -40,7 +43,8 @@ def test_harness_instructions_only_route_nebula_workspace_and_tools() -> None:
     assert "project root is cwd '.'" in instructions
     assert "browser.companion" in instructions
     assert "model.transact" in instructions
-    assert len(instructions) < 400
+    assert DIRECT_REQUEST_WORKFLOW in instructions
+    assert len(instructions) < 600
     assert not any(
         phrase in instructions.lower() for phrase in FORBIDDEN_POLICY_PHRASES
     )
@@ -48,6 +52,7 @@ def test_harness_instructions_only_route_nebula_workspace_and_tools() -> None:
 
 def test_chat_instructions_only_define_turn_protocol() -> None:
     assert _CHAT_BASE_INSTRUCTIONS.startswith("Nebula provider session.")
+    assert DIRECT_REQUEST_WORKFLOW in _CHAT_BASE_INSTRUCTIONS
     assert _CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS.startswith(
         "Nebula provider session."
     )
@@ -69,6 +74,14 @@ def test_chat_instructions_only_define_turn_protocol() -> None:
     assert not any(
         phrase in instructions.lower() for phrase in FORBIDDEN_POLICY_PHRASES
     )
+
+
+def test_clear_request_guidance_keeps_distinct_approvals_and_verification() -> None:
+    assert "Do not ask to confirm it again" in DIRECT_REQUEST_WORKFLOW
+    assert "separate tool or policy approval" in DIRECT_REQUEST_WORKFLOW
+    assert "Verify results before claiming completion" in DIRECT_REQUEST_WORKFLOW
+    assert DIRECT_REQUEST_WORKFLOW in _CHAT_INSTRUCTIONS
+    assert DIRECT_REQUEST_WORKFLOW in _CHAT_TOOL_RESULT_INSTRUCTIONS
 
 
 def test_only_the_tool_free_instructions_claim_the_turn_has_no_tools() -> None:

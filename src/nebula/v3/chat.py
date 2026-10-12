@@ -98,7 +98,10 @@ from .working_notes import (
     working_notes_block,
     working_notes_status,
 )
-from .application_model.workflow import BROWSER_MODEL_WORKFLOW
+from .application_model.workflow import (
+    BROWSER_MODEL_WORKFLOW,
+    DIRECT_REQUEST_WORKFLOW,
+)
 from .browser_companion import BrowserCompanion
 from .browser_engine import BrowserEngineRegistry
 from .domain import BrowserSession
@@ -1655,7 +1658,8 @@ _STOP_WORDS = {
 
 _CHAT_ORIGIN_INSTRUCTION = "Nebula provider session. "
 _CHAT_BASE_INSTRUCTIONS = _CHAT_ORIGIN_INSTRUCTION + (
-    "Answer the operator's request. Cite provided references with [source_id:chunk_id]."
+    "Answer the operator's request. Cite provided references with [source_id:chunk_id]. "
+    + DIRECT_REQUEST_WORKFLOW
 )
 
 # Routing and synthesis prepend their own instructions to the same base text,
