@@ -1209,7 +1209,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         else params.delete("side");
         if (nextSide && storedCompanionExpanded(id)) params.set("companion", "full");
         else params.delete("companion");
-        if (previousId !== id) params.delete("openFile");
+        if (previousId !== id) {
+          params.delete("openFile");
+          params.delete("openLine");
+          params.delete("openFileRequest");
+          params.delete("openUrl");
+          params.delete("openUrlRequest");
+        }
       }
       if (!preserveSurface && !embeddedSideChat) params.set("view", params.get("view") === "browser" ? "browser" : "chat");
 
@@ -6048,23 +6054,31 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setRunCandidate,
     runInTerminal,
     openLinkedFile: ({ path, line }) => updateSearchParams(next => {
-      next.set("view", "code");
+      next.set("view", compact ? "code" : "chat");
+      if (compact) next.delete("side");
+      else {
+        next.set("side", "code");
+        rememberChatSide(next.get("session") ?? "", "code");
+      }
+      next.delete("companion");
+      rememberCompanionExpanded(next.get("session") ?? "", false);
       next.set("openFile", path);
       if (line) next.set("openLine", String(line)); else next.delete("openLine");
       next.set("openFileRequest", globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
     }),
-    openLinkedWebPage: (url) => {
-      if (!isTauriRuntime()) {
-        globalThis.open(url, "_blank", "noopener,noreferrer");
-        return;
+    openLinkedWebPage: (url) => updateSearchParams(next => {
+      next.set("view", compact ? "browser" : "chat");
+      if (compact) next.delete("side");
+      else {
+        next.set("side", "browser");
+        rememberChatSide(next.get("session") ?? "", "browser");
       }
-      updateSearchParams(next => {
-        next.set("view", "browser");
-        next.set("browserEngine", "native");
-        next.set("openUrl", url);
-        next.set("openUrlRequest", globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
-      });
-    },
+      next.delete("companion");
+      rememberCompanionExpanded(next.get("session") ?? "", false);
+      next.set("browserEngine", isTauriRuntime() ? "native" : "managed");
+      next.set("openUrl", url);
+      next.set("openUrlRequest", globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+    }),
     resendEditedMessage,
     setMessageEdit,
     cancelMessageEdit,
@@ -6538,9 +6552,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           {api && engagement && <div ref={(element) => { if (sideView === "browser") sideSize.panelRef.current = element; }} id="chat-side-browser" role={chatSideVisible && sideView === "browser" ? "region" : undefined} aria-label={chatSideVisible && sideView === "browser" ? "Browser beside chat" : undefined} className={`persistent-browser integrated-browser-layout${browserAssistantOpen && view === "browser" ? " assistant-open" : ""}${chatSideVisible && sideView === "browser" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "browser" ? sideSize.panelStyle : undefined} hidden={view !== "browser" && !(chatSideVisible && sideView === "browser")}>
             {chatSideVisible && sideView === "browser" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Browser</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} title={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Browser" title="Hide Browser" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
             <div className="integrated-browser-page">
-            <header className="browser-workspace-toolbar">{(browserEngine === "managed" || sideBrowserVisible) && <button className="button quiet managed-browser-icon" type="button" aria-label={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} title={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} aria-expanded={browserControlsOpen} aria-controls="managed-browser-controls" onClick={() => setBrowserControlsOpen(open => !open)}><Settings2 size={18} aria-hidden="true" /></button>}<button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}><PanelRight size={18} aria-hidden="true" /></button>
+            <header className="browser-workspace-toolbar">{browserEngine === "managed" && <button className="button quiet managed-browser-icon" type="button" aria-label={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} title={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} aria-expanded={browserControlsOpen} aria-controls="managed-browser-controls" onClick={() => setBrowserControlsOpen(open => !open)}><Settings2 size={18} aria-hidden="true" /></button>}<button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}><PanelRight size={18} aria-hidden="true" /></button>
             {!sideBrowserVisible && <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Assistant browser</option><option value="native">Native browser</option></select></label>}</header>
-            {(browserEngine === "managed" || sideBrowserVisible) ? <ManagedAssistantBrowser key={`${engagement.id}:${sessionId || draftEditorKey}`} api={api} projectId={engagement.id} draftId={draftEditorKey} active={view === "browser" || (chatSideVisible && sideView === "browser")} controlsOpen={browserControlsOpen}
+            {browserEngine === "managed" ? <ManagedAssistantBrowser key={`${engagement.id}:${sessionId || draftEditorKey}`} api={api} projectId={engagement.id} draftId={draftEditorKey} active={view === "browser" || (chatSideVisible && sideView === "browser")} controlsOpen={browserControlsOpen}
+              initialOpenUrl={searchParams.get("openUrl") ?? undefined} initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
               conversationId={sessionId || undefined} onConversation={(id) => void openAttachedChat(id)}
               onContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}
               actionContainer={browserActionContainer} onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={(file) => { setBrowserAssistantOpen(true); void attachImageFiles([file]); }} /> : <WorkbenchBrowser
