@@ -1,10 +1,10 @@
 {
-  "change_digest": "6ab4bebd05ac0cb31ab99e33e85e469f06ad9bdf8aae86c7ff629f6e3495522c",
+  "change_digest": "14b82d822568203586a15b059738793d31bdc7d203bad8b205411fc535e9dbe4",
   "reviewed_by": "Codex focused review for draft Chromium Browser Research work",
-  "reason": "The existing PR diff adds an operator Chromium panel, direct input, runtime staging, and a production UI smoke path. This increment makes only the framed operator identity launch offscreen while Assistant and assessment identities remain headed, and records the full Browser Research parity contract. The 29 selected Python tests cover the existing operator/API and packaging journeys plus the new identity launch checks; the prior 24 component and ten permanent desktop/mobile Playwright selections remain because they still cover the PR diff. The production real-Core/browserd smoke is a separate focused gate.",
-  "exclusions": "No Rust or frontend source changed in this increment, so no new Rust or UI selection is added. Unrelated Core/UI/Playwright journeys and all full suites remain excluded. Headless Chromium smoke on Linux does not prove the physical Mac compositor behavior. Browser Research capture, interception, upstream, Repeater, evidence, and automation parity is still unimplemented; this draft PR cannot be merged on the basis of these selected tests.",
+  "reason": "The PR adds an operator Chromium panel and runtime staging; this increment also launches the framed identity offscreen and adds a loopback-only chain from the Core scope proxy to the existing capture proxy. The 34 selected Python tests cover operator/API separation, runtime staging, offscreen launch, proxy authentication, scope revocation, HTTP/CONNECT chaining, and credential isolation. The prior 24 component and ten permanent desktop/mobile Playwright selections remain because they cover the full PR diff. The production real-Core/browserd smoke is a separate focused gate.",
+  "exclusions": "No Rust or frontend source changed in this increment, so no new Rust or UI selection is added. Unrelated Core/UI/Playwright journeys and all full suites remain excluded. The new proxy-chain tests use a bounded fake capture listener; they do not prove the Tauri capture bridge, HTTP/2/WebSocket parity, or physical Mac behavior. Browser Research integration remains incomplete, so this draft PR must not merge on the basis of these tests.",
   "expected_tests": {
-    "python": 29,
+    "python": 34,
     "frontend": 24,
     "native": 0,
     "playwright": 10
@@ -21,7 +21,8 @@
     "tests/v3/test_packaging.py::test_playwright_runtime_staging_accepts_macos_cft_app",
     "tests/v3/test_packaging.py::test_playwright_runtime_reuses_only_verified_payload",
     "tests/v3/test_packaging.py::test_desktop_dev_prepares_core_before_tauri_and_starts_vite_in_hook",
-    "tests/v3/test_browserd.py::test_framed_identity_launches_without_a_second_desktop_window"
+    "tests/v3/test_browserd.py::test_framed_identity_launches_without_a_second_desktop_window",
+    "tests/v3/test_browser_host_proxy.py"
   ],
   "frontend": [
     "ui/src/components/OperatorBrowser.test.tsx",

@@ -117,3 +117,131 @@ def test_tunnel_rechecks_revocation_and_closes_active_connections():
         assert not proxy._clients
 
     asyncio.run(exercise())
+
+
+def test_capture_chain_preserves_scope_and_strips_browser_proxy_credentials():
+    async def exercise():
+        received = []
+
+        async def capture(reader, writer):
+            header = await reader.readuntil(b"\r\n\r\n")
+            received.append(header)
+            if header.startswith(b"CONNECT "):
+                writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                await writer.drain()
+                chunk = await reader.readexactly(4)
+                writer.write(chunk)
+            else:
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
+                )
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_server(capture, "127.0.0.1", 0)
+        capture_port = server.sockets[0].getsockname()[1]
+        allowed = []
+
+        def authorize(destination):
+            allowed.append(destination)
+            if not destination.startswith(
+                "http://allowed.test/"
+            ) and not destination.startswith("https://allowed.test:443/"):
+                raise ValueError("outside scope")
+
+        proxy = BrowserHostProxy(authorize, capture_proxy=("127.0.0.1", capture_port))
+        config = await proxy.start()
+        browser_port = urlsplit(config["server"]).port
+        credentials = base64.b64encode(f"nebula:{config['password']}".encode()).decode()
+
+        async def connect(request):
+            reader, writer = await asyncio.open_connection("127.0.0.1", browser_port)
+            writer.write(request.replace(b"CREDENTIALS", credentials.encode()))
+            await writer.drain()
+            return reader, writer
+
+        try:
+            reader, writer = await connect(
+                b"GET http://outside.test/ HTTP/1.1\r\nProxy-Authorization: Basic CREDENTIALS\r\n\r\n"
+            )
+            assert b"403" in await asyncio.wait_for(reader.read(), 3)
+            writer.close()
+            await writer.wait_closed()
+            assert received == []
+
+            reader, writer = await connect(
+                b"GET http://allowed.test/page HTTP/1.1\r\nProxy-Authorization: Basic CREDENTIALS\r\n\r\n"
+            )
+            assert (await asyncio.wait_for(reader.read(), 3)).endswith(b"OK")
+            writer.close()
+            await writer.wait_closed()
+            assert received[0].startswith(b"GET http://allowed.test/page HTTP/1.1\r\n")
+            assert b"Proxy-Authorization" not in received[0]
+            assert config["password"].encode() not in received[0]
+
+            reader, writer = await connect(
+                b"CONNECT allowed.test:443 HTTP/1.1\r\nProxy-Authorization: Basic CREDENTIALS\r\n\r\n"
+            )
+            assert b"200" in await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 3)
+            writer.write(b"ping")
+            await writer.drain()
+            assert await asyncio.wait_for(reader.readexactly(4), 3) == b"ping"
+            writer.close()
+            await writer.wait_closed()
+            assert received[1].startswith(b"CONNECT allowed.test:443 HTTP/1.1\r\n")
+            assert b"Proxy-Authorization" not in received[1]
+            assert allowed.count("https://allowed.test:443/") >= 2
+        finally:
+            await proxy.close()
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(exercise())
+
+
+def test_capture_chain_rejects_non_loopback_or_invalid_ports():
+    for address in (("example.test", 8000), ("127.0.0.1", 0)):
+        try:
+            BrowserHostProxy(lambda _destination: None, capture_proxy=address)
+        except ValueError as exc:
+            assert "loopback listener" in str(exc)
+        else:
+            raise AssertionError("Unsafe capture proxy accepted")
+
+
+def test_capture_proxy_tunnel_denial_never_opens_browser_tunnel():
+    async def exercise():
+        async def deny(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_server(deny, "127.0.0.1", 0)
+        proxy = BrowserHostProxy(
+            lambda _destination: None,
+            capture_proxy=("127.0.0.1", server.sockets[0].getsockname()[1]),
+        )
+        config = await proxy.start()
+        credentials = base64.b64encode(f"nebula:{config['password']}".encode()).decode()
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", urlsplit(config["server"]).port
+        )
+        try:
+            writer.write(
+                f"CONNECT allowed.test:443 HTTP/1.1\r\nProxy-Authorization: Basic {credentials}\r\n\r\n".encode()
+            )
+            await writer.drain()
+            response = await asyncio.wait_for(reader.read(), 3)
+            assert response.startswith(b"HTTP/1.1 403 Forbidden\r\n")
+            assert b"200 Connection Established" not in response
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            await proxy.close()
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(exercise())

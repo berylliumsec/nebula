@@ -40,17 +40,19 @@ is in progress and still needs physical Mac confirmation. No focused UI test or 
 test can establish that the reported Mac compositor issue is resolved.
 
 The target is one Core Browser Research session displayed through a Chromium
-screencast, with Chromium network instrumentation and the same durable Core
-research services. Chromium's request/response and WebSocket events provide
-per-tab attribution; its interception stage must wait for a Core decision and
-fail closed on disconnect. The host egress proxy remains a second enforcement
-point. Upstream settings and credential references must be applied before a
-context starts or through a controlled context replacement; replacing a
-context must preserve the selected identity and disclose lost live page state.
-The existing Rust capture proxy remains for legacy native sessions until the
-Chromium path passes the full fixture matrix. Browser Research controls must
-move together with the page; showing controls that operate a different session
-would be unsafe.
+screencast. browserd/CDP owns page control and tab observation. The existing
+Rust capture proxy owns request and response interception, HTTP/2 and WebSocket
+capture, body limits, proxy rules, and upstream chaining. The Core host egress
+proxy enforces live Project scope before forwarding traffic to that capture
+proxy. Core remains authoritative for saved decisions and evidence. This
+reuses Nebula's existing capture semantics; CDP-only interception would need
+new proof for service workers, WebSocket handling, and raw response behavior.
+An authenticated local bridge must register the capture proxy with Core before
+browserd starts a captured identity. A context replacement must preserve the
+selected identity and disclose lost live page state. The proxy's event-to-tab
+attribution must be verified for concurrent Chromium tabs before claiming
+parity. Browser Research controls must move together with the page; showing
+controls that operate a different session would be unsafe.
 
 This follows the publicly documented browser-session pattern: Browser Use
 keeps an explicit session and CDP target per page, and Hermes uses a local

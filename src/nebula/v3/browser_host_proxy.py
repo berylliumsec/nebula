@@ -11,8 +11,18 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 class BrowserHostProxy:
-    def __init__(self, authorize: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        authorize: Callable[[str], None],
+        *,
+        capture_proxy: tuple[str, int] | None = None,
+    ) -> None:
+        if capture_proxy is not None and (
+            capture_proxy[0] != "127.0.0.1" or not 1 <= capture_proxy[1] <= 65535
+        ):
+            raise ValueError("The browser capture proxy must be a loopback listener.")
         self.authorize = authorize
+        self.capture_proxy = capture_proxy
         self.password = secrets.token_urlsafe(32)
         self._authorization = "Basic " + base64.b64encode(
             ("nebula:" + self.password).encode("ascii")
@@ -102,18 +112,39 @@ class BrowserHostProxy:
                 (parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, "")
             )
             self.authorize(destination)
+            connect_host, connect_port = self.capture_proxy or (parsed.hostname, port)
             remote_reader, upstream = await asyncio.wait_for(
-                asyncio.open_connection(parsed.hostname, port), 10
+                asyncio.open_connection(connect_host, connect_port), 10
             )
             assert upstream is not None
             # Revalidate after DNS/connect; no bytes reach a newly revoked scope.
             self.authorize(destination)
             if tunnel:
+                if self.capture_proxy is not None:
+                    upstream.write(
+                        f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode(
+                            "iso-8859-1"
+                        )
+                    )
+                    await asyncio.wait_for(upstream.drain(), 10)
+                    response = await asyncio.wait_for(
+                        remote_reader.readuntil(b"\r\n\r\n"), 10
+                    )
+                    if response.split(b"\r\n", 1)[0].split(b" ", 2)[:2] != [
+                        b"HTTP/1.1",
+                        b"200",
+                    ]:
+                        raise ValueError("The capture proxy rejected the tunnel.")
+                    self.authorize(destination)
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
             else:
                 path = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
-                outgoing = [f"{method} {path} HTTP/1.1", f"Host: {parsed.netloc}"]
+                request_target = destination if self.capture_proxy else path
+                outgoing = [
+                    f"{method} {request_target} HTTP/1.1",
+                    f"Host: {parsed.netloc}",
+                ]
                 outgoing.extend(
                     f"{name}: {value}"
                     for name, value in fields
