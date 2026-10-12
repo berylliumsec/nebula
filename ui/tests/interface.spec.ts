@@ -10634,6 +10634,59 @@ test("provider options explain the working ceiling beside the context window", a
   expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+test("provider and harness usage separates vendor balances from recorded turns", async ({ page }, testInfo) => {
+  let refreshes = 0;
+  await page.route("**/api/v1/runtime-usage*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("refresh") === "true") refreshes += 1;
+    const recorded = (input_tokens: number, output_tokens: number, turns: number) => ({
+      input_tokens, output_tokens, total_tokens: input_tokens + output_tokens, cached_input_tokens: 0, turns,
+      scope: "Nebula turns",
+    });
+    const vendor = (source: string, detail: string, balances: unknown[], windows: unknown[] = []) => ({
+      state: "available", source, detail, checked_at: "2026-10-12T12:00:00Z", balances, windows, ordinary_usage_allowed: true,
+    });
+    await route.fulfill({ json: {
+      generated_at: "2026-10-12T12:00:00Z",
+      items: [
+        { kind: "provider", profile_id: "router", name: "OpenRouter Research", provider_type: "openrouter", enabled: true,
+          recorded: recorded(83120, 10900, 42), vendor: vendor("OpenRouter key", "This is the API key allowance, not the account's total credits.", [
+            { label: "Key allowance", currency: "USD", remaining: refreshes ? 70 : 74.5, used: refreshes ? 30 : 25.5, limit: 100, note: "Key cap only" },
+          ]) },
+        { kind: "provider", profile_id: "deepseek", name: "DeepSeek", provider_type: "deepseek", enabled: true,
+          recorded: recorded(22000, 4100, 12), vendor: vendor("DeepSeek account", "Available account balance, including granted and topped-up funds.", [
+            { label: "Account balance", currency: "USD", remaining: 12.4 },
+          ]) },
+        { kind: "harness", profile_id: "codex", name: "Codex Studio", provider_type: "codex_app_server", enabled: true,
+          recorded: recorded(385000, 21100, 69), vendor: vendor("Codex account", "Account rate-limit windows and credits reported by Codex. Resets do not guarantee access.", [
+            { label: "Codex credits", remaining: 7.25, note: "Vendor credit units" },
+          ], [{ label: "Included usage · Short window", used_percent: 62, duration_minutes: 300, resets_at: "2026-10-12T17:00:00Z" }]) },
+        { kind: "harness", profile_id: "grok", name: "Grok Build", provider_type: "grok_acp", enabled: true,
+          recorded: recorded(14800, 2300, 8), vendor: { state: "unavailable", source: "Vendor account", detail: "This harness does not expose an account balance to Nebula.", checked_at: null, balances: [], windows: [], ordinary_usage_allowed: null } },
+      ],
+    } });
+  });
+  await openWorkspace(page, "/settings#usage-settings", "Settings");
+  const usage = page.getByRole("region", { name: "Provider and harness usage" });
+  await expect(usage.getByRole("heading", { name: "Balances & activity" })).toBeVisible();
+  const router = usage.getByRole("article", { name: "OpenRouter Research usage" });
+  await expect(router).toContainText("$74.50");
+  await expect(router).toContainText("not the account's total credits");
+  await expect(usage.getByRole("article", { name: "Grok Build usage" })).toContainText("Unavailable");
+  await expect(usage.getByRole("article", { name: "Codex Studio usage" })).toContainText("38% left");
+  const refresh = usage.getByRole("button", { name: "Refresh provider and harness usage" });
+  const box = await refresh.boundingBox();
+  expectTouchTarget(box?.width, "Usage refresh width");
+  expectTouchTarget(box?.height, "Usage refresh height");
+  expect(await usage.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("runtime-usage.png"), fullPage: true });
+  await usage.getByRole("article", { name: "Codex Studio usage" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("runtime-usage-harnesses.png"), fullPage: false });
+  await refresh.click();
+  await expect(router).toContainText("$70.00");
+  const accessibility = await new AxeBuilder({ page }).include("#runtime-usage").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("OpenRouter profile policy offers ZDR and allowed upstreams", async ({ page }) => {
   await page.route("**/api/v1/provider-catalog", route => route.fulfill({ json: [{
     flavor: "openrouter", adapter: "openai_compatible", display_name: "OpenRouter",

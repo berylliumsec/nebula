@@ -12,6 +12,15 @@ export interface SettingCatalogEntry {
 
 export const settingCatalog: SettingCatalogEntry[] = [
   {
+    id: "settings.usage",
+    label: "Usage and credits",
+    description: "See provider and harness balances, rate limits, and Nebula activity",
+    category: "Models",
+    scope: "Workspace",
+    target: "usage-settings",
+    keywords: ["usage", "credits", "balance", "remaining", "quota", "rate limit", "tokens", "provider", "harness", "codex", "openrouter", "deepseek"],
+  },
+  {
     id: "settings.appearance",
     label: "Appearance and theme",
     description: "Choose a color theme for this device",

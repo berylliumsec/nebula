@@ -488,6 +488,53 @@ test("assistant upgrade OpenRouter policy persists through production LAN reload
   ]);
 });
 
+test("runtime usage real Core shows persisted provider and harness turns on LAN", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const providerResponse = await api.post("providers", { data: { name: "Usage local provider", provider_type: "ollama", endpoint: "http://127.0.0.1:11434/v1", is_local: true } });
+    expect(providerResponse.status(), await providerResponse.text()).toBe(201);
+    const provider = await providerResponse.json() as { id: string };
+    const harnessResponse = await api.post("harnesses", { data: { name: "Usage Grok harness", kind: "grok_acp", executable: "/bin/true" } });
+    expect(harnessResponse.status(), await harnessResponse.text()).toBe(201);
+    const harness = await harnessResponse.json() as { id: string };
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seeded = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ChatTokenUsage, ChatTurn, HarnessSession, HarnessTurn, HarnessTurnOrigin",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "provider, harness = sys.argv[2:]",
+      "store.create(ChatTurn(id='usage-chat-turn', engagement_id='usage-project', session_id='usage-chat', provider_profile_id=provider, model='fixture-model', usage=ChatTokenUsage(input_tokens=40, output_tokens=10, total_tokens=50)))",
+      "store.create(HarnessSession(id='usage-harness-session', engagement_id='usage-project', harness_profile_id=harness, model='fixture-model'))",
+      "store.create(HarnessTurn(id='usage-harness-turn', engagement_id='usage-project', harness_session_id='usage-harness-session', origin=HarnessTurnOrigin.ANALYSIS, prompt='Inspect', usage=ChatTokenUsage(input_tokens=24, output_tokens=6, total_tokens=30)))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), provider.id, harness.id], {
+      encoding: "utf8", env: { ...process.env, PYTHONPATH: path.join(repository, "src") }, timeout: 30_000,
+    });
+    expect(seeded.status, seeded.error?.message ?? seeded.stderr).toBe(0);
+    await pairRealCoreBrowser(page, core, "Usage browser", { requireReady: false });
+    await page.goto(`${core.origin}/settings#usage-settings`);
+    const usage = page.getByRole("region", { name: "Provider and harness usage" });
+    const providerCard = usage.getByRole("article", { name: "Usage local provider usage" });
+    const harnessCard = usage.getByRole("article", { name: "Usage Grok harness usage" });
+    await expect(providerCard).toContainText("50");
+    await expect(harnessCard).toContainText("30");
+    await expect(providerCard).toContainText("Local runtimes do not have a vendor credit balance");
+    await usage.getByRole("button", { name: "Refresh provider and harness usage" }).click();
+    await expect(providerCard).toContainText("50");
+    await page.reload();
+    await expect(harnessCard).toContainText("30");
+    expect(await usage.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await testInfo.attach("runtime-usage-lan", { body: JSON.stringify({ origin: core.origin, build: "ui/dist production", project: testInfo.project.name, viewport: page.viewportSize(), result: "persisted turns, refresh, reload" }), contentType: "application/json" });
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("work hub project board keeps check-ins after refresh and agent access revocation", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
@@ -6602,7 +6649,7 @@ async function startDelegatingModelStub(options: { childDelayMs: number }) {
   return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests, server, fail: false } satisfies LocalModelStub;
 }
 
-async function pairRealCoreBrowser(page: Page, core: RealCore, name: string) {
+async function pairRealCoreBrowser(page: Page, core: RealCore, name: string, options: { requireReady?: boolean } = {}) {
   const pairingApi = await playwrightRequest.newContext({
     baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -6614,7 +6661,12 @@ async function pairRealCoreBrowser(page: Page, core: RealCore, name: string) {
   await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
   await page.getByLabel("Device name").fill(name);
   await page.getByRole("button", { name: "Pair device" }).click();
-  await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+  if (options.requireReady === false) {
+    // Usage remains reachable when this disposable Core has no terminal runner.
+    await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0);
+  } else {
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+  }
 }
 
 async function expectNoChatStreamFailure(page: Page) {
