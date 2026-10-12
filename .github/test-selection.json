@@ -1,16 +1,16 @@
 {
-  "change_digest": "bc163311594d7842af00a9cd44e70a45e9163e879c5fc6586b1c14f3b7761a30",
-  "reviewed_by": "Codex focused conversation image-preview review",
-  "reason": "The change adds a canvas-tile preview to warm conversation switching and changes transcript presentation while Core refreshes. Three collected unit cases cover invalidation, complete multi-tile rasterization, and cache disposal. The selected browser journey exercises held history refresh, keyboard/touch text reveal, scroll restoration, retry and rapid switching at 1440/1024 px desktop and 320/390/430 px emulated Chromium and WebKit widths. Its real-Core entry exercises durable history and reload through the production bundle.",
-  "exclusions": "No Python backend, database schema, API route, or native runtime changes are present, so Python and native tests are unrelated. No full frontend or browser suite, unrelated workspace/provider journeys, live provider execution, or physical-device run is selected. The image is a transient presentation cache; the real-Core case checks the existing durable authority.",
+  "change_digest": "a9d869b010ffd1770e40552bc338ff2f853c2134ee4cfc46dfdcfc4de72cf183",
+  "reviewed_by": "Codex Quiet Lens Session rail contour review",
+  "reason": "The change replaces the collapsed Quiet Lens Session rail CSS ellipse with the same SVG contour used by the navigation handle. Twenty-five collected SideNav component cases cover the touched navigation component. Ten catalogued Quiet Lens browser cases cover first-run theme behavior and the real rail reveal journey at 1440/1024 px desktop Chromium and 320/390/430 px emulated mobile Chromium and WebKit widths. The desktop rail journey compares rendered contours, checks clipping, and verifies hover, focus, attention, and idle states. A production UI build checks the shipped CSS and SVG output.",
+  "exclusions": "No Core API, database, provider, native runtime, or origin-sensitive behavior changes, so Python and native tests are unrelated and a real-Core mutation journey is not selected. Other chat, workspace, and browser suites are excluded. Mobile devices are emulated; no physical-device result is claimed.",
   "expected_tests": {
     "python": 0,
-    "frontend": 3,
+    "frontend": 25,
     "native": 0,
-    "playwright": 9
+    "playwright": 10
   },
   "python": [],
-  "frontend": ["ui/src/pages/chatImagePreview.test.ts"],
+  "frontend": ["ui/src/components/SideNav.test.tsx"],
   "native": [],
-  "playwright": ["area:conversation-switch-performance"]
+  "playwright": ["area:quiet-lens"]
 }
