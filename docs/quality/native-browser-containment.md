@@ -73,3 +73,20 @@ The Linux host cannot observe AppKit compositing or native input hit testing.
 Physical iPhone and Android checks were not available; mobile evidence is browser
 emulation. Until the macOS gate passes, native visual containment is partially
 verified rather than confirmed in the affected desktop app.
+
+## Follow-up: native page overdraw in the macOS development app
+
+An operator screenshot after a fresh `dev:desktop` build shows the native white
+page extending past the Browser surface while the DOM's white surface stays inside
+the panel. The earlier `NSView` clipping attempt therefore did not establish the
+visible invariant. The clipping boundary is now an `NSClipView` with the child
+WKWebView as its document view; the child is explicitly framed to its bounds on
+create and resize. The main WKWebView's `pageZoom` also converts CSS-pixel surface
+bounds to AppKit points when Text size differs from 100%.
+
+An independent macOS 27.2 AppKit probe confirmed that `NSClipView.documentVisibleRect`
+and its oversized WKWebView's `visibleRect` remain limited to the clip frame after
+resizing. This probe is not a Nebula visual acceptance result. The affected Mac
+development app still needs the real Browser journey repeated at 100% and a
+nondefault Text size, including resize, tab switching, hide/show, and input at the
+clipped edge before native containment can be called verified.

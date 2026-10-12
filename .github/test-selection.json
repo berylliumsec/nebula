@@ -1,25 +1,23 @@
 {
-  "change_digest": "d0f47626e91d74207892e4d0e1aedceb26163dd5ea113b875a3a1b2ea6b40d29",
-  "reviewed_by": "Codex focused review for Current Run markdown preview",
-  "reason": "The changed journey is the compact Current Run preview of public harness commentary and provider progress. Nineteen collected ActivityLedger component tests cover inline code, formatting, inert links, status, and disclosure. One existing harness stream journey with inline-code regression assertions is selected in five permanent desktop and mobile browser profiles, including the 320 px boundary. A production build checks compilation and bundling.",
-  "exclusions": "No Core, Python, native, persistence, authentication, or origin-sensitive behavior changed, so their test layers and unrelated UI journeys are excluded. Browser cases use a mocked harness stream; a real-Core replay and physical-device check remain separate acceptance gates. Full suites are excluded.",
+  "change_digest": "75cfda995ef82ec603303dcceaa72c411686cf090fe71e73c5532f2bfbbe96fe",
+  "reviewed_by": "Codex focused review for macOS native Browser containment",
+  "reason": "The changed journey is the macOS native Browser page inside its visible surface, including resize and Text size. Two exact Rust cases cover main-webview frame coordinates and CSS-to-AppKit zoom conversion. The selected desktop Browser journey covers creating a tab, native bounds updates, resizing, sidebar and research panels, and hiding or revealing the page. macOS CI compiles the AppKit NSClipView integration and runs the selected native cases.",
+  "exclusions": "No Python or frontend source or server state changed, so Python and component tests are excluded. Mobile clients use the separate web-browser fallback; no mobile behavior changed. Real-Core persistence and non-loopback origin behavior are unchanged. The mocked desktop browser and Linux Rust tests cannot prove macOS WKWebView compositing; a rebuilt Mac app visual and input check is still required before claiming full acceptance. Unrelated suites are excluded.",
   "expected_tests": {
     "python": 0,
-    "frontend": 19,
-    "native": 0,
-    "playwright": 5
+    "frontend": 0,
+    "native": 2,
+    "playwright": 9
   },
-  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": ["ui/src/components/ActivityLedger.test.tsx"],
-  "native": [],
+  "frontend": [],
+  "native": [
+    "browser::tests::macos_browser_frame_uses_the_main_webview_coordinate_space",
+    "browser::tests::macos_browser_frame_scales_css_pixels_after_webview_zoom"
+  ],
   "playwright": [
-    "entry:codex-public-progress/desktop",
-    "entry:codex-public-progress/compact",
-    "entry:codex-public-progress/mobile-chromium-small",
-    "entry:codex-public-progress/mobile-webkit-small",
-    "entry:codex-public-progress/mobile-webkit"
+    "entry:browser-complete/desktop"
   ]
 }

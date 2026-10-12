@@ -23,7 +23,7 @@ use tauri::{
 #[cfg(target_os = "macos")]
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
 #[cfg(target_os = "macos")]
-use objc2_app_kit::NSView;
+use objc2_app_kit::{NSClipView, NSView};
 #[cfg(target_os = "macos")]
 use objc2_foundation::{
     NSArray, NSObject, NSObjectNSKeyValueCoding, NSPoint, NSRect, NSSize, NSString, NSUUID,
@@ -658,9 +658,25 @@ fn appkit_child_y(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn appkit_scaled_bounds(bounds: BrowserBounds, page_zoom: f64) -> BrowserBounds {
+    // WKWebView.pageZoom changes the CSS-pixel viewport, but not its NSView frame.
+    // getBoundingClientRect() therefore needs this conversion to AppKit points.
+    BrowserBounds {
+        x: bounds.x * page_zoom,
+        y: bounds.y * page_zoom,
+        width: bounds.width * page_zoom,
+        height: bounds.height * page_zoom,
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn appkit_browser_frame(parent: &NSView, bounds: &BrowserBounds) -> NSRect {
     let parent_bounds = parent.bounds();
+    // SAFETY: Both call sites obtain `parent` from Nebula's main WKWebView. Wry
+    // changes its pageZoom for Text size, leaving its AppKit bounds unchanged.
+    let page_zoom: f64 = unsafe { objc2::msg_send![parent, pageZoom] };
+    let bounds = appkit_scaled_bounds(*bounds, page_zoom);
     // The DOM coordinates already begin at the visible main WKWebView origin. Applying
     // safeAreaInsets here a second time leaves a title-bar-sized gap above the page.
     NSRect::new(
@@ -689,9 +705,8 @@ fn wait_for_native_browser_result(
 
 // Child WKWebViews created by Tauri are siblings of the main application WKWebView. AppKit
 // composites those native siblings above the DOM, so CSS overflow cannot stop a page from
-// covering Nebula's address bar. Reparent the page beneath a layer-backed NSView attached to the
-// main WKWebView. Its coordinates now match getBoundingClientRect(), and masksToBounds provides a
-// real native clip at every edge of the Browser surface.
+// covering Nebula's address bar. Reparent the page beneath an NSClipView attached
+// to the main WKWebView so AppKit owns the document-view clipping boundary.
 #[cfg(target_os = "macos")]
 fn install_macos_browser_container<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -726,26 +741,24 @@ fn install_macos_browser_container<R: tauri::Runtime>(
                     );
                 }
 
-                let container = NSView::initWithFrame(
-                    NSView::alloc(marker),
+                let container = NSClipView::initWithFrame(
+                    NSClipView::alloc(marker),
                     appkit_browser_frame(parent, &bounds),
                 );
                 container.setWantsLayer(true);
-                // A layer mask alone does not constrain WKWebView drawing on newer macOS.
-                // AppKit's view clipping also keeps the child inside this native frame.
+                container.setDrawsBackground(false);
                 container.setClipsToBounds(true);
                 let layer = container
                     .layer()
                     .ok_or_else(|| "The browser clipping layer is unavailable.".to_string())?;
                 layer.setMasksToBounds(true);
-                container.setAutoresizesSubviews(true);
+                container.setAutoresizesSubviews(false);
                 container.setHidden(true);
 
                 parent.addSubview(&container);
-                // The existing superview remains alive, and AppKit retains the child when it is
-                // immediately added to the new container.
+                // NSClipView retains its document view and applies a native clip to it.
                 child.removeFromSuperview();
-                container.addSubview(child);
+                container.setDocumentView(Some(child));
                 child.setFrame(container.bounds());
                 child.setHidden(true);
                 Ok(())
@@ -2803,6 +2816,31 @@ mod tests {
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, true), 120.0);
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, false), 180.0);
         assert_eq!(appkit_child_y(12.0, 900.0, 120.0, 600.0, false), 192.0);
+    }
+
+    #[test]
+    fn macos_browser_frame_scales_css_pixels_after_webview_zoom() {
+        let bounds = BrowserBounds {
+            x: 20.0,
+            y: 100.0,
+            width: 900.0,
+            height: 600.0,
+        };
+        let default = appkit_scaled_bounds(bounds, 1.0);
+        assert_eq!(
+            (default.x, default.y, default.width, default.height),
+            (20.0, 100.0, 900.0, 600.0)
+        );
+        let smaller = appkit_scaled_bounds(bounds, 0.8);
+        assert_eq!(
+            (smaller.x, smaller.y, smaller.width, smaller.height),
+            (16.0, 80.0, 720.0, 480.0)
+        );
+        let larger = appkit_scaled_bounds(bounds, 1.25);
+        assert_eq!(
+            (larger.x, larger.y, larger.width, larger.height),
+            (25.0, 125.0, 1125.0, 750.0)
+        );
     }
 
     #[test]
