@@ -1,25 +1,21 @@
 {
-  "change_digest": "d0f47626e91d74207892e4d0e1aedceb26163dd5ea113b875a3a1b2ea6b40d29",
-  "reviewed_by": "Codex focused review for Current Run markdown preview",
-  "reason": "The changed journey is the compact Current Run preview of public harness commentary and provider progress. Nineteen collected ActivityLedger component tests cover inline code, formatting, inert links, status, and disclosure. One existing harness stream journey with inline-code regression assertions is selected in five permanent desktop and mobile browser profiles, including the 320 px boundary. A production build checks compilation and bundling.",
-  "exclusions": "No Core, Python, native, persistence, authentication, or origin-sensitive behavior changed, so their test layers and unrelated UI journeys are excluded. Browser cases use a mocked harness stream; a real-Core replay and physical-device check remain separate acceptance gates. Full suites are excluded.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 19,
-    "native": 0,
-    "playwright": 5
-  },
+  "change_digest": "ea5d0e279897d57ba8676d5970717af42ed9a5773b0ed9aa4d8f3d2436f6a15a",
+  "reviewed_by": "Codex focused review of the disabled one-browser Electron and Core headless-security diff",
+  "reason": "The diff changes the Electron page host and companion attachment, Core-owned headless Chromium identity, isolated mitmdump flow bridge, built-in selectable Security Tools MCP, Project approval, research execution, emergency stop, and dashboard. Thirteen collected Python cases cover Project approval, navigation scope, companion separation, headless identity isolation, MCP profile and schemas, Repeater plus HAR/analysis/evidence/finding durability, request and response interception control, Intruder payload strategies, real mitmdump scope/capture/intercept, one real Core-owned Playwright request through the proxy, and two existing companion regressions. Six collected frontend cases cover page bounds at normal and 90-percent zoom, toolbar/dialog containment, dashboard traffic isolation, operator intercept decision, and emergency stop. Python 3.12, verified Playwright Chromium 1.61.0, and separately staged mitmdump 12.2.3 are the integration runtime; frontend cases use Vitest/jsdom. Production build and syntax checks are separate compile checks.",
+  "exclusions": "This disabled cutover is still incomplete. The selected real-proxy and headless cases skip when their separately staged runtimes are absent. No physical-Mac Electron page check, packaged macOS/Windows/Linux builds, real-Core LAN/mobile workflow, upstream SOCKS5 parity, or full WebSocket/research parity has been demonstrated. Existing Tauri Browser suites exercise the old runtime and are excluded. No full suite is authorized.",
+  "expected_tests": { "python": 13, "frontend": 6, "native": 0, "playwright": 0 },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/components/ActivityLedger.test.tsx"],
+  "python": [
+    "tests/v3/test_one_browser_cutover.py",
+    "tests/v3/test_agent_security_tools.py",
+    "tests/v3/test_agent_security_proxy.py",
+    "tests/v3/test_agent_security_headless.py",
+    "tests/v3/test_browser_companion.py::test_open_scopes_browser_sessions_to_chat_and_promotes_draft",
+    "tests/v3/test_browser_companion.py::test_takeover_revokes_pending_actions_across_service_instances"
+  ],
+  "frontend": ["ui/src/api/electronGeometry.test.ts", "ui/src/components/SecurityDashboard.test.tsx"],
   "native": [],
-  "playwright": [
-    "entry:codex-public-progress/desktop",
-    "entry:codex-public-progress/compact",
-    "entry:codex-public-progress/mobile-chromium-small",
-    "entry:codex-public-progress/mobile-webkit-small",
-    "entry:codex-public-progress/mobile-webkit"
-  ]
+  "playwright": []
 }
