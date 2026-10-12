@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.browser_companion import BrowserCompanion, validated_operator_input
 from nebula.v3.browser_engine import BrowserEngineRegistry
+from nebula.v3.browser_host import ManagedBrowserHost
 from nebula.v3.domain import BrowserIdentity, BrowserSession, Engagement
 from nebula.v3.storage import NebulaStore
 
@@ -89,6 +90,28 @@ def test_operator_session_is_distinct_from_assistant_session(tmp_path, monkeypat
             service.operator_session(assistant["session_id"])
 
     asyncio.run(run())
+
+
+def test_managed_host_only_hides_the_framed_operator_identity(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Browser project"))
+    operator = store.create(
+        BrowserIdentity(
+            engagement_id=project.id,
+            name="Operator",
+            metadata={"browser_surface": "operator"},
+        )
+    )
+    assistant = store.create(
+        BrowserIdentity(
+            engagement_id=project.id,
+            name="Assistant",
+            metadata={"browser_surface": "assistant"},
+        )
+    )
+    host = ManagedBrowserHost(store, tmp_path / "browser")
+    assert host._headless_for_identity(operator.id)
+    assert not host._headless_for_identity(assistant.id)
 
 
 def test_operator_operations_require_auth_and_operator_session(tmp_path, monkeypatch):

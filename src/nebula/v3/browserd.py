@@ -252,10 +252,12 @@ class BrowserdManager:
         *,
         playwright_factory: Callable[[], Any] | None = None,
         proxy_for_identity: Callable[[str], Awaitable[dict[str, str]]] | None = None,
+        headless_for_identity: Callable[[str], bool] | None = None,
     ) -> None:
         self.settings = settings
         self._playwright_factory = playwright_factory
         self._proxy_for_identity = proxy_for_identity
+        self._headless_for_identity = headless_for_identity
         self._playwright: Any | None = None
         self._contexts: dict[str, Any] = {}
         self._tabs: dict[tuple[str, str], Any] = {}
@@ -413,7 +415,12 @@ class BrowserdManager:
                 )
                 context = await playwright.chromium.launch_persistent_context(
                     str(profile),
-                    headless=self.settings.headless,
+                    headless=self.settings.headless
+                    or (
+                        self._headless_for_identity(identity_id)
+                        if self._headless_for_identity is not None
+                        else False
+                    ),
                     executable_path=playwright.chromium.executable_path,
                     proxy=proxy,
                     args=[

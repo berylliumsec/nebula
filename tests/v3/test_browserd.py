@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
@@ -76,6 +77,57 @@ def test_browserd_uploads_are_confined_to_an_explicit_host_browser(tmp_path):
     outside.write_text("outside", encoding="utf-8")
     with pytest.raises(ValueError, match="outside"):
         bounded._upload_path(str(outside))
+
+
+def test_framed_identity_launches_without_a_second_desktop_window(tmp_path):
+    launches = []
+
+    class Page:
+        def on(self, _event, _callback):
+            pass
+
+        def is_closed(self):
+            return False
+
+    class Context:
+        pages = [Page()]
+        tracing = SimpleNamespace(start=_start_tracing)
+
+        def on(self, _event, _callback):
+            pass
+
+    class Chromium:
+        executable_path = str(tmp_path / "runtime" / "chromium")
+
+        async def launch_persistent_context(self, _profile, **kwargs):
+            launches.append(kwargs)
+            return Context()
+
+    async def proxy_for_identity(_identity_id):
+        return {"server": "http://127.0.0.1:4911"}
+
+    manager = BrowserdManager(
+        settings(tmp_path),
+        proxy_for_identity=proxy_for_identity,
+        headless_for_identity=lambda identity_id: identity_id == "operator",
+    )
+    manager._playwright = SimpleNamespace(chromium=Chromium())
+    manager._capability = BrowserEngineCapability(
+        adapter="managed-chromium",
+        display_name="Managed Chromium",
+        state=BrowserEngineState.READY,
+    )
+
+    async def run():
+        await manager.ensure_identity("operator")
+        await manager.ensure_identity("assistant")
+
+    asyncio.run(run())
+    assert [launch["headless"] for launch in launches] == [True, False]
+
+
+async def _start_tracing(**_kwargs):
+    pass
 
 
 def test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguous(

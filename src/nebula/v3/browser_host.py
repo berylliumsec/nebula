@@ -92,7 +92,9 @@ class ManagedBrowserHost:
                     http1_only=True,
                 )
                 manager = BrowserdManager(
-                    settings, proxy_for_identity=self._identity_proxy
+                    settings,
+                    proxy_for_identity=self._identity_proxy,
+                    headless_for_identity=self._headless_for_identity,
                 )
                 self._manager = manager
                 server = _PrivateBrowserServer(
@@ -162,6 +164,14 @@ class ManagedBrowserHost:
             security._scope(identity.engagement_id)
             self._proxies[identity_id] = BrowserHostProxy(authorize)
         return await self._proxies[identity_id].start()
+
+    def _headless_for_identity(self, identity_id: str) -> bool:
+        identity = self.store.get(BrowserIdentity, identity_id)
+        if identity.revoked_at:
+            raise ValueError("The browser identity is revoked.")
+        # A framed operator page must not open a second OS window. Assistant
+        # and assessment identities retain their existing headed contract.
+        return identity.metadata.get("browser_surface") == "operator"
 
     async def close(self) -> None:
         async with self._lock:

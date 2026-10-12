@@ -50,7 +50,12 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
         BrowserdSettings,
         create_browserd_app,
     )
-    from nebula.v3.domain import BrowserSession, Engagement, ScopePolicy
+    from nebula.v3.domain import (
+        BrowserIdentity,
+        BrowserSession,
+        Engagement,
+        ScopePolicy,
+    )
     from nebula.v3.storage import NebulaStore
 
     if (
@@ -82,7 +87,15 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
                 policy_proxy_url=f"http://127.0.0.1:{proxy_port}",
                 runtime_root=runtime_root,
             )
-            manager = BrowserdManager(settings)
+            manager = BrowserdManager(
+                settings,
+                headless_for_identity=lambda identity_id: (
+                    store.get(BrowserIdentity, identity_id).metadata.get(
+                        "browser_surface"
+                    )
+                    == "operator"
+                ),
+            )
             browser_server, browser_task, browser_port = await _server(
                 create_browserd_app(settings, manager=manager)
             )
@@ -132,6 +145,11 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
                 prepared = await client.post(
                     f"/api/v1/engagements/{project.id}/browser-companion?mode=operator"
                 )
+                if not prepared.is_success:
+                    print(
+                        f"Operator browser preparation failed: {prepared.status_code} {prepared.text}",
+                        flush=True,
+                    )
                 prepared.raise_for_status()
                 probe = await client.post(
                     f"/api/v1/browser-companion/{prepared.json()['session_id']}/operator-operations",
