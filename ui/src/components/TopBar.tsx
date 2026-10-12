@@ -116,7 +116,7 @@ export function TopBar({
 
   return (
     <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
-      {onToggleLens && <button className="quiet-lens-handle quiet-lens-top-handle" type="button" aria-label="Open top menu" aria-expanded={lensOpen} title="Open top menu" onMouseEnter={onRevealLens} onFocus={onRevealLens} onClick={onRevealLens}>
+      {onToggleLens && <button className="quiet-lens-handle quiet-lens-top-handle" type="button" aria-label="Open top menu" aria-expanded={lensOpen} title="Open top menu" onMouseEnter={() => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onRevealLens?.(); }} onFocus={onRevealLens} onClick={onRevealLens}>
         <QuietLensHorizontalContour />
       </button>}
       <div className="top-bar-leading">

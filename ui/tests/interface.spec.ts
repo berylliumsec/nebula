@@ -4093,7 +4093,7 @@ reloadTest("stabilization empty project offers the existing project picker after
   await picker.getByRole("button", {name: "New project"}).click();
   await expect(picker.getByLabel("Name", {exact: true})).toBeFocused();
   await picker.getByLabel("Name", {exact: true}).fill("Disposable workspace");
-  await expect(picker.getByRole("button", {name: "Create", exact: true})).toBeInViewport();
+  await expect(picker.getByRole("button", {name: "Create in Host mode", exact: true})).toBeInViewport();
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", await page.locator("body").evaluate(el => el.clientWidth));
   await testInfo.attach("empty-project-recovery", {body: await page.screenshot(), contentType: "image/png"});
 });

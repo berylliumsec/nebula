@@ -203,6 +203,8 @@
 }
 
 .engagement-create { min-height: 0; overflow-y: auto; }
+.engagement-create input,
+.engagement-create footer .button { min-height: var(--touch-target); }
 
 @media (max-width: 480px) {
   .side-nav .engagement-picker > .engagement-menu { width: calc(100vw - 24px); }

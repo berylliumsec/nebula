@@ -1,9 +1,33 @@
 # Project Host / Docker execution mode
 
+## Startup default (October 2026)
+
+Entry: a fresh installation opens Scratch, or an operator creates a project from
+the project switcher. New projects start in Host mode, with the host filesystem
+and network boundary stated at creation. Commands start in the linked project
+folder as the Core OS user without Docker preparation. A project with an existing
+saved policy keeps its mode, and an older project without a policy retains the
+Docker fallback. Existing command sessions keep their frozen mode.
+
+| Journey | Observable invariant | State authority | Planned test layer |
+| --- | --- | --- | --- |
+| Discover/create | The creation control names Host access; a new project and fresh Scratch have a Host policy in the same transaction | Core database; UI presents the boundary | Component, setup, API, real Core browser |
+| Select/use | Settings show Host after creation; a harmless command runs on the host without Docker setup | Core policy and session snapshot | Runtime, real Core browser |
+| Refresh/reconnect | The selected project's mode remains Host after reload and switching away and back | Core policy; URL selects project | Real Core browser |
+| Change/retry | Choosing Docker persists for new sessions; an invalid or stale save leaves the prior policy visible | Core policy revision | Runtime, existing settings tests |
+| Legacy/delete | Saved modes and older policy-free projects retain their prior behavior; deleting a project removes its policy | Core database | Setup, runtime, API |
+
+Streaming, interrupt, backgrounding, and provider reconnection retain their
+existing session-snapshot behavior; this change does not alter those state
+transitions. Browser storage does not own execution mode. Planned acceptance uses
+the production bundle on a non-loopback LAN origin in desktop Chromium, emulated
+mobile Chromium, and emulated mobile WebKit. Physical-device behavior is a
+separate gate. Focused test selection excludes unrelated suites.
+
 ## Contract before implementation
 
-Entry: Settings > Project execution policy > Command runtime. Docker remains the
-default. Choosing Host requires explicit acknowledgement that commands run as the
+Entry: Settings > Project execution policy > Command runtime. This historical
+contract used Docker as the default. Choosing Host required explicit acknowledgement that commands run as the
 Core OS user and can reach host files, devices and the host network. Container VPN
 and egress isolation cannot be represented as host guarantees. External MCP
 servers keep their configured execution location.

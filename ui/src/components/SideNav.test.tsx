@@ -164,7 +164,8 @@ describe("SideNav new project form", () => {
     const switcher = screen.getByRole("dialog", { name: "Project switcher" });
     await user.click(within(switcher).getByRole("button", { name: "New project" }));
     await user.type(within(switcher).getByLabelText("Name"), "Quarterly review");
-    await user.click(within(switcher).getByRole("button", { name: "Create" }));
+    expect(within(switcher).getByRole("note")).toHaveTextContent("Agent commands can access files and the network as the Nebula server OS user.");
+    await user.click(within(switcher).getByRole("button", { name: "Create in Host mode" }));
 
     expect(within(switcher).getByRole("button", { name: "Creating…" })).toBeDisabled();
     expect(within(switcher).getByRole("button", { name: "Cancel" })).toBeDisabled();
