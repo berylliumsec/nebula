@@ -18,6 +18,7 @@
   border-radius: 0;
   background: var(--canvas);
 }
+.chat-composer-lens { display: none; }
 .session-layout.chat .session-new-chat {
   border-color: var(--border-soft);
   color: var(--text);
@@ -131,6 +132,7 @@
   border-left: 1px solid var(--border-soft);
   background: var(--surface);
 }
+.chat-studio-rail-lens { display: none; }
 .chat-studio-rail :is(h2, h3, p) { margin: 0; }
 .chat-studio-rail h2 { color: var(--text-strong); font-size: 16px; font-weight: var(--weight-semibold); }
 .chat-studio-rail h3 { color: var(--text-strong); font-size: 13px; font-weight: var(--weight-semibold); }

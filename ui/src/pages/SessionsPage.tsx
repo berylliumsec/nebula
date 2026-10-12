@@ -15,6 +15,7 @@ import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { WorkingContextPanel, contextUsePercent } from "../components/WorkingContextPanel";
 import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ChatStudioRail } from "../components/ChatStudioRail";
+import { QuietLensHorizontalContour } from "../components/QuietLensHorizontalContour";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
 import { isPendingRequest, pendingApprovalId, useSessionState } from "./useSessionState";
 import { RefreshCw } from "lucide-react";
@@ -6305,6 +6306,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue"><strong>Old browser queue</strong><p>Import these messages into Core, paused for review. Uncertain sending entries need review.</p>{queuedFollowUps.map(item => <div key={item.id}><p>{item.text}</p><button type="button" onClick={() => void (async () => { if (await submit(undefined, item, {paused: true, key: `legacy-${item.id}`, uncertain: item.status !== "queued"})) { setQueuedFollowUps(current => current.filter(row => row.id !== item.id)); } })()}>Import paused</button><button type="button" onClick={() => setQueuedFollowUps(current => current.filter(row => row.id !== item.id))}>Discard</button></div>)}</section>}
               </div>
               <form className="chat-composer" data-quiet-attention={composerBusy || pendingHarnessRequests > 0 || Boolean(chatError) || Boolean(harnessActivityError) || Boolean(stateSyncError) || Boolean(decisionNotice) || Boolean(pendingResponse) || queuedFollowUps.length > 0 || studioGoalOpen || assistantSettingsOpen || projectSnapshot === "floating" || !runtimeReady ? "true" : undefined} onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
+              <QuietLensHorizontalContour className="chat-composer-lens" />
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
               {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor"><ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} showFullGoal={studioRailAvailable && studioGoalOpen} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} /></div>}</>}
               {sessionId && !pendingSubagentApproval && <ChatSubagentRail

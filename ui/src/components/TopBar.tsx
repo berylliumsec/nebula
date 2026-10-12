@@ -25,6 +25,7 @@ import { ModalSurface } from "./DialogSystem";
 import { useOptionalGuides } from "../guides/GuideProvider";
 import { projectSurface } from "../resourceRoutes";
 import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
+import { QuietLensHorizontalContour } from "./QuietLensHorizontalContour";
 
 interface TopBarProps {
   activityOpen: boolean;
@@ -116,7 +117,7 @@ export function TopBar({
   return (
     <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
       {onToggleLens && <button className="quiet-lens-handle quiet-lens-top-handle" type="button" aria-label="Open top menu" aria-expanded={lensOpen} title="Open top menu" onMouseEnter={onRevealLens} onFocus={onRevealLens} onClick={onRevealLens}>
-        <svg viewBox="0 0 800 44" preserveAspectRatio="none" aria-hidden="true"><ellipse cx="400" cy="22" rx="390" ry="6" /></svg>
+        <QuietLensHorizontalContour />
       </button>}
       <div className="top-bar-leading">
         {/* Phones reach these pages from the Workbench More tab; this is the way back. */}

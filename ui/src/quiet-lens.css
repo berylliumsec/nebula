@@ -142,7 +142,7 @@
 :root[data-theme="quiet-lens"] [data-lens-open="true"] > .quiet-lens-handle { opacity: .85; }
 :root[data-theme="quiet-lens"] .quiet-lens-handle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 :root[data-theme="quiet-lens"] .quiet-lens-handle svg { display: block; width: 100%; height: 100%; overflow: visible; }
-:root[data-theme="quiet-lens"] .quiet-lens-handle ellipse { fill: rgb(158 186 194 / 3%); stroke: currentColor; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+:root[data-theme="quiet-lens"] :is(.quiet-lens-handle, .chat-studio-rail-lens, .chat-composer-lens) ellipse { fill: rgb(158 186 194 / 3%); stroke: currentColor; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
 :root[data-theme="quiet-lens"] .quiet-lens-side-handle {
   top: clamp(118px, 15vh, 180px);
   left: 8px;
@@ -191,22 +191,21 @@
     position: relative;
     transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer::before {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer > .chat-composer-lens {
     position: absolute;
     top: 50%;
     left: 50%;
+    display: block;
     width: min(88%, 780px);
-    height: 12px;
-    border: 1px solid var(--blue);
-    border-radius: 50%;
-    background: rgb(158 186 194 / 3%);
-    content: "";
+    height: 44px;
+    color: var(--blue);
     opacity: 0;
+    overflow: visible;
     pointer-events: none;
     transform: translate(-50%, -50%);
     transition: opacity 180ms ease;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer > * {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer > :not(.chat-composer-lens) {
     transition: opacity 180ms ease;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) {
@@ -214,10 +213,10 @@
     background: transparent;
     box-shadow: none;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer:not(:hover):not(:focus-within):not([data-quiet-attention="true"])::before {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) > .chat-composer-lens {
     opacity: .72;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) > * {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) > :not(.chat-composer-lens) {
     opacity: 0;
     pointer-events: none;
   }
@@ -226,22 +225,21 @@
     clip-path: inset(0);
     transition: opacity 180ms ease, border-color 180ms ease, background-color 180ms ease, clip-path 180ms ease;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail::before {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > .chat-studio-rail-lens {
     position: absolute;
-    top: 43%;
+    top: 20px;
     left: 50%;
-    width: 12px;
-    height: min(74%, 540px);
-    border: 1px solid var(--blue);
-    border-radius: 50%;
-    background: rgb(158 186 194 / 3%);
-    content: "";
+    display: block;
+    width: 44px;
+    height: min(61vh, 610px);
+    max-height: calc(100% - 40px);
+    color: var(--blue);
     opacity: 0;
     pointer-events: none;
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%);
     transition: opacity 180ms ease;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > * {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > :not(.chat-studio-rail-lens) {
     transition: opacity 180ms ease;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) {
@@ -249,10 +247,10 @@
     background: transparent;
     clip-path: inset(0 calc(50% - 22px));
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"])::before {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) > .chat-studio-rail-lens {
     opacity: .72;
   }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) > * {
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail:not(:hover):not(:focus-within):not([data-quiet-attention="true"]) > :not(.chat-studio-rail-lens) {
     opacity: 0;
     pointer-events: none;
   }
@@ -397,10 +395,10 @@
   :root[data-theme="quiet-lens"] .quiet-lens-handle,
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer,
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer::before,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer > .chat-composer-lens,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-panel > .chat-composer > *,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail,
-  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail::before,
+  :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > .chat-studio-rail-lens,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .chat-studio > .chat-studio-rail > *,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar::before,
