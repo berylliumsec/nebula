@@ -5497,6 +5497,44 @@ test("project execution mode Nebula help answers a Docker host-file question and
   ]);
 });
 
+test("assistant upgrade clear request reaches the model without repeat confirmation on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const stub = await startLocalModelStub({ responseContent: "The requested project summary is ready.", streamDelayMs: 10 });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const providerResponse = await api.post("providers", { data: {
+      name: "Direct request acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    await page.addInitScript((id) => {
+      localStorage.setItem("nebula.engagement", id);
+      localStorage.setItem("nebula.theme", "light");
+    }, projects[0].id);
+    await page.goto(`${core.origin}/projects/${projects[0].id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
+    await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+    const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+    const request = "Draft a one-sentence summary of this project";
+    const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
+    await composer.fill(request);
+    await composer.press("Enter");
+    await expect(assistant).toContainText("The requested project summary is ready.", { timeout: 30_000 });
+    const dispatched = stub.requests.find((item) => JSON.stringify(item.messages).includes(request));
+    expect(dispatched).toBeTruthy();
+    expect(JSON.stringify(dispatched!.messages)).toContain("Do not ask to confirm it again.");
+    expect(JSON.stringify(dispatched!.messages)).toContain("separate tool or policy approval");
+    await testInfo.attach("assistant-direct-request", { body: JSON.stringify({ origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), request, promptDelivered: true }), contentType: "application/json" });
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "model stub", dispose: () => stopLocalModelStub(stub) },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("project execution mode assistant saves and shows Host then Docker on production LAN Core", async ({ page }) => {
   test.setTimeout(90_000);
   page.setDefaultTimeout(10_000);
