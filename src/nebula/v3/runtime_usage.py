@@ -91,18 +91,25 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) and number >= 0 else None
 
 
-def _recorded(store: NebulaStore, providers: set[str], harnesses: set[str]) -> dict[tuple[str, str], RecordedUsage]:
+def _recorded(
+    store: NebulaStore, providers: set[str], harnesses: set[str]
+) -> dict[tuple[str, str], RecordedUsage]:
     rows: dict[tuple[str, str], RecordedUsage] = {}
 
-    def add(kind: str, profile_id: str | None, usage: Any, *, total_only: int = 0) -> None:
-        if profile_id is None or profile_id not in (providers if kind == "provider" else harnesses):
+    def add(
+        kind: str, profile_id: str | None, usage: Any, *, total_only: int = 0
+    ) -> None:
+        if profile_id is None or profile_id not in (
+            providers if kind == "provider" else harnesses
+        ):
             return
         key = (kind, profile_id)
         if key not in rows:
             rows[key] = RecordedUsage(
                 scope=(
                     "Nebula chat turns, native mission attempts and context compactions"
-                    if kind == "provider" else "Nebula harness turns"
+                    if kind == "provider"
+                    else "Nebula harness turns"
                 )
             )
         row = rows[key]
@@ -130,7 +137,10 @@ def _recorded(store: NebulaStore, providers: set[str], harnesses: set[str]) -> d
     for snapshot in store.iter_readable_entities(ContextSnapshot):
         if snapshot.usage.total_tokens:
             # Native attempt totals already include their run's compaction use.
-            if snapshot.owner_type == ContextOwnerType.AGENT_RUN and snapshot.owner_id in counted_runs:
+            if (
+                snapshot.owner_type == ContextOwnerType.AGENT_RUN
+                and snapshot.owner_id in counted_runs
+            ):
                 continue
             add("provider", snapshot.provider_profile_id, snapshot.usage)
     sessions = {
@@ -165,10 +175,14 @@ def _codex_window(label: str, value: Any) -> UsageWindow | None:
     return UsageWindow(
         label=label[:100],
         used_percent=percent,
-        duration_minutes=duration if isinstance(duration, int) and not isinstance(duration, bool) and duration > 0 else None,
+        duration_minutes=duration
+        if isinstance(duration, int) and not isinstance(duration, bool) and duration > 0
+        else None,
         resets_at=(
             datetime.fromtimestamp(reset, tz=timezone.utc)
-            if isinstance(reset, int) and not isinstance(reset, bool) and 0 < reset < 253402300800
+            if isinstance(reset, int)
+            and not isinstance(reset, bool)
+            and 0 < reset < 253402300800
             else None
         ),
     )
@@ -180,7 +194,9 @@ def parse_codex_usage(payload: Any) -> VendorUsage:
         raise ValueError("Codex omitted account rate limits")
     snapshots = payload.get("rateLimitsByLimitId")
     if isinstance(snapshots, dict) and snapshots:
-        selected = [value for value in list(snapshots.values())[:8] if isinstance(value, dict)]
+        selected = [
+            value for value in list(snapshots.values())[:8] if isinstance(value, dict)
+        ]
     else:
         selected = [payload["rateLimits"]]
     windows: list[UsageWindow] = []
@@ -188,7 +204,10 @@ def parse_codex_usage(payload: Any) -> VendorUsage:
         name = snapshot.get("limitName") or snapshot.get("limitId") or "Included usage"
         if not isinstance(name, str):
             name = "Included usage"
-        for key, fallback in (("primary", "Short window"), ("secondary", "Long window")):
+        for key, fallback in (
+            ("primary", "Short window"),
+            ("secondary", "Long window"),
+        ):
             window = _codex_window(f"{name[:60]} · {fallback}", snapshot.get(key))
             if window:
                 windows.append(window)
@@ -198,11 +217,21 @@ def parse_codex_usage(payload: Any) -> VendorUsage:
     if isinstance(credits, dict):
         balance = credits.get("balance")
         if credits.get("unlimited") is True:
-            balances.append(UsageBalance(label="Codex credits", display_value="Unlimited"))
+            balances.append(
+                UsageBalance(label="Codex credits", display_value="Unlimited")
+            )
         elif (amount := _number(balance)) is not None:
-            balances.append(UsageBalance(label="Codex credits", remaining=amount, note="Vendor credit units"))
+            balances.append(
+                UsageBalance(
+                    label="Codex credits", remaining=amount, note="Vendor credit units"
+                )
+            )
         elif credits.get("hasCredits") is False:
-            balances.append(UsageBalance(label="Codex credits", remaining=0, note="Vendor reports no credits"))
+            balances.append(
+                UsageBalance(
+                    label="Codex credits", remaining=0, note="Vendor reports no credits"
+                )
+            )
     allowed = payload.get("ordinaryUsageAllowed")
     return VendorUsage(
         state="available",
@@ -225,13 +254,26 @@ def parse_openrouter_usage(payload: Any) -> VendorUsage:
     if used is None and remaining is None and limit is None:
         raise ValueError("OpenRouter omitted key allowance")
     reset = data.get("limit_reset")
-    note = f"Key cap resets {reset}" if reset in {"daily", "weekly", "monthly"} else "Key cap only; account credits may differ"
+    note = (
+        f"Key cap resets {reset}"
+        if reset in {"daily", "weekly", "monthly"}
+        else "Key cap only; account credits may differ"
+    )
     return VendorUsage(
         state="available",
         source="OpenRouter key",
         detail="This is the API key allowance, not the account's total credits.",
         checked_at=datetime.now(timezone.utc),
-        balances=[UsageBalance(label="Key allowance", currency="USD", remaining=remaining, used=used, limit=limit, note=note)],
+        balances=[
+            UsageBalance(
+                label="Key allowance",
+                currency="USD",
+                remaining=remaining,
+                used=used,
+                limit=limit,
+                note=note,
+            )
+        ],
     )
 
 
@@ -245,7 +287,11 @@ def parse_deepseek_usage(payload: Any) -> VendorUsage:
             continue
         amount = _number(info.get("total_balance"))
         if amount is not None:
-            balances.append(UsageBalance(label="Account balance", currency=info["currency"], remaining=amount))
+            balances.append(
+                UsageBalance(
+                    label="Account balance", currency=info["currency"], remaining=amount
+                )
+            )
     if not balances:
         raise ValueError("DeepSeek returned no readable balances")
     return VendorUsage(
@@ -254,53 +300,100 @@ def parse_deepseek_usage(payload: Any) -> VendorUsage:
         detail="Available account balance, including granted and topped-up funds.",
         checked_at=datetime.now(timezone.utc),
         balances=balances,
-        ordinary_usage_allowed=payload.get("is_available") if isinstance(payload.get("is_available"), bool) else None,
+        ordinary_usage_allowed=payload.get("is_available")
+        if isinstance(payload.get("is_available"), bool)
+        else None,
     )
 
 
 class RuntimeUsageService:
-    def __init__(self, store: NebulaStore, credentials: CredentialStore, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        store: NebulaStore,
+        credentials: CredentialStore,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.store = store
         self.credentials = credentials
         self.transport = transport
         self._cache: dict[tuple[str, str, int], tuple[float, VendorUsage]] = {}
 
-    async def _vendor(self, profile: ProviderProfile | HarnessProfile, *, refresh: bool) -> VendorUsage:
+    async def _vendor(
+        self, profile: ProviderProfile | HarnessProfile, *, refresh: bool
+    ) -> VendorUsage:
         kind = "harness" if isinstance(profile, HarnessProfile) else "provider"
         key = (kind, profile.id, profile.revision)
         cached = self._cache.get(key)
         if not refresh and cached and time.monotonic() - cached[0] < 120:
             return cached[1]
-        if isinstance(profile, HarnessProfile) and profile.kind.value != "codex_app_server":
+        if (
+            isinstance(profile, HarnessProfile)
+            and profile.kind.value != "codex_app_server"
+        ):
             return _unsupported(profile)
-        if isinstance(profile, ProviderProfile) and profile.provider_type not in {"openrouter", "deepseek"}:
+        if isinstance(profile, ProviderProfile) and profile.provider_type not in {
+            "openrouter",
+            "deepseek",
+        }:
             return _unsupported(profile)
         if isinstance(profile, ProviderProfile):
-            expected_host = "openrouter.ai" if profile.provider_type == "openrouter" else "api.deepseek.com"
+            expected_host = (
+                "openrouter.ai"
+                if profile.provider_type == "openrouter"
+                else "api.deepseek.com"
+            )
             try:
                 endpoint = urlsplit(profile.endpoint or "")
             except ValueError:
-                return VendorUsage(state="unavailable", source="Vendor account", detail="Balance reads require the provider's official HTTPS endpoint.")
+                return VendorUsage(
+                    state="unavailable",
+                    source="Vendor account",
+                    detail="Balance reads require the provider's official HTTPS endpoint.",
+                )
             if endpoint.scheme != "https" or endpoint.hostname != expected_host:
-                return VendorUsage(state="unavailable", source="Vendor account", detail="Balance reads require the provider's official HTTPS endpoint.")
+                return VendorUsage(
+                    state="unavailable",
+                    source="Vendor account",
+                    detail="Balance reads require the provider's official HTTPS endpoint.",
+                )
             if not profile.secret_ref:
-                return VendorUsage(state="unavailable", source="Vendor account", detail="Add a provider credential to read its balance.")
+                return VendorUsage(
+                    state="unavailable",
+                    source="Vendor account",
+                    detail="Add a provider credential to read its balance.",
+                )
         try:
             if isinstance(profile, HarnessProfile):
-                payload = await CodexAppServerAdapter().read_account_usage(profile, self.credentials)
+                payload = await CodexAppServerAdapter().read_account_usage(
+                    profile, self.credentials
+                )
                 value = parse_codex_usage(payload)
             else:
-                secret = await asyncio.to_thread(self.credentials.resolve, profile.secret_ref)
+                secret = await asyncio.to_thread(
+                    self.credentials.resolve, profile.secret_ref
+                )
                 url = (
                     "https://openrouter.ai/api/v1/key"
                     if profile.provider_type == "openrouter"
                     else "https://api.deepseek.com/user/balance"
                 )
-                async with httpx.AsyncClient(timeout=6.0, transport=self.transport, follow_redirects=False) as client:
-                    response = await client.get(url, headers={"Authorization": f"Bearer {secret.get_secret_value()}"})
+                async with httpx.AsyncClient(
+                    timeout=6.0, transport=self.transport, follow_redirects=False
+                ) as client:
+                    response = await client.get(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {secret.get_secret_value()}"
+                        },
+                    )
                 response.raise_for_status()
                 payload = response.json()
-                value = parse_openrouter_usage(payload) if profile.provider_type == "openrouter" else parse_deepseek_usage(payload)
+                value = (
+                    parse_openrouter_usage(payload)
+                    if profile.provider_type == "openrouter"
+                    else parse_deepseek_usage(payload)
+                )
         except Exception:
             # Credential, transport and vendor errors can contain secret-bearing
             # URLs or response bodies. The operator needs a safe retry message.
@@ -317,26 +410,40 @@ class RuntimeUsageService:
         providers = list(self.store.iter_readable_entities(ProviderProfile))
         harnesses = list(self.store.iter_readable_entities(HarnessProfile))
         recorded = await asyncio.to_thread(
-            _recorded, self.store, {item.id for item in providers}, {item.id for item in harnesses}
+            _recorded,
+            self.store,
+            {item.id for item in providers},
+            {item.id for item in harnesses},
         )
         semaphore = asyncio.Semaphore(3)
 
         async def item(profile: ProviderProfile | HarnessProfile) -> RuntimeUsageItem:
-            kind: Literal["provider", "harness"] = "harness" if isinstance(profile, HarnessProfile) else "provider"
+            kind: Literal["provider", "harness"] = (
+                "harness" if isinstance(profile, HarnessProfile) else "provider"
+            )
             async with semaphore:
                 vendor = await self._vendor(profile, refresh=refresh)
             return RuntimeUsageItem(
                 kind=kind,
                 profile_id=profile.id,
                 name=profile.name,
-                provider_type=profile.kind.value if isinstance(profile, HarnessProfile) else profile.provider_type,
+                provider_type=profile.kind.value
+                if isinstance(profile, HarnessProfile)
+                else profile.provider_type,
                 enabled=profile.enabled,
-                recorded=recorded.get((kind, profile.id), RecordedUsage(
-                    scope="Nebula harness turns" if kind == "harness" else "Nebula chat turns, native mission attempts and context compactions"
-                )),
+                recorded=recorded.get(
+                    (kind, profile.id),
+                    RecordedUsage(
+                        scope="Nebula harness turns"
+                        if kind == "harness"
+                        else "Nebula chat turns, native mission attempts and context compactions"
+                    ),
+                ),
                 vendor=vendor,
             )
 
         profiles: list[ProviderProfile | HarnessProfile] = [*providers, *harnesses]
         items = await asyncio.gather(*(item(profile) for profile in profiles))
-        return RuntimeUsageResponse(generated_at=datetime.now(timezone.utc), items=items)
+        return RuntimeUsageResponse(
+            generated_at=datetime.now(timezone.utc), items=items
+        )
