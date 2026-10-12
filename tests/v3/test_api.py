@@ -18,6 +18,7 @@ from nebula.v3.domain import (
     Approval,
     ApprovalStatus,
     Asset,
+    AutomationProjectPolicy,
     ChatGoal,
     ChatSession,
     ChatGoalStatus,
@@ -1489,6 +1490,11 @@ def test_typed_crud_revision_and_overview(api):
     assert created.status_code == 201
     engagement = created.json()
     engagement_id = engagement["id"]
+    [runtime_policy] = store.list_entities(
+        AutomationProjectPolicy, engagement_id=engagement_id
+    )
+    assert runtime_policy.execution_mode == "host"
+    assert runtime_policy.host_access_acknowledged is True
 
     patched = client.patch(
         f"/api/v1/engagements/{engagement_id}",
@@ -1517,6 +1523,7 @@ def test_typed_crud_revision_and_overview(api):
         ).status_code
         == 204
     )
+    assert store.list_entities(AutomationProjectPolicy, engagement_id=engagement_id) == []
     assert (
         client.get(f"/api/v1/engagements/{engagement_id}", headers=_auth()).status_code
         == 404
