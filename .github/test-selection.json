@@ -1,33 +1,45 @@
 {
-  "change_digest": "1227bd526ea8a42287fb6ec8df70a37c5a2c3eb9dc5d42fdb20fe51c3cf64765",
-  "reviewed_by": "Codex focused review of the disabled one-browser Electron and Core headless-security diff",
-  "reason": "The diff changes the Electron page host and companion attachment, Core-owned headless Chromium identity, isolated mitmdump flow bridge, built-in selectable browser-security-testing-tools MCP, Project approval, research execution, emergency stop, and dashboard. Sixteen collected Python cases cover Project approval, navigation scope, companion separation, headless identity isolation, MCP profile and schemas including name migration, Repeater plus HAR/analysis/evidence/finding durability, request and response interception control, Intruder payload strategies, real mitmdump scope/capture/intercept, one real Core-owned Playwright request through the proxy, and two existing companion regressions. Six focused instruction cases cover the shared harness instruction builder after merging main's direct-request guidance. Six collected frontend cases cover page bounds at normal and 90-percent zoom, toolbar/dialog containment, dashboard traffic isolation, operator intercept decision, and emergency stop. Python 3.12, verified Playwright Chromium 1.61.0, and separately staged mitmdump 12.2.3 are the integration runtime; frontend cases use Vitest/jsdom. Production build and syntax checks are separate compile checks. The Electron view visibility regression was also checked in a live Linux Xvfb run at 100 and 90 percent zoom with a scoped local page and an open/close dialog. The added upstream tests cover explicit endpoint validation, protected credential references, live HTTP CONNECT and SOCKS5 handshakes, and an end-to-end headless Chromium request through an authenticated SOCKS5 proxy. The selected real headless case now turns on bounded body capture and verifies that a redacted response artifact is durably linked to the captured exchange.",
-  "exclusions": "This disabled cutover is still incomplete. The selected real-proxy and headless cases skip when their separately staged runtimes are absent. No physical-Mac Electron page check, packaged macOS/Windows/Linux builds, real-Core LAN/mobile workflow, upstream HTTPS proxy verification, or full WebSocket/research parity has been demonstrated. Existing Tauri Browser suites exercise the old runtime and are excluded. No full suite is authorized.",
+  "change_digest": "9fa847bd9a3e36b98be60577bfd3fbdfb2a54dee537046f9e90cd1bb65f9ce8d",
+  "reviewed_by": "Codex focused review of the Host startup default diff",
+  "reason": "New project and fresh Scratch creation now save an acknowledged Host command policy atomically. The API deletion path removes that owned policy with the project. Four focused Python cases cover startup, API creation and deletion, Host runtime selection without Docker, and the older-project Docker fallback. The SideNav component file covers the visible Host access boundary and creation control. Production real-Core LAN browser cases cover creation, usable form targets, project-switcher layering, and touch access to the top menu in the default Quiet Lens theme, plus command execution, refresh, mobile presentation, policy failure and retry, frozen sessions, and the existing assistant transition from Docker to Host and back. One mock browser case covers the changed empty-project creation label after reload.",
+  "exclusions": "No Rust or native code changed. Provider, harness, terminal, and unrelated workspace journeys are excluded because their session execution logic was not modified; existing mode and frozen-session behavior is covered by the selected runtime policy browser cases. The historical release notes are unchanged. Physical-device acceptance and full suites are excluded.",
   "expected_tests": {
-    "python": 22,
-    "frontend": 6,
+    "python": 4,
+    "frontend": 25,
     "native": 0,
-    "playwright": 0
+    "playwright": 19
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_one_browser_cutover.py",
-    "tests/v3/test_agent_security_tools.py",
-    "tests/v3/test_agent_security_proxy.py",
-    "tests/v3/test_agent_security_headless.py",
-    "tests/v3/test_security_upstream.py",
-    "tests/v3/test_minimal_agent_instructions.py",
-    "tests/v3/test_browser_companion.py::test_open_scopes_browser_sessions_to_chat_and_promotes_draft",
-    "tests/v3/test_browser_companion.py::test_takeover_revokes_pending_actions_across_service_instances"
+    "tests/v3/test_setup.py::test_fresh_database_creates_scratch_once_and_never_recreates_after_delete",
+    "tests/v3/test_setup.py::test_new_project_starts_with_durable_host_policy",
+    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
+    "tests/v3/test_automation_runtime.py::test_new_project_uses_host_without_docker_and_legacy_project_keeps_docker"
   ],
   "frontend": [
-    "ui/src/api/electronGeometry.test.ts",
-    "ui/src/components/SecurityDashboard.test.tsx"
+    "ui/src/components/SideNav.test.tsx"
   ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:host-startup-default/assistant-real-desktop",
+    "entry:host-startup-default/assistant-real-compact",
+    "entry:host-startup-default/assistant-real-chromium-320",
+    "entry:host-startup-default/assistant-real-webkit-320",
+    "entry:host-startup-default/assistant-real-chromium-390",
+    "entry:host-startup-default/assistant-real-webkit-390",
+    "entry:host-startup-default/assistant-real-chromium-430",
+    "entry:host-startup-default/assistant-real-webkit-430",
+    "entry:project-runtime-policy/assistant-real-desktop",
+    "entry:project-runtime-policy/assistant-real-compact",
+    "entry:project-runtime-policy/assistant-real-chromium-320",
+    "entry:project-runtime-policy/assistant-real-webkit-320",
+    "entry:project-runtime-policy/assistant-real-chromium-390",
+    "entry:project-runtime-policy/assistant-real-webkit-390",
+    "entry:project-runtime-policy/assistant-real-chromium-430",
+    "entry:project-runtime-policy/assistant-real-webkit-430",
+    "entry:host-startup-compat/assistant-real-desktop",
+    "entry:host-startup-compat/desktop"
+  ]
 }

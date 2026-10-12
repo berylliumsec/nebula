@@ -3493,7 +3493,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     await expect(browser.getByText(paginatedFolder, { exact: true })).toBeVisible();
     await browser.getByRole("button", { name: "Select folder" }).click();
     await expect(switcher.getByLabel("Project folder", { exact: true })).toHaveValue(paginatedFolder);
-    await switcher.getByRole("button", { name: "Create" }).click();
+    await switcher.getByRole("button", { name: "Create in Host mode" }).click();
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Linked Folder Acceptance");
 
     const response = await api.get("engagements");
@@ -3584,7 +3584,7 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     const switcher = page.getByRole("dialog", { name: "Project switcher" });
     await switcher.getByRole("button", { name: "New project" }).click();
     await switcher.getByLabel("Name", { exact: true }).fill(projectName);
-    await switcher.getByRole("button", { name: "Create" }).click();
+    await switcher.getByRole("button", { name: "Create in Host mode" }).click();
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText(projectName);
 
     const engagementsResponse = await api.get("engagements");
@@ -3756,7 +3756,7 @@ test("assistant upgrade project creation switches canonical project and isolates
     const switcher = page.getByRole("dialog", { name: "Project switcher" });
     await switcher.getByRole("button", { name: "New project" }).click();
     await switcher.getByLabel("Name", { exact: true }).fill("New isolated project");
-    await switcher.getByRole("button", { name: "Create", exact: true }).click();
+    await switcher.getByRole("button", { name: "Create in Host mode", exact: true }).click();
     await expect(switcher).toBeHidden();
     const saved = await (await api.get("engagements")).json() as Array<{ id: string; name: string }>;
     const created = saved.find(project => project.name === "New isolated project")!;
@@ -5461,6 +5461,13 @@ test("project execution mode Nebula help answers a Docker host-file question and
     } });
     expect(created.ok(), await created.text()).toBe(true);
     const projectId = ((await created.json()) as { id: string }).id;
+    const initialPolicy = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as { revision: number };
+    const dockerPolicy = await api.put(`engagements/${projectId}/automation-policy`, { data: {
+      execution_mode: "docker", host_access_acknowledged: false, approval_policy: "on_boundary",
+      network_enabled: false, runner_profile_id: null, vpn_profile_id: null,
+      max_timeout_ms: 300000, expected_revision: initialPolicy.revision,
+    } });
+    expect(dockerPolicy.ok(), await dockerPolicy.text()).toBe(true);
     const providerResponse = await api.post("providers", { data: {
       name: "Nebula help model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
@@ -5474,8 +5481,10 @@ test("project execution mode Nebula help answers a Docker host-file question and
     });
     expect(verified.ok(), await verified.text()).toBe(true);
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
-    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
-    await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
+    const assistantLauncher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
+    if (!await assistantLauncher.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click();
+    await assistantLauncher.click();
     const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
     const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
     await composer.fill("Why can't my assistant edit /etc/hosts in Docker mode?");
@@ -5535,6 +5544,60 @@ test("assistant upgrade clear request reaches the model without repeat confirmat
   ]);
 });
 
+test("project execution mode starts new projects in Host mode on production LAN Core", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string; name: string }>;
+    const scratch = projects.find(project => project.name === "Scratch Project")!;
+    expect(scratch).toBeTruthy();
+    expect(await (await api.get(`engagements/${scratch.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
+
+    await page.goto(`${core.origin}/projects/${scratch.id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: "Start new chat" })).toBeVisible({ timeout: 20_000 });
+    const openNavigation = page.getByRole("button", { name: "Open navigation" });
+    if (await openNavigation.isVisible()) await openNavigation.click();
+    const directSwitcher = page.getByRole("button", { name: "Switch project", exact: true });
+    if (await directSwitcher.isVisible()) await directSwitcher.click();
+    else {
+      await page.getByRole("button", { name: "More workbench views", exact: true }).click();
+      await page.getByRole("dialog", { name: "More", exact: true }).getByRole("button", { name: "Switch project", exact: true }).click();
+    }
+    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    await switcher.getByRole("button", { name: "New project" }).click();
+    await expect(switcher.getByRole("note")).toContainText("Agent commands can access files and the network as the Nebula server OS user.");
+    await switcher.getByLabel("Name", { exact: true }).fill("Host startup acceptance");
+    const create = switcher.getByRole("button", { name: "Create in Host mode" });
+    expect((await create.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({ page }).include(".engagement-create").analyze()).violations).toEqual([]);
+    await create.click();
+    await expect(switcher).toBeHidden();
+    const created = (await (await api.get("engagements")).json() as Array<{ id: string; name: string }>).find(project => project.name === "Host startup acceptance")!;
+    expect(created).toBeTruthy();
+    await expect(page).toHaveURL(new RegExp(`/projects/${created.id}/workbench`));
+    expect(await (await api.get(`engagements/${created.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
+    expect(await (await api.get(`automation/runtime?engagement_id=${created.id}`)).json()).toMatchObject({ ready: true, runner_profile_id: "host" });
+    const command = await api.post(`engagements/${created.id}/automation-sessions/api/host-default/commands`, { data: { command: "pwd" } });
+    expect(command.ok(), await command.text()).toBe(true);
+    expect(await command.json()).toMatchObject({ exit_code: 0 });
+
+    await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
+    const search = page.getByRole("button", { name: "Search pages, actions, and settings" });
+    if (!await search.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click();
+    await search.click();
+    await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
+    await page.getByRole("option", { name: /Project policy and network scope/ }).click();
+    await expect(page.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("host");
+    await expect(page.getByRole("checkbox", { name: /Allow host filesystem and network access/ })).toBeChecked();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("project execution mode assistant saves and shows Host then Docker on production LAN Core", async ({ page }) => {
   test.setTimeout(90_000);
   page.setDefaultTimeout(10_000);
@@ -5548,11 +5611,18 @@ test("project execution mode assistant saves and shows Host then Docker on produ
     } });
     expect(created.ok(), await created.text()).toBe(true);
     const projectId = ((await created.json()) as { id: string }).id;
+    const initialPolicy = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as { revision: number };
+    const dockerPolicy = await api.put(`engagements/${projectId}/automation-policy`, { data: {
+      execution_mode: "docker", host_access_acknowledged: false, approval_policy: "on_boundary",
+      network_enabled: false, runner_profile_id: null, vpn_profile_id: null,
+      max_timeout_ms: 300000, expected_revision: initialPolicy.revision,
+    } });
+    expect(dockerPolicy.ok(), await dockerPolicy.text()).toBe(true);
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
-    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", { name: "Open Nebula assistant" })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     const askMode = async (prompt: string) => {
       const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
+      if (!await launcher.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click();
       await launcher.click();
       const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
       await expect(assistant).toContainText(projectName);
@@ -5572,7 +5642,7 @@ test("project execution mode assistant saves and shows Host then Docker on produ
     expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
     // This LAN fixture uses a fragment bearer token, so reopen with that token.
     await page.goto("about:blank");
-    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     const dockerLens = await askMode("switch project execution mode to Docker");
     await page.getByRole("button", { name: "Switch to Docker mode" }).click();
     await expect(dockerLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("docker");
@@ -5729,6 +5799,15 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
   await writeFile(path.join(backup, "marker.txt"), "HOST_MODE_BACKUP_MARKER");
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0].id;
+    const initialPolicy = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as { revision: number };
+    const dockerPolicy = await api.put(`engagements/${projectId}/automation-policy`, { data: {
+      execution_mode: "docker", host_access_acknowledged: false, approval_policy: "on_boundary",
+      network_enabled: false, runner_profile_id: null, vpn_profile_id: null,
+      max_timeout_ms: 300000, expected_revision: initialPolicy.revision,
+    } });
+    expect(dockerPolicy.ok(), await dockerPolicy.text()).toBe(true);
     let failPolicyLoad = true;
     await page.route("**/automation-policy", route => {
       if (route.request().method() === "GET" && failPolicyLoad) {
@@ -5739,7 +5818,9 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
     const openPolicy = async () => {
-      await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
+      const search = page.getByRole("button", { name: "Search pages, actions, and settings" });
+      if (!await search.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click();
+      await search.click();
       await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
       await page.getByRole("option", { name: /Project policy and network scope/ }).click();
     };
@@ -5792,8 +5873,6 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     await expect(page.getByRole("checkbox", { name: /Allow host filesystem and network access/ })).toBeChecked();
     await save.click();
     await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
-    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
-    const projectId = projects[0].id;
     const policy = await (await api.get(`engagements/${projectId}/automation-policy`)).json();
     expect(policy).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
     const ready = await api.get(`automation/runtime?engagement_id=${projectId}`);
