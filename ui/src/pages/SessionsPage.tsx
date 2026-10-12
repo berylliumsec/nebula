@@ -9,6 +9,7 @@ import { NebulaAssistantLauncherButton } from "../components/NebulaAssistantLaun
 import { useResizableSidePanel } from "../components/useResizableSidePanel";
 import { useResizableSplitPane } from "../components/useResizableSplitPane";
 import "../browser-assistant.css";
+import "../electron-browser.css";
 import "../side-chat.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
@@ -112,7 +113,8 @@ import { startHarnessActivityPolling } from "./harnessActivityPolling";
 import { Link, useSearchParams, type NavigateOptions } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
-import { isTauriRuntime } from "../api/runtime";
+import { isElectronRuntime, isTauriRuntime } from "../api/runtime";
+import { ElectronBrowser } from "../components/ElectronBrowser";
 import { emptyAssistantDefaults, preferredAssistantRuntime } from "../api/assistantDefaults";
 import {
   prepareProviderCredential,
@@ -5944,7 +5946,19 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     runtimeKind === "harness" && harnessServiceTier ? `${harnessServiceTier} speed` : "",
   ].filter(Boolean).join(" · ");
 
-  const browserEngine = searchParams.get("browserEngine") === "native" || (!searchParams.has("browserEngine") && searchParams.has("browserTool")) ? "native" : "managed";
+  const [oneBrowserCutover, setOneBrowserCutover] = useState(isElectronRuntime());
+  useEffect(() => {
+    if (!api) return;
+    let current = true;
+    void api.request<{ one_browser_cutover: boolean }>("desktop-browser-mode")
+      .then((mode) => { if (current) setOneBrowserCutover(mode.one_browser_cutover); })
+      .catch((caught) => {
+        void logCaughtDiagnostic("interface.sessions.browser_mode_failed", "The desktop browser mode could not be loaded.", caught, "sessions_page");
+        if (current) setOneBrowserCutover(isElectronRuntime());
+      });
+    return () => { current = false; };
+  }, [api]);
+  const browserEngine = oneBrowserCutover ? "electron" : searchParams.get("browserEngine") === "native" || (!searchParams.has("browserEngine") && searchParams.has("browserTool")) ? "native" : "managed";
   const setBrowserEngine = (engine: "managed" | "native") => {
     updateSearchParams(params => params.set("browserEngine", engine), { replace: true });
   };
@@ -6553,8 +6567,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             {chatSideVisible && sideView === "browser" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Browser</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} title={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Browser" title="Hide Browser" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
             <div className="integrated-browser-page">
             <header className="browser-workspace-toolbar">{browserEngine === "managed" && <button className="button quiet managed-browser-icon" type="button" aria-label={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} title={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} aria-expanded={browserControlsOpen} aria-controls="managed-browser-controls" onClick={() => setBrowserControlsOpen(open => !open)}><Settings2 size={18} aria-hidden="true" /></button>}<button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}><PanelRight size={18} aria-hidden="true" /></button>
-            {!sideBrowserVisible && <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Assistant browser</option><option value="native">Native browser</option></select></label>}</header>
-            {browserEngine === "managed" ? <ManagedAssistantBrowser key={`${engagement.id}:${sessionId || draftEditorKey}`} api={api} projectId={engagement.id} draftId={draftEditorKey} active={view === "browser" || (chatSideVisible && sideView === "browser")} controlsOpen={browserControlsOpen}
+            {!sideBrowserVisible && !oneBrowserCutover && <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Assistant browser</option><option value="native">Native browser</option></select></label>}{oneBrowserCutover && <span>Browser</span>}</header>
+            {browserEngine === "electron" ? <ElectronBrowser api={api} projectId={engagement.id} draftId={draftEditorKey} conversationId={sessionId || undefined}
+              active={view === "browser" || (chatSideVisible && sideView === "browser")}
+              initialOpenUrl={searchParams.get("openUrl") ?? undefined} initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
+              onContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}
+              onControlChange={setBrowserControlEnabled} /> : browserEngine === "managed" ? <ManagedAssistantBrowser key={`${engagement.id}:${sessionId || draftEditorKey}`} api={api} projectId={engagement.id} draftId={draftEditorKey} active={view === "browser" || (chatSideVisible && sideView === "browser")} controlsOpen={browserControlsOpen}
               initialOpenUrl={searchParams.get("openUrl") ?? undefined} initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
               conversationId={sessionId || undefined} onConversation={(id) => void openAttachedChat(id)}
               onContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}

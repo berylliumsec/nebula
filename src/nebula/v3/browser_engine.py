@@ -151,6 +151,8 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
             return max(self._timeout, BROWSER_ACTION_TIMEOUT_SECONDS + 5)
         if path.startswith("/v1/companion/"):
             return max(self._timeout, BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS + 5)
+        if path == "/v1/security/request":
+            return max(self._timeout, 35)
         return self._timeout
 
     async def _request(
@@ -205,7 +207,9 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
                 ),
             )
 
-    async def ensure_identity(self, identity_id: str) -> None:
+    async def ensure_identity(
+        self, identity_id: str, project_id: str | None = None
+    ) -> None:
         response = await self._request(
             "POST", "/v1/identities/ensure", {"identity_id": identity_id}
         )
@@ -267,6 +271,27 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
 
     async def stop(self, assessment_id: str) -> None:
         await self._lifecycle(assessment_id, "stop")
+
+
+class VisibleElectronAdapter(LocalBrowserdAdapter):
+    """Authenticated loopback path to the operator's actual Electron tab."""
+
+    async def ensure_identity(
+        self, identity_id: str, project_id: str | None = None
+    ) -> None:
+        if not project_id:
+            raise BrowserEngineUnavailableError(
+                "A Project is required for the visible browser."
+            )
+        response = await self._request(
+            "POST",
+            "/v1/identities/ensure",
+            {"identity_id": identity_id, "project_id": project_id},
+        )
+        if response.status_code >= 400:
+            raise BrowserEngineUnavailableError(
+                "The desktop browser for this Project is disconnected. Open Browser and retry."
+            )
 
 
 class BrowserEngineRegistry:

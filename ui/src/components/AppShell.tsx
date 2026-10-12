@@ -12,7 +12,7 @@ import { SideNav } from "./SideNav";
 import { TopBar } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } from "../diagnostics";
-import { browserAuthorizationRecovery } from "../api/runtime";
+import { browserAuthorizationRecovery, isElectronRuntime } from "../api/runtime";
 import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
 import { SettingsLens } from "./SettingsLens";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
@@ -265,7 +265,7 @@ export function AppShell() {
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
             <GuideProvider>
-            <BrowserAutomationWorker />
+            {!isElectronRuntime() && <BrowserAutomationWorker />}
             <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${quietLens ? " quiet-lens-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed && !quietLens ? " sidebar-collapsed" : ""}`} data-quiet-pointer={quietPointerActive ? "active" : "idle"} data-quiet-rail={quietRailActive ? "active" : "idle"}>
               <a className="skip-link" href="#main-content">Skip to main content</a>

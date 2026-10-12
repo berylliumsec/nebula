@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "nebula-security-proxy"
+version = "0.1.0"
+description = "Isolated mitmproxy sidecar for Nebula agent security sessions"
+authors = ["BerylliumSec"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14"
+mitmproxy = "12.2.3"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

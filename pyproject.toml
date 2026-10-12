@@ -82,6 +82,7 @@ types-regex = ">=2024.11,<2027"
 pyinstaller = ">=6.12,<7"
 tomli = ">=2.2,<3"
 
+
 [tool.pytest.ini_options]
 testpaths = [ "tests/v3",]
 addopts = "--import-mode=importlib"

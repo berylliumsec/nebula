@@ -11,6 +11,7 @@ import hashlib
 import base64
 import binascii
 import json
+import os
 import re
 from datetime import timedelta
 from typing import Any, Literal
@@ -412,8 +413,19 @@ class BrowserSecurityService:
         self.artifact_store = artifact_store
         self.policy = PolicyEngine()
 
+    @staticmethod
+    def _require_agent_security_runtime(session: BrowserSession) -> None:
+        if (
+            os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+            and session.runtime_kind != "agent_security"
+        ):
+            raise BrowserWorkflowError(
+                "Research traffic belongs only to the headless agent security session"
+            )
+
     def workspace(self, engagement_id: str) -> BrowserWorkspace:
         self.store.get(Engagement, engagement_id)
+        cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
         # Every identity and session stays selectable, and the defaults below
         # are only created when the Project truly has none.
         identities = self.store.find_entities(
@@ -432,7 +444,7 @@ class BrowserSecurityService:
             for item in sessions
             if item.metadata.get("browser_companion_version") != 1
         ]
-        if not identities:
+        if not identities and not cutover:
             identity = BrowserIdentity(
                 engagement_id=engagement_id,
                 name="Default identity",
@@ -445,7 +457,7 @@ class BrowserSecurityService:
             )
             self._create(identity, "browser_identity.created", "system")
             identities = [identity]
-        if not sessions:
+        if not sessions and not cutover:
             session = BrowserSession(
                 engagement_id=engagement_id,
                 name="Research session",
@@ -480,6 +492,10 @@ class BrowserSecurityService:
     def create_session(
         self, engagement_id: str, request: BrowserSessionCreateRequest, actor_id: str
     ) -> BrowserSession:
+        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+            raise BrowserWorkflowError(
+                "New research sessions are created by the Core headless security runtime"
+            )
         identity = self._owned(BrowserIdentity, request.identity_id, engagement_id)
         if identity.revoked_at is not None:
             raise BrowserWorkflowError(
@@ -657,6 +673,7 @@ class BrowserSecurityService:
         self, session_id: str, request: BrowserTrafficRecordRequest, actor_id: str
     ) -> BrowserTrafficExchange:
         session = self.store.get(BrowserSession, session_id)
+        self._require_agent_security_runtime(session)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError(
                 "traffic can be recorded only for an active browser session"
@@ -764,6 +781,7 @@ class BrowserSecurityService:
         actor_id: str,
     ) -> BrowserWebSocketFrame:
         session = self.store.get(BrowserSession, session_id)
+        self._require_agent_security_runtime(session)
         exchange = self._owned(
             BrowserTrafficExchange, request.exchange_id, session.engagement_id
         )

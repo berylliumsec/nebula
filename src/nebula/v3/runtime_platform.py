@@ -399,6 +399,7 @@ class RuntimePlatform:
                 for plugin in build_mcp_tool_plugins(
                     self.mcp_service,
                     mcp_profiles,
+                    engagement_id=engagement_id,
                     bypass_permissions=scope.bypass_permissions,
                 ):
                     registry.register(plugin)

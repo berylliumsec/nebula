@@ -519,6 +519,7 @@ interface WireBrowserSession extends WireEntity {
   engagement_id: string;
   name: string;
   identity_id: string;
+  runtime_kind?: SecurityBrowserSession["runtimeKind"] | null;
   status: SecurityBrowserSession["status"];
   capture_mode: SecurityBrowserSession["captureMode"];
   proxy_enabled: boolean;
@@ -4668,6 +4669,7 @@ function mapBrowserSession(value: WireBrowserSession): SecurityBrowserSession {
     id: value.id,
     name: value.name,
     identityId: value.identity_id,
+    runtimeKind: value.runtime_kind ?? undefined,
     status: value.status,
     captureMode: value.capture_mode,
     proxyEnabled: value.proxy_enabled,
@@ -10850,6 +10852,13 @@ export class ApiClient {
       `runs/${encodeURIComponent(runId)}/browser-automation/stop`,
       { method: "POST" },
     ).then(mapBrowserAutomationStatus);
+  }
+
+  stopAgentSecurity(engagementId: string): Promise<{ stopped_sessions: number }> {
+    return this.request<{ stopped_sessions: number }>(
+      `engagements/${encodeURIComponent(engagementId)}/agent-security/stop`,
+      { method: "POST" },
+    );
   }
 
   createSecurityBrowserIdentity(

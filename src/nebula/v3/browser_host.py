@@ -15,9 +15,13 @@ import uvicorn
 
 from .browser_engine import LocalBrowserdAdapter
 from .browser_host_proxy import BrowserHostProxy
+from .agent_proxy import AgentMitmProxy
+from .artifacts import ArtifactStore
 from .browser_security import BrowserSecurityService
 from .browserd import BrowserdManager, BrowserdSettings, create_browserd_app
+from .credentials import CredentialStore
 from .domain import BrowserIdentity, RiskClass
+from .security_upstream import SecurityUpstreamConnector
 from .storage import NebulaStore, NotFoundError
 
 
@@ -29,16 +33,27 @@ class _PrivateBrowserServer(uvicorn.Server):
 
 
 class ManagedBrowserHost:
-    def __init__(self, store: NebulaStore, root: Path) -> None:
+    def __init__(
+        self,
+        store: NebulaStore,
+        root: Path,
+        *,
+        headless: bool = False,
+        credentials: CredentialStore | None = None,
+        artifact_store: ArtifactStore | None = None,
+    ) -> None:
         self.store = store
         self.root = root
+        self.headless = headless
+        self.credentials = credentials
+        self.artifact_store = artifact_store
         self._lock = asyncio.Lock()
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task | None = None
         self._socket: socket.socket | None = None
         self._adapter: LocalBrowserdAdapter | None = None
         self._manager: BrowserdManager | None = None
-        self._proxies: dict[str, BrowserHostProxy] = {}
+        self._proxies: dict[str, BrowserHostProxy | AgentMitmProxy] = {}
 
     async def adapter(self) -> LocalBrowserdAdapter:
         async with self._lock:
@@ -60,7 +75,8 @@ class ManagedBrowserHost:
                     "The host Chromium bundle is missing its verification manifest. Repair the host application, then retry here. Your saved conversations remain available."
                 )
             if (
-                os.name != "nt"
+                not self.headless
+                and os.name != "nt"
                 and sys.platform != "darwin"
                 and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
             ):
@@ -87,6 +103,8 @@ class ManagedBrowserHost:
                     profile_root=self.root / "profiles",
                     policy_proxy_url=fallback_config["server"],
                     runtime_root=runtime,
+                    headless=self.headless,
+                    security_headless=self.headless,
                     # Chromium 149 stalls authenticated proxy navigation with HTTP/2.
                     # Keep this compatibility restriction local to the built-in proxy.
                     http1_only=True,
@@ -140,6 +158,13 @@ class ManagedBrowserHost:
                 identity = self.store.get(BrowserIdentity, identity_id)
                 if identity.revoked_at:
                     raise ValueError("The browser identity is revoked.")
+                if (
+                    self.headless
+                    and identity.metadata.get("runtime_kind") != "agent_security"
+                ):
+                    raise ValueError(
+                        "The headless security host requires an agent security identity."
+                    )
                 scope = security._scope(identity.engagement_id)
             except NotFoundError as exc:
                 # diagnostic-expected: deletion revokes an existing egress grant.
@@ -159,13 +184,60 @@ class ManagedBrowserHost:
             identity = self.store.get(BrowserIdentity, identity_id)
             if identity.revoked_at:
                 raise ValueError("The browser identity is revoked.")
+            if (
+                self.headless
+                and identity.metadata.get("runtime_kind") != "agent_security"
+            ):
+                raise ValueError(
+                    "The headless security host requires an agent security identity."
+                )
             security._scope(identity.engagement_id)
-            self._proxies[identity_id] = BrowserHostProxy(authorize)
+            if self.headless:
+                from .domain import BrowserSession
+
+                sessions = self.store.find_entities(
+                    BrowserSession,
+                    {"identity_id": identity_id, "runtime_kind": "agent_security"},
+                    engagement_id=identity.engagement_id,
+                )
+                if not sessions:
+                    raise ValueError(
+                        "The headless security identity has no Core session."
+                    )
+                if self.credentials is None:
+                    self.credentials = CredentialStore()
+                connector = SecurityUpstreamConnector(
+                    self.store, sessions[0].id, self.credentials
+                )
+                self._proxies[identity_id] = AgentMitmProxy(
+                    self.store,
+                    sessions[0].id,
+                    identity_id,
+                    self.root / "proxies",
+                    authorize,
+                    connector.connect,
+                    artifact_store=self.artifact_store,
+                )
+            else:
+                self._proxies[identity_id] = BrowserHostProxy(authorize)
         return await self._proxies[identity_id].start()
 
     async def close(self) -> None:
         async with self._lock:
             await self._stop()
+
+    async def close_identity(self, identity_id: str) -> None:
+        """Stop a live headless context; a lazy host does not start to stop it."""
+        async with self._lock:
+            if self._adapter is None:
+                return
+            response = await self._adapter._request(
+                "POST", "/v1/identities/close", {"identity_id": identity_id}
+            )
+            response.raise_for_status()
+            proxy = self._proxies.pop(identity_id, None)
+            if proxy is not None:
+                await proxy.close()
 
     async def _stop(self) -> None:
         if self._server is not None:

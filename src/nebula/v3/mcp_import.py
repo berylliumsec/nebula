@@ -262,6 +262,10 @@ def import_mcp_config(
                     f"{draft.entry.name!r}; rename them before importing"
                 )
             current = matches[0] if matches else None
+            if current and current.transport == McpTransport.BUILTIN:
+                raise McpImportError(
+                    "Nebula's built-in Security Tools profile cannot be imported over"
+                )
             if current and request.on_conflict == "skip":
                 entry.action = "skip"
                 entry.profile_id = current.id
@@ -343,6 +347,11 @@ def export_mcp_config(profiles: list[McpServerProfile]) -> McpExportReport:
         return "${" + name + "}"
 
     for profile in profiles:
+        if profile.transport == McpTransport.BUILTIN:
+            warnings.append(
+                f"{profile.name}: built-in Nebula tools are supplied by Core and cannot be exported"
+            )
+            continue
         entry: dict[str, Any] = {}
         if profile.description:
             entry["description"] = profile.description

@@ -28,6 +28,7 @@ from .credentials import CredentialError, CredentialStore
 from .domain import (
     McpAuthMode,
     McpApprovalMode,
+    AutomationProjectPolicy,
     McpCapabilitySnapshot,
     McpCwdPolicy,
     McpServerProfile,
@@ -418,11 +419,29 @@ class McpProbeService:
         self.store = store
         self.credential_store = credential_store
         self.workspace_resolver = workspace_resolver
+        self.security_tools: Any | None = None
+
+    def bind_security_tools(self, service: Any) -> None:
+        self.security_tools = service
 
     async def probe(
         self, profile_id: str, *, engagement_id: str | None = None
     ) -> McpProbeReport:
         profile = self.store.get(McpServerProfile, profile_id)
+        if profile.transport == McpTransport.BUILTIN:
+            if self.security_tools is None:
+                raise McpProbeError("Security Tools are unavailable in this Core")
+            snapshot = self.security_tools.capabilities()
+            latest = self.store.get(McpServerProfile, profile.id)
+            self.store.update(
+                McpServerProfile,
+                latest.id,
+                {"capabilities": snapshot},
+                expected_revision=latest.revision,
+            )
+            return McpProbeReport(
+                profile_id=profile.id, compatible=True, capabilities=snapshot
+            )
         client: _McpClient | None = None
         try:
             client = await self._connect(profile, engagement_id)
@@ -604,6 +623,17 @@ class McpProbeService:
         )
         if errors:
             raise McpProbeError(f"MCP tool arguments are invalid: {errors[0].message}")
+        if profile.transport == McpTransport.BUILTIN:
+            if self.security_tools is None:
+                raise McpProbeError("Security Tools are unavailable in this Core")
+            current = self.store.get(McpServerProfile, profile.id)
+            if not current.enabled or current.transport != McpTransport.BUILTIN:
+                raise McpProbeError(
+                    "Security Tools were disabled after this turn began"
+                )
+            return await self.security_tools.call_tool(
+                engagement_id, tool_name, arguments
+            )
         client = await self._connect(
             profile,
             engagement_id,
@@ -782,7 +812,9 @@ def mcp_tool_runtime_name(profile_id: str, tool_name: str) -> str:
     return f"mcp.{digest}.{stem[:80]}"
 
 
-def _mcp_tool_risk(tool: McpToolSnapshot) -> RiskClass:
+def _mcp_tool_risk(tool: McpToolSnapshot, profile: McpServerProfile) -> RiskClass:
+    if profile.transport == McpTransport.BUILTIN:
+        return RiskClass.LOCAL_READ if tool.read_only else RiskClass.ACTIVE_SCAN
     if tool.credentialed:
         return RiskClass.CREDENTIAL_USE
     if tool.destructive:
@@ -814,12 +846,23 @@ def build_mcp_tool_plugins(
     service: McpProbeService,
     profiles: tuple[McpServerProfile, ...],
     *,
+    engagement_id: str | None = None,
     bypass_permissions: bool = False,
 ) -> list[Any]:
     """Freeze selected upstream MCP tools into ordinary broker plugins."""
 
     # Local import keeps MCP transport discovery independent from the broker.
     from .tools import ToolExecutionResult, ToolPlugin, ToolSpec
+
+    allow_all = bool(
+        engagement_id
+        and any(
+            item.browser_security_allow_all
+            for item in service.store.list_entities(
+                AutomationProjectPolicy, engagement_id=engagement_id, limit=1
+            )
+        )
+    )
 
     class McpToolPlugin(ToolPlugin):
         def __init__(
@@ -837,10 +880,17 @@ def build_mcp_tool_plugins(
                 )[:10_000],
                 input_schema=schema,
                 output_schema={"type": "object", "additionalProperties": True},
-                risk_class=_mcp_tool_risk(snapshot),
+                risk_class=_mcp_tool_risk(snapshot, profile),
                 network_access=snapshot.open_world,
                 opaque_network_access=snapshot.open_world,
-                requires_approval=_mcp_requires_approval(profile, snapshot),
+                requires_approval=(
+                    False
+                    if allow_all
+                    and profile.transport == McpTransport.BUILTIN
+                    and profile.tool_overrides.get(snapshot.name)
+                    != McpApprovalMode.DENY
+                    else _mcp_requires_approval(profile, snapshot)
+                ),
                 policy_deny_reason=(
                     "MCP tool is denied by its server approval policy; an operator must change that policy"
                     if profile.tool_overrides.get(
