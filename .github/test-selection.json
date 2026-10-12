@@ -1,16 +1,38 @@
 {
-  "change_digest": "c32658b2ca876a8d4ee0aac347021fff48af352c9f8a41ab98194a833339f086",
-  "reviewed_by": "Codex Quiet Lens contour review",
-  "reason": "The change replaces the collapsed Quiet Lens Session rail and resting composer CSS ellipses with the same SVG contours used by the navigation and top handles. Forty-two collected SideNav and TopBar component cases cover the touched shell components. Ten catalogued Quiet Lens browser cases cover first-run theme behavior, composer reveal and multiline editing, and the rail reveal journey at 1440/1024 px desktop Chromium and 320/390/430 px emulated mobile Chromium and WebKit widths. The desktop journey compares rendered contours and checks hover, focus, attention, idle, and clipping states. A production UI build checks the shipped CSS and SVG output.",
-  "exclusions": "No Core API, database, provider, native runtime, or origin-sensitive behavior changes, so Python and native tests are unrelated and a real-Core mutation journey is not selected. Other chat, workspace, and browser suites are excluded. Mobile devices are emulated; no physical-device result is claimed.",
+  "change_digest": "475b4d3414568ee9565fc0cd466a26e4b69afc2ab8e5379c387470205b990289",
+  "reviewed_by": "Codex browser pentesting fix review, 2026-10-12",
+  "reason": "The operator journey starts in Security Browser on a paired LAN browser, opens Target at mobile widths, and reviews upload or script payloads before saving a durable Intruder draft. Core owns saved drafts and payload provenance; React owns unsaved input; Quiet Lens owns the transient navigation state. The required invariants are a normal Target pointer click, an operable 44 px navigation handle outside content, exact SHA-256 of raw upload bytes or UTF-8 script text on insecure LAN HTTP, and source metadata retained by Core. The shared real-core.spec.ts test additions are limited to this journey and have been reviewed; they do not warrant unrelated suites. Select the 12 collected BrowserResearchSuite component cases; 11 collected browser-pentest Playwright cases across desktop, compact, and six emulated mobile Chromium/WebKit profiles; and 10 collected Quiet Lens shell cases across desktop, compact, and six emulated mobile profiles. Browser tests use a production UI bundle, live Core, and an owned local target; Quiet Lens tests use the scoped mock fixture.",
+  "exclusions": "No Python or Rust source changed, so their test layers are omitted. No provider-backed assistant payload proposal or remote target is exercised; the local fixture is explicitly scoped. Physical devices are unavailable. Unrelated Playwright areas and full suites are excluded. The native package smoke is a separate operator gate, not a Rust unit selection.",
   "expected_tests": {
     "python": 0,
-    "frontend": 42,
+    "frontend": 12,
     "native": 0,
-    "playwright": 10
+    "playwright": 21
   },
+  "python_versions": [
+    "3.11"
+  ],
+  "python_browser": false,
+  "python_node": false,
   "python": [],
-  "frontend": ["ui/src/components/SideNav.test.tsx", "ui/src/components/TopBar.test.tsx"],
+  "frontend": ["ui/src/components/BrowserResearchSuite.test.tsx"],
   "native": [],
-  "playwright": ["area:quiet-lens"]
+  "playwright": [
+    "browser-pentest-audit/real-core",
+    "browser-pentest-audit/assistant-real-compact",
+    "browser-pentest-audit/assistant-real-chromium-320",
+    "browser-pentest-audit/assistant-real-chromium-390",
+    "browser-pentest-audit/assistant-real-chromium-430",
+    "browser-pentest-audit/assistant-real-webkit-320",
+    "browser-pentest-audit/assistant-real-webkit-390",
+    "browser-pentest-audit/assistant-real-webkit-430",
+    "quiet-lens/desktop",
+    "quiet-lens/compact",
+    "quiet-lens/mobile-chromium-small",
+    "quiet-lens/mobile-chromium",
+    "quiet-lens/mobile-chromium-wide",
+    "quiet-lens/mobile-webkit-small",
+    "quiet-lens/mobile-webkit",
+    "quiet-lens/mobile-webkit-wide"
+  ]
 }

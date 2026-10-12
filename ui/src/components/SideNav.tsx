@@ -175,7 +175,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   };
   return (
     <aside className={`side-nav${variant === "zero" ? " zero-anchor-dock" : ""}`} data-shell="shared" aria-label="Primary navigation" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
-      {onToggleLens && <button className="quiet-lens-handle quiet-lens-side-handle" type="button" aria-label="Open navigation" aria-expanded={lensOpen} title="Open navigation" onMouseEnter={onRevealLens} onFocus={onRevealLens} onClick={onRevealLens}>
+      {onToggleLens && <button className="quiet-lens-handle quiet-lens-side-handle" type="button" aria-label="Open navigation" aria-expanded={lensOpen} title="Open navigation" onMouseEnter={() => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onRevealLens?.(); }} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) onRevealLens?.(); }} onClick={onRevealLens}>
         <QuietLensVerticalContour />
       </button>}
       <div className="brand-lockup">

@@ -13,6 +13,7 @@ import type {
   SecurityBrowserSession,
 } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { sha256Hex } from "../sha256";
 import { useConfirmation } from "./DialogSystem";
 import { AIWritingDialog } from "./AIWritingDialog";
 
@@ -508,7 +509,7 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
       const bytes = new Uint8Array(await file.arrayBuffer());
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       const values = parsePayloadDocument(text, file.name);
-      const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((value) => value.toString(16).padStart(2, "0")).join("");
+      const digest = sha256Hex(bytes);
       applyPayloadValues(values, { kind: "upload", displayName: file.name, sha256: digest, valueCount: values.length });
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.payload_upload_failed", "The Intruder payload file could not be read.", caught, "browser_research_suite");
@@ -521,10 +522,8 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
   const previewPayloadScript = () => {
     try {
       const values = runPayloadScript(payloadScript);
-      void crypto.subtle.digest("SHA-256", new TextEncoder().encode(payloadScript)).then((digest) => {
-        const sha256 = Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
-        applyPayloadValues(values, { kind: "script", displayName: "Payload script", sha256, valueCount: values.length, promptVersion: "payload-script/v1" });
-      });
+      const sha256 = sha256Hex(payloadScript);
+      applyPayloadValues(values, { kind: "script", displayName: "Payload script", sha256, valueCount: values.length, promptVersion: "payload-script/v1" });
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.payload_script_failed", "The Intruder payload script could not be previewed.", caught, "browser_research_suite");
       setError(message(caught));
