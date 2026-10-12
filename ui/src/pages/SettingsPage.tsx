@@ -14,6 +14,7 @@ import { EngagementPolicySettings } from "../components/EngagementPolicySettings
 import { AutomationRuntimeSettings, RunnerSettings } from "../components/ToolingSettings";
 import { EnvironmentSettings } from "../components/EnvironmentSettings";
 import { HarnessSettings } from "../components/HarnessSettings";
+import { RuntimeUsagePanel } from "../components/RuntimeUsagePanel";
 import { PostToolAssistantSettings } from "../components/PostToolAssistantSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { THEME_OPTIONS, useTheme } from "../state/ThemeContext";
@@ -38,6 +39,7 @@ const settingsSections = [
 
 type SettingsSection = typeof settingsSections[number][0];
 const advancedSettingsGroups = [
+  "usage-settings",
   "models-settings",
   "automation-settings",
   "environments-settings",
@@ -61,6 +63,7 @@ function elapsedLabel(startedAt: string | undefined, now: number): string | unde
 }
 
 function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
+  if (["usage-settings", "runtime-usage"].includes(hash)) return "usage-settings";
   if (["automation-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
   if (["environments-settings", "ssh-environment-settings"].includes(hash)) return "environments-settings";
   if (["integrations-settings", "typesafe-integration-settings", "web-search-runtime-settings"].includes(hash)) return "integrations-settings";
@@ -811,9 +814,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
       </section>
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
+      <SettingsGroup id="usage-settings" title="Usage" summary="Provider and harness balances, limits, and activity" open={openAdvancedGroup === "usage-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "usage-settings"}>
+        <RuntimeUsagePanel api={api} active={openAdvancedGroup === "usage-settings" && settingsSection === "advanced-settings"} />
+      </SettingsGroup>
       <SettingsGroup id="models-settings" title="Models" summary={providers.length ? `${providers.filter((provider) => provider.enabled).length} enabled provider${providers.filter((provider) => provider.enabled).length === 1 ? "" : "s"}` : "Optional · no provider configured"} open={openAdvancedGroup === "models-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "models-settings"}>
       <section className="settings-section" id="provider-settings">
-        <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><ShowMeHow guide="provider-env-key" label="Keys from environment" /><button className="button primary" type="button" data-guide="add-provider" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
+        <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><a className="button quiet" href="#usage-settings">Usage</a><ShowMeHow guide="provider-env-key" label="Keys from environment" /><button className="button primary" type="button" data-guide="add-provider" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <DiagnosticErrorNotice error={providerActionError} fallback="The provider operation could not be completed." />}
         {providers.length > 0 ? (
           <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} busy={providerBusy === provider.id} onRefresh={refreshProvider} onReverify={reverifyProvider} onEdit={openProviderEdit} onToggle={toggleProvider} onDelete={removeProvider} key={provider.id} />)}</div>

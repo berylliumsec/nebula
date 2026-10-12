@@ -257,6 +257,7 @@ from .credentials import (
     CredentialVaultLockedError,
     VaultState,
 )
+from .runtime_usage import RuntimeUsageResponse, RuntimeUsageService
 from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
     ENTITY_MODEL_BY_KIND,
@@ -1611,6 +1612,7 @@ def create_app(
     knowledge_url_fetcher: Callable[[str], FetchedUrlDocument] | None = None,
     allow_insecure_device_pairing: bool = False,
     openrouter_directory_transport: httpx.AsyncBaseTransport | None = None,
+    runtime_usage_transport: httpx.AsyncBaseTransport | None = None,
     ssh_environment_service: SshEnvironmentService | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
@@ -1842,6 +1844,9 @@ def create_app(
     )
     if harness_runtime.store is not store:
         raise ValueError("harness_runtime_service must use the API store")
+    runtime_usage = RuntimeUsageService(
+        store, credentials, transport=runtime_usage_transport
+    )
     if tool_platform is not None:
         harness_runtime.bind_tool_platform(tool_platform)
     if automation_tool_platform is not None:
@@ -4089,6 +4094,20 @@ def create_app(
     )
     async def get_harness_catalog() -> list[Any]:
         return harness_catalog()
+
+    @app.get(
+        f"{API_PREFIX}/runtime-usage",
+        response_model=RuntimeUsageResponse,
+        tags=["providers", "harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_runtime_usage(
+        response: Response, refresh: bool = False
+    ) -> RuntimeUsageResponse:
+        """Read recorded turns and vendor account snapshots without a model call."""
+
+        response.headers["Cache-Control"] = "no-store"
+        return await runtime_usage.read(refresh=refresh)
 
     @app.post(
         f"{API_PREFIX}/harnesses/{{profile_id}}/health",

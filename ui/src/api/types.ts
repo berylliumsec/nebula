@@ -1508,6 +1508,53 @@ export interface ProviderHealth {
   message?: string;
 }
 
+export interface RuntimeUsageBalance {
+  label: string;
+  currency?: string;
+  remaining?: number;
+  used?: number;
+  limit?: number;
+  displayValue?: string;
+  note?: string;
+}
+
+export interface RuntimeUsageWindow {
+  label: string;
+  usedPercent: number;
+  durationMinutes?: number;
+  resetsAt?: string;
+}
+
+export interface RuntimeUsageItem {
+  kind: "provider" | "harness";
+  profileId: string;
+  name: string;
+  providerType: string;
+  enabled: boolean;
+  recorded: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cachedInputTokens: number;
+    turns: number;
+    scope: string;
+  };
+  vendor: {
+    state: "available" | "unavailable" | "error";
+    source: string;
+    detail: string;
+    checkedAt?: string;
+    balances: RuntimeUsageBalance[];
+    windows: RuntimeUsageWindow[];
+    ordinaryUsageAllowed?: boolean;
+  };
+}
+
+export interface RuntimeUsageResponse {
+  generatedAt: string;
+  items: RuntimeUsageItem[];
+}
+
 export interface ProviderCapabilityVerification {
   model: string;
   status: "verified" | "failed";

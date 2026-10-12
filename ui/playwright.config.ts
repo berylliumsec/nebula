@@ -45,7 +45,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
         {name: `assistant-real-chromium-${width}`, use: {...devices["Pixel 5"], viewport: {width, height: 844}}},
         {name: `assistant-real-webkit-${width}`, use: {...devices["iPhone 13"], viewport: {width, height: 844}}},
       ]),
-    ].map(project => ({...project, testMatch: ["**/real-core.spec.ts", "**/work-import.spec.ts"], grep: /assistant upgrade|project removal|project execution mode|mcp import|ssh environments|work hub/})),
+    ].map(project => ({...project, testMatch: ["**/real-core.spec.ts", "**/work-import.spec.ts"], grep: /assistant upgrade|project removal|project execution mode|mcp import|ssh environments|work hub|runtime usage/})),
     ...[
       { name: "browser-chromium-landscape", device: "Pixel 5" },
       { name: "browser-webkit-landscape", device: "iPhone 13" },
@@ -127,7 +127,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
     ...project,
     // Stabilization journeys must not silently disappear behind older per-screen
     // filters. File/project boundaries still apply, including isolated real Core.
-    ...("grep" in project ? {grep: new RegExp(`stabilization|automation callback|${project.grep.source}`)} : {}),
+    ...("grep" in project ? {grep: new RegExp(`stabilization|automation callback|${project.name.startsWith("mobile-") ? "provider and harness usage|" : ""}${project.grep.source}`)} : {}),
   })),
   webServer: {
     command: testCommand,

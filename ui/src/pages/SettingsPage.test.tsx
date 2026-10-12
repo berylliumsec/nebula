@@ -32,7 +32,10 @@ const { workspace } = vi.hoisted(() => ({
 }));
 
 vi.mock("../state/WorkspaceContext", () => ({ useWorkspace: () => workspace }));
-vi.mock("../state/ThemeContext", () => ({ useTheme: () => ({ preference: "dark", resolvedTheme: "dark", setPreference: vi.fn(), cycleTheme: vi.fn() }) }));
+vi.mock("../state/ThemeContext", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../state/ThemeContext")>(),
+  useTheme: () => ({ preference: "dark", resolvedTheme: "dark", setPreference: vi.fn(), cycleTheme: vi.fn() }),
+}));
 vi.mock("../state/uiZoom", () => ({ useUiZoom: () => ({ zoom: 1, supported: false, change: vi.fn() }), UI_ZOOM_DEFAULT: 1, UI_ZOOM_STEPS: [1] }));
 vi.mock("../hooks/useCredentialVault", () => ({ useCredentialVault: () => ({ state: "unlocked", available: true, refresh: vi.fn() }), vaultUnavailableNote: () => "" }));
 vi.mock("../state/ChromeContext", () => ({ useChrome: () => ({ toolbarHost: null, trailingToolbarHost: null }) }));

@@ -827,3 +827,62 @@
 @media (max-width: 640px) {
   .policy-form-body > .tool-suggestions-key-link { display: inline-flex; align-items: center; min-height: var(--touch-target); margin-top: -10px; }
 }
+
+/* Settings usage keeps vendor limits distinct from Nebula's recorded turns. */
+.runtime-usage-panel { display: grid; gap: 20px; margin: 0; }
+.runtime-usage-panel .section-heading { margin: 0; }
+.runtime-usage-panel .section-heading p { max-width: 58ch; }
+.runtime-usage-panel .section-heading > .runtime-usage-refresh { width: 44px; min-width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; padding: 0; }
+.runtime-usage-overview { display: flex; flex-wrap: wrap; align-items: center; gap: 18px 30px; padding: 14px 18px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--surface); }
+.runtime-usage-overview > div { display: flex; align-items: baseline; gap: 8px; }
+.runtime-usage-overview strong { color: var(--text-strong); font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1; }
+.runtime-usage-overview span, .runtime-usage-overview small { color: var(--muted); font-size: 12px; }
+.runtime-usage-overview small { margin-left: auto; }
+.runtime-usage-group { display: grid; gap: 11px; min-width: 0; }
+.runtime-usage-group > h3 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-strong); font-size: 13px; font-weight: var(--weight-semibold); }
+.runtime-usage-group > h3 span { color: var(--muted); font-size: 12px; font-weight: var(--weight-regular); }
+.runtime-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 14px; min-width: 0; }
+.runtime-usage-card { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 16px; background: var(--surface); }
+.runtime-usage-card > header { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 17px 18px 0; }
+.runtime-usage-card > header > div { min-width: 0; flex: 1; }
+.runtime-usage-card > header small { color: var(--muted); font-size: 11px; }
+.runtime-usage-card > header h3 { overflow: hidden; margin: 2px 0 0; color: var(--text-strong); font-size: 15px; font-weight: var(--weight-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.runtime-usage-icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 12px; color: var(--blue); background: var(--blue-muted); }
+.runtime-usage-disabled { color: var(--muted); font-size: 11px; }
+.runtime-usage-hero { min-width: 0; padding: 22px 18px 17px; }
+.runtime-usage-hero > small { color: var(--muted); font-size: 11px; font-weight: var(--weight-medium); }
+.runtime-usage-figure { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; margin-top: 4px; }
+.runtime-usage-figure strong { color: var(--text-strong); font-size: clamp(22px, 2.3vw, 31px); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; letter-spacing: -.035em; line-height: 1.15; overflow-wrap: anywhere; }
+.runtime-usage-figure span { color: var(--muted); font-size: 12px; }
+.runtime-usage-detail { max-width: 52ch; margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.runtime-usage-attention { margin: 10px 0 0; color: var(--yellow); font-size: 12px; font-weight: var(--weight-medium); }
+.runtime-usage-limits { display: grid; gap: 14px; margin: 0 18px 17px; padding: 14px 0 0; border-top: 1px solid var(--border-soft); }
+.runtime-usage-limit-row { display: grid; gap: 6px; }
+.runtime-usage-limit-row > div:first-child, .runtime-usage-extra-balance { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.runtime-usage-limit-row span, .runtime-usage-extra-balance span { min-width: 0; color: var(--muted-strong); font-size: 11px; overflow-wrap: anywhere; }
+.runtime-usage-limit-row strong, .runtime-usage-extra-balance strong { flex: 0 0 auto; color: var(--text-strong); font-size: 11px; font-variant-numeric: tabular-nums; }
+.runtime-usage-limit-row small { color: var(--muted); font-size: 10px; }
+.runtime-usage-meter-track { display: block; height: 5px; overflow: hidden; border-radius: 999px; background: var(--border-soft); }
+.runtime-usage-meter-track > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
+.runtime-usage-recorded { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: auto; padding: 13px 18px; border-top: 1px solid var(--border-soft); background: var(--surface-raised); }
+.runtime-usage-recorded > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.runtime-usage-recorded strong { color: var(--text-strong); font-size: 15px; font-variant-numeric: tabular-nums; }
+.runtime-usage-recorded small { color: var(--muted); font-size: 10px; line-height: 1.3; }
+.runtime-usage-details { padding: 0 18px; border-top: 1px solid var(--border-soft); }
+.runtime-usage-details summary { display: flex; min-height: 44px; align-items: center; color: var(--muted-strong); font-size: 11px; cursor: pointer; }
+.runtime-usage-details dl { display: grid; gap: 6px; margin: 0 0 12px; }
+.runtime-usage-details dl > div { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; }
+.runtime-usage-details dt { color: var(--muted); }
+.runtime-usage-details dd { margin: 0; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.runtime-usage-details p { margin: 0 0 10px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.runtime-usage-card footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 12px 18px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 10px; }
+.runtime-usage-loading, .runtime-usage-empty, .runtime-usage-error { display: flex; align-items: center; gap: 10px; padding: 18px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--surface); color: var(--muted-strong); font-size: 12px; }
+.runtime-usage-empty { flex-direction: column; align-items: flex-start; }
+.runtime-usage-empty strong { color: var(--text-strong); font-size: 14px; }
+.runtime-usage-empty p { margin: 0; }
+.runtime-usage-error { flex-wrap: wrap; justify-content: space-between; border-color: var(--yellow); }
+@media (max-width: 640px) {
+  .runtime-usage-overview { gap: 12px 20px; }
+  .runtime-usage-overview small { width: 100%; margin-left: 0; }
+  .runtime-usage-figure strong { font-size: 27px; }
+}

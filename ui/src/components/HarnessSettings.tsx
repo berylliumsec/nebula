@@ -426,7 +426,7 @@ export function HarnessSettings() {
 
   return <>
     <section className="settings-section" id="harness-settings">
-      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Add a named profile for each Codex or Grok account.</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
+      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Add a named profile for each Codex or Grok account.</p></div><div className="integration-card-actions"><a className="button quiet" href="/settings#usage-settings">Usage</a><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
       {catalogError && <div role="status"><p>{catalogError}</p><button className="button quiet" type="button" onClick={() => void reload()}>Retry catalogs</button></div>}
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card harness-settings-card" key={profile.id}>

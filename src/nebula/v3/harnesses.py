@@ -3941,6 +3941,29 @@ def _codex_user_input_response(questions: list[Any], response: Any) -> dict[str,
 class CodexAppServerAdapter(HarnessAdapter):
     kind = HarnessKind.CODEX_APP_SERVER
 
+    async def read_account_usage(
+        self, profile: HarnessProfile, credential_store: CredentialStore
+    ) -> dict[str, Any]:
+        """Read account limits without starting or resuming a model turn."""
+
+        rpc = await asyncio.wait_for(
+            self._connect(profile, credential_store, (), Path.cwd()), timeout=12
+        )
+        try:
+            await asyncio.wait_for(self._initialize(rpc), timeout=12)
+            result = await asyncio.wait_for(
+                rpc.request(
+                    "account/rateLimits/read",
+                    {"excludeResetCreditDetails": True},
+                ),
+                timeout=12,
+            )
+            if not isinstance(result, dict):
+                raise HarnessTransportError("Codex returned invalid account limits")
+            return result
+        finally:
+            await rpc.close()
+
     async def fork_thread(
         self,
         profile: HarnessProfile,

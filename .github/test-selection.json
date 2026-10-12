@@ -1,19 +1,20 @@
 {
-  "change_digest": "1adedd988b77affcaa61ab934e38984b589102bfab8dc2136ebfa9e00101321d",
-  "reviewed_by": "Codex focused Nebula assistant theme-command review",
-  "reason": "The live control-assistant turn for 'change it to the light theme' saved a model claim of pending browser confirmation with no settings-tool call. This change recognizes that explicit phrase locally, applies the device theme through the visible Appearance setting, and confirms only after browser theme and storage readback. Unknown explicit theme commands now stop locally with a clear path to Appearance instead of inviting an unverified model claim. The two assistant component files contain 23 collected cases for command parsing, local application, persistence, and scoped tool receipts. The selected browser journey exercises the exact phrase, visible Appearance transition, confirmation, and reload on desktop Chromium and 390 px mobile Chromium/WebKit in a production preview served from the LAN origin.",
-  "exclusions": "No backend, API, schema, or native implementation changed, so Python and native tests are unrelated. No full frontend or Playwright suite, unrelated assistant journeys, live provider turn, or physical-device run is selected. The theme is owned by this browser; the selected production browser journey uses mocked API responses, while the previously observed Core turn establishes the missing tool receipt in the reported incident.",
+  "change_digest": "ee41e79f521edbab5dcc8099ba3c42d8d49e2bd34f80d299fb78b1afdb91b759",
+  "reviewed_by": "Codex focused runtime-usage change review",
+  "reason": "The changed journey is Settings Usage for model providers and agent harnesses. The Python file covers vendor payload scope, read-only Codex account RPC, authenticated Core aggregation, refresh caching, and secret redaction. The three frontend files cover the new usage presentation and refresh recovery, mobile settings discovery, and URL-controlled Settings routing. The catalogued Playwright area exercises the new view, refresh, reload, mobile geometry, accessibility, and a disposable real Core on a production LAN origin. Shared API/client/config/test files were reviewed against this exact read-only feature; the selected tests cross every changed integration boundary without running unrelated journeys.",
+  "exclusions": "No Rust or native code changed, so native selection is empty. No full Python, frontend, or Playwright suite is authorized. Unrelated provider chat, missions, diagnostics, and browser research journeys are excluded. Vendor calls use mocked responses in automated tests; account-specific live balances need configured credentials and are not assumed from the fixtures. Physical device testing is not available in this selection.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 23,
+    "python": 3,
+    "frontend": 16,
     "native": 0,
-    "playwright": 3
+    "playwright": 11
   },
-  "python": [],
+  "python": ["tests/v3/test_runtime_usage.py"],
   "frontend": [
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/components/NebulaControlAssistant.test.tsx"
+    "ui/src/components/RuntimeUsagePanel.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/pages/SettingsPage.test.tsx"
   ],
   "native": [],
-  "playwright": ["area:nebula-theme-command"]
+  "playwright": ["area:runtime-usage"]
 }

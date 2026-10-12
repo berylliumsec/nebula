@@ -143,6 +143,7 @@ import type {
   ProviderCatalogEntry,
   ProviderCreateRequest,
   ProviderHealth,
+  RuntimeUsageResponse,
   ProviderRuntimeHealth,
   ProviderUpdateRequest,
   ReportCreateRequest,
@@ -7656,6 +7657,55 @@ export class ApiClient {
     return this.listAll<WireProvider>("providers", signal).then((items) =>
       page(items.map(mapProvider)),
     );
+  }
+
+  getRuntimeUsage(refresh = false, signal?: AbortSignal): Promise<RuntimeUsageResponse> {
+    type WireUsage = {
+      generated_at: string;
+      items: Array<{
+        kind: "provider" | "harness"; profile_id: string; name: string;
+        provider_type: string; enabled: boolean;
+        recorded: { input_tokens: number; output_tokens: number; total_tokens: number; cached_input_tokens: number; turns: number; scope: string };
+        vendor: {
+          state: "available" | "unavailable" | "error"; source: string; detail: string;
+          checked_at: string | null;
+          balances: Array<{ label: string; currency: string | null; remaining: number | null; used: number | null; limit: number | null; display_value: string | null; note: string | null }>;
+          windows: Array<{ label: string; used_percent: number; duration_minutes: number | null; resets_at: string | null }>;
+          ordinary_usage_allowed: boolean | null;
+        };
+      }>;
+    };
+    return this.request<WireUsage>(`runtime-usage${refresh ? "?refresh=true" : ""}`, { signal }).then((value) => ({
+      generatedAt: value.generated_at,
+      items: value.items.map((item) => ({
+        kind: item.kind, profileId: item.profile_id, name: item.name,
+        providerType: item.provider_type, enabled: item.enabled,
+        recorded: {
+          inputTokens: item.recorded.input_tokens,
+          outputTokens: item.recorded.output_tokens,
+          totalTokens: item.recorded.total_tokens,
+          cachedInputTokens: item.recorded.cached_input_tokens,
+          turns: item.recorded.turns,
+          scope: item.recorded.scope,
+        },
+        vendor: {
+          state: item.vendor.state, source: item.vendor.source, detail: item.vendor.detail,
+          checkedAt: item.vendor.checked_at ?? undefined,
+          balances: item.vendor.balances.map((balance) => ({
+            label: balance.label, currency: balance.currency ?? undefined,
+            remaining: balance.remaining ?? undefined, used: balance.used ?? undefined,
+            limit: balance.limit ?? undefined, displayValue: balance.display_value ?? undefined,
+            note: balance.note ?? undefined,
+          })),
+          windows: item.vendor.windows.map((window) => ({
+            label: window.label, usedPercent: window.used_percent,
+            durationMinutes: window.duration_minutes ?? undefined,
+            resetsAt: window.resets_at ?? undefined,
+          })),
+          ordinaryUsageAllowed: item.vendor.ordinary_usage_allowed ?? undefined,
+        },
+      })),
+    }));
   }
 
   listProviderCatalog(signal?: AbortSignal): Promise<ProviderCatalogEntry[]> {
