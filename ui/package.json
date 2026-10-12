@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:desktop": "npm run build && npm run build:core && tauri dev",
+    "dev:desktop": "npm run build && npm run build:core && npm run prepare:browser-runtime && tauri dev",
     "build": "tsc -b && vite build",
     "build:core": "poetry -C .. run python -m scripts.build_nebula_core",
+    "prepare:browser-runtime": "poetry -C .. run python -m scripts.stage_playwright_runtime ui/src-tauri/resources/playwright-browsers --target auto --if-needed",
     "preview": "vite preview",
     "test": "node ../scripts/test_scope_guard.mjs unit",
     "test:watch": "vitest",

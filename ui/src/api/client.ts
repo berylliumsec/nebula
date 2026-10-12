@@ -5294,6 +5294,15 @@ export class ApiClient {
     return new WebSocket(endpoint, protocols);
   }
 
+  openOperatorBrowserStream(sessionId: string, tabId: string): WebSocket {
+    const endpoint = new URL(`${this.baseUrl.replace(/\/$/, "")}/browser-companion/${encodeURIComponent(sessionId)}/tabs/${encodeURIComponent(tabId)}/operator-stream`, globalThis.location.origin);
+    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+    const protocols = ["nebula.browser.v1"];
+    const token = this.getToken();
+    if (token) protocols.push(websocketAuthProtocol(token));
+    return new WebSocket(endpoint, protocols);
+  }
+
   getToken(): string | undefined {
     return typeof this.tokenSource === "function"
       ? this.tokenSource()

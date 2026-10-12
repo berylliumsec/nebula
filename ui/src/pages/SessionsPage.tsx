@@ -4,6 +4,7 @@ import { rememberToolSharing, sharesToolResultsAlways, type ToolSharingRuntime }
 import { HarnessReasoningDetails } from "../components/HarnessReasoningDetails";
 import { IconAction } from "../components/IconAction";
 import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
+import { OperatorBrowser } from "../components/OperatorBrowser";
 import { BrowserAssistantPanel, BROWSER_ASSISTANT_SHEET_QUERY } from "../components/BrowserAssistantPanel";
 import { NebulaAssistantLauncherButton } from "../components/NebulaAssistantLauncher";
 import { useResizableSidePanel } from "../components/useResizableSidePanel";
@@ -5944,8 +5945,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     runtimeKind === "harness" && harnessServiceTier ? `${harnessServiceTier} speed` : "",
   ].filter(Boolean).join(" · ");
 
-  const browserEngine = searchParams.get("browserEngine") === "native" || (!searchParams.has("browserEngine") && searchParams.has("browserTool")) ? "native" : "managed";
-  const setBrowserEngine = (engine: "managed" | "native") => {
+  const selectedBrowserEngine = searchParams.get("browserEngine");
+  const browserEngine = selectedBrowserEngine === "native" || selectedBrowserEngine === "managed" || selectedBrowserEngine === "operator"
+    ? selectedBrowserEngine : isTauriRuntime() ? "operator" : "managed";
+  const setBrowserEngine = (engine: "managed" | "operator" | "native") => {
     updateSearchParams(params => params.set("browserEngine", engine), { replace: true });
   };
   const attachBrowserContext = useCallback((request: Parameters<typeof requestChatContext>[0]) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }, [requestChatContext]);
@@ -6075,7 +6078,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       }
       next.delete("companion");
       rememberCompanionExpanded(next.get("session") ?? "", false);
-      next.set("browserEngine", isTauriRuntime() ? "native" : "managed");
+      next.set("browserEngine", isTauriRuntime() ? "operator" : "managed");
       next.set("openUrl", url);
       next.set("openUrlRequest", globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
     }),
@@ -6553,8 +6556,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             {chatSideVisible && sideView === "browser" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Browser</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} title={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Browser" title="Hide Browser" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
             <div className="integrated-browser-page">
             <header className="browser-workspace-toolbar">{browserEngine === "managed" && <button className="button quiet managed-browser-icon" type="button" aria-label={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} title={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} aria-expanded={browserControlsOpen} aria-controls="managed-browser-controls" onClick={() => setBrowserControlsOpen(open => !open)}><Settings2 size={18} aria-hidden="true" /></button>}<button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}><PanelRight size={18} aria-hidden="true" /></button>
-            {!sideBrowserVisible && <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Assistant browser</option><option value="native">Native browser</option></select></label>}</header>
-            {browserEngine === "managed" ? <ManagedAssistantBrowser key={`${engagement.id}:${sessionId || draftEditorKey}`} api={api} projectId={engagement.id} draftId={draftEditorKey} active={view === "browser" || (chatSideVisible && sideView === "browser")} controlsOpen={browserControlsOpen}
+            {!sideBrowserVisible && <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "operator" | "native")}><option value="operator">Interactive browser</option><option value="managed">Assistant browser</option><option value="native">Native capture</option></select></label>}</header>
+            {browserEngine === "operator" ? <OperatorBrowser key={`${engagement.id}:operator`} api={api} projectId={engagement.id} active={view === "browser" || (chatSideVisible && sideView === "browser")}
+              initialOpenUrl={searchParams.get("openUrl") ?? undefined} initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
+              onContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }} /> : browserEngine === "managed" ? <ManagedAssistantBrowser key={`${engagement.id}:${sessionId || draftEditorKey}`} api={api} projectId={engagement.id} draftId={draftEditorKey} active={view === "browser" || (chatSideVisible && sideView === "browser")} controlsOpen={browserControlsOpen}
               initialOpenUrl={searchParams.get("openUrl") ?? undefined} initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
               conversationId={sessionId || undefined} onConversation={(id) => void openAttachedChat(id)}
               onContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}

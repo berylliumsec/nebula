@@ -126,6 +126,18 @@
 .managed-assistant-browser > p[role="status"] { padding: 2px 12px; }
 .managed-browser-view-hint { margin: 0; padding: 0 12px 6px; font-size: 11px; line-height: 1.4; color: var(--muted); }
 .managed-browser-screen:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.operator-browser { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.operator-browser-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+.operator-browser-toolbar select { flex: 0 1 150px; min-width: 80px; max-width: 180px; }
+.operator-browser-toolbar input { flex: 1 1 220px; min-width: 120px; padding: 0 10px; }
+.operator-browser-toolbar select, .operator-browser-toolbar input { min-height: 44px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); color: var(--text); }
+.operator-browser > p[role="status"] { margin: 0; padding: 4px 12px; color: var(--muted); font-size: 11px; }
+.operator-browser-error { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: var(--text); background: var(--surface-muted); }
+.operator-browser-error > button { flex: 0 0 auto; min-height: 44px; margin-left: auto; }
+.operator-browser-screen { display: flex; flex: 1 1 160px; align-items: center; justify-content: center; min-width: 0; min-height: 160px; overflow: hidden; background: #fff; }
+.operator-browser-screen > img { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; touch-action: none; }
+.operator-browser-screen > img:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.operator-browser-screen > p { color: #222; }
 @media (max-width: 760px) {
   .managed-browser-tool-strip { gap: 0; padding: 0 4px; }
   .managed-browser-actions { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
