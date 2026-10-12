@@ -100,6 +100,7 @@ from .browser_companion import (
     BrowserCompanion,
     CompanionRequest,
     CompanionBindingRequest,
+    CompanionLinkedNavigation,
     CompanionDecision,
     CompanionCredentialCreate,
     CompanionFileCreate,
@@ -12406,6 +12407,34 @@ def create_app(
             )
         try:
             return await browser_companion.request(session_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/linked-navigation",
+        dependencies=[Depends(require_auth)],
+    )
+    async def open_browser_companion_link(
+        session_id: str, request: CompanionLinkedNavigation
+    ) -> dict[str, Any]:
+        # A transcript click may navigate, but the general operator operations
+        # endpoint remains a read-only viewer of the Assistant's browser.
+        try:
+            parsed = urlsplit(request.url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or any(character in request.url for character in "\x00\r\n\t")
+            ):
+                raise ValueError("Choose an HTTP or HTTPS link without credentials.")
+            return await browser_companion.request(
+                session_id,
+                CompanionRequest(
+                    operation="navigate", tab_id=request.tab_id, url=request.url
+                ),
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
