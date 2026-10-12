@@ -13,14 +13,14 @@ import {
   logDiagnostic,
   nativeDiagnosticSettings,
 } from "./diagnostics";
-import { isTauriRuntime } from "./api/runtime";
+import { isElectronRuntime, isTauriRuntime } from "./api/runtime";
 import { ThemeProvider } from "./state/ThemeContext";
 import { installZoomShortcuts } from "./state/uiZoom";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
 import "./ui.css";
 
 installGlobalDiagnosticHandlers();
-if (!isTauriRuntime() && "serviceWorker" in navigator && window.isSecureContext) {
+if (!isTauriRuntime() && !isElectronRuntime() && "serviceWorker" in navigator && window.isSecureContext) {
   window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js"));
 }
 installZoomShortcuts();

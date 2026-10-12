@@ -536,6 +536,7 @@ export interface SecurityBrowserSession {
   id: Identifier;
   name: string;
   identityId: Identifier;
+  runtimeKind?: "legacy_native" | "legacy_assistant" | "electron_visible" | "agent_security";
   status: "active" | "paused" | "closed";
   captureMode: BrowserCaptureMode;
   proxyEnabled: boolean;
@@ -2553,7 +2554,7 @@ export interface McpServerProfile {
   name: string;
   /** What the server is for, in the operator's words. */
   description?: string;
-  transport: "stdio" | "streamable_http";
+  transport: "stdio" | "streamable_http" | "builtin";
   command?: string;
   arguments: string[];
   url?: string;

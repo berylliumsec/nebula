@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { isTauriRuntime } from "../api/runtime";
+import { isElectronRuntime, isTauriRuntime } from "../api/runtime";
+import { electronDesktop } from "../api/electronDesktop";
 import { logDiagnostic } from "../diagnostics";
 
 // Font sizes are authored in px throughout the stylesheet, so text size is
@@ -47,14 +48,15 @@ export function storedZoom(): number {
 }
 
 export function uiZoomSupported(): boolean {
-  return isTauriRuntime();
+  return isTauriRuntime() || isElectronRuntime();
 }
 
 export async function applyZoom(level: number): Promise<number> {
   const normalized = normalizeZoom(level);
   if (!uiZoomSupported()) return normalized;
   try {
-    await invoke("set_interface_zoom", { scale: normalized });
+    if (isElectronRuntime()) await electronDesktop()!.setZoom(normalized);
+    else await invoke("set_interface_zoom", { scale: normalized });
   } catch (error) {
     void logDiagnostic({
       level: "error",

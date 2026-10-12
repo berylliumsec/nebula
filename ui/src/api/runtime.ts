@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { configureBrowserDiagnostics, logDiagnostic } from "../diagnostics";
+import { electronDesktop } from "./electronDesktop";
 
 export interface ApiRuntime {
   baseUrl?: string;
@@ -51,6 +52,7 @@ let browserRuntimeToken: string | undefined;
 let desktopDeviceIdentity: string | undefined;
 
 export async function desktopDeviceId(): Promise<string> {
+  if (isElectronRuntime()) return electronDesktop()!.deviceId();
   if (!isTauriRuntime()) return "paired-browser";
   if (desktopDeviceIdentity) return desktopDeviceIdentity;
   desktopDeviceIdentity = await invoke<string>("desktop_device_id");
@@ -85,7 +87,20 @@ export function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+export function isElectronRuntime(): boolean {
+  return electronDesktop()?.kind === "electron";
+}
+
 export async function resolveApiRuntime(): Promise<ApiRuntime> {
+  if (isElectronRuntime()) {
+    try {
+      const session = await electronDesktop()!.resolveBackendConnection();
+      return { baseUrl: session.endpoint, token: session.token, mode: "desktop", state: "ready" };
+    } catch (error) {
+      return { mode: "desktop", state: "unavailable",
+        message: error instanceof Error ? error.message : String(error) };
+    }
+  }
   if (isTauriRuntime()) {
     try {
       const session = await invoke<BackendSession>("resolve_backend_connection");
