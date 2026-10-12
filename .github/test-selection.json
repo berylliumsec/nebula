@@ -1,5 +1,5 @@
 {
-  "change_digest": "986be122e67ad6f0a6ca27ac9931d24f31b2bb326f23ae0722d8c903c1960b5d",
+  "change_digest": "7cf7ea82034c58c4a1adf095ba6b3c5beebcb78ab3e4ea74599866e62e24ed4d",
   "reviewed_by": "Codex focused review for macOS native Browser containment",
   "reason": "The changed journey is the macOS native Browser page inside its visible surface, including resize and Text size. Two exact Rust cases cover main-webview frame coordinates and CSS-to-AppKit zoom conversion. The selected desktop Browser journey covers creating a tab, native bounds updates, resizing, sidebar and research panels, and hiding or revealing the page. macOS CI compiles the AppKit conversion from the main WKWebView to Wry's parent and runs the selected native cases.",
   "exclusions": "No Python or frontend source or server state changed, so Python and component tests are excluded. Mobile clients use the separate web-browser fallback; no mobile behavior changed. Real-Core persistence and non-loopback origin behavior are unchanged. The mocked desktop browser and Linux Rust tests cannot prove macOS WKWebView compositing; a rebuilt Mac app visual and input check is still required before claiming full acceptance. Unrelated suites are excluded.",

@@ -881,13 +881,16 @@ fn resize_macos_browser_container<R: tauri::Runtime>(
     let browser = browser.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     main.with_webview(move |main_native| {
-        // SAFETY: Tauri supplies the live main WKWebView on the AppKit main thread.
-        let main: &NSView = unsafe { &*main_native.inner().cast::<NSView>() };
-        let page_zoom: f64 = unsafe { objc2::msg_send![main, pageZoom] };
+        // Pass only an address through Tauri's Send callback; both callbacks run on
+        // the AppKit main thread and Tauri retains the main WKWebView.
+        let main_address = main_native.inner() as usize;
         let callback_sender = sender.clone();
         if let Err(error) = browser.with_webview(move |browser_native| {
-            // SAFETY: Tauri supplies the live child WKWebView on the AppKit main thread.
+            // SAFETY: Tauri retains both WKWebViews for this main-thread callback.
+            let main: &NSView =
+                unsafe { &*((main_address as *mut std::ffi::c_void).cast::<NSView>()) };
             let child: &NSView = unsafe { &*browser_native.inner().cast::<NSView>() };
+            let page_zoom: f64 = unsafe { objc2::msg_send![main, pageZoom] };
             let result = (|| {
                 let container = unsafe { child.superview() }
                     .ok_or_else(|| "The browser clipping container is unavailable.".to_string())?;
