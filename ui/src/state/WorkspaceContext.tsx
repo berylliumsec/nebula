@@ -354,15 +354,33 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         setKnowledgeSources([]);
         setReports([]);
         setRuns([]);
+        setResourceStatus((current) => ({
+          ...current,
+          ...Object.fromEntries(["activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"]
+            .map((resource) => [resource, { state: "loading" }])),
+        } as Record<WorkspaceResource, ResourceStatus>));
+
+        // The project identity is known before its resources finish loading.
+        // Keep its Workbench usable while unrelated collections are still in flight.
+        if (!switching) setEngagement(nextEngagement);
 
         if (nextEngagement) {
+          const observationLoad = nextApi.listObservations(nextEngagement.id, controller.signal);
+          void observationLoad.then((value) => {
+            if (!active) return;
+            setObservations(value.items);
+            setResourceStatus((current) => ({ ...current, notes: { state: value.items.length ? "ready" : "empty" } }));
+          }, (error: unknown) => {
+            if (!active) return;
+            setResourceStatus((current) => ({ ...current, notes: { state: "failed", error } }));
+          });
           const detailResults = await Promise.allSettled([
             nextApi.listRuns(nextEngagement.id, controller.signal),
             nextApi.listApprovals(nextEngagement.id, controller.signal),
             nextApi.listAssets(nextEngagement.id, controller.signal),
             nextApi.listFindings(nextEngagement.id, controller.signal),
             nextApi.listEvidence(nextEngagement.id, controller.signal),
-            nextApi.listObservations(nextEngagement.id, controller.signal),
+            observationLoad,
             nextApi.listKnowledgeSources(nextEngagement.id, controller.signal),
             nextApi.listReports(nextEngagement.id, controller.signal),
           ]);
@@ -373,9 +391,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           });
           setResourceStatus((current) => ({
             ...current,
-            ...Object.fromEntries(detailResults.map((result, index) => [labels[index], result.status === "fulfilled" ? { state: result.value.items.length ? "ready" : "empty" } : { state: "failed", error: result.reason }])),
+            ...Object.fromEntries(detailResults.flatMap((result, index) => index === 5 ? [] : [[labels[index], result.status === "fulfilled" ? { state: result.value.items.length ? "ready" : "empty" } : { state: "failed", error: result.reason }]])),
           }));
-          const [runResult, approvalResult, assetResult, findingResult, evidenceResult, observationResult, knowledgeResult, reportResult] = detailResults;
+          const [runResult, approvalResult, assetResult, findingResult, evidenceResult, , knowledgeResult, reportResult] = detailResults;
           if (runResult.status === "fulfilled") {
             setRuns(runResult.value.items);
             nextRun = runResult.value.items.find((item) => item.id === selectedMissionId)
@@ -388,12 +406,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           if (assetResult.status === "fulfilled") setAssets(assetResult.value.items);
           if (findingResult.status === "fulfilled") setFindings(findingResult.value.items);
           if (evidenceResult.status === "fulfilled") setEvidence(evidenceResult.value.items);
-          if (observationResult.status === "fulfilled") setObservations(observationResult.value.items);
           if (knowledgeResult.status === "fulfilled") setKnowledgeSources(knowledgeResult.value.items);
           if (reportResult.status === "fulfilled") setReports(reportResult.value.items);
         }
 
-        setEngagement(nextEngagement);
+        if (switching) setEngagement(nextEngagement);
         setRun(nextRun);
         if (!switching) bootstrappedAttempt.current = attempt;
         const degraded = nextHealth?.status === "degraded" || loadErrors.length > 0;

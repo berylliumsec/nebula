@@ -44,6 +44,7 @@
     {"name": "studio-dark-vision", "patterns": ["ui/src/studio-dark.css", "ui/src/pages/OverviewPage*", "ui/src/state/ThemeContext*", "ui/src/pages/SettingsPage*"], "areas": ["studio-dark-vision"]},
     {"name": "notes-screen-fit", "patterns": ["ui/src/components-workbench.css", "ui/src/pages/SessionsPage.tsx"], "areas": ["notes-screen-fit"]},
     {"name": "notes-typing", "patterns": ["ui/src/components/NotesPanel.tsx"], "areas": ["notes-typing"]},
+    {"name": "notes-readiness", "patterns": ["ui/src/state/WorkspaceContext.tsx", "ui/src/components/NotesPanel.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["notes-readiness"]},
     {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
     {"name": "file-navigation-search", "patterns": ["src/nebula/v3/workspace.py", "ui/src/components/WorkspacePanel*", "ui/src/components/EditorWorkspaceSearch*", "ui/src/components/CodeEditorPanel*", "ui/src/api/types.ts"], "areas": ["editor-files-scroll", "file-search-real-core"]},
     {"name": "code-editor", "patterns": ["ui/src/components/CodeEditorPanel*", "ui/src/components/CodeMirrorSurface*", "ui/src/components/Editor*", "ui/src/components/editor*", "ui/src/components/fileIcons*", "ui/src/components/useEditorSidebarWidth*"], "areas": ["coding-makeover", "editor-files-scroll"]},
@@ -1778,6 +1779,11 @@
       {"area":"notes-typing","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"},
       {"area":"notes-typing","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"},
       {"area":"notes-typing","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"notes typing production LAN saves and reloads the latest draft","runtime":"real-core","shard":"1/1"}
+    ],
+    "notes-readiness": [
+      {"area":"notes-readiness","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization notes open before unrelated evidence finishes loading","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-readiness","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"stabilization notes open before unrelated evidence finishes loading","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-readiness","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"stabilization notes open before unrelated evidence finishes loading","runtime":"real-core","shard":"1/1"}
     ],
     "desktop-shell": [
       {"area":"desktop-shell","project":"desktop","test_match":"tests/interface.spec.ts","grep":"desktop|window|updater|paired-device","runtime":"mock","shard":"1/1"},

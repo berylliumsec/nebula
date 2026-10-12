@@ -26,6 +26,7 @@ function Probe() {
     library: value.libraryItems, harnesses: value.harnesses, assets: value.assets,
     run: value.run, runs: value.runs, events: value.events,
     approvals: value.approvals, engagement: value.engagement?.id,
+    observations: value.observations,
   })}</output>{(["library", "harnesses", "activity"] as const).map((resource) =>
     <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}
   <button onClick={() => value.selectEngagement("project-b")}>Select project B</button>
@@ -60,6 +61,23 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it("opens the selected project and publishes notes while evidence is still loading", async () => {
+    let finishEvidence!: (value: unknown) => void;
+    fixture.methods.listEvidence.mockImplementationOnce(() => new Promise((resolve) => { finishEvidence = resolve; }));
+    fixture.methods.listObservations.mockResolvedValue({ items: [{ id: "note-1", title: "Ready note" }] });
+
+    render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    await waitFor(() => expect(state().engagement).toBe("project"));
+    await waitFor(() => expect(state().status.notes.state).toBe("ready"));
+    expect(state().observations).toEqual([{ id: "note-1", title: "Ready note" }]);
+    expect(state().status.evidence.state).toBe("loading");
+    expect(state().workspace).toBe("bootstrapping");
+    expect(fixture.methods.listObservations).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishEvidence({ items: [] }));
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+  });
+
   it("shows a selected project before its resources finish and does not reload global catalogs", async () => {
     fixture.methods.listEngagements.mockResolvedValue({ items: [
       { id: "project", name: "Project A", status: "active" },
