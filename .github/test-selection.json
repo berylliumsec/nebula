@@ -1,32 +1,16 @@
 {
-  "change_digest": "1782ff805e477dcecdaf6046c4cccd3ab79403f74398e4a4e94452005a32a810",
-  "reviewed_by": "Codex Notes readiness review, 2026-10-12",
-  "reason": "The changed journey is Workbench Notes entry through selection, editing, save feedback, link search, and reload. Core owns saved observations; WorkspaceContext owns project/resource readiness; NotesPanel owns the transient draft and picker state. The shared WorkspaceContext change is reviewed through 12 collected recovery cases, including notes publication while Evidence is held, and a real-Core LAN browser case. The 16 collected NotesPanel cases cover loading, no duplicate fetch, bounded link search, autosave, failure/retry, refresh, and selection. Eight collected Notes layout cases cover desktop/compact and emulated Chromium/WebKit at 320/390/430 px. One existing real-Core LAN case covers save/reload, and three permanent real-Core browser projects cover independent readiness and a synthetic 29,000-item Evidence list. The disposable production-bundle benchmark records four switches before and after repair.",
-  "exclusions": "No Python or Rust behavior changes, so those layers are omitted. The new real-Core test uses live Core for notes and a held synthetic Evidence response to isolate browser loading; no live provider or external target is called. Unrelated workspace and browser journeys and full suites are excluded after reviewing the shared context impact. Physical devices are unavailable; mobile runs use permanent emulated profiles.",
+  "change_digest": "9f6261faa1945513180ab99449c9de578c34b367f9033fe0dc3986433274bdd4",
+  "reviewed_by": "Codex README feature review, 2026-10-12",
+  "reason": "This diff adds the user-reviewed feature shortlist to README.md. It describes existing Project, browser interception, skill, container VPN, operator-control, and evidence workflows without changing application code or an operator journey. The claims were checked against the current Nebula guide, automation runtime documentation, and relevant UI/source paths.",
+  "exclusions": "No Python, frontend, native, or Playwright behavior changed, so all four test layers have zero selected tests and no runtime setup. Product workflow tests and full suites are excluded for this documentation-only edit. Git diff validation and the CI selection receipts check the scoped change.",
   "expected_tests": {
     "python": 0,
-    "frontend": 28,
+    "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 0
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/NotesPanel.test.tsx",
-    "ui/src/state/WorkspaceContext.recovery.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:notes-screen-fit/desktop",
-    "entry:notes-screen-fit/compact",
-    "entry:notes-screen-fit/mobile-chromium-small",
-    "entry:notes-screen-fit/mobile-chromium",
-    "entry:notes-screen-fit/mobile-chromium-wide",
-    "entry:notes-screen-fit/mobile-webkit-small",
-    "entry:notes-screen-fit/mobile-webkit",
-    "entry:notes-screen-fit/mobile-webkit-wide",
-    "entry:notes-typing/real-core",
-    "entry:notes-readiness/assistant-real-desktop",
-    "entry:notes-readiness/assistant-real-chromium-320",
-    "entry:notes-readiness/assistant-real-webkit-320"
-  ]
+  "playwright": []
 }
