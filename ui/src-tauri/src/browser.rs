@@ -79,6 +79,7 @@ const BROWSER_CONTEXT_SCRIPT: &str = r#"(() => {
 #[derive(Default)]
 pub(crate) struct BrowserState {
     tabs: Mutex<HashMap<String, BrowserTab>>,
+    presented_tab: Mutex<Option<String>>,
     session_proxies: Mutex<HashMap<String, crate::browser_proxy::BrowserProxyHandle>>,
     session_projects: Mutex<HashMap<String, String>>,
     downloads: Mutex<HashMap<PathBuf, PendingDownload>>,
@@ -1220,6 +1221,11 @@ fn close_tab_internal(app: &AppHandle, state: &BrowserState, tab_id: &str) -> Re
     if let Ok(mut targets) = state.context_targets.lock() {
         targets.remove(tab_id);
     }
+    if let Ok(mut presented) = state.presented_tab.lock()
+        && presented.as_deref() == Some(tab_id)
+    {
+        *presented = None;
+    }
     let tab = state
         .tabs
         .lock()
@@ -2311,22 +2317,16 @@ pub(crate) fn browser_control(
     .map_err(|error| format!("cannot control browser tab: {error}"))
 }
 
-#[tauri::command]
-pub(crate) fn browser_set_bounds(
-    app: AppHandle,
-    state: State<'_, BrowserState>,
-    tab_id: String,
-    project_id: String,
+fn set_browser_view_bounds(
+    app: &AppHandle,
+    webview: &tauri::Webview,
     bounds: BrowserBounds,
 ) -> Result<(), String> {
-    let label = find_tab(&state, &tab_id, &project_id)?;
-    let bounds = checked_bounds(bounds)?;
-    let webview = app
-        .get_webview(&label)
-        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
     #[cfg(target_os = "macos")]
     {
-        resize_macos_browser_container(&app, &webview, bounds)
+        resize_macos_browser_container(app, webview, bounds)
             .map_err(|error| format!("cannot resize browser tab: {error}"))
     }
     #[cfg(not(target_os = "macos"))]
@@ -2338,21 +2338,10 @@ pub(crate) fn browser_set_bounds(
     }
 }
 
-#[tauri::command]
-pub(crate) fn browser_set_visible(
-    app: AppHandle,
-    state: State<'_, BrowserState>,
-    tab_id: String,
-    project_id: String,
-    visible: bool,
-) -> Result<(), String> {
-    let label = find_tab(&state, &tab_id, &project_id)?;
-    let webview = app
-        .get_webview(&label)
-        .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+fn set_browser_view_visible(webview: &tauri::Webview, visible: bool) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        set_macos_browser_container_visible(&webview, visible)
+        set_macos_browser_container_visible(webview, visible)
             .map_err(|error| format!("cannot change browser visibility: {error}"))
     }
     #[cfg(not(target_os = "macos"))]
@@ -2364,6 +2353,71 @@ pub(crate) fn browser_set_visible(
         }
         .map_err(|error| format!("cannot change browser visibility: {error}"))
     }
+}
+
+// The renderer owns the Browser slot, but this command owns the complete native
+// presentation transition. It never shows a newly selected page before applying
+// that slot's current bounds. A failed resize leaves the page hidden.
+#[tauri::command]
+pub(crate) fn browser_present_tab(
+    app: AppHandle,
+    state: State<'_, BrowserState>,
+    project_id: String,
+    tab_id: Option<String>,
+    bounds: Option<BrowserBounds>,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id) {
+        return Err("The Project identifier is invalid.".to_string());
+    }
+    let target = match tab_id.as_deref() {
+        Some(id) => Some((
+            find_tab(&state, id, &project_id)?,
+            checked_bounds(
+                bounds
+                    .ok_or_else(|| "A visible browser tab requires surface bounds.".to_string())?,
+            )?,
+        )),
+        None if bounds.is_none() => None,
+        None => return Err("A hidden browser cannot have surface bounds.".to_string()),
+    };
+    // Serialize presentation commands even if the renderer sends them during a
+    // rapid tab or layout transition. Never hold the tab map across AppKit callbacks.
+    let mut presented = state
+        .presented_tab
+        .lock()
+        .map_err(|_| "Browser presentation state is unavailable.".to_string())?;
+    if presented.as_deref() != tab_id.as_deref() || target.is_none() {
+        let labels: Vec<String> = state
+            .tabs
+            .lock()
+            .map_err(|_| "Browser state is unavailable.".to_string())?
+            .values()
+            .map(|tab| tab.label.clone())
+            .collect();
+        for label in labels {
+            if let Some(webview) = app.get_webview(&label) {
+                set_browser_view_visible(&webview, false)?;
+            }
+        }
+        *presented = None;
+    }
+    if let Some((label, bounds)) = target {
+        let webview = app
+            .get_webview(&label)
+            .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
+        if let Err(error) = set_browser_view_bounds(&app, &webview, bounds) {
+            let _ = set_browser_view_visible(&webview, false);
+            *presented = None;
+            return Err(error);
+        }
+        if let Err(error) = set_browser_view_visible(&webview, true) {
+            let _ = set_browser_view_visible(&webview, false);
+            *presented = None;
+            return Err(error);
+        }
+        *presented = tab_id;
+    }
+    Ok(())
 }
 
 #[tauri::command]

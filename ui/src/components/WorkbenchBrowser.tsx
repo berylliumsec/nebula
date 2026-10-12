@@ -31,6 +31,7 @@ import type { NebulaDraftRequest } from "../state/WorkbenchDraftContext";
 import { useConfirmation, useDialogOpen } from "./DialogSystem";
 import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
 import { BrowserResearchSuite, type BrowserResearchToolView, type RepeaterDraftStore } from "./BrowserResearchSuite";
+import { BrowserPresentationQueue } from "./BrowserPresentationQueue";
 import { SecurityBrowserWorkspacePanel } from "./SecurityBrowserWorkspacePanel";
 import { waitForBrowserInterceptListener } from "./browserInterceptReadiness";
 
@@ -92,6 +93,9 @@ const MAX_SESSION_TRAFFIC = 500;
 const MAX_SESSION_FRAMES = 1000;
 const CLIPPING_OVERFLOW = new Set(["auto", "clip", "hidden", "scroll"]);
 const ASK_NEBULA_LAYOUT_EVENT = "nebula-ask-nebula-layout";
+const BROWSER_PLACEMENT_ERROR = "The Browser page could not be placed safely. Resize the window or switch tabs to retry.";
+const browserPresentationQueue = new BrowserPresentationQueue((request) =>
+  workbenchBrowser.present(request.projectId, request.tabId, request.bounds));
 
 export function largestUnoccludedBrowserRect(surface: BrowserBounds, occlusions: BrowserBounds[]): BrowserBounds {
   let candidates = [surface];
@@ -196,6 +200,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const [capabilities, setCapabilities] = useState<BrowserCapabilities>();
   const [notice, setNotice] = useState<BrowserNotice>();
   const [error, setError] = useState<string>();
+  const syncNativeBrowserRef = useRef<() => void>(() => undefined);
   useEffect(() => { if (desktop) void desktopDeviceId().then(setDeviceId).catch((caught) => {
     void logCaughtDiagnostic("interface.security_browser.device_identity_unavailable", "The desktop browser identity could not be loaded.", caught, "workbench_browser");
     setError("This desktop's Browser identity is unavailable. Retry after restoring access to the protected app configuration.");
@@ -341,6 +346,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const researchCoversBrowser = researchOpen && compactResearch;
   const browserVisible = desktop && active && !researchCoversBrowser && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
+  const activeTabCreated = activeTab?.id === activeId && activeTab.created;
 
   const bounds = useCallback((): BrowserBounds | undefined => {
     const surface = surfaceRef.current;
@@ -1119,16 +1125,6 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   }, [api, projectId, refreshAutomationStatus]);
 
   useEffect(() => {
-    if (!desktop) return;
-    for (const tab of tabs) {
-      if (!tab.created) continue;
-      void workbenchBrowser.visible(tab.id, projectId, browserVisible && tab.id === activeId).catch((caught) => {
-        void logCaughtDiagnostic("interface.workbench_browser.visibility_failed", "An embedded browser tab could not change visibility.", caught, "workbench_browser");
-      });
-    }
-  }, [activeId, browserVisible, desktop, projectId, tabs]);
-
-  useEffect(() => {
     if (!activeSession || !deviceId || hydratedProjectRef.current !== `${projectId}:${activeSession.id}`) return;
     const durableTabs = tabs.map((tab, position) => {
       const decision = evaluateBrowserScope(tab.url, scope);
@@ -1159,15 +1155,38 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   }, [activeId, activeSession, api, deviceId, projectId, scope, tabs]);
 
   useEffect(() => {
-    if (!desktop || !browserVisible || !activeTab?.created) return;
+    if (!desktop) return;
+    let disposed = false;
     let frame = 0;
+    let layoutTimer = 0;
+    let settleFrame = 0;
+    const hide = () => browserPresentationQueue.request({ projectId, tabId: null, bounds: null }, {
+      onError: (caught) => {
+        void logCaughtDiagnostic("interface.workbench_browser.presentation_failed", "The embedded browser page could not be hidden.", caught, "workbench_browser");
+        if (!disposed) setError(`${BROWSER_PLACEMENT_ERROR} ${errorMessage(caught)}`);
+      },
+    });
+    if (!browserVisible || !activeTabCreated) {
+      syncNativeBrowserRef.current = () => undefined;
+      hide();
+      return () => { disposed = true; };
+    }
     const sync = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
+        if (disposed) return;
         const next = bounds();
-        if (next) void workbenchBrowser.bounds(activeTab.id, projectId, next).catch((caught) => void logCaughtDiagnostic("interface.workbench_browser.bounds_failed", "The embedded browser surface could not be resized.", caught, "workbench_browser"));
+        if (!next) { hide(); return; }
+        browserPresentationQueue.request({ projectId, tabId: activeId, bounds: next }, {
+          onSuccess: () => { if (!disposed) setError((current) => current?.startsWith(BROWSER_PLACEMENT_ERROR) ? undefined : current); },
+          onError: (caught) => {
+            void logCaughtDiagnostic("interface.workbench_browser.presentation_failed", "The embedded browser page could not be placed.", caught, "workbench_browser");
+            if (!disposed) setError(`${BROWSER_PLACEMENT_ERROR} ${errorMessage(caught)}`);
+          },
+        });
       });
     };
+    syncNativeBrowserRef.current = sync;
     const observer = new ResizeObserver(sync);
     if (surfaceRef.current) observer.observe(surfaceRef.current);
     if (toolbarRef.current) observer.observe(toolbarRef.current);
@@ -1179,11 +1198,40 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     }
     window.addEventListener("resize", sync);
     window.addEventListener("scroll", sync, true);
-    window.addEventListener(ASK_NEBULA_LAYOUT_EVENT, sync);
-    window.addEventListener("nebula:ui-zoom", sync);
+    const onLayoutChange = () => {
+      sync();
+      cancelAnimationFrame(settleFrame);
+      settleFrame = requestAnimationFrame(sync);
+      window.clearTimeout(layoutTimer);
+      layoutTimer = window.setTimeout(sync, 120);
+    };
+    window.addEventListener(ASK_NEBULA_LAYOUT_EVENT, onLayoutChange);
+    window.addEventListener("nebula:ui-zoom", onLayoutChange);
     sync();
-    return () => { observer.disconnect(); mutationObserver?.disconnect(); window.removeEventListener("resize", sync); window.removeEventListener("scroll", sync, true); window.removeEventListener(ASK_NEBULA_LAYOUT_EVENT, sync); window.removeEventListener("nebula:ui-zoom", sync); cancelAnimationFrame(frame); };
-  }, [activeTab?.created, activeTab?.id, bounds, browserPanelWidth, browserVisible, capabilities?.projectStorage, desktop, error, notice, projectId, researchOpen, researchPanelWidth, sidebarCollapsed]);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      mutationObserver?.disconnect();
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("scroll", sync, true);
+      window.removeEventListener(ASK_NEBULA_LAYOUT_EVENT, onLayoutChange);
+      window.removeEventListener("nebula:ui-zoom", onLayoutChange);
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(settleFrame);
+      window.clearTimeout(layoutTimer);
+      syncNativeBrowserRef.current = () => undefined;
+      hide();
+    };
+  }, [activeId, activeTabCreated, bounds, browserVisible, desktop, projectId]);
+
+  // ResizeObserver reports size changes but can miss position-only movement.
+  // Re-measure after layout choices that move the Browser slot, across the
+  // transition frames just as a native view attach does after a pane reflow.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => syncNativeBrowserRef.current());
+    const timer = window.setTimeout(() => syncNativeBrowserRef.current(), 120);
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, [browserPanelWidth, researchOpen, researchPanelWidth, sidebarCollapsed, error, notice]);
 
   useEffect(() => () => {
     for (const tab of tabsRef.current) if (tab.created) void workbenchBrowser.close(tab.id, projectId).catch((caught) => {

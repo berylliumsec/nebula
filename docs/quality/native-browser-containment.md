@@ -1,5 +1,28 @@
 # Native browser containment
 
+## Presentation refactor contract
+
+The operator opens Native browser, enters an in-scope URL, switches tabs, changes
+the Assistant/sidebar/research layout, and returns after a blocking overlay or
+reload. The selected page must become visible only after its current DOM slot has
+been measured and its native bounds applied. Hidden or stale tabs must not draw or
+receive input. A failed placement leaves the page hidden and reports a diagnostic;
+the next layout event can retry. Core owns durable tab and scope records, React
+owns the selected tab and measured slot, and Tauri owns the single native
+hide/resize/show transaction. Browser storage remains tied to the selected
+research identity. Create, use, tab switch, resize, hide/show, refresh, failure,
+retry, and close are required lifecycle steps. Streaming and deletion are not
+part of this presentation change.
+
+The refactor keeps the Tauri/WKWebView runtime and its security and automation
+paths. It follows Browser Use Desktop's measured-slot-before-native-attach
+sequence: one native presentation command hides old tabs, applies the current
+rectangle, then shows the selected tab. A renderer queue coalesces fast resize
+requests without dropping a hide before a later show. Focused component tests
+cover those transitions; selected desktop Playwright cases cover the Browser
+entry point and DOM measurements; Rust tests and macOS CI cover native
+compilation. Only a real Mac render and input check can accept the visual result.
+
 ## Operator contract
 
 Entry: Workbench → Project browser → Native browser → open an in-scope page.
@@ -129,3 +152,12 @@ cannot serve as a general arbitrary-site replacement. Sources:
 [Cline screenshot panel](https://github.com/cline/cline/blob/a48408909bf9b2ff7f620d420be8547fb509e8ed/apps/vscode/webview-ui/src/components/chat/BrowserSessionRow.tsx#L140-L186),
 [VS Code Simple Browser](https://github.com/microsoft/vscode/blob/72b3e1558739d58ace9bcb200578d4508c7c00d5/extensions/simple-browser/src/simpleBrowserView.ts#L143-L170),
 [AppKit coordinates](https://developer.apple.com/documentation/appkit/nsview/convert%28_%3Ato%3A%29-3cqqt).
+
+### Complete browser-path comparison
+
+| Harness | Browser and presentation | Agent control | What its source establishes |
+| --- | --- | --- | --- |
+| Browser Use Desktop | Electron `WebContentsView` for each session; renderer measures its pane and main process sets bounds before attaching and updates them on layout changes. | The same `webContents` is connected to the session's CDP-enabled browser harness. | One visible view and one agent target share a session; native bounds and visibility have an explicit owner. [Pane](https://github.com/browser-use/desktop/blob/f073b7574f7927185ebbebd87556391d5cb0cfd1/app/src/renderer/hub/AgentPane.tsx#L722-L925), [view pool](https://github.com/browser-use/desktop/blob/f073b7574f7927185ebbebd87556391d5cb0cfd1/app/src/main/sessions/BrowserPool.ts#L619-L725) |
+| Hermes Desktop preview | Electron `<webview>` guest sits inside the renderer's flex layout after the preview bar. | `drive_preview` reads from and sends input to that guest. Generic `browser_exec` uses a separate Chromium/CDP path. | The preview's layout belongs to the renderer; preview automation targets that same guest. [Preview pane](https://github.com/NousResearch/hermes-agent/blob/0e161737d2a5982a481d2d340434f9eac25d9f10/apps/desktop/src/app/chat/right-rail/preview-pane.tsx#L1107-L1145), [layout](https://github.com/NousResearch/hermes-agent/blob/0e161737d2a5982a481d2d340434f9eac25d9f10/apps/desktop/src/app/chat/right-rail/preview-pane.tsx#L1440-L1535), [input path](https://github.com/NousResearch/hermes-agent/blob/0e161737d2a5982a481d2d340434f9eac25d9f10/apps/desktop/src/app/chat/right-rail/preview-pane.tsx#L836-L919) |
+| Codex and Claude desktop | Their public product docs describe in-app browsers and agent interaction. | Published behavior includes browsing and page interaction. | Desktop native compositing code is not public in the checked repositories, so no internal embedding pattern is inferred. [Codex](https://learn.chatgpt.com/docs/browser?surface=app), [Claude](https://support.claude.com/en/articles/16607400-use-the-built-in-browser-in-claude-cowork) |
+| Nebula | Tauri child WKWebView is native sibling of the React webview. React measures the pane; AppKit reparents the child into an `NSClipView` and converts the rectangle into the native parent. | Native commands evaluate JavaScript and control the same visible WKWebView; Core `browserd` is a separate Playwright runtime. | The DOM-to-AppKit geometry boundary remains the unverified difference. The presentation refactor orders bounds, visibility, and tab selection but cannot prove that the converted frame matches the affected Mac's rendered page. |

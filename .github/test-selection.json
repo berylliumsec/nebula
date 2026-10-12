@@ -1,23 +1,29 @@
 {
-  "change_digest": "7cf7ea82034c58c4a1adf095ba6b3c5beebcb78ab3e4ea74599866e62e24ed4d",
-  "reviewed_by": "Codex focused review for macOS native Browser containment",
-  "reason": "The changed journey is the macOS native Browser page inside its visible surface, including resize and Text size. Two exact Rust cases cover main-webview frame coordinates and CSS-to-AppKit zoom conversion. The selected desktop Browser journey covers creating a tab, native bounds updates, resizing, sidebar and research panels, and hiding or revealing the page. macOS CI compiles the AppKit conversion from the main WKWebView to Wry's parent and runs the selected native cases.",
-  "exclusions": "No Python or frontend source or server state changed, so Python and component tests are excluded. Mobile clients use the separate web-browser fallback; no mobile behavior changed. Real-Core persistence and non-loopback origin behavior are unchanged. The mocked desktop browser and Linux Rust tests cannot prove macOS WKWebView compositing; a rebuilt Mac app visual and input check is still required before claiming full acceptance. Unrelated suites are excluded.",
+  "change_digest": "7bb624034ee234c81c286edf640cd87f128e12e39f27a380d6c5a6b078629d9a",
+  "reviewed_by": "Codex focused review for ordered native Browser presentation",
+  "reason": "The changed journey is opening and switching native Browser tabs while the Browser slot moves. The two selected component files cover asynchronous presentation ordering, the hide-before-show barrier, and Workbench Browser create, hide, restore, placement failure, and retry behavior. Three exact Rust cases cover bounds validation and macOS frame math; macOS CI compiles the native presentation command. The selected Browser catalog entries cover desktop mocked native placement and emulated mobile Chromium/WebKit fallback layouts.",
+  "exclusions": "No Python or Core browser engine state changed, so Python tests and real-Core Playwright are excluded. LAN-origin behavior is unchanged. The desktop Playwright Tauri mock and Linux Rust tests cannot prove macOS WKWebView compositing; a rebuilt Mac app visual and input check is required before claiming native containment. Physical mobile devices are unavailable; selected mobile browser projects are emulated. Unrelated suites are excluded.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
-    "native": 2,
-    "playwright": 9
+    "frontend": 35,
+    "native": 3,
+    "playwright": 23
   },
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/BrowserPresentationQueue.test.ts",
+    "ui/src/components/WorkbenchBrowser.test.tsx"
+  ],
   "native": [
+    "browser::tests::bounds_reject_negative_or_unbounded_surfaces",
     "browser::tests::macos_browser_frame_uses_the_main_webview_coordinate_space",
     "browser::tests::macos_browser_frame_scales_css_pixels_after_webview_zoom"
   ],
   "playwright": [
-    "entry:browser-complete/desktop"
+    "entry:browser-complete/desktop",
+    "entry:browser-complete/mobile-chromium-small",
+    "entry:browser-complete/mobile-webkit-wide"
   ]
 }

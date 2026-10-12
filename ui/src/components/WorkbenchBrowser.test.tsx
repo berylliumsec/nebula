@@ -15,7 +15,6 @@ const runtimeMocks = vi.hoisted(() => ({
 
 const browserMocks = vi.hoisted(() => ({
   applyProxyScope: vi.fn(),
-  bounds: vi.fn(),
   capabilities: vi.fn(),
   captureContext: vi.fn(),
   clear: vi.fn(),
@@ -26,11 +25,11 @@ const browserMocks = vi.hoisted(() => ({
   discardDownload: vi.fn(),
   importDownload: vi.fn(),
   navigate: vi.fn(),
+  present: vi.fn(),
   proxyCaStatus: vi.fn(),
   revealProxyCa: vi.fn(),
   rotateProxyCa: vi.fn(),
   revokeProxyCa: vi.fn(),
-  visible: vi.fn(),
 }));
 
 type EventHandler = (event: { payload: unknown }) => void;
@@ -232,6 +231,38 @@ describe("WorkbenchBrowser", () => {
     expect(browserMocks.create.mock.calls[0][10]).toEqual(fresh);
   });
 
+  it("presents a new native tab only after creation with a measured surface", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, this.classList.contains("browser-surface") ? 96 : 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    renderBrowser();
+    await openPage();
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+    await waitFor(() => expect(browserMocks.present).toHaveBeenCalledWith("project-1", tabId, expect.objectContaining({ y: 96 })));
+    const firstShow = browserMocks.present.mock.calls.findIndex(([, id]) => id === tabId);
+    expect(firstShow).toBeGreaterThanOrEqual(0);
+    expect(browserMocks.create.mock.invocationCallOrder[0]).toBeLessThan(browserMocks.present.mock.invocationCallOrder[firstShow]);
+  });
+
+  it("reports a failed native placement and clears it after a layout retry", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, this.classList.contains("browser-surface") ? 96 : 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    let failed = false;
+    browserMocks.present.mockImplementation(async (_projectId: string, tabId: string | null) => {
+      if (tabId && !failed) { failed = true; throw new Error("Native frame unavailable"); }
+    });
+    renderBrowser();
+    await openPage();
+    await waitFor(() => expect(screen.getByText(/The Browser page could not be placed safely/)).toBeInTheDocument());
+
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => expect(screen.queryByText(/The Browser page could not be placed safely/)).not.toBeInTheDocument());
+    expect(browserMocks.present.mock.calls.filter(([, tabId]) => tabId).length).toBeGreaterThanOrEqual(2);
+  });
+
   it("opens an assistant link in the scoped native browser after the durable session loads", async () => {
     runtimeMocks.isTauriRuntime.mockReturnValue(true);
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
@@ -368,19 +399,20 @@ describe("WorkbenchBrowser", () => {
     });
     renderBrowser();
     await openPage();
-    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(expect.any(String), "project-1", true));
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+    await waitFor(() => expect(browserMocks.present).toHaveBeenLastCalledWith("project-1", tabId, expect.any(Object)));
 
     chrome.settingLensOpen = true;
     fireEvent.change(screen.getByLabelText("Address or search"), {
       target: { value: "https://docs.example.com/hidden" },
     });
-    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(expect.any(String), "project-1", false));
+    await waitFor(() => expect(browserMocks.present).toHaveBeenLastCalledWith("project-1", null, null));
 
     chrome.settingLensOpen = false;
     fireEvent.change(screen.getByLabelText("Address or search"), {
       target: { value: "https://docs.example.com/restored" },
     });
-    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(expect.any(String), "project-1", true));
+    await waitFor(() => expect(browserMocks.present).toHaveBeenLastCalledWith("project-1", tabId, expect.any(Object)));
   });
 
   it("opens web addresses externally and can add them directly to Project Sources", async () => {
@@ -468,13 +500,13 @@ describe("WorkbenchBrowser", () => {
     renderBrowser();
     await openPage();
     const tabId = browserMocks.create.mock.calls[0][0] as string;
-    await waitFor(() => expect(browserMocks.visible).toHaveBeenCalledWith(tabId, "project-1", true));
+    await waitFor(() => expect(browserMocks.present).toHaveBeenCalledWith("project-1", tabId, expect.any(Object)));
 
     fireEvent.click(screen.getByRole("button", { name: "Open blocking surface" }));
-    await waitFor(() => expect(browserMocks.visible).toHaveBeenCalledWith(tabId, "project-1", false));
+    await waitFor(() => expect(browserMocks.present).toHaveBeenLastCalledWith("project-1", null, null));
 
     fireEvent.click(screen.getByRole("button", { name: "Close blocking surface" }));
-    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(tabId, "project-1", true));
+    await waitFor(() => expect(browserMocks.present).toHaveBeenLastCalledWith("project-1", tabId, expect.any(Object)));
   });
 
   it("adds the final URL of the current page to Project Sources and links to it", async () => {
