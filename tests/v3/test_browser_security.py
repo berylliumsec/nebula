@@ -1,4 +1,7 @@
 import base64
+from itertools import product
+
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -505,3 +508,58 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
     )
     assert stored.redacted is True
     assert b"do-not-store" not in ArtifactStore(tmp_path / "artifacts").read(stored)
+
+
+@pytest.mark.parametrize(
+    ("capture_mode", "proxy_enabled", "interception_enabled", "upstream_enabled"),
+    list(
+        product(
+            ("metadata", "headers", "bodies"),
+            (False, True),
+            (False, True),
+            (False, True),
+        )
+    ),
+)
+def test_browser_capture_settings_matrix(
+    tmp_path, capture_mode, proxy_enabled, interception_enabled, upstream_enabled
+):
+    """Every stored capture combination has one coherent visible/transport state."""
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(create_app(store, auth_token="test-token"))
+    project, _ = _project(client, store)
+    _, session = _synced_session(client, project)
+    before = store.get(BrowserSession, session["id"]).model_dump()
+    response = client.put(
+        f"/api/v1/browser-sessions/{session['id']}/capture-settings",
+        headers=_auth(),
+        json={
+            "expected_revision": session["revision"],
+            "capture_mode": capture_mode,
+            "proxy_enabled": proxy_enabled,
+            "trust_acknowledged": proxy_enabled,
+            "interception_enabled": interception_enabled,
+            "upstream_proxy_enabled": upstream_enabled,
+            "upstream_proxy_url": "http://proxy.example.test:8080"
+            if upstream_enabled
+            else None,
+        },
+    )
+    if interception_enabled and not proxy_enabled:
+        assert response.status_code == 422, response.text
+        assert "interception requires" in response.json()["detail"]
+        assert store.get(BrowserSession, session["id"]).model_dump() == before
+    else:
+        assert response.status_code == 200, response.text
+        saved = response.json()
+        persisted = next(
+            item
+            for item in _workspace(client, project)["sessions"]
+            if item["id"] == session["id"]
+        )
+        for snapshot in (saved, persisted):
+            assert snapshot["capture_mode"] == capture_mode
+            assert snapshot["proxy_enabled"] is proxy_enabled
+            assert snapshot["interception_enabled"] is interception_enabled
+            assert snapshot["upstream_proxy_enabled"] is upstream_enabled
+            assert snapshot["proxy_trust_acknowledged"] is proxy_enabled

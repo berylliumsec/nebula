@@ -644,16 +644,6 @@ fn child_size(bounds: &BrowserBounds) -> LogicalSize<f64> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn inset_browser_bounds(mut bounds: BrowserBounds, top_inset: f64) -> BrowserBounds {
-    let inset = top_inset
-        .clamp(0.0, 96.0)
-        .min((bounds.height - 1.0).max(0.0));
-    bounds.y += inset;
-    bounds.height -= inset;
-    bounds
-}
-
-#[cfg(any(target_os = "macos", test))]
 fn appkit_child_y(
     parent_origin_y: f64,
     parent_height: f64,
@@ -671,10 +661,8 @@ fn appkit_child_y(
 #[cfg(target_os = "macos")]
 fn appkit_browser_frame(parent: &NSView, bounds: &BrowserBounds) -> NSRect {
     let parent_bounds = parent.bounds();
-    // Full-size-content windows place the WKWebView beneath the title bar while WebKit's DOM
-    // viewport begins at the unobscured safe-area origin. Window inner/outer positions do not
-    // describe this offset and are commonly identical in Tauri.
-    let bounds = inset_browser_bounds(*bounds, parent.safeAreaInsets().top);
+    // The DOM coordinates already begin at the visible main WKWebView origin. Applying
+    // safeAreaInsets here a second time leaves a title-bar-sized gap above the page.
     NSRect::new(
         NSPoint::new(
             parent_bounds.origin.x + bounds.x,
@@ -743,6 +731,9 @@ fn install_macos_browser_container<R: tauri::Runtime>(
                     appkit_browser_frame(parent, &bounds),
                 );
                 container.setWantsLayer(true);
+                // A layer mask alone does not constrain WKWebView drawing on newer macOS.
+                // AppKit's view clipping also keeps the child inside this native frame.
+                container.setClipsToBounds(true);
                 let layer = container
                     .layer()
                     .ok_or_else(|| "The browser clipping layer is unavailable.".to_string())?;
@@ -2812,22 +2803,6 @@ mod tests {
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, true), 120.0);
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, false), 180.0);
         assert_eq!(appkit_child_y(12.0, 900.0, 120.0, 600.0, false), 192.0);
-    }
-
-    #[test]
-    fn macos_safe_area_offset_keeps_the_browser_bottom_fixed() {
-        let bounds = inset_browser_bounds(
-            BrowserBounds {
-                x: 20.0,
-                y: 100.0,
-                width: 900.0,
-                height: 600.0,
-            },
-            28.0,
-        );
-        assert_eq!(bounds.y, 128.0);
-        assert_eq!(bounds.height, 572.0);
-        assert_eq!(bounds.y + bounds.height, 700.0);
     }
 
     #[test]

@@ -1,8 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { useState } from "react";
-import type { EngagementScopePolicy } from "../api/types";
+import type { EngagementScopePolicy, SecurityBrowserSession } from "../api/types";
 import type { ApiClient } from "../api/client";
 import { ChromeProvider, type ChromeContextValue } from "../state/ChromeContext";
 import { DialogProvider, useDialogPresence } from "./DialogSystem";
@@ -20,11 +20,16 @@ const browserMocks = vi.hoisted(() => ({
   captureContext: vi.fn(),
   clear: vi.fn(),
   close: vi.fn(),
+  configureProxy: vi.fn(),
   control: vi.fn(),
   create: vi.fn(),
   discardDownload: vi.fn(),
   importDownload: vi.fn(),
   navigate: vi.fn(),
+  proxyCaStatus: vi.fn(),
+  revealProxyCa: vi.fn(),
+  rotateProxyCa: vi.fn(),
+  revokeProxyCa: vi.fn(),
   visible: vi.fn(),
 }));
 
@@ -650,6 +655,109 @@ describe("WorkbenchBrowser", () => {
       maxToolCalls: 100,
       browserAutonomy: { durationSeconds: 240, maxCommands: 100, maxRequests: 250 },
     });
+  });
+
+  it("keeps interception off when enabling capture and explains a saved native setting failure", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    browserMocks.capabilities.mockResolvedValue({ engine: "test-webview", projectStorage: "persistent", interceptionProxy: true });
+    browserMocks.proxyCaStatus.mockResolvedValue({ certificatePath: "/tmp/project-ca.pem", fingerprint: "test-fingerprint", state: "generated" });
+    browserMocks.revealProxyCa.mockResolvedValue("/tmp/project-ca.pem");
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    const api = browserApi();
+    const initial = await api.getSecurityBrowserWorkspace("project-1");
+    let snapshot: Awaited<ReturnType<ApiClient["getSecurityBrowserWorkspace"]>> = { ...initial, sessions: [{ ...initial.sessions[0], interceptionEnabled: true }] };
+    api.getSecurityBrowserWorkspace = vi.fn(async () => snapshot);
+    api.getSecurityBrowserAssessments = vi.fn(async () => ({ assessments: [], steps: [], profiles: [], engines: [], candidates: [], validationGrants: [] }));
+    const update = vi.fn(async (_session: SecurityBrowserSession, request: Parameters<ApiClient["updateSecurityBrowserCapture"]>[1]) => {
+      const current = snapshot.sessions[0];
+      const changed: SecurityBrowserSession = { ...current, captureMode: request.captureMode, proxyEnabled: request.proxyEnabled,
+        proxyTrustAcknowledged: request.trustAcknowledged ?? current.proxyTrustAcknowledged, interceptionEnabled: request.interceptionEnabled,
+        upstreamProxyEnabled: request.upstreamProxyEnabled, upstreamProxyUrl: request.upstreamProxyUrl,
+        upstreamProxyCredentialRef: request.upstreamProxyCredentialRef,
+        revision: current.revision + 1 };
+      snapshot = { ...snapshot, sessions: [changed] };
+      return changed;
+    });
+    api.updateSecurityBrowserCapture = update as ApiClient["updateSecurityBrowserCapture"];
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    fireEvent.click(await screen.findByRole("button", { name: "Security research workbench" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Session" }));
+    expect(await screen.findByText("An older saved interception setting is inactive. Changing capture detail clears it.")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Capture detail"), { target: { value: "metadata" } });
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ proxyEnabled: false, interceptionEnabled: false })));
+    await waitFor(() => expect(screen.queryByText("An older saved interception setting is inactive. Changing capture detail clears it.")).toBeNull());
+    fireEvent.click(await screen.findByRole("button", { name: "I trust the CA · enable capture proxy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "CA is trusted · enable" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ proxyEnabled: true, interceptionEnabled: false })));
+    expect(await screen.findByText("Capture proxy: On · Interception: Off")).toBeVisible();
+
+    browserMocks.configureProxy.mockRejectedValueOnce(new Error("native connector unavailable"));
+    fireEvent.change(screen.getByLabelText("Capture detail"), { target: { value: "bodies" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Capture detail was saved, but the native proxy could not apply it: native connector unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.getByLabelText("Capture detail")).toHaveValue("bodies"));
+
+    for (const action of ["Rotate", "Revoke"] as const) {
+      update.mockRejectedValueOnce(new Error("Core unavailable"));
+      fireEvent.click(screen.getByRole("button", { name: action }));
+      fireEvent.click(await screen.findByRole("button", { name: `${action} CA` }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Core unavailable");
+      expect(browserMocks.rotateProxyCa).not.toHaveBeenCalled();
+      expect(browserMocks.revokeProxyCa).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() => expect(screen.getByText("Capture proxy: On · Interception: Off")).toBeVisible());
+    }
+
+  });
+
+  it("restores native interception when Core rejects it and reconciles a saved upstream failure", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    browserMocks.capabilities.mockResolvedValue({ engine: "test-webview", projectStorage: "persistent", interceptionProxy: true });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    const api = browserApi();
+    const initial = await api.getSecurityBrowserWorkspace("project-1");
+    let snapshot: Awaited<ReturnType<ApiClient["getSecurityBrowserWorkspace"]>> = { ...initial, sessions: [{
+      ...initial.sessions[0], proxyEnabled: true, proxyTrustAcknowledged: true,
+    }] };
+    api.getSecurityBrowserWorkspace = vi.fn(async () => snapshot);
+    api.getSecurityBrowserAssessments = vi.fn(async () => ({ assessments: [], steps: [], profiles: [], engines: [], candidates: [], validationGrants: [] }));
+    const update = vi.fn(async (_session: SecurityBrowserSession, request: Parameters<ApiClient["updateSecurityBrowserCapture"]>[1]) => {
+      const current = snapshot.sessions[0];
+      const changed: SecurityBrowserSession = { ...current, captureMode: request.captureMode, proxyEnabled: request.proxyEnabled,
+        proxyTrustAcknowledged: request.trustAcknowledged ?? current.proxyTrustAcknowledged, interceptionEnabled: request.interceptionEnabled,
+        upstreamProxyEnabled: request.upstreamProxyEnabled, upstreamProxyUrl: request.upstreamProxyUrl,
+        upstreamProxyCredentialRef: request.upstreamProxyCredentialRef, revision: current.revision + 1 };
+      snapshot = { ...snapshot, sessions: [changed] };
+      return changed;
+    });
+    api.updateSecurityBrowserCapture = update as ApiClient["updateSecurityBrowserCapture"];
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    fireEvent.click(await screen.findByRole("button", { name: "Security research workbench" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Session" }));
+    await screen.findByText("Capture proxy: On · Interception: Off");
+
+    browserMocks.configureProxy.mockClear();
+    update.mockRejectedValueOnce(new Error("Core unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "Enable interception" }));
+    const approval = await screen.findByRole("dialog", { name: "Pause every in-scope request?" });
+    fireEvent.click(within(approval).getByRole("button", { name: "Enable interception" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The previous interception setting was restored");
+    await waitFor(() => expect(browserMocks.configureProxy).toHaveBeenCalledTimes(2));
+    expect(browserMocks.configureProxy.mock.calls.map((call) => call[4])).toEqual([true, false]);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Capture proxy: On · Interception: Off");
+
+    fireEvent.click(screen.getByText("Protected upstream proxy"));
+    fireEvent.click(screen.getByLabelText("Chain in-scope traffic through an upstream proxy"));
+    fireEvent.change(screen.getByLabelText("Proxy URL"), { target: { value: "http://proxy.example:8080" } });
+    browserMocks.configureProxy.mockRejectedValueOnce(new Error("upstream connector unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply upstream settings" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Upstream settings were saved, but the native proxy could not apply them: upstream connector unavailable");
+    expect(update).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ upstreamProxyEnabled: true, upstreamProxyUrl: "http://proxy.example:8080" }));
   });
 
   it("answers a native page selection inline and continues the same durable conversation", async () => {

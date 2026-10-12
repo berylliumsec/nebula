@@ -129,12 +129,13 @@ function api(snapshot = workspace()): ApiClient {
   } as unknown as ApiClient;
 }
 
-function renderPanel(client: ApiClient, desktop = true, entry = "/project?view=browser&tool=traffic") {
+function renderPanel(client: ApiClient, desktop = true, entry = "/project?view=browser&tool=traffic", compact = false) {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <DialogProvider>
         <SecurityBrowserWorkspacePanel
           api={client}
+          compact={compact}
           desktop={desktop}
           projectId="project-1"
           identity={identity}
@@ -175,6 +176,12 @@ function assessmentWorkspace(): SecurityBrowserAssessmentWorkspace {
 
 describe("SecurityBrowserWorkspacePanel", () => {
   beforeEach(() => { vi.restoreAllMocks(); streams.opened = 0; });
+
+  it("uses the browser panel width to disable side resizing when research fills the browser", () => {
+    renderPanel(api(), true, "/project?view=browser&tool=traffic", true);
+    expect(screen.queryByRole("separator", { name: "Resize Security Browser workspace" })).toBeNull();
+    expect(screen.getByText("Traffic tool content")).toBeVisible();
+  });
 
   it("walks a new operator through all five preflight decisions before creating", async () => {
     const client = api();
