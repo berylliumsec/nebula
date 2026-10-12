@@ -45,6 +45,8 @@ async def _server(app, host: str = "127.0.0.1"):
 
 async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
     from nebula.v3.api import create_app
+    from nebula.v3.browser_host_proxy import BrowserHostProxy
+    from nebula.v3.browser_security import BrowserSecurityService
     from nebula.v3.browserd import (
         BrowserdManager,
         BrowserdSettings,
@@ -54,6 +56,7 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
         BrowserIdentity,
         BrowserSession,
         Engagement,
+        RiskClass,
         ScopePolicy,
     )
     from nebula.v3.storage import NebulaStore
@@ -68,8 +71,16 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
         )
 
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(runtime_root)
-    proxy = await asyncio.start_server(_respond_as_bounded_proxy, "127.0.0.1", 0)
+    captured_requests: list[bytes] = []
+
+    async def capture_fixture(reader, writer):
+        await _respond_as_bounded_proxy(
+            reader, writer, observed_requests=captured_requests
+        )
+
+    proxy = await asyncio.start_server(capture_fixture, "127.0.0.1", 0)
     proxy_port = proxy.sockets[0].getsockname()[1]
+    scope_proxy: BrowserHostProxy | None = None
     browser_server = core_server = None
     browser_task = core_task = None
     old_url, old_token = (
@@ -81,14 +92,42 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
             prefix="nebula-operator-browser-"
         ) as directory:
             root = Path(directory)
+            store = NebulaStore(root / "core.db")
+            project = store.create(Engagement(name="Operator browser fixture"))
+            scope = store.create(
+                ScopePolicy(
+                    engagement_id=project.id,
+                    allowed_domains=["browserd-smoke.example.test"],
+                )
+            )
+            store.update(Engagement, project.id, {"scope_policy_id": scope.id})
+            security = BrowserSecurityService(store)
+
+            def authorize(destination: str) -> None:
+                security._require_in_scope(
+                    security._scope(project.id),
+                    destination,
+                    "browser.navigate",
+                    RiskClass.PASSIVE,
+                )
+
+            scope_proxy = BrowserHostProxy(
+                authorize, capture_proxy=("127.0.0.1", proxy_port)
+            )
+            scope_proxy_config = await scope_proxy.start()
+
+            async def proxy_for_identity(_identity_id: str) -> dict[str, str]:
+                return scope_proxy_config
+
             settings = BrowserdSettings(
                 token=secrets.token_urlsafe(32),
                 profile_root=root / "profiles",
-                policy_proxy_url=f"http://127.0.0.1:{proxy_port}",
+                policy_proxy_url=scope_proxy_config["server"],
                 runtime_root=runtime_root,
             )
             manager = BrowserdManager(
                 settings,
+                proxy_for_identity=proxy_for_identity,
                 headless_for_identity=lambda identity_id: (
                     store.get(BrowserIdentity, identity_id).metadata.get(
                         "browser_surface"
@@ -101,15 +140,6 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
             )
             os.environ["NEBULA_BROWSERD_URL"] = f"http://127.0.0.1:{browser_port}"
             os.environ["NEBULA_BROWSERD_TOKEN"] = settings.token
-            store = NebulaStore(root / "core.db")
-            project = store.create(Engagement(name="Operator browser fixture"))
-            scope = store.create(
-                ScopePolicy(
-                    engagement_id=project.id,
-                    allowed_domains=["browserd-smoke.example.test"],
-                )
-            )
-            store.update(Engagement, project.id, {"scope_policy_id": scope.id})
             token = secrets.token_urlsafe(32)
             dist = Path(__file__).resolve().parents[1] / "ui" / "dist"
             if not (dist / "index.html").is_file():
@@ -234,6 +264,14 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
                             )
 
                         assert "Ready" in (await capture())["text"]
+                        assert any(
+                            request.startswith(
+                                b"GET http://browserd-smoke.example.test/ HTTP/1.1"
+                            )
+                            for request in captured_requests
+                        ), (
+                            "Chromium did not reach the capture listener through Core scope"
+                        )
                         identity_id = store.get(BrowserSession, session_id).identity_id
                         live_page = await manager.page_for_screencast(
                             identity_id, tab_id
@@ -339,6 +377,8 @@ async def smoke(runtime_root: Path, origin_host: str, evidence: Path) -> None:
         if browser_server:
             browser_server.should_exit = True
             await asyncio.wait_for(browser_task, 15)
+        if scope_proxy is not None:
+            await scope_proxy.close()
         proxy.close()
         await proxy.wait_closed()
         if old_url is None:
