@@ -86,7 +86,19 @@ bounds to AppKit points when Text size differs from 100%.
 
 An independent macOS 27.2 AppKit probe confirmed that `NSClipView.documentVisibleRect`
 and its oversized WKWebView's `visibleRect` remain limited to the clip frame after
-resizing. This probe is not a Nebula visual acceptance result. The affected Mac
-development app still needs the real Browser journey repeated at 100% and a
-nondefault Text size, including resize, tab switching, hide/show, and input at the
-clipped edge before native containment can be called verified.
+resizing. This probe is not a Nebula visual acceptance result. In the affected
+Mac development app at `579ff9ec`, the white page still covers part of the URL
+field, both with and without Assistant open. That build attached the clip to
+Nebula's main WKWebView, although Wry created the browser tab beside it in the
+window's native content view. The follow-up keeps the clip under that original
+parent and checks both webviews share it before showing the page. Its placement
+remains a hypothesis until the operator tests the rebuilt Mac app.
+
+For this follow-up, the two exact Rust frame tests passed, all nine selected
+desktop Chromium Browser cases passed against this worktree's development server
+on a dedicated port, and the production UI bundle built. These tests exercise DOM
+bounds and native command dispatch, but cannot observe AppKit's rendered page.
+
+Repeat the real Browser journey at 100% and a nondefault Text size, including
+resize, Assistant open/closed, tab switching, hide/show, and input at each clipped
+edge before native containment can be called verified.

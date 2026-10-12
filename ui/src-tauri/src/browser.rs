@@ -671,14 +671,11 @@ fn appkit_scaled_bounds(bounds: BrowserBounds, page_zoom: f64) -> BrowserBounds 
 }
 
 #[cfg(target_os = "macos")]
-fn appkit_browser_frame(parent: &NSView, bounds: &BrowserBounds) -> NSRect {
+fn appkit_browser_frame(parent: &NSView, bounds: &BrowserBounds, page_zoom: f64) -> NSRect {
     let parent_bounds = parent.bounds();
-    // SAFETY: Both call sites obtain `parent` from Nebula's main WKWebView. Wry
-    // changes its pageZoom for Text size, leaving its AppKit bounds unchanged.
-    let page_zoom: f64 = unsafe { objc2::msg_send![parent, pageZoom] };
     let bounds = appkit_scaled_bounds(*bounds, page_zoom);
-    // The DOM coordinates already begin at the visible main WKWebView origin. Applying
-    // safeAreaInsets here a second time leaves a title-bar-sized gap above the page.
+    // Use Wry's original child parent: the main WKWebView can have a different
+    // origin inside that parent, even though DOM bounds begin at the viewport.
     NSRect::new(
         NSPoint::new(
             parent_bounds.origin.x + bounds.x,
@@ -705,8 +702,8 @@ fn wait_for_native_browser_result(
 
 // Child WKWebViews created by Tauri are siblings of the main application WKWebView. AppKit
 // composites those native siblings above the DOM, so CSS overflow cannot stop a page from
-// covering Nebula's address bar. Reparent the page beneath an NSClipView attached
-// to the main WKWebView so AppKit owns the document-view clipping boundary.
+// covering Nebula's address bar. Keep the clipping view in the child's original
+// Wry parent coordinate space and make the child its document view.
 #[cfg(target_os = "macos")]
 fn install_macos_browser_container<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -741,9 +738,23 @@ fn install_macos_browser_container<R: tauri::Runtime>(
                     );
                 }
 
+                // Wry places the child under the window's native content view. The main
+                // WKWebView is another child of that view, not the coordinate authority
+                // for Wry's initial frame. Preserve the native parent when clipping.
+                let root = unsafe { child.superview() }
+                    .ok_or_else(|| "The browser native parent is unavailable.".to_string())?;
+                let main_root = unsafe { parent.superview() }
+                    .ok_or_else(|| "The Nebula native parent is unavailable.".to_string())?;
+                if !std::ptr::eq(&*root, &*main_root) {
+                    return Err(
+                        "The browser and Nebula views have different native parents.".to_string(),
+                    );
+                }
+                // SAFETY: `parent` is Nebula's main WKWebView on the AppKit main thread.
+                let page_zoom: f64 = unsafe { objc2::msg_send![parent, pageZoom] };
                 let container = NSClipView::initWithFrame(
                     NSClipView::alloc(marker),
-                    appkit_browser_frame(parent, &bounds),
+                    appkit_browser_frame(&root, &bounds, page_zoom),
                 );
                 container.setWantsLayer(true);
                 container.setDrawsBackground(false);
@@ -755,7 +766,7 @@ fn install_macos_browser_container<R: tauri::Runtime>(
                 container.setAutoresizesSubviews(false);
                 container.setHidden(true);
 
-                parent.addSubview(&container);
+                root.addSubview(&container);
                 // NSClipView retains its document view and applies a native clip to it.
                 child.removeFromSuperview();
                 container.setDocumentView(Some(child));
@@ -813,17 +824,41 @@ where
 
 #[cfg(target_os = "macos")]
 fn resize_macos_browser_container<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     browser: &tauri::Webview<R>,
     bounds: BrowserBounds,
 ) -> Result<(), String> {
-    with_macos_browser_container(browser, move |container, child| {
-        // SAFETY: The clipping container remains attached to Nebula's main WKWebView.
-        let parent = unsafe { container.superview() }
-            .ok_or_else(|| "The Nebula browser surface is unavailable.".to_string())?;
-        container.setFrame(appkit_browser_frame(&parent, &bounds));
-        child.setFrame(container.bounds());
-        Ok(())
+    let main = app
+        .get_webview("main")
+        .ok_or_else(|| "The Nebula webview is unavailable.".to_string())?;
+    let browser = browser.clone();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    main.with_webview(move |main_native| {
+        // SAFETY: Tauri supplies the live main WKWebView on the AppKit main thread.
+        let main: &NSView = unsafe { &*main_native.inner().cast::<NSView>() };
+        let page_zoom: f64 = unsafe { objc2::msg_send![main, pageZoom] };
+        let callback_sender = sender.clone();
+        if let Err(error) = browser.with_webview(move |browser_native| {
+            // SAFETY: Tauri supplies the live child WKWebView on the AppKit main thread.
+            let child: &NSView = unsafe { &*browser_native.inner().cast::<NSView>() };
+            let result = (|| {
+                let container = unsafe { child.superview() }
+                    .ok_or_else(|| "The browser clipping container is unavailable.".to_string())?;
+                let root = unsafe { container.superview() }
+                    .ok_or_else(|| "The Nebula browser surface is unavailable.".to_string())?;
+                container.setFrame(appkit_browser_frame(&root, &bounds, page_zoom));
+                child.setFrame(container.bounds());
+                Ok(())
+            })();
+            let _ = callback_sender.send(result);
+        }) {
+            let _ = sender.send(Err(format!(
+                "cannot access the embedded macOS browser view: {error}"
+            )));
+        }
     })
+    .map_err(|error| format!("cannot access the Nebula macOS webview: {error}"))?;
+    wait_for_native_browser_result(receiver)
 }
 
 #[cfg(target_os = "macos")]
@@ -2235,7 +2270,7 @@ pub(crate) fn browser_set_bounds(
         .ok_or_else(|| "This browser tab is unavailable.".to_string())?;
     #[cfg(target_os = "macos")]
     {
-        resize_macos_browser_container(&webview, bounds)
+        resize_macos_browser_container(&app, &webview, bounds)
             .map_err(|error| format!("cannot resize browser tab: {error}"))
     }
     #[cfg(not(target_os = "macos"))]
@@ -2812,7 +2847,7 @@ mod tests {
     }
 
     #[test]
-    fn macos_browser_frame_uses_the_main_webview_coordinate_space() {
+    fn macos_browser_frame_uses_the_wry_parent_coordinate_space() {
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, true), 120.0);
         assert_eq!(appkit_child_y(0.0, 900.0, 120.0, 600.0, false), 180.0);
         assert_eq!(appkit_child_y(12.0, 900.0, 120.0, 600.0, false), 192.0);

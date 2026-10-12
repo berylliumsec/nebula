@@ -1,7 +1,7 @@
 {
-  "change_digest": "75cfda995ef82ec603303dcceaa72c411686cf090fe71e73c5532f2bfbbe96fe",
+  "change_digest": "47889ce9366a34f3bbc0d5947fe2c08ead2a6f0ebdcd191eb1f69b831d926199",
   "reviewed_by": "Codex focused review for macOS native Browser containment",
-  "reason": "The changed journey is the macOS native Browser page inside its visible surface, including resize and Text size. Two exact Rust cases cover main-webview frame coordinates and CSS-to-AppKit zoom conversion. The selected desktop Browser journey covers creating a tab, native bounds updates, resizing, sidebar and research panels, and hiding or revealing the page. macOS CI compiles the AppKit NSClipView integration and runs the selected native cases.",
+  "reason": "The changed journey is the macOS native Browser page inside its visible surface, including resize and Text size. Two exact Rust cases cover Wry parent frame coordinates and CSS-to-AppKit zoom conversion. The selected desktop Browser journey covers creating a tab, native bounds updates, resizing, sidebar and research panels, and hiding or revealing the page. macOS CI compiles the AppKit NSClipView integration and runs the selected native cases.",
   "exclusions": "No Python or frontend source or server state changed, so Python and component tests are excluded. Mobile clients use the separate web-browser fallback; no mobile behavior changed. Real-Core persistence and non-loopback origin behavior are unchanged. The mocked desktop browser and Linux Rust tests cannot prove macOS WKWebView compositing; a rebuilt Mac app visual and input check is still required before claiming full acceptance. Unrelated suites are excluded.",
   "expected_tests": {
     "python": 0,
@@ -14,7 +14,7 @@
   "python": [],
   "frontend": [],
   "native": [
-    "browser::tests::macos_browser_frame_uses_the_main_webview_coordinate_space",
+    "browser::tests::macos_browser_frame_uses_the_wry_parent_coordinate_space",
     "browser::tests::macos_browser_frame_scales_css_pixels_after_webview_zoom"
   ],
   "playwright": [
