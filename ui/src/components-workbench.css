@@ -2652,6 +2652,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .activity-ledger-progress-preview { display: grid; min-width: 0; gap: 3px; margin: 0; padding: 4px 16px 14px; }
 .activity-ledger-progress-preview small { color: var(--muted); font-size: var(--type-meta); }
 .activity-ledger-progress-preview span { display: -webkit-box; min-width: 0; overflow: hidden; color: var(--muted-strong); font-size: var(--type-control); line-height: var(--leading-ui); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.activity-ledger-progress-preview code { padding: 1px 4px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); font-family: var(--font-mono); font-size: .88em; }
 .activity-ledger-progress-details { min-width: 0; padding-bottom: 12px; overflow-wrap: anywhere; }
 .activity-ledger-progress-text h4 { margin: 0 0 8px; color: var(--muted-strong); font-size: var(--type-secondary); font-weight: var(--weight-medium); }
 .activity-ledger-progress-text .assistant-markdown { color: var(--muted-strong); }
