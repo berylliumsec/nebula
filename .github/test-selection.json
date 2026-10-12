@@ -1,32 +1,33 @@
 {
-  "change_digest": "4d610bf3ad85b69237e7f619af7e4cddfbdbfd36b5ce5f08ed8c40b0239cfb76",
-  "reviewed_by": "Codex focused review for native Browser scope capacity",
-  "reason": "The native capture proxy now accepts the Project policy's full validated allowlists, including a 0-10000 TCP port range. Three exact Rust cases cover the large-scope regression, bounded request enforcement, and authorization modes. The selected Core and frontend tests check saved policy normalization and range parsing; the selected Browser journeys cover settings modes and durable browser scope on desktop and mobile profiles.",
-  "exclusions": "Unrelated suites and browser feature areas are excluded. Mock Playwright profiles do not execute the Tauri proxy. This Linux host cannot verify a packaged macOS WKWebView or a physical mobile browser; those product gates remain pending. No origin-sensitive UI code changed, so a separate LAN-origin check is excluded.",
+  "change_digest": "02192b1e4575645d2422e41c5f742e55afeccf2102e6587db7b7e83bd95aee81",
+  "reviewed_by": "Codex focused review for assistant link routing",
+  "reason": "Assistant transcript links now select the Code or Browser companion and the managed browser accepts only a dedicated authenticated, scope-checked link navigation. The Python viewer file covers the route, auth, unsafe URLs, scope refusal, and continued denial of general manual operations. Component tests cover link parsing, navigation, and retry. The exact Playwright assistant-link journey covers file and website selection, refresh, and repeated clicks on desktop and emulated mobile; the production LAN real-Core case verifies saved file content and an actual scoped local website request. The Playwright workflow change only stages verified headed Chromium and Xvfb for that exact real-Core entry.",
+  "exclusions": "Unrelated Python, frontend, Playwright, and native Rust suites are excluded. Although the shared Core API and SessionsPage are touched, the diff is limited to assistant link routing and one browser operation, so the named tests cover the affected boundary. No native Rust code changed. This Linux run cannot exercise a packaged macOS Tauri WebView or a physical mobile browser; those gates remain unverified.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 4,
-    "native": 3,
-    "playwright": 5
+    "python": 11,
+    "frontend": 22,
+    "native": 0,
+    "playwright": 9
   },
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_domain.py::test_scope_normalizes_targets_and_validates_window",
-    "tests/v3/test_api_crud_validation.py::test_project_scope_persists_all_targets_and_normalizes_root_domain_urls"
+    "tests/v3/test_assistant_browser_viewer.py"
   ],
   "frontend": [
-    "ui/src/components/EngagementPolicySettings.test.ts"
+    "ui/src/components/ManagedAssistantBrowser.test.tsx",
+    "ui/src/components/assistantLinks.test.ts"
   ],
-  "native": [
-    "browser_proxy::tests::native_scope_accepts_large_saved_allowlists_without_widening_bounded_requests",
-    "browser_proxy::tests::native_scope_matches_domains_cidrs_paths_and_ports_fail_closed",
-    "browser_proxy::tests::native_scope_all_destinations_and_bypass_override_their_policy_gates"
-  ],
+  "native": [],
   "playwright": [
-    "entry:project-runtime-policy/desktop",
-    "entry:project-runtime-policy/mobile-chromium",
-    "entry:project-runtime-policy/mobile-webkit",
-    "entry:browser-complete/real-core"
+    "entry:assistant-links/desktop",
+    "entry:assistant-links/compact",
+    "entry:assistant-links/mobile-chromium-small",
+    "entry:assistant-links/mobile-chromium-ledger-390",
+    "entry:assistant-links/mobile-chromium-wide",
+    "entry:assistant-links/mobile-webkit-small",
+    "entry:assistant-links/mobile-webkit",
+    "entry:assistant-links/mobile-webkit-wide",
+    "entry:assistant-links/assistant-real-desktop"
   ]
 }
