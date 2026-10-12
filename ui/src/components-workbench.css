@@ -55,11 +55,6 @@ body {
 .brand-mark {
   width: 34px;
   height: 34px;
-  border: 0;
-  border-radius: var(--radius-panel);
-  color: var(--on-accent);
-  background: linear-gradient(145deg, var(--brand-start), var(--brand-end));
-  box-shadow: none;
 }
 
 .brand-lockup strong { font-size: 14px; font-weight: var(--weight-semibold); letter-spacing: -.01em; }
