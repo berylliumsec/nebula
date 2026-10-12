@@ -1,25 +1,37 @@
 {
-  "change_digest": "d0f47626e91d74207892e4d0e1aedceb26163dd5ea113b875a3a1b2ea6b40d29",
-  "reviewed_by": "Codex focused review for Current Run markdown preview",
-  "reason": "The changed journey is the compact Current Run preview of public harness commentary and provider progress. Nineteen collected ActivityLedger component tests cover inline code, formatting, inert links, status, and disclosure. One existing harness stream journey with inline-code regression assertions is selected in five permanent desktop and mobile browser profiles, including the 320 px boundary. A production build checks compilation and bundling.",
-  "exclusions": "No Core, Python, native, persistence, authentication, or origin-sensitive behavior changed, so their test layers and unrelated UI journeys are excluded. Browser cases use a mocked harness stream; a real-Core replay and physical-device check remain separate acceptance gates. Full suites are excluded.",
+  "change_digest": "1c6ce9fe90191684e1a099e049aa0ed679cc1e0331e278a15cf244b27923323f",
+  "reviewed_by": "Codex focused review for operator Chromium browser panel",
+  "reason": "The changed journey opens a separate Chromium operator session from the Browser view, streams a page inside the React panel, sends direct pointer and keyboard input, preserves Core scope checks, and keeps the Assistant viewer read-only. Twenty-three Python tests cover input validation and session/API separation; four packaging tests cover Mac Chromium staging, verified reuse, and the desktop launch command. Twenty-four component tests cover the operator panel, input mapping, and existing Assistant viewer. One contained-page UI journey runs in ten permanent desktop, mobile, and landscape browser profiles. A production build and the committed focused real-Core/browserd LAN smoke script cover the live boundary.",
+  "exclusions": "No Rust or WKWebView source changed, so native tests are not selected. Unrelated Core, UI, and Playwright journeys and all full suites are excluded. The mocked Playwright journey does not prove live Chromium input; the separate real-Core run is required. The Linux host cannot perform the physical Mac compositor check, which remains an explicit acceptance gate.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 19,
+    "python": 27,
+    "frontend": 24,
     "native": 0,
-    "playwright": 5
+    "playwright": 10
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/components/ActivityLedger.test.tsx"],
+  "python": [
+    "tests/v3/test_operator_browser.py",
+    "tests/v3/test_assistant_browser_viewer.py",
+    "tests/v3/test_packaging.py::test_playwright_runtime_staging_keeps_only_verified_generated_payload",
+    "tests/v3/test_packaging.py::test_playwright_runtime_staging_accepts_macos_cft_app",
+    "tests/v3/test_packaging.py::test_playwright_runtime_reuses_only_verified_payload",
+    "tests/v3/test_packaging.py::test_desktop_dev_prepares_core_before_tauri_and_starts_vite_in_hook"
+  ],
+  "frontend": ["ui/src/components/OperatorBrowser.test.tsx", "ui/src/components/OperatorBrowserSurface.test.tsx", "ui/src/components/ManagedAssistantBrowser.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:codex-public-progress/desktop",
-    "entry:codex-public-progress/compact",
-    "entry:codex-public-progress/mobile-chromium-small",
-    "entry:codex-public-progress/mobile-webkit-small",
-    "entry:codex-public-progress/mobile-webkit"
+    "entry:operator-browser/desktop",
+    "entry:operator-browser/compact",
+    "entry:operator-browser/mobile-chromium-small",
+    "entry:operator-browser/mobile-chromium-ledger-390",
+    "entry:operator-browser/mobile-chromium-wide",
+    "entry:operator-browser/mobile-webkit-small",
+    "entry:operator-browser/mobile-webkit",
+    "entry:operator-browser/mobile-webkit-wide",
+    "entry:operator-browser/browser-chromium-landscape",
+    "entry:operator-browser/browser-webkit-landscape"
   ]
 }

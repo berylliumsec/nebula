@@ -11079,6 +11079,84 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
   }
 });
 
+test("browser Assistant and interactive Chromium keep the address above a contained page", async ({ page }, testInfo) => {
+  await installTruthfulCore(page);
+  const tabs = [{id: "operator-tab", url: "about:blank", title: "New tab"}];
+  await page.route("**/api/v1/**/browser-companion?mode=operator", route => route.fulfill({json: {
+    session_id: "operator-session", active_tab_id: "operator-tab", tabs,
+  }}));
+  await page.route("**/api/v1/browser-companion/operator-session/operator-operations", async route => {
+    const body = route.request().postDataJSON();
+    if (body.operation === "navigate") tabs[0] = {id: "operator-tab", url: body.url, title: "Fixture page"};
+    if (body.operation === "tabs" || body.operation === "new_tab") {
+      await route.fulfill({json: {tabs, active_tab_id: "operator-tab"}});
+    } else if (body.operation === "navigate" || body.operation === "capture") {
+      await route.fulfill({json: {url: tabs[0].url, title: "Fixture page", text: "Click fixture", page_revision: "revision-1", captured_at: "2026-10-12T12:00:00Z"}});
+    } else await route.fulfill({json: {tabs, active_tab_id: "operator-tab"}});
+  });
+  await openWorkspace(page, "/?view=browser&browserEngine=managed", "Workbench");
+  await page.evaluate(() => {
+    const operatorFrames: Record<string, unknown>[] = [];
+    Object.assign(window, {__operatorFrames: operatorFrames});
+    class OperatorStream {
+      static readonly OPEN = 1;
+      readonly readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: {data: string}) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        setTimeout(() => {
+          this.onopen?.();
+          const canvas = document.createElement("canvas");
+          canvas.width = 800; canvas.height = 600;
+          const context = canvas.getContext("2d")!;
+          context.fillStyle = "white"; context.fillRect(0, 0, 800, 600);
+          context.fillStyle = "black"; context.fillText("Chromium fixture page", 40, 40);
+          this.onmessage?.({data: JSON.stringify({kind: "frame", data: canvas.toDataURL("image/jpeg").split(",")[1]})});
+        }, 10);
+      }
+      send(value: string) {operatorFrames.push(JSON.parse(value));}
+      close() {this.onclose?.();}
+    }
+    Object.defineProperty(window, "WebSocket", {configurable: true, value: OperatorStream});
+  });
+  await page.getByLabel("Browser engine").selectOption("operator");
+  const browser = page.getByRole("region", {name: "Interactive browser", exact: true});
+  const image = browser.getByRole("img", {name: /Live Chromium page/});
+  await expect(image).toBeVisible();
+  const address = browser.getByRole("textbox", {name: "Browser address"});
+  await address.fill("example.com/path");
+  await browser.getByRole("button", {name: "Go"}).click();
+  await expect(address).toHaveValue("https://example.com/path");
+  const bounds = await browser.evaluate(element => {
+    const address = element.querySelector<HTMLInputElement>('input[aria-label="Browser address"]')!.getBoundingClientRect();
+    const screen = element.querySelector<HTMLElement>(".operator-browser-screen")!.getBoundingClientRect();
+    const image = element.querySelector<HTMLImageElement>("img")!.getBoundingClientRect();
+    return {addressBottom: address.bottom, screenTop: screen.top, screenBottom: screen.bottom,
+      imageTop: image.top, imageBottom: image.bottom, imageLeft: image.left, imageRight: image.right,
+      screenLeft: screen.left, screenRight: screen.right};
+  });
+  expect(bounds.addressBottom).toBeLessThanOrEqual(bounds.screenTop);
+  expect(bounds.imageTop).toBeGreaterThanOrEqual(bounds.screenTop);
+  expect(bounds.imageBottom).toBeLessThanOrEqual(bounds.screenBottom);
+  expect(bounds.imageLeft).toBeGreaterThanOrEqual(bounds.screenLeft);
+  expect(bounds.imageRight).toBeLessThanOrEqual(bounds.screenRight);
+  for (const name of ["New tab", "Close tab", "Go", "Ask about page", "Reconnect browser"]) {
+    const target = await browser.getByRole("button", {name, exact: true}).boundingBox();
+    expectTouchTarget(target?.width, name);
+    expectTouchTarget(target?.height, name);
+  }
+  if (testInfo.project.use.isMobile) await image.tap(); else await image.click();
+  await expect.poll(() => page.evaluate(() => (window as Window & {__operatorFrames?: Record<string, unknown>[]}).__operatorFrames?.some(event => event.kind === "mouse" || event.kind === "touch"))).toBe(true);
+  await page.getByRole("button", {name: "Assistant", exact: true}).click();
+  await expect(address).toBeVisible();
+  await expect(image).toBeVisible();
+  expect((await new AxeBuilder({page}).include(".operator-browser").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({path: testInfo.outputPath("operator-browser-contained.png")});
+});
+
 for (const degradedBrowserCore of [false, true]) {
 test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page, browserName }) => {
   test.setTimeout(browserName === "webkit" ? 180000 : 90000);
