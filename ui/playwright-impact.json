@@ -1624,6 +1624,16 @@
       {"area":"browser","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
       {"area":"browser","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"}
     ],
+    "browser-pentest-audit": [
+      {"area":"browser-pentest-audit","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"browser pentest","runtime":"real-core","shard":"1/1"},
+      {"area":"browser-pentest-audit","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"stabilization browser pentest local target","runtime":"real-core","shard":"1/1"},
+      {"area":"browser-pentest-audit","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"stabilization browser pentest local target","runtime":"real-core","shard":"1/1"},
+      {"area":"browser-pentest-audit","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"stabilization browser pentest local target","runtime":"real-core","shard":"1/1"},
+      {"area":"browser-pentest-audit","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"stabilization browser pentest local target","runtime":"real-core","shard":"1/1"},
+      {"area":"browser-pentest-audit","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"stabilization browser pentest local target","runtime":"real-core","shard":"1/1"},
+      {"area":"browser-pentest-audit","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization browser pentest local target","runtime":"real-core","shard":"1/1"},
+      {"area":"browser-pentest-audit","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"stabilization browser pentest local target","runtime":"real-core","shard":"1/1"}
+    ],
     "browser-complete": [
       {"area":"browser-complete","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser keeps native bounds|remote Core mode keeps the native Browser|stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
       {"area":"browser-complete","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},

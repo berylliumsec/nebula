@@ -344,15 +344,17 @@
     visibility: visible;
     transform: none;
   }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav[data-lens-open="false"] { pointer-events: none; }
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav[data-lens-open="true"] {
     width: min(300px, calc(100vw - 44px));
     border-radius: 0 24px 24px 0;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-side-handle {
-    top: 12%;
+    top: 8px;
     left: 4px;
-    height: 53%;
+    height: 44px;
     opacity: .72;
+    pointer-events: auto;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .sidebar-scrim { display: none; }
   :root[data-theme="quiet-lens"] .quiet-lens-shell:has(> .side-nav[data-lens-open="true"]) > .sidebar-scrim { display: block; z-index: 75; inset: 64px 0 0; }

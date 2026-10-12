@@ -7,7 +7,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
-import { expect, request as playwrightRequest, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, request as playwrightRequest, test, type APIRequestContext, type Page, type TestInfo } from "@playwright/test";
 import {startApprovalCore} from "./fixtures/approval-core";
 import {OwnedCleanupError, withOwnedCleanup} from "./fixtures/owned-cleanup";
 import {settingCatalog} from "../src/settingsCatalog";
@@ -252,6 +252,75 @@ function localNetworkIpv4(): string {
     }
   }
   throw new Error("A non-loopback IPv4 address is required for LAN acceptance.");
+}
+
+interface BrowserPentestAuditFixture {
+  core: RealCore;
+  api: APIRequestContext;
+  site: Server;
+  projectId: string;
+  targetUrl: string;
+  targetHits: string[];
+}
+
+async function startBrowserPentestAuditFixture(): Promise<BrowserPentestAuditFixture> {
+  const targetHits: string[] = [];
+  const site = createServer((request, response) => {
+    targetHits.push(`${request.method} ${request.url}`);
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+    response.setHeader("X-Audit-Site", "local-only");
+    response.end("<!doctype html><html lang='en'><title>Nebula local audit</title><h1>Nebula local audit</h1><a href='/next'>Next page</a><form action='/echo' method='post'><input name='value'><button>Send</button></form></html>");
+  });
+  await new Promise<void>((resolve, reject) => { site.once("error", reject); site.listen(0, "127.0.0.1", resolve); });
+  let core: RealCore | undefined;
+  let api: APIRequestContext | undefined;
+  try {
+    const targetUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/start`;
+    core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const projects = await (await api.get("engagements")).json() as Array<{id: string; scope_policy_id: string}>;
+    const project = projects[0];
+    expect(project).toBeTruthy();
+    const scope = await api.patch(`scope-policies/${project.scope_policy_id}`, {data: {changes: {
+      allowed_cidrs: ["127.0.0.1/32"],
+      allowed_ports: [Number(new URL(targetUrl).port)],
+    }}});
+    expect(scope.ok(), await scope.text()).toBe(true);
+    return {core, api, site, projectId: project.id, targetUrl, targetHits};
+  } catch (error) {
+    if (api) await api.dispose();
+    if (core) await stopRealCore(core);
+    await new Promise<void>(resolve => site.close(() => resolve()));
+    throw error;
+  }
+}
+
+async function stopBrowserPentestAuditFixture(fixture: BrowserPentestAuditFixture): Promise<void> {
+  await withOwnedCleanup(async () => undefined, [
+    {name: "audit API", dispose: () => fixture.api.dispose()},
+    {name: "audit Core", dispose: () => stopRealCore(fixture.core)},
+    {name: "local audit site", dispose: () => new Promise<void>((resolve, reject) => fixture.site.close(error => error ? reject(error) : resolve()))},
+  ]);
+}
+
+async function pairBrowserPentestAudit(page: Page, fixture: BrowserPentestAuditFixture): Promise<void> {
+  const pairingApi = await playwrightRequest.newContext({
+    baseURL: `http://127.0.0.1:${new URL(fixture.core.origin).port}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${fixture.core.token}`},
+  });
+  const response = await pairingApi.post("auth/pairings", {data: {name: "Local pentest audit browser"}});
+  expect(response.ok(), await response.text()).toBe(true);
+  const pairing = await response.json() as {secret: string; confirmation_code: string};
+  await pairingApi.dispose();
+  await page.goto(`${fixture.core.origin}/?view=browser#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill("Local pentest audit browser");
+  await page.getByRole("button", {name: "Pair device"}).click();
+  await page.waitForURL(url => url.origin === fixture.core.origin && url.pathname === "/" && !url.search && !url.hash, {waitUntil: "load", timeout: 20_000});
+  await page.goto(`${fixture.core.origin}/?view=browser`);
+  await expect(page.getByLabel("Browser engine")).toBeVisible({timeout: 20_000});
+  await page.getByLabel("Browser engine").selectOption("native");
+  await page.getByRole("button", {name: "Research workbench"}).click();
+  await expect(page.getByRole("navigation", {name: "Security Browser tools"})).toBeVisible();
 }
 
 async function stopRealCore(core: RealCore, options: { keepData?: boolean } = {}): Promise<void> {
@@ -2390,6 +2459,257 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
   ]);
+});
+
+test("stabilization browser pentest local target and durable request drafts on LAN", async ({page}, testInfo) => {
+  test.setTimeout(150_000);
+  page.setDefaultTimeout(8_000);
+  const fixture = await startBrowserPentestAuditFixture();
+  await withOwnedCleanup(async () => {
+    await pairBrowserPentestAudit(page, fixture);
+    await page.getByRole("button", {name: "Research workbench"}).click();
+    const address = page.getByRole("textbox", {name: "Web address", exact: true});
+    await address.fill(fixture.targetUrl);
+    const popupPromise = page.context().waitForEvent("page", {timeout: 10_000});
+    await page.getByRole("button", {name: "Open", exact: true}).click();
+    const popup = await popupPromise;
+    await expect(popup.getByRole("heading", {name: "Nebula local audit"})).toBeVisible();
+    await popup.close();
+    expect(fixture.targetHits).toContain("GET /start");
+    await expect(page.getByText(/In scope · Matches Project scope/)).toBeVisible();
+
+    await page.getByRole("button", {name: "Research workbench"}).click();
+    const tools = page.getByRole("navigation", {name: "Security Browser tools"});
+    if ((page.viewportSize()?.width ?? 1440) <= 430) {
+      const navigation = page.locator(".side-nav");
+      await navigation.getByRole("button", {name: "Open navigation"}).click();
+      await expect(navigation).toHaveAttribute("data-lens-open", "true");
+      await page.getByRole("button", {name: "Close sidebar"}).click({position: {x: (page.viewportSize()?.width ?? 320) - 12, y: 100}});
+      await expect(navigation).toHaveAttribute("data-lens-open", "false");
+    }
+    await tools.getByRole("button", {name: "Target", exact: true}).click();
+    await expect(page.getByRole("heading", {name: "Target map"})).toBeVisible();
+    await expect(page.getByRole("button", {name: "Create bounded crawl"})).toBeDisabled();
+    await tools.getByRole("button", {name: "Repeater", exact: true}).click();
+    const editor = page.locator(".repeater-editor");
+    await editor.getByLabel("Name").fill("Local audit request");
+    await editor.getByLabel("URL", {exact: true}).fill(fixture.targetUrl);
+    await editor.getByLabel("Headers").fill("Accept: text/html\nX-Audit: first");
+    await editor.getByRole("button", {name: "Save draft"}).click();
+    await expect(page.getByRole("status").filter({hasText: "Repeater draft created"})).toBeVisible();
+    await expect(page.getByRole("button", {name: "GET Local audit request"})).toBeVisible();
+    await expect(editor.getByRole("button", {name: "Send"})).toBeDisabled();
+    const saved = await fixture.api.get(`engagements/${fixture.projectId}/browser-research`);
+    expect(saved.ok(), await saved.text()).toBe(true);
+    expect((await saved.json() as {repeater_tabs: Array<{name: string; url: string}>}).repeater_tabs)
+      .toEqual(expect.arrayContaining([expect.objectContaining({name: "Local audit request", url: fixture.targetUrl})]));
+
+    await editor.getByLabel("Body").fill("unsaved local audit change");
+    await tools.getByRole("button", {name: /Traffic/}).click();
+    await expect(page.getByText("No captured traffic")).toBeVisible();
+    await tools.getByRole("button", {name: "Repeater", exact: true}).click();
+    await expect(editor.getByLabel("Body")).toHaveValue("unsaved local audit change");
+    await editor.getByRole("button", {name: "Discard changes"}).click();
+    await page.getByRole("dialog", {name: "Discard unsaved changes?"}).getByRole("button", {name: "Discard changes"}).click();
+    await expect(editor.getByLabel("Body")).toHaveValue("");
+
+    await page.reload();
+    await expect(page.getByLabel("Browser engine")).toBeVisible({timeout: 20_000});
+    await page.getByLabel("Browser engine").selectOption("native");
+    await page.getByRole("button", {name: "Research workbench"}).click();
+    await tools.getByRole("button", {name: "Repeater", exact: true}).click();
+    await page.getByRole("button", {name: "GET Local audit request"}).click();
+    await expect(editor.getByLabel("URL", {exact: true})).toHaveValue(fixture.targetUrl);
+
+    await tools.getByRole("button", {name: /Automate/}).click();
+    await expect(page.getByRole("heading", {name: "Intruder"})).toBeVisible();
+    await page.getByLabel("Name", {exact: true}).fill("Local audit attack");
+    await page.getByLabel("URL template").fill(fixture.targetUrl);
+    await page.getByRole("button", {name: "Save attack draft"}).click();
+    await expect(page.getByRole("alert").filter({hasText: "Add §id§"})).toBeVisible();
+    await page.getByLabel("URL template").fill(`${fixture.targetUrl}?id=§id§`);
+    await page.getByLabel("Payload sets").fill("alpha\nbeta");
+    await page.getByRole("button", {name: "Save attack draft"}).click();
+    await expect(page.getByRole("status").filter({hasText: "Intruder attack saved"})).toBeVisible();
+    const attack = page.locator(".browser-suite-list li").filter({hasText: "Local audit attack"});
+    await expect(attack).toContainText("0/2 requests");
+    await attack.getByRole("button", {name: "Queue on desktop"}).click();
+    await expect(attack).toContainText("queued");
+    await attack.getByRole("button", {name: "Cancel"}).click();
+    await expect(attack).toContainText("cancelled");
+    await attack.getByRole("button", {name: "Delete Intruder attack Local audit attack"}).click();
+    await page.getByRole("dialog", {name: "Delete Local audit attack?"}).getByRole("button", {name: "Delete attack"}).click();
+    await expect(attack).toHaveCount(0);
+    await tools.getByRole("button", {name: "Repeater", exact: true}).click();
+    await page.getByRole("button", {name: "Delete Repeater request Local audit request"}).click();
+    await page.getByRole("dialog", {name: "Delete Local audit request?"}).getByRole("button", {name: "Delete request"}).click();
+    await expect(page.getByRole("button", {name: "GET Local audit request"})).toHaveCount(0);
+    const suite = page.locator(".browser-suite");
+    expect(await suite.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    const axe = await new AxeBuilder({page}).include(".browser-suite").analyze();
+    expect(axe.violations).toEqual([]);
+    await testInfo.attach("local-pentest-audit", {body: await page.screenshot(), contentType: "image/png"});
+  }, [{name: "local pentest fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)}]);
+});
+
+test("browser pentest upload and script payload sources work on LAN", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const fixture = await startBrowserPentestAuditFixture();
+  await withOwnedCleanup(async () => {
+    await pairBrowserPentestAudit(page, fixture);
+    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
+    const browserContext = await page.evaluate(() => ({secure: isSecureContext, subtle: Boolean(crypto.subtle)}));
+    expect(browserContext).toEqual({secure: false, subtle: false});
+    await testInfo.attach("browser-context", {body: JSON.stringify({origin: fixture.core.origin, ...browserContext}), contentType: "application/json"});
+    await page.getByRole("tab", {name: "Upload file"}).click();
+    const uploadBytes = Buffer.from('["alpha", "beta"]');
+    await page.getByLabel("Upload payload file").setInputFiles({name: "local-values.json", mimeType: "application/json", buffer: uploadBytes});
+    await expect(page.getByText("Reviewed values (2)")).toBeVisible();
+    await page.getByLabel("Name", {exact: true}).fill("LAN upload provenance");
+    await page.getByLabel("URL template").fill(`${fixture.targetUrl}?id=§id§`);
+    await page.getByRole("button", {name: "Save attack draft"}).click();
+    await expect(page.locator(".browser-suite-list li").filter({hasText: "LAN upload provenance"})).toBeVisible();
+    await page.getByRole("tab", {name: "Script"}).click();
+    const script = 'values("é", "admin")';
+    await page.getByLabel("Payload script").fill(script);
+    await page.getByRole("button", {name: "Run preview"}).click();
+    await expect(page.getByText("Reviewed values (2)")).toBeVisible();
+    await page.getByLabel("Name", {exact: true}).fill("LAN script provenance");
+    await page.getByRole("button", {name: "Save attack draft"}).click();
+    await expect(page.locator(".browser-suite-list li").filter({hasText: "LAN script provenance"})).toBeVisible();
+    const workspaceResponse = await fixture.api.get(`engagements/${fixture.projectId}/browser-research`);
+    expect(workspaceResponse.ok(), await workspaceResponse.text()).toBe(true);
+    const workspace = await workspaceResponse.json() as {attacks: Array<{name: string; metadata: {payload_source?: {kind: string; sha256: string}}}>};
+    expect(workspace.attacks.find(attack => attack.name === "LAN upload provenance")?.metadata.payload_source).toMatchObject({
+      kind: "upload", sha256: createHash("sha256").update(uploadBytes).digest("hex"),
+    });
+    expect(workspace.attacks.find(attack => attack.name === "LAN script provenance")?.metadata.payload_source).toMatchObject({
+      kind: "script", sha256: createHash("sha256").update(script).digest("hex"),
+    });
+    await testInfo.attach("payload-sources-LAN", {body: await page.screenshot(), contentType: "image/png"});
+
+    await page.goto(`http://127.0.0.1:${new URL(fixture.core.origin).port}/?view=browser#token=${encodeURIComponent(fixture.core.token)}`);
+    await expect(page.getByLabel("Browser engine")).toBeVisible({timeout: 20_000});
+    expect(await page.evaluate(() => ({secure: isSecureContext, subtle: Boolean(crypto.subtle)}))).toEqual({secure: true, subtle: true});
+    await page.getByLabel("Browser engine").selectOption("native");
+    await page.getByRole("button", {name: "Research workbench"}).click();
+    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
+    await page.getByRole("tab", {name: "Upload file"}).click();
+    await page.getByLabel("Upload payload file").setInputFiles({name: "local-values.json", mimeType: "application/json", buffer: Buffer.from('["alpha", "beta"]')});
+    await expect(page.getByText("Reviewed values (2)")).toBeVisible();
+    await page.getByRole("tab", {name: "Script"}).click();
+    await page.getByRole("button", {name: "Run preview"}).click();
+    await expect(page.getByText("Reviewed values (13)")).toBeVisible();
+  }, [{name: "local pentest fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)}]);
+});
+
+test("browser pentest Intruder strategy budgets are durable and do not send during setup", async ({page}) => {
+  test.setTimeout(90_000);
+  const fixture = await startBrowserPentestAuditFixture();
+  await withOwnedCleanup(async () => {
+    await pairBrowserPentestAudit(page, fixture);
+    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
+    const variants = [
+      {strategy: "sniper", name: "Audit sniper", payloads: "one\ntwo", requests: 4},
+      {strategy: "battering_ram", name: "Audit battering ram", payloads: "one\ntwo", requests: 2},
+      {strategy: "pitchfork", name: "Audit pitchfork", payloads: "one\ntwo\n---\nadmin\nuser", requests: 2},
+      {strategy: "cluster_bomb", name: "Audit cluster bomb", payloads: "one\ntwo\n---\nadmin\nuser", requests: 4},
+    ];
+    for (const variant of variants) {
+      await page.getByLabel("Name", {exact: true}).fill(variant.name);
+      await page.getByLabel("Strategy").selectOption(variant.strategy);
+      await page.getByLabel("Position names").fill("id, role");
+      await page.getByLabel("URL template").fill(`${fixture.targetUrl}?id=§id§&role=§role§`);
+      await page.getByLabel("Payload sets").fill(variant.payloads);
+      await page.getByRole("button", {name: "Save attack draft"}).click();
+      const attack = page.locator(".browser-suite-list li").filter({hasText: variant.name});
+      await expect(attack).toContainText(`0/${variant.requests} requests`);
+      await expect(attack).toContainText(variant.strategy.replaceAll("_", " "));
+    }
+    await page.reload();
+    await expect(page.getByLabel("Browser engine")).toBeVisible({timeout: 20_000});
+    await page.getByLabel("Browser engine").selectOption("native");
+    await page.getByRole("button", {name: "Research workbench"}).click();
+    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
+    for (const variant of variants) {
+      await expect(page.locator(".browser-suite-list li").filter({hasText: variant.name})).toContainText(`0/${variant.requests} requests`);
+    }
+    const response = await fixture.api.get(`engagements/${fixture.projectId}/browser-research`);
+    expect(response.ok(), await response.text()).toBe(true);
+    const workspace = await response.json() as {attacks: Array<{name: string; strategy: string; max_requests: number; request_count: number; state: string}>};
+    for (const variant of variants) {
+      expect(workspace.attacks).toEqual(expect.arrayContaining([expect.objectContaining({
+        name: variant.name, strategy: variant.strategy, max_requests: variant.requests, request_count: 0, state: "draft",
+      })]));
+    }
+    expect(fixture.targetHits).toEqual([]);
+  }, [{name: "local pentest fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)}]);
+});
+
+test("browser pentest Decoder Comparer and Sequencer use real Core on LAN", async ({page}) => {
+  test.setTimeout(120_000);
+  const fixture = await startBrowserPentestAuditFixture();
+  await withOwnedCleanup(async () => {
+    await pairBrowserPentestAudit(page, fixture);
+    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: "Analyze"}).click();
+    const utilities = page.locator(".browser-utility-grid form");
+    const decoder = utilities.nth(0);
+    const decode = async (operation: string, input: string) => {
+      await decoder.getByLabel("Operation").selectOption(operation);
+      await decoder.getByLabel("Decoder input").fill(input);
+      const output = decoder.getByLabel("Decoder output");
+      const previous = await output.inputValue();
+      await decoder.getByRole("button", {name: "Transform"}).click();
+      await expect(output).not.toHaveValue(previous);
+      return output.inputValue();
+    };
+    expect(await decode("url_encode", "a b")).toBe("a%20b");
+    expect(await decode("url_decode", "a%20b")).toBe("a b");
+    expect(await decode("html_encode", "<&")).toBe("&lt;&amp;");
+    expect(await decode("html_decode", "&lt;&amp;")).toBe("<&");
+    expect(await decode("base64_encode", "hello")).toBe("aGVsbG8=");
+    expect(await decode("base64_decode", "aGVsbG8=")).toBe("hello");
+    expect(await decode("hex_encode", "hi")).toBe("6869");
+    expect(await decode("hex_decode", "6869")).toBe("hi");
+    const compressed = await decode("gzip_compress", "local audit");
+    expect(compressed).toMatch(/^[A-Za-z0-9+/]+=*$/);
+    expect(await decode("gzip_decompress", compressed)).toBe("local audit");
+    const jwt = `${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from('{"sub":"local"}').toString("base64url")}.signature`;
+    expect(JSON.parse(await decode("jwt_inspect", jwt))).toMatchObject({header: {alg: "none"}, payload: {sub: "local"}, verified: false});
+    expect(await decode("sha256", "abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    await decoder.getByLabel("Operation").selectOption("base64_decode");
+    await decoder.getByLabel("Decoder input").fill("not base64!");
+    await decoder.getByRole("button", {name: "Transform"}).click();
+    await expect(page.getByRole("alert").filter({hasText: "decoder operation failed"})).toBeVisible();
+
+    const comparer = utilities.nth(1);
+    for (const [mode, left, right] of [
+      ["text", "alpha", "beta"],
+      ["json", '{"a":1,"b":2}', '{"b":2,"a":1}'],
+      ["http", "GET /a HTTP/1.1", "GET /b HTTP/1.1"],
+      ["bytes", "YQ==", "Yg=="],
+    ]) {
+      await comparer.getByLabel("Mode").selectOption(mode);
+      await comparer.getByLabel("Compare left").fill(left);
+      await comparer.getByLabel("Compare right").fill(right);
+      await comparer.getByRole("button", {name: "Compare"}).click();
+      await expect.poll(async () => {
+        try { return (JSON.parse(await comparer.locator("pre").textContent() ?? "null") as {mode?: string} | null)?.mode; }
+        catch { return undefined; }
+      }).toBe(mode);
+      const result = JSON.parse(await comparer.locator("pre").textContent() ?? "null") as {mode: string; equal: boolean};
+      expect(result).toMatchObject({mode, equal: mode === "json"});
+    }
+    const sequencer = utilities.nth(2);
+    await sequencer.getByLabel("One token per line").fill("alpha\nbeta\nalpha\ngamma");
+    await sequencer.getByRole("button", {name: "Analyze samples"}).click();
+    await expect(sequencer).toContainText("4");
+    await expect(sequencer).toContainText("3");
+    const state = await fixture.api.get(`engagements/${fixture.projectId}/browser-research`);
+    expect(state.ok(), await state.text()).toBe(true);
+    expect((await state.json() as {token_analyses: Array<{sample_count: number; unique_count: number}>}).token_analyses)
+      .toEqual(expect.arrayContaining([expect.objectContaining({sample_count: 4, unique_count: 3})]));
+  }, [{name: "local pentest fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)}]);
 });
 
 test("stabilization real Core device-browser handoff opens an isolated local tab without a false failure", async ({page}, testInfo) => {

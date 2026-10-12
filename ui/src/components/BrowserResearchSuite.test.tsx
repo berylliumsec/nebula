@@ -46,6 +46,37 @@ describe("BrowserResearchSuite", () => {
     expect(() => runPayloadScript("range(0, 20000)")).toThrow(/10,000-value limit/i);
   });
 
+  it("saves exact upload bytes and UTF-8 script provenance without Web Crypto", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "attack-1" });
+    renderSuite(<BrowserResearchSuite api={api({ createSecurityBrowserAttack: create })} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="intruder" />);
+    await screen.findByRole("heading", { name: "Intruder" });
+    fireEvent.change(screen.getByLabelText(/URL template/), { target: { value: "https://app.example.test/?id=§id§" } });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Upload file" }));
+    const bytes = new TextEncoder().encode('["alpha", "beta"]');
+    const file = new File([bytes], "values.json", { type: "application/json" });
+    Object.defineProperty(file, "arrayBuffer", { value: () => Promise.resolve(bytes.buffer) });
+    fireEvent.change(screen.getByLabelText("Upload payload file"), { target: { files: [file] } });
+    expect(await screen.findByText("Reviewed values (2)")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save attack draft" }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith("project-1", expect.objectContaining({
+      payloadSource: expect.objectContaining({
+        kind: "upload", sha256: "b0bf75e6646cbdfeec6709c5daddc1353a8e368101a91a751d2c0d188e9815c1", valueCount: 2,
+      }),
+    })));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Script" }));
+    fireEvent.change(screen.getByLabelText("Payload script"), { target: { value: 'values("é", "admin")' } });
+    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
+    expect(await screen.findByText("Reviewed values (2)")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save attack draft" }));
+    await waitFor(() => expect(create).toHaveBeenLastCalledWith("project-1", expect.objectContaining({
+      payloadSource: expect.objectContaining({
+        kind: "script", sha256: "8335001b1f002b76e1b0047ddcae2ac322adfd925dbb3583bbedc16e037859f7", valueCount: 2,
+      }),
+    })));
+  });
+
   it("renders the durable target map and bounded crawl controls", async () => {
     renderSuite(<BrowserResearchSuite api={api()} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="target" />);
 
