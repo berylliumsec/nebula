@@ -109,6 +109,7 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
     const url = `${core.origin}/?view=notes#token=${encodeURIComponent(core.token)}`;
     await page.goto(`${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`);
     const notesTab = page.getByRole("tab", { name: "Project notes" });
+    if (!await notesTab.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click();
     await expect(notesTab).toBeVisible();
     let noteReads = 0;
     page.on("request", (request) => {
@@ -138,6 +139,68 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("stabilization notes open before unrelated evidence finishes loading", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0].id;
+    const created = await api.post("observations", { data: {
+      engagement_id: projectId, observation_type: "note", title: "Ready while evidence loads",
+      body: "The note editor is usable before Evidence finishes.", source: "operator-note", confidence: 1,
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    let evidenceStarted!: () => void;
+    let evidenceFinished!: () => void;
+    let releaseEvidence!: () => void;
+    const evidenceRequest = new Promise<void>((resolve) => { evidenceStarted = resolve; });
+    const evidenceResponse = new Promise<void>((resolve) => { evidenceFinished = resolve; });
+    const heldEvidence = new Promise<void>((resolve) => { releaseEvidence = resolve; });
+    const now = new Date().toISOString();
+    const largeEvidenceCatalog = Array.from({ length: 29_000 }, (_, index) => ({
+      id: `disposable-evidence-${index}`, engagement_id: projectId, evidence_type: "file",
+      title: `Evidence ${index}`, captured_at: now, created_at: now, updated_at: now, revision: 1,
+    }));
+    await page.route("**/api/v1/evidence?*", async (route) => {
+      evidenceStarted();
+      try {
+        await heldEvidence;
+        const offset = Number(new URL(route.request().url()).searchParams.get("offset") ?? 0);
+        await route.fulfill({ json: offset === 0 ? largeEvidenceCatalog : [] });
+      } finally {
+        evidenceFinished();
+      }
+    });
+    let noteReads = 0;
+    page.on("request", (request) => {
+      if (request.method() === "GET" && new URL(request.url()).pathname.endsWith("/observations")) noteReads += 1;
+    });
+    try {
+      await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notes#token=${encodeURIComponent(core.token)}`);
+      await evidenceRequest;
+      const body = page.getByRole("textbox", { name: "Note body" });
+      await expect(body).toHaveValue("The note editor is usable before Evidence finishes.", { timeout: 12_000 });
+      await expect(page.locator(".note-editor-caption .note-save-status")).toHaveText("Saved");
+      expect(noteReads).toBe(1);
+      await testInfo.attach("notes-independent-readiness", { body: JSON.stringify({ origin: core.origin, noteReads, evidenceReleased: false }), contentType: "application/json" });
+    } finally {
+      releaseEvidence();
+      await evidenceResponse;
+      await page.unroute("**/api/v1/evidence?*");
+    }
+    expect(await page.locator(".note-editor details input[type=checkbox]").count()).toBe(0);
+    await page.locator(".note-editor details summary").click();
+    await expect(page.getByText("Showing 40 of 29000 evidence matches. Search to narrow.")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".note-editor details input[type=checkbox]")).toHaveCount(40);
+    await page.getByRole("searchbox", { name: "Search note links" }).fill("Evidence 28999");
+    await expect(page.getByRole("checkbox", { name: "Evidence 28999" })).toBeVisible();
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
   ]);
 });
 

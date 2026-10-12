@@ -1,31 +1,32 @@
 {
-  "change_digest": "fc22965cd3a5a6af1cfe5f4320176b97abb08707667840fe47fb62f34df4d2ca",
-  "reviewed_by": "Codex focused browser session review",
-  "reason": "Native browser containment and Session layout/settings changed. The selected browser feature area checks desktop bounds, panel and zoom interactions, responsive and paired-client research layout, browser Assistant interactions, real-Core durability, and browser-only capture state. Unit and native selections cover the changed policy, local UI, and logical AppKit frame math.",
-  "exclusions": "Unrelated suites are excluded. The Linux host cannot run a packaged macOS WKWebView acceptance check or a physical mobile browser; these remain explicit product-quality limitations. Production UI build and non-loopback LAN dogfood are separate checks.",
+  "change_digest": "1782ff805e477dcecdaf6046c4cccd3ab79403f74398e4a4e94452005a32a810",
+  "reviewed_by": "Codex Notes readiness review, 2026-10-12",
+  "reason": "The changed journey is Workbench Notes entry through selection, editing, save feedback, link search, and reload. Core owns saved observations; WorkspaceContext owns project/resource readiness; NotesPanel owns the transient draft and picker state. The shared WorkspaceContext change is reviewed through 12 collected recovery cases, including notes publication while Evidence is held, and a real-Core LAN browser case. The 16 collected NotesPanel cases cover loading, no duplicate fetch, bounded link search, autosave, failure/retry, refresh, and selection. Eight collected Notes layout cases cover desktop/compact and emulated Chromium/WebKit at 320/390/430 px. One existing real-Core LAN case covers save/reload, and three permanent real-Core browser projects cover independent readiness and a synthetic 29,000-item Evidence list. The disposable production-bundle benchmark records four switches before and after repair.",
+  "exclusions": "No Python or Rust behavior changes, so those layers are omitted. The new real-Core test uses live Core for notes and a held synthetic Evidence response to isolate browser loading; no live provider or external target is called. Unrelated workspace and browser journeys and full suites are excluded after reviewing the shared context impact. Physical devices are unavailable; mobile runs use permanent emulated profiles.",
   "expected_tests": {
-    "python": 33,
-    "frontend": 36,
-    "native": 2,
-    "playwright": 65
+    "python": 0,
+    "frontend": 28,
+    "native": 0,
+    "playwright": 12
   },
-  "python_versions": [
-    "3.11"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_browser_security.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/components/SecurityBrowserWorkspacePanel.test.tsx"
+    "ui/src/components/NotesPanel.test.tsx",
+    "ui/src/state/WorkspaceContext.recovery.test.tsx"
   ],
-  "native": [
-    "browser::tests::browser_bounds_remain_logical_at_high_density",
-    "browser::tests::macos_browser_frame_uses_the_main_webview_coordinate_space"
-  ],
+  "native": [],
   "playwright": [
-    "area:browser-complete"
+    "entry:notes-screen-fit/desktop",
+    "entry:notes-screen-fit/compact",
+    "entry:notes-screen-fit/mobile-chromium-small",
+    "entry:notes-screen-fit/mobile-chromium",
+    "entry:notes-screen-fit/mobile-chromium-wide",
+    "entry:notes-screen-fit/mobile-webkit-small",
+    "entry:notes-screen-fit/mobile-webkit",
+    "entry:notes-screen-fit/mobile-webkit-wide",
+    "entry:notes-typing/real-core",
+    "entry:notes-readiness/assistant-real-desktop",
+    "entry:notes-readiness/assistant-real-chromium-320",
+    "entry:notes-readiness/assistant-real-webkit-320"
   ]
 }

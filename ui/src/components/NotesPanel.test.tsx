@@ -120,6 +120,36 @@ describe("NotesPanel", () => {
     expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body);
     expect(screen.getByRole("button", { name: /Initial note/ })).toHaveClass("active");
     expect(listObservations).not.toHaveBeenCalled();
+    expect(screen.getByText("Saved").closest(".note-editor-caption")).toBeVisible();
+  });
+
+  it("waits for the workspace's in-flight notes request without starting another", async () => {
+    const listObservations = vi.fn();
+    const api = { listObservations } as unknown as ApiClient;
+    const { rerender } = render(<DialogProvider><NotesPanel api={api} engagementId="eng-1" initialNotesLoading /></DialogProvider>);
+    expect(screen.getByRole("status", { name: "Loading saved notes" })).toBeVisible();
+    expect(listObservations).not.toHaveBeenCalled();
+
+    rerender(<DialogProvider><NotesPanel api={api} engagementId="eng-1" initialNotes={[note]} initialNotesReady /></DialogProvider>);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body));
+    expect(listObservations).not.toHaveBeenCalled();
+  });
+
+  it("keeps large link catalogs collapsed and lets an operator find and select a later item", async () => {
+    const user = userEvent.setup();
+    const updateObservation = vi.fn().mockImplementation(async (_id, request) => ({ ...note, ...request, revision: 2 }));
+    const evidenceOptions = Array.from({ length: 1000 }, (_, index) => ({ id: `evidence-${index}`, label: `Screenshot ${index}` }));
+    render(<DialogProvider><NotesPanel api={{ listObservations: vi.fn().mockResolvedValue({ items: [note], total: 1 }) } as unknown as ApiClient}
+      engagementId="eng-1" evidenceOptions={evidenceOptions} updateObservation={updateObservation} /></DialogProvider>);
+    await screen.findByRole("textbox", { name: "Note body" });
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText(/Links ·/));
+    await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(40));
+    expect(screen.getByText("Showing 40 of 1000 evidence matches. Search to narrow.")).toBeVisible();
+    await user.type(screen.getByRole("searchbox", { name: "Search note links" }), "Screenshot 999");
+    await user.click(screen.getByRole("checkbox", { name: "Screenshot 999" }));
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledWith(note.id, expect.objectContaining({ evidenceIds: ["evidence-999"] })), { timeout: 2500 });
   });
 
   it("shows loading progress and lets the operator start writing before saved notes arrive", async () => {
