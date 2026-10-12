@@ -27,10 +27,16 @@ from .browser_research import (
     SiteNodeRecordRequest,
     TokenAnalysisRequest,
 )
-from .browser_security import BrowserCaptureSettingsRequest, BrowserSecurityService
+from .browser_security import (
+    BrowserBodyArtifactUploadRequest,
+    BrowserCaptureSettingsRequest,
+    BrowserSecurityService,
+    BrowserWorkflowError,
+)
 from .browserd import BrowserdSecurityRequest
 from .domain import (
     BrowserAttack,
+    BrowserCaptureMode,
     BrowserCrawlJob,
     BrowserInterceptItem,
     BrowserSession,
@@ -93,6 +99,12 @@ _TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         "intercept",
         "Enable or disable flow interception in the headless security proxy.",
         _object({"enabled": {"type": "boolean"}}, ["enabled"]),
+        False,
+    ),
+    (
+        "capture",
+        "Select metadata, headers or bounded redacted text bodies for the headless security session.",
+        _object({"mode": {"enum": ["metadata", "headers", "bodies"]}}, ["mode"]),
         False,
     ),
     (
@@ -335,8 +347,10 @@ class SecurityToolsRuntime:
     def __init__(self, store: NebulaStore, sessions: AgentSecuritySessions) -> None:
         self.store = store
         self.sessions = sessions
-        self.security = BrowserSecurityService(store)
-        self.research = BrowserResearchService(store, self.security)
+        host = getattr(sessions, "host", None)
+        artifact_store = getattr(host, "artifact_store", None)
+        self.security = BrowserSecurityService(store, artifact_store)
+        self.research = BrowserResearchService(store, self.security, artifact_store)
         self._tasks: set[asyncio.Task[None]] = set()
         self._project_tasks: dict[str, set[asyncio.Task[None]]] = {}
 
@@ -440,6 +454,7 @@ class SecurityToolsRuntime:
                     "interception_enabled": session.interception_enabled
                     if session
                     else False,
+                    "capture_mode": session.capture_mode.value if session else None,
                     "upstream_proxy_configured": bool(
                         session and session.upstream_proxy_enabled
                     ),
@@ -587,6 +602,7 @@ class SecurityToolsRuntime:
                     metadata={
                         "browser_session_id": session.id,
                         "browser_exchange_id": exchange.id,
+                        "response_body_artifact_id": exchange.response_body_artifact_id,
                         "redacted": True,
                     },
                 )
@@ -640,6 +656,35 @@ class SecurityToolsRuntime:
                     "state": receipt.state,
                     "url": receipt.page_url,
                     "failure_code": receipt.failure_code,
+                }
+            )
+        if name == "capture":
+            mode = BrowserCaptureMode(arguments["mode"])
+            if (
+                mode == BrowserCaptureMode.BODIES
+                and self.security.artifact_store is None
+            ):
+                raise ValueError(
+                    "Redacted body capture requires the Project artifact store"
+                )
+            capture_settings_session = self.security.update_capture_settings(
+                session.id,
+                BrowserCaptureSettingsRequest(
+                    expected_revision=session.revision,
+                    capture_mode=mode,
+                    proxy_enabled=True,
+                    trust_acknowledged=True,
+                    interception_enabled=session.interception_enabled,
+                    upstream_proxy_enabled=session.upstream_proxy_enabled,
+                    upstream_proxy_url=session.upstream_proxy_url,
+                    upstream_proxy_credential_ref=session.upstream_proxy_credential_ref,
+                ),
+                _ACTOR,
+            )
+            return self._result(
+                {
+                    "session_id": session.id,
+                    "capture_mode": capture_settings_session.capture_mode.value,
                 }
             )
         if name == "intercept":
@@ -752,6 +797,7 @@ class SecurityToolsRuntime:
                     actor_id=_ACTOR,
                 ),
             )
+            capture_note = None
             try:
                 response = await self.sessions.request(
                     project_id,
@@ -763,12 +809,34 @@ class SecurityToolsRuntime:
                         body=tab.body_template,
                     ),
                 )
+                response_artifact_id = None
+                if (
+                    session.capture_mode == BrowserCaptureMode.BODIES
+                    and response.body_base64
+                    and self.security.artifact_store is not None
+                ):
+                    try:
+                        artifact = self.security.upload_body_artifact(
+                            session.id,
+                            BrowserBodyArtifactUploadRequest(
+                                direction="response",
+                                content_base64=response.body_base64,
+                                media_type=response.headers.get("content-type"),
+                                filename="repeater-response.txt",
+                                truncated=response.truncated,
+                            ),
+                            _ACTOR,
+                        )
+                        response_artifact_id = artifact.id
+                    except BrowserWorkflowError as exc:
+                        capture_note = str(exc)
                 result = RepeaterResultRequest(
                     expected_revision=tab.revision,
                     actor_id=_ACTOR,
                     status_code=response.status_code,
                     response_headers=list(response.headers.items()),
                     response_bytes=response.body_bytes,
+                    response_body_artifact_id=response_artifact_id,
                 )
             except Exception as exc:
                 result = RepeaterResultRequest(
@@ -783,6 +851,8 @@ class SecurityToolsRuntime:
                     "result_id": repeater_result.id,
                     "status_code": repeater_result.status_code,
                     "error": repeater_result.error,
+                    "response_body_artifact_id": repeater_result.response_body_artifact_id,
+                    "body_capture_note": capture_note,
                 }
             )
         if name == "intruder":

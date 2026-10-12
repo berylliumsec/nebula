@@ -1790,6 +1790,7 @@ def create_app(
         browser_root / "agent-security-browser",
         headless=True,
         credentials=credentials,
+        artifact_store=artifact_store,
     )
     from .agent_security import AgentSecuritySessions
     from .agent_security_tools import SecurityToolsRuntime

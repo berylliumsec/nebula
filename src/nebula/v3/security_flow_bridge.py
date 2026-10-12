@@ -8,14 +8,17 @@ import json
 import secrets
 from typing import Any
 
+from .artifacts import ArtifactStore
 from .browser_research import BrowserResearchService, InterceptCreateRequest
 from .browser_security import (
+    BrowserBodyArtifactUploadRequest,
     BrowserSecurityService,
     BrowserTrafficRecordRequest,
     BrowserWebSocketFrameRecordRequest,
 )
 from .domain import (
     BrowserInterceptItem,
+    BrowserCaptureMode,
     BrowserSession,
     BrowserSessionStatus,
     RiskClass,
@@ -24,19 +27,24 @@ from .domain import (
 from .storage import NebulaStore
 
 
-MAX_MESSAGE_BYTES = 256_000
+MAX_MESSAGE_BYTES = 1_500_000
 
 
 class SecurityFlowBridge:
     """One proxy instance may write only one active agent security session."""
 
-    def __init__(self, store: NebulaStore, session_id: str) -> None:
+    def __init__(
+        self,
+        store: NebulaStore,
+        session_id: str,
+        artifact_store: ArtifactStore | None = None,
+    ) -> None:
         self.store = store
         self.session_id = session_id
         self.token = secrets.token_urlsafe(32)
         self._server: asyncio.Server | None = None
-        self.security = BrowserSecurityService(store)
-        self.research = BrowserResearchService(store, self.security)
+        self.security = BrowserSecurityService(store, artifact_store)
+        self.research = BrowserResearchService(store, self.security, artifact_store)
 
     @property
     def address(self) -> str:
@@ -111,7 +119,18 @@ class SecurityFlowBridge:
                 RiskClass.ACTIVE_SCAN,
                 native_scope_authority=True,
             )
-            return {"interception_enabled": session.interception_enabled}
+            return {
+                "interception_enabled": session.interception_enabled,
+                "capture_bodies": session.capture_mode == BrowserCaptureMode.BODIES
+                and self.security.artifact_store is not None,
+            }
+        if kind == "body_artifact":
+            artifact = self.security.upload_body_artifact(
+                session.id,
+                BrowserBodyArtifactUploadRequest.model_validate(value),
+                "agent-security-proxy",
+            )
+            return {"artifact_id": artifact.id}
         if kind == "exchange":
             traffic_request = BrowserTrafficRecordRequest.model_validate(
                 {

@@ -16,6 +16,7 @@ import uvicorn
 from .browser_engine import LocalBrowserdAdapter
 from .browser_host_proxy import BrowserHostProxy
 from .agent_proxy import AgentMitmProxy
+from .artifacts import ArtifactStore
 from .browser_security import BrowserSecurityService
 from .browserd import BrowserdManager, BrowserdSettings, create_browserd_app
 from .credentials import CredentialStore
@@ -39,11 +40,13 @@ class ManagedBrowserHost:
         *,
         headless: bool = False,
         credentials: CredentialStore | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.store = store
         self.root = root
         self.headless = headless
         self.credentials = credentials
+        self.artifact_store = artifact_store
         self._lock = asyncio.Lock()
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task | None = None
@@ -213,6 +216,7 @@ class ManagedBrowserHost:
                     self.root / "proxies",
                     authorize,
                     connector.connect,
+                    artifact_store=self.artifact_store,
                 )
             else:
                 self._proxies[identity_id] = BrowserHostProxy(authorize)

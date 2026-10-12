@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 from jsonschema import Draft202012Validator
 
@@ -8,12 +9,14 @@ from nebula.v3.agent_security_tools import (
     PROFILE_ID,
     PROFILE_NAME,
 )
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.browserd import BrowserdSecurityResponse
 from nebula.v3.browser_security import (
     BrowserSecurityService,
     BrowserTrafficRecordRequest,
 )
 from nebula.v3.domain import (
+    Artifact,
     BrowserAttack,
     BrowserIdentity,
     BrowserRepeaterResult,
@@ -128,9 +131,14 @@ def test_repeater_uses_headless_identity_and_saves_durable_result(
     monkeypatch.setenv("NEBULA_ONE_BROWSER_CUTOVER", "1")
     store, project, session = _project(tmp_path)
     sessions = StubSessions(session)
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    sessions.host = SimpleNamespace(artifact_store=artifacts)
     runtime = SecurityToolsRuntime(store, sessions)
 
     async def run():
+        capture = await runtime.call_tool(project.id, "capture", {"mode": "bodies"})
+        assert capture["structuredContent"]["capture_mode"] == "bodies"
+        sessions.session = store.get(BrowserSession, session.id)
         result = await runtime.call_tool(
             project.id,
             "repeater",
@@ -147,6 +155,9 @@ def test_repeater_uses_headless_identity_and_saves_durable_result(
         )
         assert saved.engagement_id == project.id
         assert saved.status_code == 200
+        assert saved.response_body_artifact_id
+        artifact = store.get(Artifact, saved.response_body_artifact_id)
+        assert artifacts.read(artifact) == b"ok"
         exchange = BrowserSecurityService(store).record_traffic(
             session.id,
             BrowserTrafficRecordRequest(

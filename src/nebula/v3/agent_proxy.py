@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 
+from .artifacts import ArtifactStore
 from .browser_host_proxy import BrowserHostProxy
 from .security_flow_bridge import SecurityFlowBridge
 from .storage import NebulaStore
@@ -29,13 +30,15 @@ class AgentMitmProxy:
             [str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
         ]
         | None = None,
+        *,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.store = store
         self.session_id = session_id
         self.identity_id = identity_id
         self.root = root / hashlib.sha256(identity_id.encode()).hexdigest()
         self.upstream = BrowserHostProxy(authorize, connect=connect)
-        self.bridge = SecurityFlowBridge(store, session_id)
+        self.bridge = SecurityFlowBridge(store, session_id, artifact_store)
         self.password = secrets.token_urlsafe(32)
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task | None = None

@@ -8,6 +8,7 @@ bridge fails closed. It sends bounded metadata to Core for durable capture.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -15,8 +16,9 @@ import os
 from mitmproxy import http
 
 
-MAX_MESSAGE_BYTES = 256_000
+MAX_MESSAGE_BYTES = 1_500_000
 MAX_HEADERS = 200
+MAX_BODY_CAPTURE_BYTES = 1_048_576
 
 
 class CoreBridgeError(RuntimeError):
@@ -64,6 +66,29 @@ class AgentSecurityAddon:
         return {
             name: value[:8192] for name, value in list(headers.items())[:MAX_HEADERS]
         }
+
+    async def _body_artifact(
+        self, content: bytes | None, direction: str, media_type: str | None
+    ) -> str | None:
+        if not content:
+            return None
+        try:
+            result = await self._call(
+                "body_artifact",
+                {
+                    "direction": direction,
+                    "content_base64": base64.b64encode(
+                        content[:MAX_BODY_CAPTURE_BYTES]
+                    ).decode("ascii"),
+                    "media_type": media_type,
+                    "filename": f"{direction}-body.txt",
+                    "truncated": len(content) > MAX_BODY_CAPTURE_BYTES,
+                },
+            )
+            return result["artifact_id"]
+        except (CoreBridgeError, KeyError):
+            # Unsupported binary or compressed bodies remain metadata-only.
+            return None
 
     async def _wait_for_decision(self, intercept_id: str) -> dict | None:
         for _ in range(300):
@@ -141,6 +166,19 @@ class AgentSecurityAddon:
                     flow.response.headers.clear()
                     for name, value in state["headers"]:
                         flow.response.headers.add(name, value)
+            request_artifact_id = None
+            response_artifact_id = None
+            if decision.get("capture_bodies"):
+                request_artifact_id = await self._body_artifact(
+                    flow.request.raw_content,
+                    "request",
+                    flow.request.headers.get("content-type"),
+                )
+                response_artifact_id = await self._body_artifact(
+                    flow.response.raw_content,
+                    "response",
+                    flow.response.headers.get("content-type"),
+                )
             websocket = flow.response.status_code == 101 and (
                 flow.request.headers.get("upgrade", "").lower() == "websocket"
             )
@@ -161,6 +199,8 @@ class AgentSecurityAddon:
                     "response_headers": self._headers(flow.response.headers),
                     "request_bytes": len(flow.request.raw_content or b""),
                     "response_bytes": len(flow.response.raw_content or b""),
+                    "request_body_artifact_id": request_artifact_id,
+                    "response_body_artifact_id": response_artifact_id,
                     "duration_ms": max(
                         0,
                         int(

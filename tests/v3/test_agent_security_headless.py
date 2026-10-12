@@ -8,10 +8,11 @@ import pytest
 
 from nebula.v3.agent_security import AgentSecuritySessions
 from nebula.v3.agent_security_tools import SecurityToolsRuntime
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.browser_host import ManagedBrowserHost
 from nebula.v3.browser_security import BrowserSecurityService
 from nebula.v3.browserd import BrowserdSecurityRequest
-from nebula.v3.domain import Engagement, ScopePolicy
+from nebula.v3.domain import Artifact, Engagement, ScopePolicy
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.storage import NebulaStore
 from pydantic import SecretStr
@@ -29,6 +30,7 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
     monkeypatch.setenv("NEBULA_SECURITY_PROXY_ADDON", str(addon))
     store = NebulaStore(tmp_path / "nebula.db")
     project = store.create(Engagement(name="Headless integration"))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
 
     async def fixture(reader, writer):
         await reader.readuntil(b"\r\n\r\n")
@@ -51,11 +53,19 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
             )
         )
         store.update(Engagement, project.id, {"scope_policy_id": scope.id})
-        host = ManagedBrowserHost(store, tmp_path / "security-browser", headless=True)
+        host = ManagedBrowserHost(
+            store,
+            tmp_path / "security-browser",
+            headless=True,
+            artifact_store=artifacts,
+        )
         service = AgentSecuritySessions(store, host)
+        runtime = SecurityToolsRuntime(store, service)
         try:
             session = await service.ensure(project.id)
             assert session.runtime_kind == "agent_security"
+            capture = await runtime.call_tool(project.id, "capture", {"mode": "bodies"})
+            assert capture["structuredContent"]["capture_mode"] == "bodies"
             response = await service.request(
                 project.id,
                 BrowserdSecurityRequest(
@@ -69,6 +79,9 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
             traffic = BrowserSecurityService(store).workspace(project.id).traffic
             assert len(traffic) == 1
             assert traffic[0].session_id == session.id
+            assert traffic[0].response_body_artifact_id
+            artifact = store.get(Artifact, traffic[0].response_body_artifact_id)
+            assert artifacts.read(artifact) == b"headless"
             assert await service.stop(project.id, reason="test stop") == 1
             with pytest.raises(ValueError, match="stopped"):
                 await service.request(
@@ -80,6 +93,7 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
                     ),
                 )
         finally:
+            await runtime.close()
             await host.close()
             server.close()
             await server.wait_closed()
