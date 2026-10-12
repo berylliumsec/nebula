@@ -23,6 +23,7 @@ from .browser_engine import (
     BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS,
     BrowserEngineRegistry,
     LocalBrowserdAdapter,
+    VisibleElectronAdapter,
 )
 from .browser_security import BrowserSecurityService, BrowserWorkflowError
 from .domain import (
@@ -211,6 +212,12 @@ class BrowserCompanion:
         policies = self.store.list_entities(
             AutomationProjectPolicy, engagement_id=project_id, limit=2
         )
+        if (
+            os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+            and policies
+            and policies[0].browser_security_allow_all
+        ):
+            return AutomationApprovalPolicy.NEVER
         return (
             policies[0].approval_policy
             if policies
@@ -388,6 +395,14 @@ class BrowserCompanion:
         return values
 
     async def adapter(self) -> LocalBrowserdAdapter:
+        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+            endpoint = os.environ.get("NEBULA_VISIBLE_BROWSER_URL")
+            token = os.environ.get("NEBULA_VISIBLE_BROWSER_TOKEN")
+            if not endpoint or not token:
+                raise ValueError(
+                    "The desktop browser is disconnected. Open Browser in the Electron app and retry."
+                )
+            return VisibleElectronAdapter(endpoint, token)
         adapter = await self.engines.adapter("managed-chromium")
         host_ref = self._store_hosts.get(self.store)
         if (
@@ -417,8 +432,14 @@ class BrowserCompanion:
 
     def session(self, session_id: str) -> BrowserSession:
         session = self.store.get(BrowserSession, session_id)
-        if session.metadata.get("browser_companion_version") != 1:
-            raise ValueError("This session belongs to the native browser.")
+        cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+        if cutover and session.runtime_kind != "electron_visible":
+            raise ValueError("This historical browser cannot receive new commands.")
+        if not cutover and (
+            session.metadata.get("browser_companion_version") != 1
+            or session.runtime_kind == "electron_visible"
+        ):
+            raise ValueError("This session is not the active Assistant browser.")
         if session.status.value == "closed":
             raise ValueError("This browser session is closed.")
         identity = self.store.get(BrowserIdentity, session.identity_id)
@@ -444,19 +465,29 @@ class BrowserCompanion:
             sessions = self.store.find_entities(
                 BrowserSession, {}, engagement_id=project_id
             )
+            cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
             companions = [
                 item
                 for item in sessions
-                if item.metadata.get("browser_companion_version") == 1
+                if (
+                    item.runtime_kind == "electron_visible"
+                    if cutover
+                    else item.metadata.get("browser_companion_version") == 1
+                    and item.runtime_kind != "electron_visible"
+                )
             ]
-            session = next(
-                (
-                    item
-                    for item in companions
-                    if conversation_id
-                    and item.metadata.get("conversation_id") == conversation_id
-                ),
-                None,
+            session = (
+                companions[0]
+                if cutover and companions
+                else next(
+                    (
+                        item
+                        for item in companions
+                        if conversation_id
+                        and item.metadata.get("conversation_id") == conversation_id
+                    ),
+                    None,
+                )
             )
             if session is None and draft_id:
                 session = next(
@@ -481,9 +512,12 @@ class BrowserCompanion:
             if session is None:
                 identity = BrowserIdentity(
                     engagement_id=project_id,
-                    name="Assistant browser",
+                    name="Visible browser" if cutover else "Assistant browser",
                     metadata={
                         "browser_companion_version": 1,
+                        "runtime_kind": "electron_visible"
+                        if cutover
+                        else "legacy_assistant",
                         "conversation_id": conversation_id,
                         "draft_id": draft_id,
                     },
@@ -491,7 +525,8 @@ class BrowserCompanion:
                 session = BrowserSession(
                     engagement_id=project_id,
                     identity_id=identity.id,
-                    name="Assistant browser",
+                    name="Visible browser" if cutover else "Assistant browser",
+                    runtime_kind="electron_visible" if cutover else "legacy_assistant",
                     metadata={
                         "browser_companion_version": 1,
                         "conversation_id": conversation_id,
@@ -499,10 +534,17 @@ class BrowserCompanion:
                     },
                 )
                 self.store.create_many([identity, session])
-            elif conversation_id and not session.metadata.get("conversation_id"):
+            elif (
+                conversation_id
+                and (cutover or not session.metadata.get("conversation_id"))
+                and session.metadata.get("conversation_id") != conversation_id
+            ):
                 self.bind(session.id, conversation_id)
-            self.session(session.id)
-            await adapter.ensure_identity(session.identity_id)
+            session = self.session(session.id)
+            if cutover:
+                await adapter.ensure_identity(session.identity_id, project_id)
+            else:
+                await adapter.ensure_identity(session.identity_id)
             previous_active_tab = session.active_tab_id
             tabs = await self.request(session.id, CompanionRequest(operation="tabs"))
             session = self.session(session.id)

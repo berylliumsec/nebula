@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from jsonschema import Draft202012Validator
@@ -164,7 +165,12 @@ def attached_session(
         (
             item.id
             for item in sessions
-            if item.metadata.get("browser_companion_version") == 1
+            if (
+                item.runtime_kind == "electron_visible"
+                if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+                else item.metadata.get("browser_companion_version") == 1
+                and item.runtime_kind != "electron_visible"
+            )
         ),
         None,
     )

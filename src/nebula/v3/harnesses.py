@@ -1850,6 +1850,10 @@ def _mcp_runtime_config(
             "enabled_tools": list(profile.enabled_tools),
             "disabled_tools": list(profile.disabled_tools),
         }
+        if profile.transport == McpTransport.BUILTIN:
+            # Built-in tools are exposed through Nebula's already authenticated
+            # gateway and execute in Core; vendors receive no direct endpoint.
+            continue
         if profile.transport == McpTransport.STDIO:
             item.update(
                 command=profile.command,
@@ -16001,6 +16005,23 @@ class HarnessRuntimeService:
                 mandatory_approval = True
         if (
             policy == McpApprovalMode.ASK
+            and server is not None
+            and server.transport == McpTransport.BUILTIN
+            and not mandatory_approval
+            and risk not in PolicyEngine._always_approve
+            and any(
+                item.browser_security_allow_all
+                for item in self.store.list_entities(
+                    AutomationProjectPolicy,
+                    engagement_id=turn.engagement_id,
+                    limit=1,
+                )
+            )
+        ):
+            policy = McpApprovalMode.ALLOW
+            rationale = "Project Allow all browser and security actions"
+        if (
+            policy == McpApprovalMode.ASK
             and session.metadata.get("approval_policy") == "never"
             and not mandatory_approval
         ):
@@ -16579,7 +16600,9 @@ class HarnessRuntimeService:
                 if safe
                 else "MCP tool has write, destructive, open-world, credential, or untrusted annotations"
             )
-        if tool.credentialed:
+        if server.transport == McpTransport.BUILTIN:
+            risk = RiskClass.LOCAL_READ if tool.read_only else RiskClass.ACTIVE_SCAN
+        elif tool.credentialed:
             risk = RiskClass.CREDENTIAL_USE
         elif tool.destructive:
             risk = RiskClass.DESTRUCTIVE

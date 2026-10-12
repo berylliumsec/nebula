@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote, urlsplit
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import (
@@ -121,6 +122,7 @@ from .browser_security import (
     BrowserHandoffResultRequest,
     BrowserIdentityCreateRequest,
     BrowserSecurityService,
+    BrowserWorkflowError,
     BrowserSessionCreateRequest,
     BrowserSessionSyncRequest,
     BrowserTrafficRecordRequest,
@@ -272,6 +274,8 @@ from .domain import (
     AssistantDefaults,
     Artifact,
     BrowserAction,
+    BrowserAutomationLease,
+    BrowserAutomationLeaseStatus,
     BrowserAssessment,
     BrowserAssessmentStatus,
     BrowserCommand,
@@ -280,6 +284,7 @@ from .domain import (
     BrowserIdentity,
     BrowserIssueCandidate,
     BrowserSession,
+    RiskClass,
     BrowserTrafficExchange,
     BrowserValidationGrant,
     BrowserWebSocketFrame,
@@ -1171,6 +1176,15 @@ class AutomationPolicyUpdateRequest(NebulaModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class BrowserSecurityApprovalUpdate(NebulaModel):
+    allow_all: bool
+    expected_revision: int = Field(ge=1)
+
+
+class BrowserNavigationCheck(NebulaModel):
+    url: str = Field(min_length=1, max_length=16_384)
+
+
 class TypeSafeKeyRequest(NebulaModel):
     secret: SecretStr
     persistence: Literal["vault", "session"] = "vault"
@@ -1771,6 +1785,16 @@ def create_app(
     managed_skill_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     managed_skill_root.chmod(0o700)
     managed_browser_host = ManagedBrowserHost(store, browser_root / "managed-browser")
+    agent_security_host = ManagedBrowserHost(
+        store, browser_root / "agent-security-browser", headless=True
+    )
+    from .agent_security import AgentSecuritySessions
+    from .agent_security_tools import SecurityToolsRuntime
+
+    agent_security_sessions = AgentSecuritySessions(store, agent_security_host)
+    agent_security_tools = SecurityToolsRuntime(store, agent_security_sessions)
+    if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+        agent_security_tools.register_profile()
     browser_companion = BrowserCompanion(
         store,
         browser_assessments.engines,
@@ -1858,6 +1882,9 @@ def create_app(
         credential_store=credentials,
         workspace_resolver=harness_workspace,
     )
+    if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+        mcp_probes.bind_security_tools(agent_security_tools)
+        harness_runtime.mcp_service.bind_security_tools(agent_security_tools)
     if tool_platform is not None:
         tool_platform.bind_mcp_service(mcp_probes)
     ssh_environments = ssh_environment_service or SshEnvironmentService(store)
@@ -2118,6 +2145,10 @@ def create_app(
         started: list[tuple[str, str, Callable[[], Any]]] = []
         # Lazy startup is driven by opening the browser; Core still owns shutdown.
         started.append(("runtime", "managed-browser-host", managed_browser_host.close))
+        started.append(
+            ("runtime", "agent-security-browser-host", agent_security_host.close)
+        )
+        started.append(("runtime", "agent-security-tools", agent_security_tools.close))
 
         async def start_component(
             feature: str,
@@ -2363,6 +2394,8 @@ def create_app(
     app.state.store = store
     app.state.application_model = application_model
     app.state.browser_companion = browser_companion
+    app.state.agent_security_sessions = agent_security_sessions
+    app.state.agent_security_tools = agent_security_tools
     app.state.artifact_store = artifact_store
     app.state.knowledge_index = knowledge_index
     app.state.auth_token = token
@@ -8192,6 +8225,119 @@ def create_app(
             )
         return automation_runtime.project_policy(engagement_id)
 
+    def browser_security_policy(engagement_id: str) -> AutomationProjectPolicy:
+        if automation_runtime is not None:
+            return automation_runtime.project_policy(engagement_id)
+        store.get(Engagement, engagement_id)
+        policy_id = str(
+            uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")
+        )
+        try:
+            return store.get(AutomationProjectPolicy, policy_id)
+        except NotFoundError:
+            try:
+                return store.create(
+                    AutomationProjectPolicy(id=policy_id, engagement_id=engagement_id)
+                )
+            except ConflictError:
+                return store.get(AutomationProjectPolicy, policy_id)
+
+    @app.get(
+        f"{API_PREFIX}/desktop-browser-mode",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def desktop_browser_mode() -> dict[str, bool]:
+        return {
+            "one_browser_cutover": os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+        }
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/agent-security/stop",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_agent_security(engagement_id: str) -> dict[str, int]:
+        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") != "1":
+            raise HTTPException(
+                status_code=404, detail="agent security runtime is unavailable"
+            )
+        stopped = await agent_security_tools.stop(
+            engagement_id,
+            reason="Operator emergency stop",
+        )
+        return {"stopped_sessions": stopped}
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-security-approval",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_browser_security_approval(engagement_id: str) -> dict[str, Any]:
+        policy = browser_security_policy(engagement_id)
+        return {
+            "allow_all": policy.browser_security_allow_all,
+            "revision": policy.revision,
+        }
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-security-approval",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def put_browser_security_approval(
+        engagement_id: str,
+        request: BrowserSecurityApprovalUpdate,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> dict[str, Any]:
+        current = browser_security_policy(engagement_id)
+        updated, _ = store.update_with_operation_event(
+            AutomationProjectPolicy,
+            current.id,
+            {"browser_security_allow_all": request.allow_all},
+            expected_revision=request.expected_revision,
+            operation_id=current.id,
+            operation_kind="browser_security_approval",
+            engagement_id=engagement_id,
+            event_type=(
+                "browser_security_approval.enabled"
+                if request.allow_all
+                else "browser_security_approval.revoked"
+            ),
+            event_payload={"allow_all": request.allow_all},
+            actor_id=x_nebula_actor,
+        )
+        stopped = 0
+        if current.browser_security_allow_all and not request.allow_all:
+            if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+                for session in store.find_entities(
+                    BrowserSession,
+                    {"runtime_kind": "electron_visible"},
+                    engagement_id=engagement_id,
+                ):
+                    browser_companion.takeover(session.id, True)
+            run_ids = {
+                lease.run_id
+                for lease in store.find_entities(
+                    BrowserAutomationLease, {}, engagement_id=engagement_id
+                )
+                if lease.status == BrowserAutomationLeaseStatus.ACTIVE
+            }
+            for run_id in run_ids:
+                stopped += browser_automation.revoke_run(
+                    run_id,
+                    "Project browser and security approval revoked",
+                    x_nebula_actor,
+                )
+            stopped += await agent_security_tools.stop(
+                engagement_id, reason="Project browser and security approval revoked"
+            )
+        return {
+            "allow_all": updated.browser_security_allow_all,
+            "revision": updated.revision,
+            "stopped_security_leases": stopped,
+        }
+
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/automation-policy",
         response_model=AutomationProjectPolicy,
@@ -12056,6 +12202,9 @@ def create_app(
         browser_automation.revoke_run(
             run_id, "Emergency stop requested by operator", x_nebula_actor
         )
+        await agent_security_tools.stop(
+            run.engagement_id, reason="Emergency stop requested by operator"
+        )
         return browser_automation.status(run.engagement_id, run_id=run_id)
 
     @app.get(
@@ -12380,6 +12529,36 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-navigation-check",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def check_browser_navigation(
+        engagement_id: str, request: BrowserNavigationCheck
+    ) -> dict[str, bool]:
+        """Authorize each Electron main-frame request, including redirects."""
+        parsed = urlsplit(request.url)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise HTTPException(
+                status_code=403, detail="Only HTTP(S) pages are allowed."
+            )
+        try:
+            browser_security._require_in_scope(
+                browser_security._scope(engagement_id),
+                request.url,
+                "browser.navigate",
+                RiskClass.PASSIVE,
+            )
+        except BrowserWorkflowError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"allowed": True}
+
     @app.put(
         f"{API_PREFIX}/browser-companion/{{session_id}}/conversation",
         dependencies=[Depends(require_auth)],
@@ -12500,6 +12679,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def companion_select_tab(session_id: str, tab_id: str) -> dict[str, str]:
+        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+            await browser_companion.select_tab(session_id, tab_id)
+            return {"active_tab_id": tab_id}
         raise HTTPException(
             status_code=403,
             detail="Only the Assistant changes the active browser tab. Viewing a tab does not select it for the Assistant.",

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import os
 import secrets
 from collections.abc import Sequence
 from datetime import timedelta
@@ -267,6 +268,13 @@ class BrowserAutomationService:
         if session.engagement_id != engagement_id:
             raise BrowserAutomationRequestError(
                 "browser session belongs to another Project"
+            )
+        if (
+            os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+            and session.runtime_kind != "agent_security"
+        ):
+            raise BrowserAutomationRequestError(
+                "security automation requires a separate headless agent session"
             )
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserAutomationRequestError(
