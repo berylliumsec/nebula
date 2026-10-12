@@ -12419,8 +12419,17 @@ def create_app(
     async def operate_operator_browser(
         session_id: str, request: CompanionRequest
     ) -> dict[str, Any]:
-        if request.operation not in {"tabs", "navigate", "new_tab", "close_tab", "capture"}:
-            raise HTTPException(status_code=403, detail="Use the operator browser controls for this action.")
+        if request.operation not in {
+            "tabs",
+            "navigate",
+            "new_tab",
+            "close_tab",
+            "capture",
+        }:
+            raise HTTPException(
+                status_code=403,
+                detail="Use the operator browser controls for this action.",
+            )
         try:
             browser_companion.operator_session(session_id)
             return await browser_companion.request(session_id, request)
@@ -12641,13 +12650,18 @@ def create_app(
                                 raise ValueError("Browser input is too large.")
                             event = validated_operator_input(json.loads(encoded))
                         except (ValueError, json.JSONDecodeError):
-                            await websocket.close(code=4400, reason="Invalid browser input.")
+                            # diagnostic-expected: malformed direct input closes this operator stream.
+                            await websocket.close(
+                                code=4400, reason="Invalid browser input."
+                            )
                             return
                         browser_companion.operator_session(session_id)
                         if event["kind"] not in {"resize"} and not (
                             event["kind"] == "mouse" and event["type"] == "mouseMoved"
                         ):
-                            await browser_companion.authorize_operator_tab(session_id, tab_id)
+                            await browser_companion.authorize_operator_tab(
+                                session_id, tab_id
+                            )
                             browser_companion.invalidate_pending_actions(session_id)
                         async with browser_companion._locks.setdefault(
                             session_id, asyncio.Lock()

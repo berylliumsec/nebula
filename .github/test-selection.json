@@ -1,5 +1,5 @@
 {
-  "change_digest": "1c6ce9fe90191684e1a099e049aa0ed679cc1e0331e278a15cf244b27923323f",
+  "change_digest": "80e03508c3b1a6f7d8cff4b3f05efaa7e071fc668dd327a9be9b7a65c2c13146",
   "reviewed_by": "Codex focused review for operator Chromium browser panel",
   "reason": "The changed journey opens a separate Chromium operator session from the Browser view, streams a page inside the React panel, sends direct pointer and keyboard input, preserves Core scope checks, and keeps the Assistant viewer read-only. Twenty-three Python tests cover input validation and session/API separation; four packaging tests cover Mac Chromium staging, verified reuse, and the desktop launch command. Twenty-four component tests cover the operator panel, input mapping, and existing Assistant viewer. One contained-page UI journey runs in ten permanent desktop, mobile, and landscape browser profiles. A production build and the committed focused real-Core/browserd LAN smoke script cover the live boundary.",
   "exclusions": "No Rust or WKWebView source changed, so native tests are not selected. Unrelated Core, UI, and Playwright journeys and all full suites are excluded. The mocked Playwright journey does not prove live Chromium input; the separate real-Core run is required. The Linux host cannot perform the physical Mac compositor check, which remains an explicit acceptance gate.",

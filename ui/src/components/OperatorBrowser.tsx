@@ -41,7 +41,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
     method,
     ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }),
   }), [api]);
-  const report = (caught: unknown) => {
+  const logCaughtDiagnosticFailure = (caught: unknown) => {
     void logCaughtDiagnostic("interface.operator_browser.operation_failed", "The interactive browser could not complete an operation.", caught, "operator_browser");
     if (mounted.current) setError(caught instanceof Error ? caught.message : String(caught));
   };
@@ -60,7 +60,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
       if (!addressEdited.current) setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? "");
       if (next.page_state_reset) setError("The browser restarted and its live tabs were lost. Reopen the page to continue.");
       setConnectionEpoch(value => value + 1);
-    } catch (caught) { report(caught); }
+    } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { if (mounted.current) setBusy(false); }
   }, [projectId, request]);
 
@@ -80,7 +80,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
       try {
         const value = JSON.parse(String(event.data));
         if (value.kind === "frame" && typeof value.data === "string") setFrame(`data:image/jpeg;base64,${value.data}`);
-      } catch (caught) { report(caught); }
+      } catch (caught) { logCaughtDiagnosticFailure(caught); }
     };
     connection.onerror = () => setError("The page stream failed. Reconnect to continue.");
     connection.onclose = () => { setConnected(false); setError(current => current || "The page stream ended. Reconnect to continue."); };
@@ -101,7 +101,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
         setTabs(latest.tabs);
         const selected = latest.tabs.find(tab => tab.id === tabId);
         if (selected && !addressEdited.current) setAddress(selected.url === "about:blank" ? "" : selected.url);
-      } catch (caught) { if (!cancelled) report(caught); }
+      } catch (caught) { if (!cancelled) logCaughtDiagnosticFailure(caught); }
     };
     const timer = window.setInterval(() => void refresh(), 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
@@ -115,7 +115,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
       const result = await operation<Capture>("navigate", { url });
       addressEdited.current = false;
       setAddress(result.url);
-    } catch (caught) { report(caught); }
+    } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -136,7 +136,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
       setTabs(next.tabs); setTabId(selected?.id ?? "");
       addressEdited.current = false;
       setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? "");
-    } catch (caught) { report(caught); }
+    } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -148,7 +148,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
       source.username = ""; source.password = ""; source.search = ""; source.hash = "";
       onContext({ text: `BROWSER CONTENT\nURL: ${source}\nTitle: ${result.title}\nCaptured: ${result.captured_at}\nTab: ${tabId}\nPage revision: ${result.page_revision}\n\n${result.text}`,
         sourceKind: "browser_companion", sourceId: session?.session_id ?? "", sourceLabel: result.title || source.toString(), truncated: result.text.length >= 12000 });
-    } catch (caught) { report(caught); }
+    } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { if (mounted.current) setBusy(false); }
   };
 
@@ -163,7 +163,7 @@ export function OperatorBrowser({ api, projectId, active, initialOpenUrl, initia
         setTabId(selected);
         addressEdited.current = false;
         setAddress(tabs.find(tab => tab.id === selected)?.url ?? "");
-        if (session) void request(`browser-companion/${session.session_id}/active-tab/${encodeURIComponent(selected)}`, undefined, "PUT").catch(report);
+        if (session) void request(`browser-companion/${session.session_id}/active-tab/${encodeURIComponent(selected)}`, undefined, "PUT").catch(caught => logCaughtDiagnosticFailure(caught));
       }}>{tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.title || "New tab"}</option>)}</select>
       <button type="button" className="button quiet managed-browser-icon" aria-label="New tab" title="New tab" disabled={!session || busy} onClick={() => void manageTab("new_tab")}><Plus size={18} aria-hidden="true" /></button>
       <button type="button" className="button quiet managed-browser-icon" aria-label="Close tab" title="Close tab" disabled={!session || busy} onClick={() => void manageTab("close_tab")}><X size={18} aria-hidden="true" /></button>

@@ -115,37 +115,92 @@ def validated_operator_input(value: Any) -> dict[str, Any]:
     if kind == "mouse":
         event_type = value.get("type")
         button = value.get("button", "none")
-        if event_type not in {"mouseMoved", "mousePressed", "mouseReleased", "mouseWheel"} or button not in {"none", "left", "right", "middle"}:
+        if event_type not in {
+            "mouseMoved",
+            "mousePressed",
+            "mouseReleased",
+            "mouseWheel",
+        } or button not in {"none", "left", "right", "middle"}:
             raise ValueError("Browser pointer input is invalid.")
-        event = {"kind": kind, "type": event_type, "x": number("x", 0, 1920), "y": number("y", 0, 1080), "button": button}
+        event = {
+            "kind": kind,
+            "type": event_type,
+            "x": number("x", 0, 1920),
+            "y": number("y", 0, 1080),
+            "button": button,
+        }
         if event_type == "mouseWheel":
-            event.update(deltaX=number("deltaX", -2000, 2000), deltaY=number("deltaY", -2000, 2000))
+            event.update(
+                deltaX=number("deltaX", -2000, 2000),
+                deltaY=number("deltaY", -2000, 2000),
+            )
         else:
             count = value.get("clickCount", 0)
-            if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 3:
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or not 0 <= count <= 3
+            ):
                 raise ValueError("Browser click count is invalid.")
             event["clickCount"] = count
         return event
     if kind == "touch":
         event_type = value.get("type")
         points = value.get("touchPoints")
-        if event_type not in {"touchStart", "touchMove", "touchEnd", "touchCancel"} or not isinstance(points, list) or len(points) != (1 if event_type in {"touchStart", "touchMove"} else 0):
+        if (
+            event_type not in {"touchStart", "touchMove", "touchEnd", "touchCancel"}
+            or not isinstance(points, list)
+            or len(points) != (1 if event_type in {"touchStart", "touchMove"} else 0)
+        ):
             raise ValueError("Browser touch input is invalid.")
         if not points:
             return {"kind": kind, "type": event_type, "touchPoints": []}
         point = points[0]
         if not isinstance(point, dict) or point.get("id") != 0:
             raise ValueError("Browser touch point is invalid.")
-        return {"kind": kind, "type": event_type, "touchPoints": [{"x": number_from(point, "x", 1920), "y": number_from(point, "y", 1080), "id": 0}]}
+        return {
+            "kind": kind,
+            "type": event_type,
+            "touchPoints": [
+                {
+                    "x": number_from(point, "x", 1920),
+                    "y": number_from(point, "y", 1080),
+                    "id": 0,
+                }
+            ],
+        }
     if kind == "key":
         event_type = value.get("type")
-        key, code, modifiers = value.get("key"), value.get("code", ""), value.get("modifiers", 0)
-        if event_type not in {"keyDown", "keyUp"} or not isinstance(key, str) or not 1 <= len(key) <= 100 or not isinstance(code, str) or len(code) > 100 or isinstance(modifiers, bool) or not isinstance(modifiers, int) or not 0 <= modifiers <= 15:
+        key, code, modifiers = (
+            value.get("key"),
+            value.get("code", ""),
+            value.get("modifiers", 0),
+        )
+        if (
+            event_type not in {"keyDown", "keyUp"}
+            or not isinstance(key, str)
+            or not 1 <= len(key) <= 100
+            or not isinstance(code, str)
+            or len(code) > 100
+            or isinstance(modifiers, bool)
+            or not isinstance(modifiers, int)
+            or not 0 <= modifiers <= 15
+        ):
             raise ValueError("Browser key input is invalid.")
-        return {"kind": kind, "type": event_type, "key": key, "code": code, "modifiers": modifiers}
+        return {
+            "kind": kind,
+            "type": event_type,
+            "key": key,
+            "code": code,
+            "modifiers": modifiers,
+        }
     if kind == "text":
         content = value.get("text")
-        if not isinstance(content, str) or not 1 <= len(content) <= 256 or "\x00" in content:
+        if (
+            not isinstance(content, str)
+            or not 1 <= len(content) <= 256
+            or "\x00" in content
+        ):
             raise ValueError("Browser text input is invalid.")
         return {"kind": kind, "text": content}
     raise ValueError("Unsupported browser input.")
@@ -524,7 +579,9 @@ class BrowserCompanion:
         async with self._locks.setdefault(project_id, asyncio.Lock()):
             self.store.get(Engagement, project_id)
             if mode == "operator" and (conversation_id or draft_id):
-                raise ValueError("The operator browser cannot bind an Assistant draft or conversation.")
+                raise ValueError(
+                    "The operator browser cannot bind an Assistant draft or conversation."
+                )
             if conversation_id:
                 conversation = self.store.get(ChatSession, conversation_id)
                 if conversation.engagement_id != project_id:
