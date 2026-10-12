@@ -486,6 +486,7 @@ class HarnessInteractionStatus(StringEnum):
 class McpTransport(StringEnum):
     STDIO = "stdio"
     STREAMABLE_HTTP = "streamable_http"
+    BUILTIN = "builtin"
 
 
 class McpAuthMode(StringEnum):
@@ -979,6 +980,9 @@ class AutomationProjectPolicy(Entity):
     host_access_acknowledged: bool = False
     engagement_id: str
     approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    # Narrow project opt-in for the visible browser and Security Tools MCP only.
+    # Command, mission, and other approval policies remain independent.
+    browser_security_allow_all: bool = False
     network_enabled: bool = True
     runner_profile_id: str | None = Field(default=None, max_length=200)
     vpn_profile_id: str | None = Field(default=None, max_length=200)
@@ -1331,6 +1335,13 @@ class BrowserSession(Entity):
 
     entity_kind: ClassVar[str] = "browser_sessions"
     engagement_id: str
+    # None identifies records written before the browser runtime cutover.
+    runtime_kind: (
+        Literal[
+            "legacy_native", "legacy_assistant", "electron_visible", "agent_security"
+        ]
+        | None
+    ) = None
     name: str = Field(min_length=1, max_length=200)
     identity_id: str = Field(min_length=1, max_length=200)
     status: BrowserSessionStatus = BrowserSessionStatus.ACTIVE
@@ -3288,7 +3299,29 @@ class McpServerProfile(Entity):
 
     @model_validator(mode="after")
     def transport_is_coherent(self) -> "McpServerProfile":
-        if self.transport == McpTransport.STDIO:
+        if self.id == "nebula-security-tools-v1" and (
+            self.transport != McpTransport.BUILTIN
+            or self.metadata.get("built_in") != "agent_security_v1"
+        ):
+            raise ValueError("the built-in Security Tools identity cannot be replaced")
+        if self.transport == McpTransport.BUILTIN:
+            if (
+                self.id != "nebula-security-tools-v1"
+                or self.metadata.get("built_in") != "agent_security_v1"
+                or self.command is not None
+                or self.arguments
+                or self.url is not None
+                or self.auth_mode != McpAuthMode.NONE
+                or self.bearer_secret_ref
+                or self.header_secret_refs
+                or self.environment
+                or self.environment_secret_refs
+                or self.cwd is not None
+            ):
+                raise ValueError(
+                    "built-in MCP profiles must use Nebula's signed definition"
+                )
+        elif self.transport == McpTransport.STDIO:
             if not self.command or self.url is not None:
                 raise ValueError("stdio MCP servers require command and no URL")
             if self.auth_mode != McpAuthMode.NONE:

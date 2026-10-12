@@ -416,6 +416,7 @@ class BrowserResearchService:
         self, request: CrawlCreateRequest, actor_id: str
     ) -> BrowserCrawlJob:
         session = self.store.get(BrowserSession, request.session_id)
+        self.security._require_agent_security_runtime(session)
         if session.identity_id != request.identity_id:
             raise BrowserWorkflowError("crawl identity must match the selected session")
         self.security._require_in_scope(
@@ -644,6 +645,7 @@ class BrowserResearchService:
         self, session_id: str, request: InterceptCreateRequest, actor_id: str
     ) -> BrowserInterceptItem:
         session = self.store.get(BrowserSession, session_id)
+        self.security._require_agent_security_runtime(session)
         if not session.interception_enabled:
             raise BrowserWorkflowError(
                 "interception must be explicitly enabled for the session"
@@ -750,6 +752,7 @@ class BrowserResearchService:
         self, request: RepeaterTabCreateRequest, actor_id: str
     ) -> BrowserRepeaterTab:
         session = self.store.get(BrowserSession, request.session_id)
+        self.security._require_agent_security_runtime(session)
         if session.identity_id != request.identity_id:
             raise BrowserWorkflowError(
                 "Repeater identity must match the selected session"
@@ -910,6 +913,7 @@ class BrowserResearchService:
         self, request: AttackCreateRequest, actor_id: str
     ) -> BrowserAttack:
         session = self.store.get(BrowserSession, request.session_id)
+        self.security._require_agent_security_runtime(session)
         if session.identity_id != request.identity_id:
             raise BrowserWorkflowError(
                 "attack identity must match the selected session"
@@ -1285,13 +1289,24 @@ class BrowserResearchService:
             "redaction": "headers and bodies containing reusable secrets are not imported",
         }
 
-    def export_har(self, engagement_id: str, session_id: str) -> dict[str, Any]:
+    def export_har(
+        self, engagement_id: str, session_id: str, *, limit: int | None = None
+    ) -> dict[str, Any]:
         session = self._owned(BrowserSession, session_id, engagement_id)
+        if limit is not None and not 1 <= limit <= 500:
+            raise BrowserWorkflowError(
+                "bounded HAR export limit must be between 1 and 500"
+            )
         exchanges = self.store.find_entities(
             BrowserTrafficExchange,
             {"session_id": session.id},
             engagement_id=engagement_id,
+            newest_first=limit is not None,
+            limit=limit + 1 if limit is not None else None,
         )
+        truncated = limit is not None and len(exchanges) > limit
+        if limit is not None:
+            exchanges = list(reversed(exchanges[:limit]))
         entries = []
         for exchange in exchanges:
             entries.append(
@@ -1347,7 +1362,7 @@ class BrowserResearchService:
                     "comment": f"Nebula exchange {exchange.id}; scope revision {exchange.scope_policy_revision}; redacted",
                 }
             )
-        return {
+        result: dict[str, Any] = {
             "log": {
                 "version": "1.2",
                 "creator": {"name": "Nebula", "version": "3"},
@@ -1355,6 +1370,9 @@ class BrowserResearchService:
                 "entries": entries,
             }
         }
+        if limit is not None:
+            result["truncated"] = truncated
+        return result
 
     @staticmethod
     def _normalized_site_url(value: str) -> str:

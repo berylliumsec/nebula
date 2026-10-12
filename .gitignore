@@ -9,6 +9,7 @@ suggestions_notes/ai_notes.html
 suggestions_notes/suggestions.html
 .DS_Store
 poetry.lock
+!security-proxy/poetry.lock
 src/.DS_Store
 nmap_output
 ui/playwright-report/

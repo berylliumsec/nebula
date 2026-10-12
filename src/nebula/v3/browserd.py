@@ -132,9 +132,12 @@ class BrowserdSettings:
     runtime_root: Path
     upload_root: Path | None = None
     headless: bool = False
+    security_headless: bool = False
     http1_only: bool = False
 
     def __post_init__(self) -> None:
+        if self.security_headless and not self.headless:
+            raise ValueError("security_headless requires a headless Chromium context")
         if not self.token or any(character.isspace() for character in self.token):
             raise ValueError("browserd token must be opaque")
         object.__setattr__(
@@ -161,6 +164,24 @@ class BrowserdIdentityReceipt(BaseModel):
     identity_id: str
     tab_ids: list[str]
     state: str = "ready"
+
+
+class BrowserdSecurityRequest(NebulaModel):
+    identity_id: str = Field(pattern=_OPAQUE_ID.pattern)
+    method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
+    url: str = Field(min_length=1, max_length=16_384)
+    headers: dict[str, str] = Field(default_factory=dict, max_length=200)
+    body: str = Field(default="", max_length=65_536)
+    max_body_bytes: int = Field(default=1_048_576, ge=0, le=16_777_216)
+
+
+class BrowserdSecurityResponse(NebulaModel):
+    url: str
+    status_code: int
+    headers: dict[str, str]
+    body_base64: str
+    body_bytes: int
+    truncated: bool
 
 
 class BrowserdLifecycleReceipt(BaseModel):
@@ -315,10 +336,9 @@ class BrowserdManager:
         actual = _sha256_file(executable)
         if not expected or not hmac.compare_digest(expected, actual):
             raise RuntimeError("Chromium executable digest does not match the manifest")
+        test_headless = self.settings.headless and not self.settings.security_headless
         state = (
-            BrowserEngineState.DEGRADED
-            if self.settings.headless
-            else BrowserEngineState.READY
+            BrowserEngineState.DEGRADED if test_headless else BrowserEngineState.READY
         )
         return BrowserEngineCapability(
             adapter="managed-chromium",
@@ -343,12 +363,12 @@ class BrowserdManager:
             protocols=["http", "https", "websocket", "cdp-screencast"],
             unavailability_reason=(
                 "Headless mode is test-only and cannot satisfy packaged desktop acceptance."
-                if self.settings.headless
+                if test_headless
                 else None
             ),
             recovery_action=(
                 "Restart browserd in headed desktop mode for production qualification."
-                if self.settings.headless
+                if test_headless
                 else None
             ),
         )
@@ -369,6 +389,64 @@ class BrowserdManager:
             except Exception:
                 # diagnostic-expected: process shutdown is already in progress.
                 pass
+
+    async def close_identity(self, identity_id: str) -> None:
+        """Stop one security context without affecting other Project identities."""
+        async with self._lock:
+            context = self._contexts.pop(identity_id, None)
+            self._companion_protected_values.pop(identity_id, None)
+            for key in list(self._tabs):
+                if key[0] == identity_id:
+                    self._tabs.pop(key, None)
+            if context is not None:
+                await context.close()
+
+    async def security_request(
+        self, request: BrowserdSecurityRequest
+    ) -> BrowserdSecurityResponse:
+        """Send one non-redirecting request with the headless identity's cookies.
+
+        Core owns authorization; the identity proxy rechecks the live scope on
+        this request. Redirects are returned to Core for a fresh target check.
+        """
+        if not self.settings.security_headless:
+            raise ValueError("security requests require the headless security runtime")
+        target = _network_url(request.url)
+        if target != request.url:
+            raise ValueError("security request URL is invalid")
+        for name, value in request.headers.items():
+            if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) or any(
+                character in value for character in "\r\n\x00"
+            ):
+                raise ValueError("security request headers are invalid")
+        await self.ensure_identity(request.identity_id)
+        context = self._contexts[request.identity_id]
+        response = await context.request.fetch(
+            target,
+            method=request.method,
+            headers=request.headers,
+            data=request.body.encode("utf-8") if request.body else None,
+            max_redirects=0,
+            timeout=30_000,
+            ignore_https_errors=True,
+        )
+        try:
+            body = await response.body()
+            limit = request.max_body_bytes
+            return BrowserdSecurityResponse(
+                url=response.url,
+                status_code=response.status,
+                headers={
+                    name: value[:8192] for name, value in response.headers.items()
+                },
+                body_base64=base64.b64encode(body[:limit]).decode("ascii"),
+                body_bytes=len(body),
+                truncated=len(body) > limit,
+            )
+        finally:
+            # APIRequestContext otherwise retains every response until the
+            # identity closes, which is unbounded across Intruder requests.
+            await response.dispose()
 
     async def readiness(self) -> BrowserEngineCapability:
         return self._capability or BrowserEngineCapability(
@@ -416,6 +494,7 @@ class BrowserdManager:
                     headless=self.settings.headless,
                     executable_path=playwright.chromium.executable_path,
                     proxy=proxy,
+                    ignore_https_errors=self.settings.security_headless,
                     args=[
                         "--proxy-bypass-list=<-loopback>",
                         "--disable-quic",
@@ -748,12 +827,32 @@ def create_browserd_app(
         return await runtime.ensure_identity(request.identity_id)
 
     @app.post(
+        "/v1/identities/close",
+        dependencies=[Depends(require_auth)],
+    )
+    async def close_identity(request: BrowserdIdentityRequest) -> dict[str, bool]:
+        await runtime.close_identity(request.identity_id)
+        return {"closed": True}
+
+    @app.post(
         "/v1/actions",
         response_model=BrowserEngineReceipt,
         dependencies=[Depends(require_auth)],
     )
     async def execute(action: BrowserEngineAction) -> BrowserEngineReceipt:
         return await runtime.execute(action)
+
+    if settings.security_headless:
+
+        @app.post(
+            "/v1/security/request",
+            response_model=BrowserdSecurityResponse,
+            dependencies=[Depends(require_auth)],
+        )
+        async def security_request(
+            request: BrowserdSecurityRequest,
+        ) -> BrowserdSecurityResponse:
+            return await runtime.security_request(request)
 
     @app.post(
         "/v1/assessments/{assessment_id}/{action}",
