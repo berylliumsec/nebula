@@ -29,7 +29,9 @@ from scripts.package_audit import (
 )
 from scripts.stage_playwright_runtime import (
     PlaywrightRuntimeStageError,
+    _host_target,
     stage_playwright_runtime,
+    verified_existing_runtime,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -571,6 +573,59 @@ def test_linux_playwright_runtime_normalizes_rpath_before_recording_digest(
     )
 
 
+def test_playwright_runtime_staging_accepts_macos_cft_app(tmp_path):
+    assert _host_target(platform_name="darwin", machine="arm64") == (
+        "aarch64-apple-darwin"
+    )
+    destination = tmp_path / "playwright-browsers"
+    executable_name = (
+        "chromium-test/chrome-mac-arm64/Google Chrome for Testing.app/"
+        "Contents/MacOS/Google Chrome for Testing"
+    )
+
+    def install(command, *, env, check, text):
+        runtime = Path(env["PLAYWRIGHT_BROWSERS_PATH"])
+        executable = runtime / executable_name
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"mac browser")
+        executable.chmod(0o755)
+        (runtime / "LICENSE.chromium").write_text("license\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    manifest = stage_playwright_runtime(
+        destination, target="aarch64-apple-darwin", run=install
+    )
+    assert manifest["executables"] == [executable_name]
+    assert manifest["target"] == "aarch64-apple-darwin"
+
+
+def test_playwright_runtime_reuses_only_verified_payload(tmp_path):
+    destination = tmp_path / "playwright-browsers"
+
+    def install(command, *, env, check, text):
+        runtime = Path(env["PLAYWRIGHT_BROWSERS_PATH"])
+        executable = runtime / "chromium-test/chrome-linux/chrome"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"browser")
+        executable.chmod(0o755)
+        (runtime / "LICENSE.chromium").write_text("license\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    manifest = stage_playwright_runtime(
+        destination, target="x86_64-unknown-linux-gnu", run=install
+    )
+    assert (
+        verified_existing_runtime(destination, target="x86_64-unknown-linux-gnu")
+        == manifest
+    )
+    executable = destination / "chromium-test/chrome-linux/chrome"
+    executable.write_bytes(b"changed browser")
+    assert (
+        verified_existing_runtime(destination, target="x86_64-unknown-linux-gnu")
+        is None
+    )
+
+
 def test_playwright_runtime_staging_rejects_a_symlink_destination(tmp_path):
     target = tmp_path / "outside"
     target.mkdir()
@@ -595,7 +650,11 @@ def test_desktop_dev_prepares_core_before_tauri_and_starts_vite_in_hook():
 
     assert tauri["build"]["beforeDevCommand"] == "npm run dev"
     assert package["scripts"]["dev:desktop"] == (
-        "npm run build && npm run build:core && tauri dev"
+        "npm run build && npm run build:core && npm run prepare:browser-runtime && tauri dev"
+    )
+    assert package["scripts"]["prepare:browser-runtime"] == (
+        "poetry -C .. run python -m scripts.stage_playwright_runtime "
+        "ui/src-tauri/resources/playwright-browsers --target auto --if-needed"
     )
     assert package["scripts"]["build:core"] == (
         "poetry -C .. run python -m scripts.build_nebula_core"

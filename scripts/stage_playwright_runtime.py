@@ -8,6 +8,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ SBOM_NAME = "nebula-playwright-sbom.spdx.json"
 BROWSER_EXECUTABLE_NAMES = {
     "chrome",
     "chrome.exe",
+    "google chrome for testing",
 }
 
 
@@ -72,6 +74,71 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _host_target(
+    *, platform_name: str | None = None, machine: str | None = None
+) -> str:
+    platform_name = platform_name or sys.platform
+    machine = (machine or platform.machine()).lower()
+    architecture = "aarch64" if machine in {"arm64", "aarch64"} else machine
+    if platform_name == "darwin":
+        return f"{architecture}-apple-darwin"
+    if platform_name.startswith("linux"):
+        return f"{architecture}-unknown-linux-gnu"
+    if platform_name == "win32":
+        return f"{architecture}-pc-windows-msvc"
+    raise PlaywrightRuntimeStageError("the host platform is unsupported")
+
+
+def verified_existing_runtime(
+    destination: Path, *, target: str
+) -> dict[str, object] | None:
+    """Reuse a generated runtime only when its pinned executable still matches."""
+    if destination.is_symlink():
+        raise PlaywrightRuntimeStageError(
+            "the Playwright runtime destination cannot be a symbolic link"
+        )
+    manifest_path = destination / MANIFEST_NAME
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (
+            manifest.get("schema") != 1
+            or manifest.get("browser") != "chromium"
+            or manifest.get("target") != target
+            or manifest.get("playwright_version")
+            != importlib.metadata.version("playwright")
+            or not isinstance(manifest.get("executables"), list)
+            or not manifest["executables"]
+            or not isinstance(manifest.get("executable_sha256"), dict)
+            or not isinstance(manifest.get("licenses"), list)
+            or not manifest["licenses"]
+            or not isinstance(manifest.get("sbom"), str)
+        ):
+            return None
+        root = destination.resolve()
+        for relative in [manifest["sbom"], *manifest["licenses"]]:
+            payload = (destination / relative).resolve()
+            if (
+                not payload.is_relative_to(root)
+                or not payload.is_file()
+                or payload.stat().st_size == 0
+            ):
+                return None
+        for relative in manifest["executables"]:
+            executable = (destination / relative).resolve()
+            if (
+                not executable.is_relative_to(root)
+                or not executable.is_file()
+                or not os.access(executable, os.X_OK)
+                or _sha256(executable) != manifest["executable_sha256"].get(relative)
+            ):
+                return None
+        return manifest
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
 
 
 def _normalize_linux_executable_rpath(path: Path) -> None:
@@ -161,9 +228,7 @@ def stage_playwright_runtime(
                 "filesAnalyzed": True,
                 "licenseConcluded": "BSD-3-Clause",
                 "licenseDeclared": "BSD-3-Clause",
-                "checksums": [
-                    {"algorithm": "SHA256", "checksumValue": primary_sha256}
-                ],
+                "checksums": [{"algorithm": "SHA256", "checksumValue": primary_sha256}],
             },
             {
                 "name": "Playwright Python",
@@ -209,11 +274,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--if-needed", action="store_true")
     arguments = parser.parse_args()
-    manifest = stage_playwright_runtime(
-        arguments.destination,
-        target=arguments.target,
-    )
+    target = _host_target() if arguments.target == "auto" else arguments.target
+    manifest = (
+        verified_existing_runtime(arguments.destination, target=target)
+        if arguments.if_needed
+        else None
+    ) or stage_playwright_runtime(arguments.destination, target=target)
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0
 

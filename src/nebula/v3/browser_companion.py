@@ -9,6 +9,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, ClassVar
@@ -89,6 +90,75 @@ class CompanionRequestRefused(ValueError):
     def __init__(self, message: str, *, argument: str | None = None) -> None:
         super().__init__(message)
         self.argument = argument
+
+
+def validated_operator_input(value: Any) -> dict[str, Any]:
+    """Bound the operator's screencast input before forwarding it to browserd."""
+    if not isinstance(value, dict) or len(json.dumps(value)) > 8000:
+        raise ValueError("Browser input is too large or malformed.")
+
+    def number(name: str, lower: float, upper: float) -> float:
+        raw = value.get(name)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValueError(f"Browser input {name} is invalid.")
+        result = float(raw)
+        if not math.isfinite(result) or not lower <= result <= upper:
+            raise ValueError(f"Browser input {name} is outside the viewport.")
+        return result
+
+    kind = value.get("kind")
+    if kind == "resize":
+        width, height = number("width", 320, 1920), number("height", 320, 1080)
+        if not width.is_integer() or not height.is_integer():
+            raise ValueError("Browser viewport dimensions must be whole pixels.")
+        return {"kind": kind, "width": int(width), "height": int(height)}
+    if kind == "mouse":
+        event_type = value.get("type")
+        button = value.get("button", "none")
+        if event_type not in {"mouseMoved", "mousePressed", "mouseReleased", "mouseWheel"} or button not in {"none", "left", "right", "middle"}:
+            raise ValueError("Browser pointer input is invalid.")
+        event = {"kind": kind, "type": event_type, "x": number("x", 0, 1920), "y": number("y", 0, 1080), "button": button}
+        if event_type == "mouseWheel":
+            event.update(deltaX=number("deltaX", -2000, 2000), deltaY=number("deltaY", -2000, 2000))
+        else:
+            count = value.get("clickCount", 0)
+            if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 3:
+                raise ValueError("Browser click count is invalid.")
+            event["clickCount"] = count
+        return event
+    if kind == "touch":
+        event_type = value.get("type")
+        points = value.get("touchPoints")
+        if event_type not in {"touchStart", "touchMove", "touchEnd", "touchCancel"} or not isinstance(points, list) or len(points) != (1 if event_type in {"touchStart", "touchMove"} else 0):
+            raise ValueError("Browser touch input is invalid.")
+        if not points:
+            return {"kind": kind, "type": event_type, "touchPoints": []}
+        point = points[0]
+        if not isinstance(point, dict) or point.get("id") != 0:
+            raise ValueError("Browser touch point is invalid.")
+        return {"kind": kind, "type": event_type, "touchPoints": [{"x": number_from(point, "x", 1920), "y": number_from(point, "y", 1080), "id": 0}]}
+    if kind == "key":
+        event_type = value.get("type")
+        key, code, modifiers = value.get("key"), value.get("code", ""), value.get("modifiers", 0)
+        if event_type not in {"keyDown", "keyUp"} or not isinstance(key, str) or not 1 <= len(key) <= 100 or not isinstance(code, str) or len(code) > 100 or isinstance(modifiers, bool) or not isinstance(modifiers, int) or not 0 <= modifiers <= 15:
+            raise ValueError("Browser key input is invalid.")
+        return {"kind": kind, "type": event_type, "key": key, "code": code, "modifiers": modifiers}
+    if kind == "text":
+        content = value.get("text")
+        if not isinstance(content, str) or not 1 <= len(content) <= 256 or "\x00" in content:
+            raise ValueError("Browser text input is invalid.")
+        return {"kind": kind, "text": content}
+    raise ValueError("Unsupported browser input.")
+
+
+def number_from(value: dict[str, Any], name: str, upper: float) -> float:
+    raw = value.get(name)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"Browser input {name} is invalid.")
+    result = float(raw)
+    if not math.isfinite(result) or not 0 <= result <= upper:
+        raise ValueError(f"Browser input {name} is outside the viewport.")
+    return result
 
 
 # A ``running`` action older than its approval window plus this grace lost the
@@ -428,14 +498,33 @@ class BrowserCompanion:
             )
         return session
 
+    def operator_session(self, session_id: str) -> BrowserSession:
+        session = self.session(session_id)
+        if session.metadata.get("browser_surface") != "operator":
+            raise ValueError("Direct input belongs to an operator browser session.")
+        return session
+
+    async def authorize_operator_tab(self, session_id: str, tab_id: str) -> None:
+        session = self.operator_session(session_id)
+        result = await self.request(session_id, CompanionRequest(operation="tabs"))
+        tab = next((item for item in result["tabs"] if item["id"] == tab_id), None)
+        if tab is None:
+            raise ValueError("The selected browser tab is no longer available.")
+        if tab["url"] != "about:blank":
+            self._require_in_scope(session, tab["url"], "browser.read")
+
     async def open(
         self,
         project_id: str,
         conversation_id: str | None = None,
         draft_id: str | None = None,
+        *,
+        mode: Literal["assistant", "operator"] = "assistant",
     ) -> dict[str, Any]:
         async with self._locks.setdefault(project_id, asyncio.Lock()):
             self.store.get(Engagement, project_id)
+            if mode == "operator" and (conversation_id or draft_id):
+                raise ValueError("The operator browser cannot bind an Assistant draft or conversation.")
             if conversation_id:
                 conversation = self.store.get(ChatSession, conversation_id)
                 if conversation.engagement_id != project_id:
@@ -448,6 +537,7 @@ class BrowserCompanion:
                 item
                 for item in sessions
                 if item.metadata.get("browser_companion_version") == 1
+                and item.metadata.get("browser_surface", "assistant") == mode
             ]
             session = next(
                 (
@@ -479,11 +569,13 @@ class BrowserCompanion:
                     None,
                 )
             if session is None:
+                name = "Operator browser" if mode == "operator" else "Assistant browser"
                 identity = BrowserIdentity(
                     engagement_id=project_id,
-                    name="Assistant browser",
+                    name=name,
                     metadata={
                         "browser_companion_version": 1,
+                        "browser_surface": mode,
                         "conversation_id": conversation_id,
                         "draft_id": draft_id,
                     },
@@ -491,9 +583,10 @@ class BrowserCompanion:
                 session = BrowserSession(
                     engagement_id=project_id,
                     identity_id=identity.id,
-                    name="Assistant browser",
+                    name=name,
                     metadata={
                         "browser_companion_version": 1,
+                        "browser_surface": mode,
                         "conversation_id": conversation_id,
                         "draft_id": draft_id,
                     },

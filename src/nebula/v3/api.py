@@ -104,6 +104,7 @@ from .browser_companion import (
     CompanionDecision,
     CompanionCredentialCreate,
     CompanionFileCreate,
+    validated_operator_input,
 )
 from .browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
@@ -12372,10 +12373,11 @@ def create_app(
         engagement_id: str,
         conversation_id: str | None = Query(default=None, max_length=200),
         draft_id: str | None = Query(default=None, max_length=200),
+        mode: Literal["assistant", "operator"] = Query(default="assistant"),
     ) -> dict[str, Any]:
         try:
             return await browser_companion.open(
-                engagement_id, conversation_id, draft_id
+                engagement_id, conversation_id, draft_id, mode=mode
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -12406,6 +12408,21 @@ def create_app(
                 detail="Assistant browser is read-only here. Give browsing directions in the Assistant.",
             )
         try:
+            return await browser_companion.request(session_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/operator-operations",
+        dependencies=[Depends(require_auth)],
+    )
+    async def operate_operator_browser(
+        session_id: str, request: CompanionRequest
+    ) -> dict[str, Any]:
+        if request.operation not in {"tabs", "navigate", "new_tab", "close_tab", "capture"}:
+            raise HTTPException(status_code=403, detail="Use the operator browser controls for this action.")
+        try:
+            browser_companion.operator_session(session_id)
             return await browser_companion.request(session_id, request)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -12500,10 +12517,12 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def companion_select_tab(session_id: str, tab_id: str) -> dict[str, str]:
-        raise HTTPException(
-            status_code=403,
-            detail="Only the Assistant changes the active browser tab. Viewing a tab does not select it for the Assistant.",
-        )
+        try:
+            browser_companion.operator_session(session_id)
+            await browser_companion.select_tab(session_id, tab_id)
+            return {"active_tab_id": tab_id}
+        except (ValueError, NotFoundError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     @app.get(
         f"{API_PREFIX}/browser-companion/{{session_id}}/actions",
@@ -12549,11 +12568,8 @@ def create_app(
         browser_companion.takeover(session_id, paused)
         return {"paused": paused}
 
-    @app.websocket(
-        f"{API_PREFIX}/browser-companion/{{session_id}}/tabs/{{tab_id}}/stream"
-    )
-    async def companion_stream(
-        websocket: WebSocket, session_id: str, tab_id: str
+    async def _companion_stream(
+        websocket: WebSocket, session_id: str, tab_id: str, *, operator_input: bool
     ) -> None:
         import base64
         from urllib.parse import quote
@@ -12577,10 +12593,16 @@ def create_app(
             return
         try:
             try:
-                session = browser_companion.session(session_id)
+                session = (
+                    browser_companion.operator_session(session_id)
+                    if operator_input
+                    else browser_companion.session(session_id)
+                )
             except NotFoundError:  # diagnostic-expected: a stale tab streams a companion session that was removed
                 await websocket.close(code=4404, reason="companion session not found")
                 return
+            if operator_input:
+                await browser_companion.authorize_operator_tab(session_id, tab_id)
             adapter = await browser_companion.adapter()
             endpoint = adapter.base_url.replace("http://", "ws://", 1)
             endpoint += f"/v1/identities/{quote(session.identity_id, safe='')}/tabs/{quote(tab_id, safe='')}/screencast"
@@ -12606,15 +12628,32 @@ def create_app(
 
                 async def inputs() -> None:
                     while True:
-                        await websocket.receive_json()
-                        browser_companion.session(session_id)
-                        # Old clients must not mutate the page or invalidate an
-                        # assistant approval through this passive viewing channel.
-                        await websocket.close(
-                            code=4403,
-                            reason="Assistant browser is read-only. Give directions in the Assistant.",
-                        )
-                        return
+                        encoded = await websocket.receive_text()
+                        if not operator_input:
+                            # A viewer never gains input by naming this passive path.
+                            await websocket.close(
+                                code=4403,
+                                reason="Assistant browser is read-only. Give directions in the Assistant.",
+                            )
+                            return
+                        try:
+                            if len(encoded) > 8000:
+                                raise ValueError("Browser input is too large.")
+                            event = validated_operator_input(json.loads(encoded))
+                        except (ValueError, json.JSONDecodeError):
+                            await websocket.close(code=4400, reason="Invalid browser input.")
+                            return
+                        browser_companion.operator_session(session_id)
+                        if event["kind"] not in {"resize"} and not (
+                            event["kind"] == "mouse" and event["type"] == "mouseMoved"
+                        ):
+                            await browser_companion.authorize_operator_tab(session_id, tab_id)
+                            browser_companion.invalidate_pending_actions(session_id)
+                        async with browser_companion._locks.setdefault(
+                            session_id, asyncio.Lock()
+                        ):
+                            browser_companion.operator_session(session_id)
+                            await upstream.send(json.dumps(event))
 
                 # diagnostic-expected: paired pumps are cancelled and drained in finally.
                 sender = asyncio.create_task(frames())
@@ -12643,6 +12682,22 @@ def create_app(
                     code=4410,
                     reason="Browser connection ended. Reconnect to restore the view.",
                 )
+
+    @app.websocket(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/tabs/{{tab_id}}/stream"
+    )
+    async def companion_stream(
+        websocket: WebSocket, session_id: str, tab_id: str
+    ) -> None:
+        await _companion_stream(websocket, session_id, tab_id, operator_input=False)
+
+    @app.websocket(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/tabs/{{tab_id}}/operator-stream"
+    )
+    async def operator_companion_stream(
+        websocket: WebSocket, session_id: str, tab_id: str
+    ) -> None:
+        await _companion_stream(websocket, session_id, tab_id, operator_input=True)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-sessions",
