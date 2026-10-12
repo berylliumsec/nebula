@@ -14269,21 +14269,34 @@ def _register_crud_routes(
                     candidate = store.get(ScopePolicy, current.scope_policy_id)
                     if candidate.engagement_id == current.id:
                         owned_scope = candidate
+                owned_policies = store.list_entities(
+                    AutomationProjectPolicy, engagement_id=entity_id, limit=1_000
+                )
+                owned_configuration_ids = [policy.id for policy in owned_policies]
+                if owned_scope is not None:
+                    owned_configuration_ids.append(owned_scope.id)
                 if store.engagement_has_dependents(
                     entity_id,
-                    exclude_entity_ids=(owned_scope.id,) if owned_scope else (),
+                    exclude_entity_ids=owned_configuration_ids,
                 ):
                     raise ConflictError(
                         "engagement cannot be deleted while owned entities exist; "
                         "archive it instead"
                     )
-                if owned_scope is not None:
+                if owned_scope is not None or owned_policies:
                     with store.transaction() as transaction:
-                        transaction.delete(
-                            ScopePolicy,
-                            owned_scope.id,
-                            expected_revision=owned_scope.revision,
-                        )
+                        for policy in owned_policies:
+                            transaction.delete(
+                                AutomationProjectPolicy,
+                                policy.id,
+                                expected_revision=policy.revision,
+                            )
+                        if owned_scope is not None:
+                            transaction.delete(
+                                ScopePolicy,
+                                owned_scope.id,
+                                expected_revision=owned_scope.revision,
+                            )
                         transaction.delete(
                             Engagement,
                             current.id,

@@ -18,6 +18,8 @@
     {"name": "conversation-panel-sizing", "patterns": ["ui/src/components/useResizableSidePanel*", "ui/src/components/ChatWorkspaceDrawer.tsx"], "areas": ["conversation-panel-sizing"]},
     {"name": "structured-results", "patterns": ["ui/src/components/structured-result/*", "ui/src/pages/ResultsPage*", "ui/src/structured-results.css", "src/nebula/v3/structured_results.py", "ui/src/components/ProviderGoalPanel*", "src/nebula/v3/chat_goals.py"], "areas": ["structured-results", "project-snapshot"]},
     {"name": "project-runtime-policy", "patterns": ["ui/src/components/EngagementPolicySettings*", "src/nebula/v3/harness*.py", "src/nebula/v3/runtime_platform.py", "src/nebula/v3/tools.py"], "areas": ["project-runtime-policy"]},
+    {"name": "host-startup-default", "patterns": ["src/nebula/v3/setup.py", "ui/src/components/SideNav*", "ui/src/components/ProjectSwitcher.css", "ui/src/components/TopBar.tsx", "ui/src/quiet-lens.css"], "areas": ["host-startup-default"]},
+    {"name": "host-startup-compat", "patterns": ["src/nebula/v3/setup.py", "ui/src/components/SideNav*"], "areas": ["host-startup-compat"]},
     {"name": "assistant-defaults", "patterns": ["ui/src/api/assistantDefaults*", "ui/src/pages/SessionsPage.tsx", "src/nebula/v3/domain.py", "src/nebula/v3/api.py"], "areas": ["assistant-defaults"]},
     {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import", "harness-delete", "harness-delete-core"]},
@@ -451,6 +453,20 @@
       {"area":"core-connection-resilience","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
       {"area":"core-connection-resilience","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
       {"area":"core-connection-resilience","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"}
+    ],
+    "host-startup-default": [
+      {"area":"host-startup-default","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-default","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-default","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-default","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-default","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-default","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-default","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-default","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "host-startup-compat": [
+      {"area":"host-startup-compat","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode (?:Nebula help answers a Docker host-file question and opens the setting|assistant saves and shows Host then Docker) on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"host-startup-compat","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization empty project offers the existing project picker after reload","runtime":"mock","shard":"1/1"}
     ],
     "project-runtime-policy": [
       {"area":"project-runtime-policy","project":"desktop","test_match":"tests/interface.spec.ts","grep":"project scope normalizes root URLs and confirms distinct authorization modes","runtime":"mock","shard":"1/1"},

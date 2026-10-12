@@ -78,6 +78,7 @@
 }
 :root[data-theme="quiet-lens"] .side-nav[data-lens-open="false"] > :not(.quiet-lens-handle) { display: none; }
 :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] > :not(.quiet-lens-handle) { position: relative; z-index: 2; }
+:root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] > .engagement-picker { z-index: 3; }
 :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .brand-lockup {
   min-height: 76px;
   padding-left: 55px;

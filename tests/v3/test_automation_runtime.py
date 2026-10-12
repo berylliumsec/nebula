@@ -54,6 +54,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
+from nebula.v3.setup import create_engagement_with_default_scope
 from nebula.v3.storage import NebulaStore, NotFoundError
 from nebula.v3.tool_results import (
     ToolOutputAccessError,
@@ -1691,6 +1692,30 @@ def test_host_mode_requires_consent_and_reads_external_folder_without_docker(tmp
         assert retained.execution_mode == "host"
         await manager.close_session(result.session_id)
         assert policy.execution_mode == "docker"
+
+    asyncio.run(scenario())
+
+
+def test_new_project_uses_host_without_docker_and_legacy_project_keeps_docker(tmp_path):
+    async def scenario():
+        manager, store, _, legacy_project, containers = runtime(tmp_path)
+        assert manager.project_policy(legacy_project.id).execution_mode == "docker"
+
+        created = create_engagement_with_default_scope(
+            store, Engagement(name="New Host project")
+        )
+        policy = manager.project_policy(created.id)
+        assert policy.execution_mode == "host"
+        assert policy.host_access_acknowledged is True
+        manager.runtime_image = ""
+        manager.runtime_digest = ""
+        assert (await manager.runtime_info(engagement_id=created.id)).ready
+        session = await manager.session(
+            engagement_id=created.id, owner_kind="api", owner_id="default-host"
+        )
+        assert session.execution_mode == "host"
+        assert containers == []
+        await manager.close_session(session.id)
 
     asyncio.run(scenario())
 

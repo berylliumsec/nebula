@@ -19,7 +19,12 @@ from sqlalchemy import create_engine
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.database import BootstrapStateRow, Database
-from nebula.v3.domain import Engagement, RunnerProfile, ScopePolicy
+from nebula.v3.domain import (
+    AutomationProjectPolicy,
+    Engagement,
+    RunnerProfile,
+    ScopePolicy,
+)
 from nebula.v3.sandbox import (
     ContainerSandboxRunner,
     PreparedContainerImage,
@@ -34,6 +39,7 @@ from nebula.v3.setup import (
     SetupService,
     SetupServiceError,
     bootstrap_scratch_project,
+    create_engagement_with_default_scope,
 )
 from nebula.v3.storage import NebulaStore
 from nebula.v3.runtime_platform import (
@@ -88,6 +94,12 @@ def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
     assert default_scope.allowed_ports == []
     assert default_scope.local_only is False
     assert default_scope.max_concurrency == 1
+    [host_policy] = store.list_entities(
+        AutomationProjectPolicy, engagement_id=scratch.id
+    )
+    assert host_policy.execution_mode == "host"
+    assert host_policy.host_access_acknowledged is True
+    assert host_policy.network_enabled is False
     assert bootstrap_scratch_project(store) == scratch.id
     assert store.count(Engagement) == 1
 
@@ -95,6 +107,20 @@ def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
 
     assert bootstrap_scratch_project(store) is None
     assert store.count(Engagement) == 0
+
+
+def test_new_project_starts_with_durable_host_policy(tmp_path):
+    store = NebulaStore(tmp_path / "projects.db")
+    created = create_engagement_with_default_scope(
+        store, Engagement(name="Host project")
+    )
+
+    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=created.id)
+    assert policy.execution_mode == "host"
+    assert policy.host_access_acknowledged is True
+    assert policy.network_enabled is False
+    assert policy.metadata["host_access_source"] == "project_creation_default"
+    assert store.get(AutomationProjectPolicy, policy.id) == policy
 
 
 def test_import_content_arriving_before_first_launch_suppresses_scratch(tmp_path):

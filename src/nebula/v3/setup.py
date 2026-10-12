@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import Field
 from sqlalchemy import func, insert, select, update
@@ -28,6 +28,7 @@ from .database import (
     SCRATCH_PROJECT_BOOTSTRAP_KEY,
 )
 from .domain import (
+    AutomationProjectPolicy,
     Engagement,
     EngagementStatus,
     NebulaModel,
@@ -276,18 +277,33 @@ def default_scope_policy(engagement_id: str) -> ScopePolicy:
     )
 
 
+def default_host_policy(engagement_id: str) -> AutomationProjectPolicy:
+    """Give newly created projects the requested host command runtime."""
+
+    return AutomationProjectPolicy(
+        id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")),
+        engagement_id=engagement_id,
+        execution_mode="host",
+        host_access_acknowledged=True,
+        network_enabled=False,
+        metadata={"host_access_source": "project_creation_default"},
+    )
+
+
 def create_engagement_with_default_scope(
     store: NebulaStore, engagement: Engagement
 ) -> Engagement:
-    """Atomically create one Project and its deny-network default scope."""
+    """Atomically create a Project with scope and Host runtime policy."""
 
     if engagement.scope_policy_id is not None:
         raise ValueError("new Projects cannot supply a scope policy reference")
     scope = default_scope_policy(engagement.id)
+    runtime_policy = default_host_policy(engagement.id)
     prepared = engagement.model_copy(update={"scope_policy_id": scope.id})
     with store.transaction() as transaction:
         transaction.add(scope)
         transaction.add(prepared)
+        transaction.add(runtime_policy)
     return prepared
 
 
@@ -349,6 +365,7 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
         engagement_id: str | None = None
         if entity_count == 0:
             scope = default_scope_policy(SCRATCH_PROJECT_ID)
+            runtime_policy = default_host_policy(SCRATCH_PROJECT_ID)
             scratch = Engagement(
                 id=SCRATCH_PROJECT_ID,
                 name=SCRATCH_PROJECT_NAME,
@@ -382,6 +399,17 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
                     payload=payload,
                     created_at=scratch.created_at,
                     updated_at=scratch.updated_at,
+                )
+            )
+            connection.execute(
+                insert(EntityRow).values(
+                    id=runtime_policy.id,
+                    kind=runtime_policy.entity_kind,
+                    engagement_id=runtime_policy.engagement_id,
+                    revision=runtime_policy.revision,
+                    payload=runtime_policy.model_dump(mode="json"),
+                    created_at=runtime_policy.created_at,
+                    updated_at=runtime_policy.updated_at,
                 )
             )
             engagement_id = scratch.id
