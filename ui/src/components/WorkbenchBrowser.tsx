@@ -1162,7 +1162,6 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     let settleFrame = 0;
     const hide = () => browserPresentationQueue.request({ projectId, tabId: null, bounds: null }, {
       onError: (caught) => {
-        void logCaughtDiagnostic("interface.workbench_browser.presentation_failed", "The embedded browser page could not be hidden.", caught, "workbench_browser");
         if (!disposed) setError(`${BROWSER_PLACEMENT_ERROR} ${errorMessage(caught)}`);
       },
     });
@@ -1180,7 +1179,6 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
         browserPresentationQueue.request({ projectId, tabId: activeId, bounds: next }, {
           onSuccess: () => { if (!disposed) setError((current) => current?.startsWith(BROWSER_PLACEMENT_ERROR) ? undefined : current); },
           onError: (caught) => {
-            void logCaughtDiagnostic("interface.workbench_browser.presentation_failed", "The embedded browser page could not be placed.", caught, "workbench_browser");
             if (!disposed) setError(`${BROWSER_PLACEMENT_ERROR} ${errorMessage(caught)}`);
           },
         });

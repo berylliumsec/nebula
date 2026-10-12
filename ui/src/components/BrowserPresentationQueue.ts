@@ -1,4 +1,5 @@
 import type { BrowserBounds } from "../api/workbenchBrowser";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export interface BrowserPresentation {
   projectId: string;
@@ -47,13 +48,14 @@ export class BrowserPresentationQueue {
         await this.apply(presentation);
         succeeded = true;
       } catch (error) {
+        void logCaughtDiagnostic("interface.workbench_browser.presentation_failed", "A native Browser presentation request failed.", error, "workbench_browser");
         failure = error;
       }
       try {
         if (succeeded) callbacks.onSuccess?.();
         else callbacks.onError?.(failure);
       } catch (error) {
-        console.error("Browser presentation callback failed", error);
+        void logCaughtDiagnostic("interface.workbench_browser.presentation_callback_failed", "A native Browser presentation result could not be reported.", error, "workbench_browser");
       }
     }
     this.running = false;

@@ -1,5 +1,5 @@
 {
-  "change_digest": "7bb624034ee234c81c286edf640cd87f128e12e39f27a380d6c5a6b078629d9a",
+  "change_digest": "c668e74324328f45822e68af38fdbe4615b79f537cc7cc39e7a8ae15002cb21d",
   "reviewed_by": "Codex focused review for ordered native Browser presentation",
   "reason": "The changed journey is opening and switching native Browser tabs while the Browser slot moves. The two selected component files cover asynchronous presentation ordering, the hide-before-show barrier, and Workbench Browser create, hide, restore, placement failure, and retry behavior. Three exact Rust cases cover bounds validation and macOS frame math; macOS CI compiles the native presentation command. The selected Browser catalog entries cover desktop mocked native placement and emulated mobile Chromium/WebKit fallback layouts.",
   "exclusions": "No Python or Core browser engine state changed, so Python tests and real-Core Playwright are excluded. LAN-origin behavior is unchanged. The desktop Playwright Tauri mock and Linux Rust tests cannot prove macOS WKWebView compositing; a rebuilt Mac app visual and input check is required before claiming native containment. Physical mobile devices are unavailable; selected mobile browser projects are emulated. Unrelated suites are excluded.",
