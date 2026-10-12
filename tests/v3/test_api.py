@@ -1523,7 +1523,9 @@ def test_typed_crud_revision_and_overview(api):
         ).status_code
         == 204
     )
-    assert store.list_entities(AutomationProjectPolicy, engagement_id=engagement_id) == []
+    assert (
+        store.list_entities(AutomationProjectPolicy, engagement_id=engagement_id) == []
+    )
     assert (
         client.get(f"/api/v1/engagements/{engagement_id}", headers=_auth()).status_code
         == 404

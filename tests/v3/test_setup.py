@@ -19,7 +19,12 @@ from sqlalchemy import create_engine
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.database import BootstrapStateRow, Database
-from nebula.v3.domain import AutomationProjectPolicy, Engagement, RunnerProfile, ScopePolicy
+from nebula.v3.domain import (
+    AutomationProjectPolicy,
+    Engagement,
+    RunnerProfile,
+    ScopePolicy,
+)
 from nebula.v3.sandbox import (
     ContainerSandboxRunner,
     PreparedContainerImage,
@@ -89,7 +94,9 @@ def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
     assert default_scope.allowed_ports == []
     assert default_scope.local_only is False
     assert default_scope.max_concurrency == 1
-    [host_policy] = store.list_entities(AutomationProjectPolicy, engagement_id=scratch.id)
+    [host_policy] = store.list_entities(
+        AutomationProjectPolicy, engagement_id=scratch.id
+    )
     assert host_policy.execution_mode == "host"
     assert host_policy.host_access_acknowledged is True
     assert host_policy.network_enabled is False
