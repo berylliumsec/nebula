@@ -1,16 +1,32 @@
 {
-  "change_digest": "9f6261faa1945513180ab99449c9de578c34b367f9033fe0dc3986433274bdd4",
-  "reviewed_by": "Codex README feature review, 2026-10-12",
-  "reason": "This diff adds the user-reviewed feature shortlist to README.md. It describes existing Project, browser interception, skill, container VPN, operator-control, and evidence workflows without changing application code or an operator journey. The claims were checked against the current Nebula guide, automation runtime documentation, and relevant UI/source paths.",
-  "exclusions": "No Python, frontend, native, or Playwright behavior changed, so all four test layers have zero selected tests and no runtime setup. Product workflow tests and full suites are excluded for this documentation-only edit. Git diff validation and the CI selection receipts check the scoped change.",
+  "change_digest": "4d610bf3ad85b69237e7f619af7e4cddfbdbfd36b5ce5f08ed8c40b0239cfb76",
+  "reviewed_by": "Codex focused review for native Browser scope capacity",
+  "reason": "The native capture proxy now accepts the Project policy's full validated allowlists, including a 0-10000 TCP port range. Three exact Rust cases cover the large-scope regression, bounded request enforcement, and authorization modes. The selected Core and frontend tests check saved policy normalization and range parsing; the selected Browser journeys cover settings modes and durable browser scope on desktop and mobile profiles.",
+  "exclusions": "Unrelated suites and browser feature areas are excluded. Mock Playwright profiles do not execute the Tauri proxy. This Linux host cannot verify a packaged macOS WKWebView or a physical mobile browser; those product gates remain pending. No origin-sensitive UI code changed, so a separate LAN-origin check is excluded.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
+    "python": 2,
+    "frontend": 4,
+    "native": 3,
+    "playwright": 5
   },
-  "python": [],
-  "frontend": [],
-  "native": [],
-  "playwright": []
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_domain.py::test_scope_normalizes_targets_and_validates_window",
+    "tests/v3/test_api_crud_validation.py::test_project_scope_persists_all_targets_and_normalizes_root_domain_urls"
+  ],
+  "frontend": [
+    "ui/src/components/EngagementPolicySettings.test.ts"
+  ],
+  "native": [
+    "browser_proxy::tests::native_scope_accepts_large_saved_allowlists_without_widening_bounded_requests",
+    "browser_proxy::tests::native_scope_matches_domains_cidrs_paths_and_ports_fail_closed",
+    "browser_proxy::tests::native_scope_all_destinations_and_bypass_override_their_policy_gates"
+  ],
+  "playwright": [
+    "entry:project-runtime-policy/desktop",
+    "entry:project-runtime-policy/mobile-chromium",
+    "entry:project-runtime-policy/mobile-webkit",
+    "entry:browser-complete/real-core"
+  ]
 }
