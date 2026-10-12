@@ -2433,10 +2433,20 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
   if ((page.viewportSize()?.width ?? 1440) > 760) {
     await page.mouse.move(360, 310);
     await expect(composerInput).toHaveCSS("opacity", "0");
-    await expect.poll(() => composerFrame.evaluate(element => getComputedStyle(element, "::before").opacity)).toBe("0.72");
-    expect(await composerFrame.evaluate(element => Number.parseFloat(getComputedStyle(element, "::before").height))).toBeLessThanOrEqual(12);
+    const composerLens = composerFrame.locator(".chat-composer-lens");
+    await expect(composerLens).toHaveCSS("opacity", "0.72");
+    const upperContour = await topHandle.locator("ellipse").boundingBox();
+    const lowerContour = await composerLens.locator("ellipse").boundingBox();
+    expect(upperContour && lowerContour).toBeTruthy();
+    expect(lowerContour!.height).toBeCloseTo(upperContour!.height, 1);
+    expect(lowerContour!.width).toBeGreaterThan(100);
+    const upperStroke = await topHandle.locator("ellipse").evaluate(element => getComputedStyle(element).strokeWidth);
+    const lowerStroke = await composerLens.locator("ellipse").evaluate(element => getComputedStyle(element).strokeWidth);
+    expect(lowerStroke).toBe(upperStroke);
+    await page.screenshot({ path: testInfo.outputPath("quiet-lens-composer-contour.png") });
     await composerFrame.hover();
     await expect(composerInput).toHaveCSS("opacity", "1");
+    await expect(composerLens).toHaveCSS("opacity", "0");
     await page.mouse.move(360, 310);
     await expect(composerInput).toHaveCSS("opacity", "0");
     await composer.focus();
