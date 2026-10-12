@@ -958,8 +958,6 @@ fn snapshot_rules(rules: &Arc<Mutex<Vec<NativeProxyRule>>>) -> Vec<NativeProxyRu
         .unwrap_or_default()
 }
 
-const MAX_SCOPE_ENTRIES: usize = 512;
-
 fn parse_scope_time(
     value: Option<String>,
     field: &str,
@@ -1028,13 +1026,6 @@ fn compile_scope(input: NativeProxyScopeInput) -> Result<NativeProxyScope, Strin
     if input.revision == 0 {
         return Err("Project scope revision must be positive".to_string());
     }
-    if input.allowed_cidrs.len() > MAX_SCOPE_ENTRIES
-        || input.allowed_domains.len() > MAX_SCOPE_ENTRIES
-        || input.allowed_urls.len() > MAX_SCOPE_ENTRIES
-        || input.allowed_ports.len() > MAX_SCOPE_ENTRIES
-    {
-        return Err("Project scope contains too many entries".to_string());
-    }
     let allowed_cidrs = input
         .allowed_cidrs
         .iter()
@@ -1055,9 +1046,6 @@ fn compile_scope(input: NativeProxyScopeInput) -> Result<NativeProxyScope, Strin
         .map(|value| compile_scope_url(value))
         .collect::<Result<Vec<_>, _>>()?;
     let mut allowed_ports = input.allowed_ports;
-    if allowed_ports.contains(&0) {
-        return Err("Project scope ports must be between 1 and 65535".to_string());
-    }
     allowed_ports.sort_unstable();
     allowed_ports.dedup();
     let not_before = parse_scope_time(input.not_before, "start time")?;
@@ -1131,7 +1119,7 @@ fn scope_allows_uri_for_request(
     if scope.allow_all_targets {
         return true;
     }
-    if !scope.allowed_ports.is_empty() && !scope.allowed_ports.contains(&port) {
+    if !scope.allowed_ports.is_empty() && scope.allowed_ports.binary_search(&port).is_err() {
         return false;
     }
     let host_allowed = host
@@ -1499,16 +1487,13 @@ impl HttpHandler for CaptureHandler {
         let scope = snapshot_scope(&self.scope);
         let scope_uri = scope_uri_for_request(&request);
         if let Some(scope) = scope.as_ref() {
-            if scope_uri
-                .as_ref()
-                .is_none_or(|uri| {
-                    !scope_allows_uri_for_request(
-                        scope,
-                        uri,
-                        request.method() == hudsucker::hyper::Method::CONNECT,
-                    )
-                })
-            {
+            if scope_uri.as_ref().is_none_or(|uri| {
+                !scope_allows_uri_for_request(
+                    scope,
+                    uri,
+                    request.method() == hudsucker::hyper::Method::CONNECT,
+                )
+            }) {
                 return self
                     .blocked_request(
                         request_id,
@@ -2766,6 +2751,49 @@ mod tests {
     }
 
     #[test]
+    fn native_scope_accepts_large_saved_allowlists_without_widening_bounded_requests() {
+        let large_input = |allow_all_targets| NativeProxyScopeInput {
+            revision: 8,
+            allowed_cidrs: (0..513)
+                .map(|index| format!("198.51.{}.{}/32", index / 256, index % 256))
+                .collect(),
+            allowed_domains: (0..513)
+                .map(|index| format!("host{index}.example.test"))
+                .collect(),
+            allowed_urls: (0..513)
+                .map(|index| format!("https://path{index}.example.test/reviewed"))
+                .collect(),
+            allowed_ports: (0..=10_000).rev().collect(),
+            allow_all_targets,
+            bypass_permissions: false,
+            not_before: None,
+            not_after: None,
+        };
+
+        let bounded = compile_scope(large_input(false)).expect("large bounded scope compiles");
+        assert_eq!(bounded.allowed_cidrs.len(), 513);
+        assert_eq!(bounded.allowed_domains.len(), 513);
+        assert_eq!(bounded.allowed_urls.len(), 513);
+        assert_eq!(bounded.allowed_ports.len(), 10_001);
+        assert_eq!(bounded.allowed_ports[0], 0);
+        assert_eq!(bounded.allowed_ports[10_000], 10_000);
+        assert!(scope_allows_uri(
+            &bounded,
+            &"https://host512.example.test:10000/".parse().unwrap()
+        ));
+        assert!(!scope_allows_uri(
+            &bounded,
+            &"https://host512.example.test:10001/".parse().unwrap()
+        ));
+
+        let all = compile_scope(large_input(true)).expect("large all-target scope compiles");
+        assert!(scope_allows_uri(
+            &all,
+            &"https://outside.example.test:10001/".parse().unwrap()
+        ));
+    }
+
+    #[test]
     fn native_scope_all_destinations_and_bypass_override_their_policy_gates() {
         let all = compile_scope(NativeProxyScopeInput {
             revision: 1,
@@ -2779,7 +2807,10 @@ mod tests {
             not_after: None,
         })
         .unwrap();
-        assert!(scope_allows_uri(&all, &"https://example.test:8443/".parse().unwrap()));
+        assert!(scope_allows_uri(
+            &all,
+            &"https://example.test:8443/".parse().unwrap()
+        ));
 
         let bypass = compile_scope(NativeProxyScopeInput {
             revision: 2,
@@ -2793,7 +2824,10 @@ mod tests {
             not_after: Some("2020-01-01T00:00:00Z".to_string()),
         })
         .unwrap();
-        assert!(scope_allows_uri(&bypass, &"https://example.test:8443/".parse().unwrap()));
+        assert!(scope_allows_uri(
+            &bypass,
+            &"https://example.test:8443/".parse().unwrap()
+        ));
     }
 
     #[test]
@@ -2813,8 +2847,14 @@ mod tests {
         let connect_uri = "https://specific.test/".parse().unwrap();
         assert!(scope_allows_uri_for_request(&scope, &connect_uri, true));
         assert!(!scope_allows_uri(&scope, &connect_uri));
-        assert!(scope_allows_uri(&scope, &"https://specific.test/app/page".parse().unwrap()));
-        assert!(!scope_allows_uri(&scope, &"https://specific.test/other".parse().unwrap()));
+        assert!(scope_allows_uri(
+            &scope,
+            &"https://specific.test/app/page".parse().unwrap()
+        ));
+        assert!(!scope_allows_uri(
+            &scope,
+            &"https://specific.test/other".parse().unwrap()
+        ));
     }
 
     #[test]
