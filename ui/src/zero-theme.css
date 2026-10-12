@@ -193,11 +193,6 @@
 :root[data-theme^="zero-"] .zero-anchor-dock .brand-mark {
   width: 36px;
   height: 36px;
-  border: 1px solid rgb(146 194 255 / 30%);
-  border-radius: 50%;
-  color: #c8e0ff;
-  background: radial-gradient(circle at 38% 30%, rgb(107 169 249 / 28%), rgb(13 18 25 / 88%) 70%);
-  box-shadow: inset 0 1px rgb(255 255 255 / 13%), 0 0 24px rgb(75 145 232 / 14%);
 }
 
 :root[data-theme^="zero-"] .zero-anchor-dock .brand-lockup strong { font-size: 13px; font-weight: var(--weight-semibold); }
@@ -648,10 +643,7 @@
   box-shadow: none;
 }
 :root[data-theme="zero-dark"] .zero-anchor-dock .brand-mark {
-  border-color: var(--border);
-  color: var(--blue-bright);
-  background: var(--blue-muted);
-  box-shadow: none;
+  background: transparent;
 }
 :root[data-theme="zero-dark"] .zero-anchor-dock :is(.engagement-switcher, .operator-row, .nav-item.active) { background: var(--surface-raised); }
 :root[data-theme="zero-dark"] .zero-anchor-dock .nav-item:hover { border-color: var(--border); background: var(--surface-hover); }

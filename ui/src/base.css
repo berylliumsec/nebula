@@ -72,7 +72,9 @@ input, textarea { color: var(--text); background: transparent; caret-color: var(
   background: var(--surface);
 }
 .brand-lockup { display: flex; align-items: center; gap: 10px; min-height: var(--top-height); padding: 0 15px; border-bottom: 1px solid var(--border-soft); }
-.brand-mark { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid color-mix(in srgb, var(--blue) 40%, transparent); border-radius: var(--radius-control); color: var(--on-accent); background: linear-gradient(145deg, var(--brand-start), var(--brand-end)); }
+.brand-mark { display: grid; width: 32px; height: 32px; place-items: center; }
+.brand-mark img { display: block; width: 20px; height: 30px; object-fit: contain; }
+:root:is([data-theme="light"], [data-theme="zero-light"]) .brand-mark { border-radius: 9px; background: #090d11; }
 .brand-lockup > span:nth-child(2) { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .brand-lockup strong { font-size: var(--type-title-sm); letter-spacing: .01em; }
 .brand-lockup small { margin-top: 1px; color: var(--muted); font-size: 11px; }

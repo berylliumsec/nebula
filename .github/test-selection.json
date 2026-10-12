@@ -1,25 +1,32 @@
 {
-  "change_digest": "d0f47626e91d74207892e4d0e1aedceb26163dd5ea113b875a3a1b2ea6b40d29",
-  "reviewed_by": "Codex focused review for Current Run markdown preview",
-  "reason": "The changed journey is the compact Current Run preview of public harness commentary and provider progress. Nineteen collected ActivityLedger component tests cover inline code, formatting, inert links, status, and disclosure. One existing harness stream journey with inline-code regression assertions is selected in five permanent desktop and mobile browser profiles, including the 320 px boundary. A production build checks compilation and bundling.",
-  "exclusions": "No Core, Python, native, persistence, authentication, or origin-sensitive behavior changed, so their test layers and unrelated UI journeys are excluded. Browser cases use a mocked harness stream; a real-Core replay and physical-device check remain separate acceptance gates. Full suites are excluded.",
+  "change_digest": "58bdcfac4f98209c7dc0bb2deb8304d9caab7c5aeeceb7fa7aea8df01b870a34",
+  "reviewed_by": "Codex focused review for Quiet Lens logo rollout",
+  "reason": "The changed journey is seeing one upright Quiet Lens mark at launch, in navigation, and in browser, install, and packaged app icons. The 25 collected SideNav component cases cover the shared navigation component. Ten catalogued Quiet Lens browser cases cover launch, navigation reveal and panel width, theme selection, SVG and raster asset loading, and desktop/mobile geometry in permanent Chromium and WebKit profiles. A production build and generated-icon inspection cover bundle and package assets.",
+  "exclusions": "No Core database, Python, Rust behavior, provider, harness, or workspace state changed, so those test layers and unrelated UI journeys are excluded. Browser tests use mocked API responses; production LAN asset loading is checked separately. Physical-device behavior and installed desktop packaging remain unverified. Full suites are excluded.",
   "expected_tests": {
     "python": 0,
-    "frontend": 19,
+    "frontend": 25,
     "native": 0,
-    "playwright": 5
+    "playwright": 10
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": ["ui/src/components/ActivityLedger.test.tsx"],
+  "frontend": [
+    "ui/src/components/SideNav.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:codex-public-progress/desktop",
-    "entry:codex-public-progress/compact",
-    "entry:codex-public-progress/mobile-chromium-small",
-    "entry:codex-public-progress/mobile-webkit-small",
-    "entry:codex-public-progress/mobile-webkit"
+    "entry:quiet-lens/desktop",
+    "entry:quiet-lens/compact",
+    "entry:quiet-lens/mobile-chromium-small",
+    "entry:quiet-lens/mobile-chromium",
+    "entry:quiet-lens/mobile-chromium-wide",
+    "entry:quiet-lens/mobile-webkit-small",
+    "entry:quiet-lens/mobile-webkit",
+    "entry:quiet-lens/mobile-webkit-wide"
   ]
 }

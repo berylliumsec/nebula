@@ -2175,6 +2175,19 @@ test(firstRunThemeTest, async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#nebula-boot")).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "quiet-lens");
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/nebula-icon.svg");
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/nebula-icon-180.png");
+  const favicon = await page.request.get("/nebula-icon.svg");
+  expect(favicon.ok()).toBe(true);
+  expect(await favicon.text()).toContain("M256 64C339 155");
+  const manifest = await page.request.get("/manifest.webmanifest");
+  expect(manifest.ok()).toBe(true);
+  expect((await manifest.json()).icons.map((icon: { src: string }) => icon.src)).toEqual([
+    "/nebula-icon.svg", "/nebula-icon-192.png", "/nebula-icon-512.png",
+  ]);
+  for (const size of [180, 192, 512]) {
+    expect((await page.request.get(`/nebula-icon-${size}.png`)).ok()).toBe(true);
+  }
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim())).toBe("#090d11");
   await expect(page.locator(".app-shell")).toHaveClass(/quiet-lens-shell/);
   await expect(page.getByRole("button", { name: "Open top menu" })).toBeVisible();
@@ -2511,6 +2524,11 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     await sideHandle.tap();
   }
   await expect(side.locator(".nav-list")).toBeVisible();
+  await expect.poll(() => side.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(250);
+  const brandMark = side.locator(".brand-mark img");
+  await expect(brandMark).toBeVisible();
+  await expect(brandMark).toHaveAttribute("src", "/nebula-logo.svg");
+  expect(await brandMark.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
   await expect(side.getByRole("link", { name: "Findings" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("quiet-lens-navigation.png") });

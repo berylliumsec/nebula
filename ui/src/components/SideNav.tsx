@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
-import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, Search, X } from "lucide-react";
+import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Plus, Search, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItemForPath, navigationItems } from "../navigation";
 import { canonicalNavigationPath, projectSurface, replaceProjectInPath } from "../resourceRoutes";
@@ -180,7 +180,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
       </button>}
       <div className="brand-lockup">
         <span className="brand-mark" aria-hidden="true">
-          <Orbit size={24} strokeWidth={1.8} />
+          <img src="/nebula-logo.svg" width="20" height="30" alt="" />
         </span>
         <span>
           <strong>Nebula</strong>

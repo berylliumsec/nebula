@@ -84,7 +84,6 @@
   border-bottom: 0;
 }
 :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .brand-mark {
-  color: var(--blue);
   background: transparent;
 }
 :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .alpha-label { display: none; }

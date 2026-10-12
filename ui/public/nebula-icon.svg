@@ -1,5 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#05070b"/>
-  <path d="M116 372V140h54l172 153V140h54v232h-48L170 214v158z" fill="#78adff"/>
-  <circle cx="365" cy="143" r="35" fill="#e18a45"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Nebula</title>
+  <desc id="desc">An upright, softly luminous lens.</desc>
+  <defs>
+    <linearGradient id="edge" x1="173" y1="448" x2="339" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#789BA6"/>
+      <stop offset=".48" stop-color="#B7DDE4"/>
+      <stop offset=".8" stop-color="#DCF5F7"/>
+      <stop offset="1" stop-color="#82B6C5"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-25%" width="220%" height="150%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+  <path fill="#090d11" d="M0 0h512v512H0z"/>
+  <path d="M256 64C339 155 339 357 256 448C173 357 173 155 256 64Z" fill="none" stroke="#76B6C5" stroke-width="24" opacity=".35" filter="url(#glow)"/>
+  <path d="M256 64C339 155 339 357 256 448C173 357 173 155 256 64Z" fill="none" stroke="url(#edge)" stroke-width="10" stroke-linejoin="round"/>
 </svg>

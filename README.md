@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="images/logo.png" alt="Nebula Quiet Lens logo" width="120" height="120">
   <h1>Nebula</h1>
   <p>Cybersecurity harness built around the operator</p>
 </div>
