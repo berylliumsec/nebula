@@ -1593,7 +1593,9 @@
     ],
     "codex-public-progress": [
       {"area":"codex-public-progress","project":"desktop","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
+      {"area":"codex-public-progress","project":"compact","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
       {"area":"codex-public-progress","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
+      {"area":"codex-public-progress","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
       {"area":"codex-public-progress","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"}
     ],
     "studio-conversation": [

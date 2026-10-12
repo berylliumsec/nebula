@@ -1,5 +1,7 @@
 import { HarnessReasoningDetails } from "./HarnessReasoningDetails";
 import { ChevronDown } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   activityLedgerStatusLabel,
@@ -134,7 +136,12 @@ export function ActivityLedger({
       </p>)}
 
       {compact && active && (progress?.headline || model.currentAction) && <p className="activity-ledger-current activity-ledger-compact-current" aria-live="polite"><small>Now</small><span>{progress?.headline ?? model.currentAction}</span></p>}
-      {compact && active && (progress?.latest || latestUpdate) && <p className="activity-ledger-progress-preview" aria-live="polite"><small>Latest update</small><span>{progress?.latest || latestUpdate}</span></p>}
+      {compact && active && (progress?.latest || latestUpdate) && <p className="activity-ledger-progress-preview" aria-live="polite"><small>Latest update</small><span><ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        allowedElements={["p", "strong", "em", "del", "code", "br"]}
+        unwrapDisallowed
+        components={{ p: ({ children }) => <>{children}</> }}
+      >{progress?.latest || latestUpdate}</ReactMarkdown></span></p>}
 
       {attentionEntries.length > 0 && <div className="activity-ledger-attention" aria-label="Activity requiring attention">
         {attentionEntries.map((entry) => entry.status === "failed" ? <details className="activity-ledger-failure status-failed" key={`attention:${entry.id}`}>

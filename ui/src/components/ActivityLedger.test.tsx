@@ -65,6 +65,26 @@ describe("ActivityLedger", () => {
     expect(within(ledger).queryByText(/activity step/)).toBeNull();
   });
 
+  it("renders inline code in the live harness preview", () => {
+    render(<ActivityLedger compact model={model({ currentAction: "Thinking" })} latestUpdate="Read the build report on `host.example.test`." />);
+    const preview = screen.getByText("Latest update").closest(".activity-ledger-progress-preview")!;
+    expect(within(preview as HTMLElement).getByText("host.example.test").tagName).toBe("CODE");
+    expect(preview).not.toHaveTextContent("`host.example.test`");
+  });
+
+  it("keeps provider previews formatted and inert", () => {
+    render(<ActivityLedger compact model={model()} progress={{
+      latest: "Check **results** on `host.example.test` and [details](javascript:alert(1)).",
+      receipt: "Updates saved",
+      details: <p>Full progress update.</p>,
+    }} />);
+    const preview = screen.getByText("Latest update").closest(".activity-ledger-progress-preview")!;
+    expect(within(preview as HTMLElement).getByText("results").tagName).toBe("STRONG");
+    expect(within(preview as HTMLElement).getByText("host.example.test").tagName).toBe("CODE");
+    expect(preview.querySelector("a")).toBeNull();
+    expect(preview).toHaveTextContent("details");
+  });
+
   it("shows current work and phases while keeping audit detail collapsed", async () => {
     const user = userEvent.setup();
     render(<ActivityLedger model={model()} />);

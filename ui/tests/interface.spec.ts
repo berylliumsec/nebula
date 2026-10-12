@@ -8744,7 +8744,7 @@ test("completed harness output keeps live commentary in expandable work detail",
       const encoder = new TextEncoder();
       const frames = [
         { type: "started", harness_profile_id: "harness-codex-commentary", harness_session_id: session, harness_turn_id: turn, model: "gpt-6-sol", session_id: "chat-codex-commentary", turn_id: "chat-turn-codex-commentary" },
-        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "commentary", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I checked the adapter. The next step is to verify replay.\n\nThe remaining details are available in activity.", artifact_ids: [], payload: {} },
+        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "commentary", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I checked the adapter on `host.example.test`. The next step is to verify replay.\n\nThe remaining details are available in activity.", artifact_ids: [], payload: {} },
         { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "private-reasoning", item_kind: "reasoning", item_status: "completed", title: "Reasoning", artifact_ids: [], payload: { reasoning_summary_state: "not_provided" } },
         { type: "tool_started", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "tool-1", item_kind: "tool", item_status: "running", title: "Inspect workspace", artifact_ids: [], payload: {} },
         { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
@@ -8779,7 +8779,9 @@ test("completed harness output keeps live commentary in expandable work detail",
   await ledger.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("current-run-hierarchy.png") });
   await expect(ledger).toContainText("Running");
-  await expect(ledger.locator(".activity-ledger-progress-preview")).toContainText("I checked the adapter.");
+  await expect(ledger.locator(".activity-ledger-progress-preview")).toContainText("I checked the adapter on host.example.test.");
+  await expect(ledger.locator(".activity-ledger-progress-preview code")).toHaveText("host.example.test");
+  await expect(ledger.locator(".activity-ledger-progress-preview")).not.toContainText("`host.example.test`");
   await expect(ledger.locator(".activity-ledger-progress-preview")).not.toContainText("remaining details");
   await expect(ledger.locator(".activity-ledger-footer")).toContainText("1 update");
   const thinking = page.getByLabel("Harness thinking");
@@ -8790,9 +8792,10 @@ test("completed harness output keeps live commentary in expandable work detail",
   await expect(thinking).toContainText("Codex did not provide a public summary for one reasoning episode.");
   await expect(page.getByLabel("Assistant commentary")).toHaveCount(0);
   await ledger.getByRole("button", { name: "Show activity" }).click();
-  await ledger.locator(".activity-ledger-audit summary").filter({ hasText: "I checked the adapter." }).click();
+  await ledger.locator(".activity-ledger-audit summary").filter({ hasText: "I checked the adapter" }).click();
   const commentary = ledger.getByLabel("Assistant commentary");
-  await expect(commentary).toContainText("I checked the adapter. The next step is to verify replay.");
+  await expect(commentary).toContainText("I checked the adapter on host.example.test. The next step is to verify replay.");
+  await expect(commentary.locator("code")).toHaveText("host.example.test");
   await expect(commentary).toContainText("The remaining details are available in activity.");
   await expect(commentary).toBeVisible();
   await expect(page.getByText("Tool started", { exact: true })).toHaveCount(0);
