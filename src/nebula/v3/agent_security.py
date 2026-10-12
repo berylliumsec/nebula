@@ -19,6 +19,7 @@ from .browser_research import (
     RepeaterStateRequest,
 )
 from .browser_security import BrowserSecurityService
+from .diagnostics import record_caught_exception
 from .domain import (
     BrowserIdentity,
     BrowserAttack,
@@ -201,7 +202,14 @@ class AgentSecuritySessions:
                     continue
                 try:
                     await self.host.close_identity(session.identity_id)
-                except Exception:
+                except Exception as exc:
+                    record_caught_exception(
+                        "security_browser",
+                        "security_browser.identity_close_failed",
+                        "The headless security identity could not close cleanly; the host is being stopped.",
+                        exc,
+                        stage="agent-security-stop",
+                    )
                     # A dead private bridge cannot keep its proxy or Chromium
                     # context alive. Close the whole security host fail-closed.
                     await self.host.close()

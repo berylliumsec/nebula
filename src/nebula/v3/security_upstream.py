@@ -68,6 +68,7 @@ def _authority(host: str, port: int) -> str:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
+        # diagnostic-expected: a DNS hostname is formatted without IPv6 brackets.
         return f"{host}:{port}"
     return f"[{address}]:{port}" if address.version == 6 else f"{address}:{port}"
 

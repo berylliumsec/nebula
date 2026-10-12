@@ -34,6 +34,7 @@ from .browser_security import (
     BrowserWorkflowError,
 )
 from .browserd import BrowserdSecurityRequest
+from .diagnostics import record_caught_exception
 from .domain import (
     BrowserAttack,
     BrowserCaptureMode,
@@ -380,6 +381,7 @@ class SecurityToolsRuntime:
         try:
             profile = self.store.get(McpServerProfile, PROFILE_ID)
         except NotFoundError:
+            # diagnostic-expected: first registration creates this optional built-in profile.
             return self.store.create(
                 McpServerProfile(
                     id=PROFILE_ID,
@@ -829,6 +831,7 @@ class SecurityToolsRuntime:
                         )
                         response_artifact_id = artifact.id
                     except BrowserWorkflowError as exc:
+                        # diagnostic-expected: the result is saved with a capture note below.
                         capture_note = str(exc)
                 result = RepeaterResultRequest(
                     expected_revision=tab.revision,
@@ -839,6 +842,13 @@ class SecurityToolsRuntime:
                     response_body_artifact_id=response_artifact_id,
                 )
             except Exception as exc:
+                record_caught_exception(
+                    "security_browser",
+                    "security_browser.repeater_request_failed",
+                    "A headless Repeater request failed and its durable result records the error.",
+                    exc,
+                    stage="agent-security-repeater",
+                )
                 result = RepeaterResultRequest(
                     expected_revision=tab.revision,
                     actor_id=_ACTOR,
@@ -924,6 +934,7 @@ class SecurityToolsRuntime:
         return exchanges
 
     def _start_task(self, project_id: str, work: Any) -> None:
+        # diagnostic-expected: this task is tracked, drained on stop, and failures are recorded below.
         task = asyncio.create_task(work)
         self._tasks.add(task)
         project_tasks = self._project_tasks.setdefault(project_id, set())
@@ -936,7 +947,16 @@ class SecurityToolsRuntime:
                 self._project_tasks.pop(project_id, None)
             # An unexpected worker failure must not become an unobserved task.
             if not completed.cancelled():
-                completed.exception()
+                failure = completed.exception()
+                if failure is not None:
+                    record_caught_exception(
+                        "security_browser",
+                        "security_browser.worker_failed",
+                        "A headless security worker stopped unexpectedly.",
+                        failure,
+                        stage="agent-security-worker",
+                        metadata={"project_id": project_id},
+                    )
 
         task.add_done_callback(forget)
 
@@ -1097,7 +1117,8 @@ class SecurityToolsRuntime:
                                 RiskClass.ACTIVE_SCAN,
                                 native_scope_authority=True,
                             )
-                        except Exception:
+                        except BrowserWorkflowError:
+                            # diagnostic-expected: crawl skips links outside the active Project scope.
                             continue
                         frontier.append((target, depth + 1))
                         if len(frontier) >= job.max_requests:

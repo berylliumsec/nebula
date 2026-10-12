@@ -112,6 +112,7 @@ class AgentMitmProxy:
                 stderr=asyncio.subprocess.PIPE,
                 env=environment,
             )
+            # diagnostic-expected: close() supervises and awaits this bounded stderr reader.
             self._stderr_task = asyncio.create_task(self._read_stderr())
             for _ in range(100):
                 if self._process.returncode is not None:
@@ -124,6 +125,7 @@ class AgentMitmProxy:
                     await writer.wait_closed()
                     return self._config()
                 except (OSError, TimeoutError):
+                    # diagnostic-expected: the sidecar listener may not be ready during startup.
                     await asyncio.sleep(0.05)
             raise TimeoutError("The security proxy did not become ready")
         except BaseException:
@@ -155,6 +157,7 @@ class AgentMitmProxy:
             try:
                 await asyncio.wait_for(process.wait(), 5)
             except TimeoutError:
+                # diagnostic-expected: the supervised sidecar missed its graceful exit deadline.
                 process.kill()
                 await process.wait()
         if self._stderr_task is not None:

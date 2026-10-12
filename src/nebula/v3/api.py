@@ -8239,11 +8239,13 @@ def create_app(
         try:
             return store.get(AutomationProjectPolicy, policy_id)
         except NotFoundError:
+            # diagnostic-expected: first read creates the Project approval policy.
             try:
                 return store.create(
                     AutomationProjectPolicy(id=policy_id, engagement_id=engagement_id)
                 )
             except ConflictError:
+                # diagnostic-expected: a concurrent first read already created the policy.
                 return store.get(AutomationProjectPolicy, policy_id)
 
     @app.get(

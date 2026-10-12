@@ -16,6 +16,7 @@ from .browser_security import (
     BrowserTrafficRecordRequest,
     BrowserWebSocketFrameRecordRequest,
 )
+from .diagnostics import record_caught_exception
 from .domain import (
     BrowserInterceptItem,
     BrowserCaptureMode,
@@ -92,8 +93,15 @@ class SecurityFlowBridge:
             result = self._dispatch(message)
             payload = {"ok": True, "result": result}
         except Exception as exc:
-            # The sidecar fails closed. Detailed errors never include bearer or
-            # raw response bodies; Core's diagnostics preserve the exception.
+            # The sidecar fails closed. Core records the exception type without
+            # putting bearer credentials or raw body content on the wire.
+            record_caught_exception(
+                "security_browser",
+                "security_browser.proxy_bridge_rejected",
+                "The headless security proxy request was rejected by Core.",
+                exc,
+                stage="security-flow-bridge",
+            )
             payload = {"ok": False, "error": type(exc).__name__}
         try:
             writer.write((json.dumps(payload, separators=(",", ":")) + "\n").encode())
