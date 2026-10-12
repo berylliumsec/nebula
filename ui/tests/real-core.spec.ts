@@ -322,11 +322,12 @@ interface BrowserPentestAuditFixture {
   api: APIRequestContext;
   site: Server;
   projectId: string;
+  scopePolicyId: string;
   targetUrl: string;
   targetHits: string[];
 }
 
-async function startBrowserPentestAuditFixture(): Promise<BrowserPentestAuditFixture> {
+async function startBrowserPentestAuditFixture(options: {runtimeRoot?: string} = {}): Promise<BrowserPentestAuditFixture> {
   const targetHits: string[] = [];
   const site = createServer((request, response) => {
     targetHits.push(`${request.method} ${request.url}`);
@@ -339,7 +340,10 @@ async function startBrowserPentestAuditFixture(): Promise<BrowserPentestAuditFix
   let api: APIRequestContext | undefined;
   try {
     const targetUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/start`;
-    core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    core = await startRealCore({
+      bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+      env: options.runtimeRoot ? {PLAYWRIGHT_BROWSERS_PATH: options.runtimeRoot} : undefined,
+    });
     api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
     const projects = await (await api.get("engagements")).json() as Array<{id: string; scope_policy_id: string}>;
     const project = projects[0];
@@ -349,7 +353,7 @@ async function startBrowserPentestAuditFixture(): Promise<BrowserPentestAuditFix
       allowed_ports: [Number(new URL(targetUrl).port)],
     }}});
     expect(scope.ok(), await scope.text()).toBe(true);
-    return {core, api, site, projectId: project.id, targetUrl, targetHits};
+    return {core, api, site, projectId: project.id, scopePolicyId: project.scope_policy_id, targetUrl, targetHits};
   } catch (error) {
     if (api) await api.dispose();
     if (core) await stopRealCore(core);
@@ -1830,16 +1834,15 @@ test("assistant upgrade conversation switching restores durable Core history pro
   ]);
 });
 
-test("assistant upgrade linked reply opens a durable workspace file from production LAN Core", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
-  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
-  const modelStub = await startLocalModelStub({ responseContent: "[Open file](/workspace/notes/review.md#L2) · [Open site](https://example.test/review)" });
-  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+test("assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const runtimeRoot = process.env.NEBULA_TEST_MANAGED_BROWSER_RUNTIME;
+  expect(runtimeRoot, "A verified managed Chromium runtime is required for the LAN browser journey").toBeTruthy();
+  const fixture = await startBrowserPentestAuditFixture({runtimeRoot});
+  const { core, api, projectId, scopePolicyId, targetUrl, targetHits } = fixture;
+  const modelStub = await startLocalModelStub({ responseContent: `[Open file](/workspace/notes/review.md#L2) · [Open site](${targetUrl})` });
   await withOwnedCleanup(async () => {
-    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
-    const projectId = projects[0]?.id;
-    expect(projectId).toBeTruthy();
-    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId!).digest("hex"));
+    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId).digest("hex"));
     await mkdir(path.join(workspaceRoot, "notes"), { recursive: true });
     await writeFile(path.join(workspaceRoot, "notes/review.md"), "first line\nsecond line\n");
     const providerResponse = await api.post("providers", { data: {
@@ -1859,21 +1862,45 @@ test("assistant upgrade linked reply opens a durable workspace file from product
     await pairingApi.dispose();
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Linked reply browser");
+    const redeemed = page.waitForResponse(response => response.url().endsWith("/auth/pairings/redeem") && response.request().method() === "POST");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    expect((await redeemed).ok()).toBe(true);
+    await page.waitForURL(url => url.pathname === "/" && !url.hash, { waitUntil: "load" });
+    await expect(page.getByRole("main").getByRole("button", { name: "Assistant" })).toBeVisible();
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${completion.session_id}`);
     const reply = page.locator(".chat-message.assistant .assistant-markdown");
     await expect(reply.getByRole("link", { name: "Open file" })).toBeVisible();
     await reply.getByRole("link", { name: "Open file" }).click();
+    await expect(page).toHaveURL(/view=chat.*side=code/);
+    await expect(page.getByRole("region", { name: "Code beside chat" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
     await expect(page.locator(".code-editor-panel")).toContainText("second line");
     await page.reload();
     await expect(page.locator(".code-editor-panel")).toContainText("second line");
-    await testInfo.attach("linked-file-lan", { body: await page.screenshot(), contentType: "image/png" });
+    await reply.getByRole("link", { name: "Open site" }).click();
+    await expect(page).toHaveURL(/view=chat.*side=browser/);
+    await expect(page.getByRole("region", { name: "Browser beside chat" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl, { timeout: 30_000 });
+    await expect.poll(() => targetHits.filter(hit => hit === "GET /start").length).toBe(1);
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl, { timeout: 30_000 });
+    expect(targetHits.filter(hit => hit === "GET /start")).toHaveLength(1);
+    const refuse = await api.patch(`scope-policies/${scopePolicyId}`, {data: {changes: {allowed_cidrs: ["192.0.2.0/24"]}}});
+    expect(refuse.ok(), await refuse.text()).toBe(true);
+    const siteLink = reply.getByRole("link", { name: "Open site" });
+    await siteLink.focus();
+    await siteLink.press("Enter");
+    await expect(page.getByRole("alert")).toContainText("scope");
+    expect(targetHits.filter(hit => hit === "GET /start")).toHaveLength(1);
+    const restore = await api.patch(`scope-policies/${scopePolicyId}`, {data: {changes: {allowed_cidrs: ["127.0.0.1/32"]}}});
+    expect(restore.ok(), await restore.text()).toBe(true);
+    await page.getByRole("button", {name: "Retry link"}).click();
+    await expect.poll(() => targetHits.filter(hit => hit === "GET /start").length).toBe(2);
+    await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl);
+    await testInfo.attach("assistant-links-lan", { body: await page.screenshot(), contentType: "image/png" });
   }, [
-    {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
-    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "browser fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)},
   ]);
 });
 

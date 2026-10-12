@@ -50,6 +50,11 @@ class CompanionBindingRequest(NebulaModel):
     conversation_id: str | None = Field(default=None, max_length=200)
 
 
+class CompanionLinkedNavigation(NebulaModel):
+    tab_id: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=16384)
+
+
 class CompanionDecision(NebulaModel):
     decision: Literal["approve", "reject"]
 

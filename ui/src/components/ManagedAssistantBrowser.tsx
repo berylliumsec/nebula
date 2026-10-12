@@ -20,8 +20,9 @@ interface Action { operator_requested?: boolean; id: string; status: string; exp
 
 const BROWSER_RESTART_NOTICE = "The browser restarted. Your conversation is saved, but the previous live tabs were lost. Resume assistant control and ask the Assistant to reopen the page.";
 
-export function ManagedAssistantBrowser({ api, projectId, active, conversationId, draftId, onConversation, onContext, onImage, imageSupported, onControlChange, actionContainer, controlsOpen = true }: {
+export function ManagedAssistantBrowser({ api, projectId, active, conversationId, draftId, initialOpenUrl, initialOpenRequest, onConversation, onContext, onImage, imageSupported, onControlChange, actionContainer, controlsOpen = true }: {
   api: ApiClient; projectId: string; active: boolean; conversationId?: string; draftId?: string;
+  initialOpenUrl?: string; initialOpenRequest?: string;
   onConversation: (id: string) => void; onContext: (request: NebulaDraftRequest) => void;
   onImage: (file: File) => void; imageSupported: boolean;
   onControlChange?: (enabled: boolean) => void;
@@ -33,6 +34,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const [tabId, setTabId] = useState("");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
+  const [failedLink, setFailedLink] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState("");
   const [capture, setCapture] = useState<Capture>();
@@ -56,6 +58,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   }, [session?.session_id, paused, onControlChange]);
   const currentTabRef = useRef(tabId);
   currentTabRef.current = tabId;
+  const openedLinkedUrlRef = useRef<string | undefined>(undefined);
   const socket = useRef<WebSocket | undefined>(undefined);
   const mounted = useRef(true);
   const conversationRef = useRef(conversationId);
@@ -85,6 +88,34 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     finally { if (mounted.current) setBusy(false); }
   }, [conversationId, draftId, projectId, request]);
   useEffect(() => { mounted.current = true; if (active && !session) void open(); return () => { mounted.current = false; }; }, [open, active, session]);
+  const openLinkedPage = useCallback(async (url: string, requestId: string) => {
+    if (!session || !tabId) return;
+    setBusy(true); setError(""); setFailedLink(undefined); setCapture(undefined);
+    try {
+      const opened = await request<Capture>(`browser-companion/${session.session_id}/linked-navigation`, { tab_id: tabId, url });
+      if (!mounted.current) return;
+      const currentTabs = await request<{ tabs: Tab[] }>(`browser-companion/${session.session_id}/operations`, { operation: "tabs" });
+      if (!mounted.current) return;
+      setTabs(currentTabs.tabs);
+      if (currentTabRef.current === tabId) setAddress(opened.url);
+      try { sessionStorage.setItem(`nebula.assistant-browser-link.${session.session_id}`, requestId); } catch { /* diagnostic-expected: blocked storage only affects reload deduplication. */ }
+    } catch (caught) {
+      if (!mounted.current) return;
+      void logCaughtDiagnostic("interface.browser_companion.link_navigation_failed", "A linked page could not open in the Assistant browser.", caught, "browser_companion");
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setFailedLink(url);
+    } finally { if (mounted.current) setBusy(false); }
+  }, [request, session, tabId]);
+  useEffect(() => {
+    if (!active || !session || !tabId || !initialOpenUrl || !initialOpenRequest) return;
+    const requestId = `${projectId}:${session.session_id}:${initialOpenRequest}`;
+    if (openedLinkedUrlRef.current === requestId) return;
+    openedLinkedUrlRef.current = requestId;
+    let handled = false;
+    try { handled = sessionStorage.getItem(`nebula.assistant-browser-link.${session.session_id}`) === requestId; } catch { /* diagnostic-expected: Core's tab state remains authoritative. */ }
+    if (!session.page_state_reset && handled) return;
+    void openLinkedPage(initialOpenUrl, requestId);
+  }, [active, initialOpenRequest, initialOpenUrl, openLinkedPage, projectId, session, tabId]);
   useEffect(() => {
     if (!session || !conversationId) return;
     void request(`browser-companion/${session.session_id}/conversation`, { conversation_id: conversationId }, "PUT").catch(caught => logCaughtDiagnosticFailure(caught));
@@ -238,7 +269,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     </div>
     <p role="status">{busy ? "Connecting or reading page…" : connected ? `Assistant browser · ${paused ? "Assistant paused" : approvalPolicy === "never" ? "Assistant control enabled · project allows without prompts" : "Assistant control enabled · approval policy applies"}` : "Assistant browser view disconnected"}</p>
     <p className="managed-browser-view-hint">Read-only view. Give browsing directions in the Assistant.</p>
-    {error && <div className="managed-browser-error" role="alert">{error}<button className="button quiet" disabled={busy} onClick={() => void open()}>Reconnect view</button></div>}
+    {error && <div className="managed-browser-error" role="alert">{error}<button className="button quiet" disabled={busy} onClick={() => failedLink ? void openLinkedPage(failedLink, `${projectId}:${session?.session_id ?? ""}:${initialOpenRequest ?? "retry"}`) : void open()}>{failedLink ? "Retry link" : "Reconnect view"}</button></div>}
     {active && (actionContainer ? createPortal(requiredActions, actionContainer) : requiredActions)}
     {actions.filter(action => action.status === "complete" || action.status === "revoked").sort((a, b) => Date.parse(b.expires_at) - Date.parse(a.expires_at)).slice(0, 1).map(action => <p role="status" key={action.id}>{action.request.operation === "upload" ? "File upload" : "Browser action"} {action.status === "complete" ? "completed" : "cancelled"}.</p>)}
     {capture && <section className="managed-browser-capture" aria-label="Browser context preview">

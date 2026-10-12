@@ -3,12 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import { ManagedAssistantBrowser } from "./ManagedAssistantBrowser";
 
-function fixture(active = true, fail = false, protectedField = false, fileField = false, controlRead?: Promise<{ paused: boolean; approval_policy?: "always" | "on_boundary" | "never" }>, pageReset = false) {
+function fixture(active = true, fail = false, protectedField = false, fileField = false, controlRead?: Promise<{ paused: boolean; approval_policy?: "always" | "on_boundary" | "never" }>, pageReset = false, linkedUrl?: string, linkedFailure = false) {
   let savedFiles: { reference: string; filename: string; size: number; media_type: string }[] = [];
   let actions: { id: string; status: string; expires_at: string; operator_requested: boolean; request: Record<string, unknown> }[] = [];
   let savedCredentials: { reference: string; label: string; available: boolean }[] = [];
   let liveTab = { id: "tab-1", url: "https://example.test/", title: "Example" };
   let resetNoticePending = pageReset;
+  let refuseLink = linkedFailure;
   const connection: { close: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; readyState: number; onopen?: () => void } = { close: vi.fn(), send: vi.fn(), readyState: 1 };
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
@@ -24,6 +25,12 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
       return options?.method === "POST" ? actions[0] : actions;
     }
     if (path.endsWith("/actions/action-1")) { actions[0] = { ...actions[0], status: "complete" }; return actions[0]; }
+    if (path.endsWith("/linked-navigation")) {
+      if (refuseLink) throw new Error("The page is outside this Project's browser scope.");
+      const opened = JSON.parse(String(options?.body)) as { url: string };
+      liveTab = { ...liveTab, url: opened.url, title: "Linked page" };
+      return { url: opened.url, title: "Linked page", text: "", page_revision: "linked-revision", captured_at: "2026-10-12T12:00:00Z", elements: [] };
+    }
     if (path.endsWith("/operations") && JSON.parse(String(options?.body)).operation === "tabs") return { tabs: [liveTab] };
     if (path.endsWith("/credentials")) {
       if (options?.method === "POST") savedCredentials = [{ reference: "protected-1", label: JSON.parse(String(options.body)).label, available: true }];
@@ -35,12 +42,31 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
   const onContext = vi.fn(); const onConversation = vi.fn();
   const onControlChange = vi.fn();
   const api = { request, openBrowserCompanionStream: vi.fn(() => connection) } as unknown as ApiClient;
-  const props = { api, projectId: "project-1", active, onConversation, onContext, onControlChange, onImage: vi.fn(), imageSupported: false };
+  const props = { api, projectId: "project-1", active, initialOpenUrl: linkedUrl, initialOpenRequest: linkedUrl ? `link-${Math.random()}` : undefined, onConversation, onContext, onControlChange, onImage: vi.fn(), imageSupported: false };
   const view = render(<ManagedAssistantBrowser {...props} />);
-  return { proposeUpload: () => { actions = [{ id: "action-1", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: false, request: { operation: "upload", file_ref: "file-1", tab_id: "tab-1", page_revision: "revision-1", element_id: "2" } }]; }, setControlsOpen: (controlsOpen: boolean) => view.rerender(<ManagedAssistantBrowser {...props} controlsOpen={controlsOpen} />), request, onContext, onConversation, connection, onControlChange, navigate: (url: string) => { liveTab = { ...liveTab, url, title: "Navigated page" }; } };
+  return { proposeUpload: () => { actions = [{ id: "action-1", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: false, request: { operation: "upload", file_ref: "file-1", tab_id: "tab-1", page_revision: "revision-1", element_id: "2" } }]; }, setControlsOpen: (controlsOpen: boolean) => view.rerender(<ManagedAssistantBrowser {...props} controlsOpen={controlsOpen} />), clickLinkAgain: () => view.rerender(<ManagedAssistantBrowser {...props} initialOpenRequest={`link-${Math.random()}`} />), request, onContext, onConversation, connection, onControlChange, navigate: (url: string) => { liveTab = { ...liveTab, url, title: "Navigated page" }; }, allowLink: () => { refuseLink = false; } };
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("opens a clicked link in the selected browser tab without repeating the navigation", async () => {
+    const { request, clickLinkAgain } = fixture(true, false, false, false, undefined, false, "https://example.test/linked");
+    await waitFor(() => expect(screen.getByLabelText("Browser address")).toHaveValue("https://example.test/linked"));
+    const navigations = request.mock.calls.filter(([path]) => path.endsWith("/linked-navigation"));
+    expect(navigations).toHaveLength(1);
+    expect(JSON.parse(String(navigations[0][1]?.body))).toEqual({ tab_id: "tab-1", url: "https://example.test/linked" });
+    expect(screen.getByLabelText("Browser address")).toHaveAttribute("readonly");
+    clickLinkAgain();
+    await waitFor(() => expect(request.mock.calls.filter(([path]) => path.endsWith("/linked-navigation"))).toHaveLength(2));
+  });
+
+  it("keeps a refused link visible and retries after scope recovery", async () => {
+    const { request, allowLink } = fixture(true, false, false, false, undefined, false, "https://example.test/linked", true);
+    expect(await screen.findByRole("alert")).toHaveTextContent("outside this Project's browser scope");
+    allowLink();
+    fireEvent.click(screen.getByRole("button", { name: "Retry link" }));
+    await waitFor(() => expect(screen.getByLabelText("Browser address")).toHaveValue("https://example.test/linked"));
+    expect(request.mock.calls.filter(([path]) => path.endsWith("/linked-navigation"))).toHaveLength(2);
+  });
   it("clears a delivered restart notice on a successful reconnect", async () => {
     fixture(true, false, false, false, undefined, true);
     await screen.findByText(/The browser restarted/);
