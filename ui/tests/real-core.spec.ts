@@ -2366,7 +2366,7 @@ test("production LAN mission ledger survives failure, retry, restart recovery, a
   ]);
 });
 
-test("real Core Browser shows durable scope and an honest device-browser handoff", async ({ page }) => {
+test("real Core Browser shows durable scope and an honest device-browser handoff", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
@@ -2375,6 +2375,17 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
   await withOwnedCleanup(async () => {
+    const buildResponse = await page.request.get(`${core.origin}/web-build.json`);
+    expect(buildResponse.ok()).toBe(true);
+    const build = await buildResponse.json() as { commit: string; builtAt: string; assets: Record<string, string> };
+    const browserAsset = Object.keys(build.assets).find((asset) => asset.startsWith("assets/SessionsPage-") && asset.endsWith(".js"));
+    expect(browserAsset).toBeTruthy();
+    const bundleResponse = await page.request.get(`${core.origin}/${browserAsset}`);
+    expect(bundleResponse.ok()).toBe(true);
+    const bundle = await bundleResponse.body();
+    expect(createHash("sha256").update(bundle).digest("hex")).toBe(build.assets[browserAsset!]);
+    expect(bundle.toString("utf8")).toContain("Protected upstream proxy");
+    await testInfo.attach("browser-production-lan-build", { body: JSON.stringify({ origin: core.origin, commit: build.commit, builtAt: build.builtAt, asset: browserAsset, sha256: build.assets[browserAsset!] }), contentType: "application/json" });
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
     const engagements = await engagementsResponse.json() as Array<{ id: string }>;
@@ -2422,7 +2433,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
       window.open = () => ({}) as Window;
     });
     await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByLabel("Browser engine")).toBeVisible({ timeout: 20_000 });
     await page.getByLabel("Browser engine").selectOption("native");
     await expect(page.getByText("Browse from this device")).toBeVisible();
     await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
@@ -2447,7 +2458,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect(page.getByText("Durable account request", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
     await page.goto(`${core.origin}/?view=browser&browserTool=repeater#token=${encodeURIComponent(core.token)}`);
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByLabel("Browser engine")).toBeVisible({ timeout: 20_000 });
     await page.getByLabel("Browser engine").selectOption("native");
     await page.getByRole("button", { name: "Research workbench" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("tool")).toBe("repeater");
@@ -2731,7 +2742,7 @@ test("stabilization real Core device-browser handoff opens an isolated local tab
     }});
     expect(saved.ok(), await saved.text()).toBe(true);
     await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
-    await expect(page.locator(".connection-chip")).toHaveAccessibleName(/Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await expect(page.getByLabel("Browser engine")).toBeVisible({timeout: 20_000});
     await page.getByLabel("Browser engine").selectOption("native");
     await expect(page.getByText("Browse from this device", {exact: true})).toBeVisible();
     const address = page.getByRole("textbox", {name: "Web address", exact: true});

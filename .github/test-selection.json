@@ -1,38 +1,31 @@
 {
-  "change_digest": "475b4d3414568ee9565fc0cd466a26e4b69afc2ab8e5379c387470205b990289",
-  "reviewed_by": "Codex browser pentesting fix review, 2026-10-12",
-  "reason": "The operator journey starts in Security Browser on a paired LAN browser, opens Target at mobile widths, and reviews upload or script payloads before saving a durable Intruder draft. Core owns saved drafts and payload provenance; React owns unsaved input; Quiet Lens owns the transient navigation state. The required invariants are a normal Target pointer click, an operable 44 px navigation handle outside content, exact SHA-256 of raw upload bytes or UTF-8 script text on insecure LAN HTTP, and source metadata retained by Core. The shared real-core.spec.ts test additions are limited to this journey and have been reviewed; they do not warrant unrelated suites. Select the 12 collected BrowserResearchSuite component cases; 11 collected browser-pentest Playwright cases across desktop, compact, and six emulated mobile Chromium/WebKit profiles; and 10 collected Quiet Lens shell cases across desktop, compact, and six emulated mobile profiles. Browser tests use a production UI bundle, live Core, and an owned local target; Quiet Lens tests use the scoped mock fixture.",
-  "exclusions": "No Python or Rust source changed, so their test layers are omitted. No provider-backed assistant payload proposal or remote target is exercised; the local fixture is explicitly scoped. Physical devices are unavailable. Unrelated Playwright areas and full suites are excluded. The native package smoke is a separate operator gate, not a Rust unit selection.",
+  "change_digest": "fc22965cd3a5a6af1cfe5f4320176b97abb08707667840fe47fb62f34df4d2ca",
+  "reviewed_by": "Codex focused browser session review",
+  "reason": "Native browser containment and Session layout/settings changed. The selected browser feature area checks desktop bounds, panel and zoom interactions, responsive and paired-client research layout, browser Assistant interactions, real-Core durability, and browser-only capture state. Unit and native selections cover the changed policy, local UI, and logical AppKit frame math.",
+  "exclusions": "Unrelated suites are excluded. The Linux host cannot run a packaged macOS WKWebView acceptance check or a physical mobile browser; these remain explicit product-quality limitations. Production UI build and non-loopback LAN dogfood are separate checks.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 12,
-    "native": 0,
-    "playwright": 21
+    "python": 33,
+    "frontend": 36,
+    "native": 2,
+    "playwright": 65
   },
   "python_versions": [
     "3.11"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/components/BrowserResearchSuite.test.tsx"],
-  "native": [],
+  "python": [
+    "tests/v3/test_browser_security.py"
+  ],
+  "frontend": [
+    "ui/src/components/WorkbenchBrowser.test.tsx",
+    "ui/src/components/SecurityBrowserWorkspacePanel.test.tsx"
+  ],
+  "native": [
+    "browser::tests::browser_bounds_remain_logical_at_high_density",
+    "browser::tests::macos_browser_frame_uses_the_main_webview_coordinate_space"
+  ],
   "playwright": [
-    "entry:browser-pentest-audit/real-core",
-    "entry:browser-pentest-audit/assistant-real-compact",
-    "entry:browser-pentest-audit/assistant-real-chromium-320",
-    "entry:browser-pentest-audit/assistant-real-chromium-390",
-    "entry:browser-pentest-audit/assistant-real-chromium-430",
-    "entry:browser-pentest-audit/assistant-real-webkit-320",
-    "entry:browser-pentest-audit/assistant-real-webkit-390",
-    "entry:browser-pentest-audit/assistant-real-webkit-430",
-    "entry:quiet-lens/desktop",
-    "entry:quiet-lens/compact",
-    "entry:quiet-lens/mobile-chromium-small",
-    "entry:quiet-lens/mobile-chromium",
-    "entry:quiet-lens/mobile-chromium-wide",
-    "entry:quiet-lens/mobile-webkit-small",
-    "entry:quiet-lens/mobile-webkit",
-    "entry:quiet-lens/mobile-webkit-wide"
+    "area:browser-complete"
   ]
 }

@@ -1,7 +1,7 @@
 import { browserScopeStatus, proxyScopeSignal } from "./browserScopeStatus";
 import { InterceptionTransport } from "./InterceptionTransport";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Bug, Check, Download, ExternalLink, GitCompareArrows, Globe2, History, LoaderCircle, MessageSquareText, Network, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Square, Trash2, UserRound, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Bug, Check, ChevronDown, Download, ExternalLink, GitCompareArrows, Globe2, History, LoaderCircle, MessageSquareText, Network, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Square, Trash2, UserRound, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Link, useSearchParams } from "react-router-dom";
 import { desktopDeviceId, isTauriRuntime } from "../api/runtime";
@@ -219,6 +219,17 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
   const [researchOpen, setResearchOpen] = useState(false);
   const [researchPanelWidth, setResearchPanelWidth] = useState<number>();
+  const browserRootRef = useRef<HTMLDivElement>(null);
+  const [browserPanelWidth, setBrowserPanelWidth] = useState(0);
+  useLayoutEffect(() => {
+    const root = browserRootRef.current;
+    if (!root) return;
+    const measure = () => setBrowserPanelWidth(root.getBoundingClientRect().width);
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    measure();
+    return () => observer.disconnect();
+  }, [desktop]);
   const repeaterDraftStore = useRef<RepeaterDraftStore>(new Map());
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
@@ -293,6 +304,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     ?? workspace?.sessions.find((session) => session.status === "active")
     ?? workspace?.sessions[0];
   const activeIdentity = workspace?.identities.find((identity) => identity.id === activeSession?.identityId);
+  const interceptionActive = !!activeSession?.proxyEnabled && !!activeSession?.interceptionEnabled;
 
   useEffect(() => {
     if (!activeSession) return;
@@ -325,7 +337,8 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     ? nativeScopeSignals[activeSession.id]
     : savedScopeSignal ? proxyScopeSignal(savedScopeSignal) : undefined;
   const scopeBadge = browserScopeStatus(scopeDecision, nativeScopeError);
-  const researchCoversBrowser = researchOpen && window.matchMedia("(max-width: 1100px)").matches;
+  const compactResearch = browserPanelWidth === 0 || browserPanelWidth <= 1100;
+  const researchCoversBrowser = researchOpen && compactResearch;
   const browserVisible = desktop && active && !researchCoversBrowser && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
 
@@ -511,7 +524,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
             credentialRef: persistedSession.upstreamProxyCredentialRef,
           },
           persistedSession.captureMode === "bodies",
-          persistedSession.interceptionEnabled,
+          persistedSession.proxyEnabled && persistedSession.interceptionEnabled,
           currentScope,
         );
         if (persistedSession.proxyEnabled) setNativeScopeSignals(current => ({...current, [persistedSession.id]: null}));
@@ -1167,9 +1180,10 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     window.addEventListener("resize", sync);
     window.addEventListener("scroll", sync, true);
     window.addEventListener(ASK_NEBULA_LAYOUT_EVENT, sync);
+    window.addEventListener("nebula:ui-zoom", sync);
     sync();
-    return () => { observer.disconnect(); mutationObserver?.disconnect(); window.removeEventListener("resize", sync); window.removeEventListener("scroll", sync, true); window.removeEventListener(ASK_NEBULA_LAYOUT_EVENT, sync); cancelAnimationFrame(frame); };
-  }, [activeTab?.created, activeTab?.id, bounds, browserVisible, capabilities?.projectStorage, desktop, error, notice, projectId]);
+    return () => { observer.disconnect(); mutationObserver?.disconnect(); window.removeEventListener("resize", sync); window.removeEventListener("scroll", sync, true); window.removeEventListener(ASK_NEBULA_LAYOUT_EVENT, sync); window.removeEventListener("nebula:ui-zoom", sync); cancelAnimationFrame(frame); };
+  }, [activeTab?.created, activeTab?.id, bounds, browserPanelWidth, browserVisible, capabilities?.projectStorage, desktop, error, notice, projectId, researchOpen, researchPanelWidth, sidebarCollapsed]);
 
   useEffect(() => () => {
     for (const tab of tabsRef.current) if (tab.created) void workbenchBrowser.close(tab.id, projectId).catch((caught) => {
@@ -1448,16 +1462,18 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const updateCaptureMode = async (captureMode: SecurityBrowserSession["captureMode"]) => {
     if (!activeSession) return;
     setWorkspaceError(undefined);
+    let saved = false;
     try {
       const updated = await api.updateSecurityBrowserCapture(activeSession, {
         captureMode,
         proxyEnabled: activeSession.proxyEnabled,
         trustAcknowledged: activeSession.proxyTrustAcknowledged,
-        interceptionEnabled: activeSession.interceptionEnabled,
+        interceptionEnabled: interceptionActive,
         upstreamProxyEnabled: activeSession.upstreamProxyEnabled,
         upstreamProxyUrl: activeSession.upstreamProxyUrl,
         upstreamProxyCredentialRef: activeSession.upstreamProxyCredentialRef,
       });
+      saved = true;
       if (updated.proxyEnabled && typeof workbenchBrowser.configureProxy === "function") {
         await workbenchBrowser.configureProxy(projectId, updated.id, {
           enabled: updated.upstreamProxyEnabled,
@@ -1471,23 +1487,28 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
       } : current);
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.capture_mode_update_failed", "The browser capture detail could not be updated.", caught, "workbench_browser");
-      setWorkspaceError(errorMessage(caught));
+      if (saved) await refreshWorkspace();
+      setWorkspaceError(saved
+        ? `Capture detail was saved, but the native proxy could not apply it: ${errorMessage(caught)} Reopen the tab or retry this setting.`
+        : errorMessage(caught));
     }
   };
 
   const updateUpstreamProxy = async () => {
     if (!activeSession) return;
     setWorkspaceError(undefined);
+    let saved = false;
     try {
       const updated = await api.updateSecurityBrowserCapture(activeSession, {
         captureMode: activeSession.captureMode,
         proxyEnabled: activeSession.proxyEnabled,
         trustAcknowledged: activeSession.proxyTrustAcknowledged,
-        interceptionEnabled: activeSession.interceptionEnabled,
+        interceptionEnabled: interceptionActive,
         upstreamProxyEnabled: upstreamProxyEnabledDraft,
         upstreamProxyUrl: upstreamProxyUrlDraft.trim() || undefined,
         upstreamProxyCredentialRef: upstreamProxyCredentialRefDraft.trim() || undefined,
       });
+      saved = true;
       if (updated.proxyEnabled && typeof workbenchBrowser.configureProxy === "function") {
         await workbenchBrowser.configureProxy(projectId, updated.id, {
           enabled: updated.upstreamProxyEnabled,
@@ -1502,7 +1523,10 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
       setNotice({ kind: "info", message: updated.upstreamProxyEnabled ? "The native session proxy is now chaining through the protected upstream reference." : "Upstream proxy chaining is disabled for this session." });
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.upstream_proxy_update_failed", "The upstream proxy configuration could not be applied.", caught, "workbench_browser");
-      setWorkspaceError(`${errorMessage(caught)} No upstream credentials were returned to the UI or AI.`);
+      if (saved) await refreshWorkspace();
+      setWorkspaceError(saved
+        ? `Upstream settings were saved, but the native proxy could not apply them: ${errorMessage(caught)} Reopen the tab or retry these settings.`
+        : `${errorMessage(caught)} No upstream credentials were returned to the UI or AI.`);
     }
   };
 
@@ -1553,38 +1577,52 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
       setNotice({ kind: "info", message: interceptionEnabled ? "Interception enabled. In-scope requests now pause durably for up to 60 seconds." : "Interception disabled. New requests pass through the capture proxy without pausing." });
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.interception_update_failed", "Browser interception could not be updated.", caught, "workbench_browser");
-      setWorkspaceError(`${errorMessage(caught)} The previous interception setting remains authoritative.`);
+      try {
+        await workbenchBrowser.configureProxy(projectId, activeSession.id, {
+          enabled: activeSession.upstreamProxyEnabled,
+          url: activeSession.upstreamProxyUrl,
+          credentialRef: activeSession.upstreamProxyCredentialRef,
+        }, activeSession.captureMode === "bodies", activeSession.interceptionEnabled);
+        await refreshWorkspace();
+        setWorkspaceError(`${errorMessage(caught)} The previous interception setting was restored. Retry from Session.`);
+      } catch (restoreError) {
+        void logCaughtDiagnostic("interface.security_browser.interception_restore_failed", "The previous native interception setting could not be restored.", restoreError, "workbench_browser");
+        await refreshWorkspace();
+        setWorkspaceError(`${errorMessage(caught)} Native interception may differ from the saved setting: ${errorMessage(restoreError)} Reopen the browser session before making another request.`);
+      }
     } finally { setInterceptionUpdating(false); }
   };
 
-  const setProxyEnabled = async (proxyEnabled: boolean) => {
-    if (!activeSession) return;
+  const setProxyEnabled = async (proxyEnabled: boolean): Promise<boolean> => {
+    if (!activeSession) return false;
     if (proxyEnabled) {
       let path: string;
       try { path = await workbenchBrowser.revealProxyCa(projectId); }
       catch (caught) {
         void logCaughtDiagnostic("interface.security_browser.proxy_ca_reveal_failed", "The Project capture proxy CA could not be revealed.", caught, "workbench_browser");
-        setWorkspaceError(errorMessage(caught)); return;
+        setWorkspaceError(errorMessage(caught)); return false;
       }
       const approved = await confirm({
         title: "Enable Project capture proxy?",
         message: <>Nebula revealed <code>{path}</code>. Trust this Project-local CA in the operating system before enabling HTTPS capture. Its private key remains in protected Nebula application data. Enabling the proxy recreates open tabs in the same identity.</>,
         confirmLabel: "CA is trusted · enable",
       });
-      if (!approved) return;
+      if (!approved) return false;
       setCaTrustAcknowledged(true);
     }
     setWorkspaceError(undefined);
+    let saved = false;
     try {
       const updated = await api.updateSecurityBrowserCapture(activeSession, {
         captureMode: activeSession.captureMode,
         proxyEnabled,
         trustAcknowledged: proxyEnabled,
-        interceptionEnabled: proxyEnabled ? activeSession.interceptionEnabled : false,
+        interceptionEnabled: proxyEnabled && activeSession.proxyEnabled && activeSession.interceptionEnabled,
         upstreamProxyEnabled: activeSession.upstreamProxyEnabled,
         upstreamProxyUrl: activeSession.upstreamProxyUrl,
         upstreamProxyCredentialRef: activeSession.upstreamProxyCredentialRef,
       });
+      saved = true;
       for (const tab of tabsRef.current) {
         if (tab.created) await workbenchBrowser.close(tab.id, projectId);
       }
@@ -1597,9 +1635,14 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
         sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
       } : current);
       setNotice({ kind: "info", message: proxyEnabled ? "Capture proxy enabled. Reopen the tab to begin HTTP/2 and WebSocket capture." : "Capture proxy and interception disabled. Reopen the tab to browse directly." });
+      return true;
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.proxy_update_failed", "The browser capture proxy setting could not be updated.", caught, "workbench_browser");
-      setWorkspaceError(errorMessage(caught));
+      if (saved) await refreshWorkspace();
+      setWorkspaceError(saved
+        ? `Capture proxy setting was saved, but the native tab could not switch: ${errorMessage(caught)} Reopen the tab to use the saved mode.`
+        : errorMessage(caught));
+      return false;
     }
   };
 
@@ -1612,7 +1655,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     });
     if (!approved) return;
     try {
-      if (activeSession?.proxyEnabled) await setProxyEnabled(false);
+      if (activeSession?.proxyEnabled && !await setProxyEnabled(false)) return;
       const next = await workbenchBrowser.rotateProxyCa(projectId);
       setCaStatus(next);
       setCaTrustAcknowledged(false);
@@ -1643,7 +1686,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     });
     if (!approved) return;
     try {
-      if (activeSession?.proxyEnabled) await setProxyEnabled(false);
+      if (activeSession?.proxyEnabled && !await setProxyEnabled(false)) return;
       await workbenchBrowser.revokeProxyCa(projectId);
       setCaStatus({ certificatePath: "", fingerprint: "", state: "revoked" });
       setCaTrustAcknowledged(false);
@@ -1775,10 +1818,11 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const scopeReady = !!scope && (scope.bypassPermissions || scope.allowAllTargets || scope.allowedCidrs.length > 0 || scope.allowedDomains.length > 0 || scope.allowedUrls.length > 0)
     && (!scope.notBefore || new Date(scope.notBefore).getTime() <= Date.now())
     && (!scope.notAfter || new Date(scope.notAfter).getTime() > Date.now());
-  const transportControls = <InterceptionTransport enabled={!!activeSession?.interceptionEnabled} available={!!(desktop && capabilities?.interceptionProxy && activeSession?.proxyEnabled)} desktop={desktop} scopeReady={scopeReady} nativeReady={!!activeTab?.created} pending={interceptionUpdating} onToggle={() => void setInterceptionEnabled(!activeSession?.interceptionEnabled)} onSetup={() => { setResearchView("session"); setResearchOpen(true); }} />;
+  const transportControls = <InterceptionTransport enabled={interceptionActive} available={!!(desktop && capabilities?.interceptionProxy && activeSession?.proxyEnabled)} desktop={desktop} scopeReady={scopeReady} nativeReady={!!activeTab?.created} pending={interceptionUpdating} onToggle={() => void setInterceptionEnabled(!interceptionActive)} onSetup={() => { setResearchView("session"); setResearchOpen(true); }} />;
 
   const researchPanel = researchOpen ? <SecurityBrowserWorkspacePanel
     api={api}
+    compact={compactResearch}
     desktop={desktop}
     projectId={projectId}
     identity={activeIdentity}
@@ -1787,7 +1831,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     onClose={() => setResearchOpen(false)}
     onWidthChange={setResearchPanelWidth}
     transportControls={transportControls}
-    manualTools={["traffic", "intercepts", "repeater"].includes(researchView)}
+    manualTools={["traffic", "intercepts", "repeater", "actions", "identities", "session"].includes(researchView)}
     toolNavigation={<nav aria-label="Security Browser tools">
       <button type="button" className={researchView === "target" ? "active" : ""} onClick={() => setResearchView("target")}>Target</button>
       <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Traffic <span>{sessionTraffic.length}</span></button>
@@ -1817,27 +1861,33 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
       <ul>{workspace?.identities.map((identity) => <li key={identity.id}><span style={{ background: identity.color }} /><div><strong>{identity.name}</strong><small>{identity.ephemeral ? "Ephemeral" : "Persistent"} · {workspace.sessions.filter((session) => session.identityId === identity.id).length} sessions</small></div></li>)}</ul>
     </div> : <div className="browser-session-workbench">
       <label>Research session<select value={activeSession?.id ?? ""} onChange={(event) => { const next = workspace?.sessions.find((session) => session.id === event.target.value); if (next) void selectResearchSession(next); }}>{workspace?.sessions.map((session) => <option key={session.id} value={session.id}>{session.name} · {session.status}</option>)}</select></label>
+      <p className="browser-session-status" role="status">Capture proxy: {activeSession?.proxyEnabled ? "On" : "Off"} · Interception: {interceptionActive ? "On" : "Off"}</p>
+      {activeSession?.interceptionEnabled && !activeSession.proxyEnabled && <p className="browser-session-status">An older saved interception setting is inactive. Changing capture detail clears it.</p>}
       <label>Capture detail<select value={activeSession?.captureMode ?? "headers"} onChange={(event) => void updateCaptureMode(event.target.value as SecurityBrowserSession["captureMode"])}><option value="metadata">Metadata only</option><option value="headers">Redacted headers</option><option value="bodies">Redacted bounded bodies (1 MiB)</option></select></label>
-      <fieldset className="browser-upstream-controls" disabled={!desktop || !activeSession?.proxyEnabled}>
-        <legend>Protected upstream proxy</legend>
-        <label><input type="checkbox" checked={upstreamProxyEnabledDraft} onChange={(event) => setUpstreamProxyEnabledDraft(event.target.checked)} /> Chain in-scope traffic through an upstream proxy</label>
-        <label>Proxy URL<input value={upstreamProxyUrlDraft} onChange={(event) => setUpstreamProxyUrlDraft(event.target.value)} placeholder="http://proxy.example:8080 or socks5://proxy.example:1080" /></label>
-        <label>Credential reference<input value={upstreamProxyCredentialRefDraft} onChange={(event) => setUpstreamProxyCredentialRefDraft(event.target.value)} placeholder="vault:… or env:NEBULA_PROXY" autoComplete="off" /></label>
-        <small>Use an opaque vault/env reference to a <code>username:password</code> pair. The secret is resolved only inside the native connector.</small>
-        <button className="button secondary" type="button" onClick={() => void updateUpstreamProxy()}>Apply upstream settings</button>
-      </fieldset>
-      <dl><div><dt>Durable tabs</dt><dd>{activeSession?.tabs.length ?? 0}</dd></div><div><dt>Device owner</dt><dd>{activeSession?.deviceOwner ?? "Unclaimed"}</dd></div><div><dt>Capture proxy</dt><dd>{capabilities?.interceptionProxy ? "HTTP history enabled when CA is trusted" : "Native proxy unavailable"}</dd></div><div><dt>HTTP/2 · WebSocket</dt><dd>{capabilities?.http2Capture && capabilities.websocketCapture ? "Captured" : "Unavailable in this build"}</dd></div></dl>
+      {desktop && capabilities?.interceptionProxy && <div className="browser-proxy-controls"><button className={activeSession?.proxyEnabled ? "button danger" : "button primary"} type="button" onClick={() => void setProxyEnabled(!activeSession?.proxyEnabled)}>{activeSession?.proxyEnabled ? "Disable capture proxy" : "I trust the CA · enable capture proxy"}</button>{activeSession?.proxyEnabled && <button className={activeSession.interceptionEnabled ? "button danger" : "button secondary"} type="button" onClick={() => void setInterceptionEnabled(!activeSession.interceptionEnabled)}>{activeSession.interceptionEnabled ? "Disable interception" : "Enable interception"}</button>}</div>}
+      <dl><div><dt>Durable tabs</dt><dd>{activeSession?.tabs.length ?? 0}</dd></div><div><dt>Device owner</dt><dd>{activeSession?.deviceOwner ?? "Unclaimed"}</dd></div><div><dt>Capture proxy</dt><dd>{capabilities?.interceptionProxy ? activeSession?.proxyEnabled ? "On · native traffic capture" : "Off · browsing directly" : "Native proxy unavailable"}</dd></div><div><dt>HTTP/2 · WebSocket</dt><dd>{capabilities?.http2Capture && capabilities.websocketCapture ? activeSession?.proxyEnabled ? "Capture active" : "Available when capture is on" : "Unavailable in this build"}</dd></div></dl>
       {desktop && capabilities?.interceptionProxy && <>
         <section className="browser-ca-card" aria-labelledby="browser-ca-title">
           <header><strong id="browser-ca-title">Project capture CA</strong><span className={`browser-action-status ${caStatus?.state ?? "pending"}`}>{caStatus?.state ?? "checking"}</span></header>
           <p>CA generation is automatic and Project-local. OS trust is always an explicit operator action; Nebula never installs it silently.</p>
           {caStatus?.fingerprint ? <dl><div><dt>SHA-256 fingerprint</dt><dd><code>{caStatus.fingerprint}</code></dd></div><div><dt>Expires</dt><dd>{caStatus.expiresAt ? new Date(caStatus.expiresAt).toLocaleString() : "Unknown"}</dd></div></dl> : <small>Reading the durable certificate status…</small>}
           {caStatus?.trustInstructions && <small>{caStatus.trustInstructions}</small>}
-          <div className="browser-proxy-controls"><button className="button secondary" type="button" onClick={() => void revealProjectCa()}>Reveal certificate</button><button className="button secondary" type="button" disabled={!caStatus || caStatus.state === "revoked"} onClick={() => void rotateProjectCa()}>Rotate</button><button className="button quiet danger" type="button" disabled={!caStatus || caStatus.state === "revoked"} onClick={() => void revokeProjectCa()}>Revoke</button></div>
+          <div className="browser-proxy-controls"><button className="button secondary" type="button" onClick={() => void revealProjectCa()}>Reveal certificate</button><button className="button secondary" type="button" disabled={!caStatus || caStatus.state === "revoked"} onClick={() => void rotateProjectCa()}>Rotate</button><button className="button danger-quiet" type="button" disabled={!caStatus || caStatus.state === "revoked"} onClick={() => void revokeProjectCa()}>Revoke</button></div>
           {caTrustAcknowledged && <small role="status">Trust acknowledgement recorded for this Nebula session. The operating-system trust store remains under your control.</small>}
         </section>
-        <div className="browser-proxy-controls"><button className={activeSession?.proxyEnabled ? "button danger" : "button primary"} type="button" onClick={() => void setProxyEnabled(!activeSession?.proxyEnabled)}>{activeSession?.proxyEnabled ? "Disable capture proxy" : "I trust the CA · enable capture proxy"}</button>{activeSession?.proxyEnabled && <button className={activeSession.interceptionEnabled ? "button danger" : "button secondary"} type="button" onClick={() => void setInterceptionEnabled(!activeSession.interceptionEnabled)}>{activeSession.interceptionEnabled ? "Disable interception" : "Enable interception"}</button>}</div>
       </>}
+      <details className="browser-upstream-disclosure">
+        <summary>Protected upstream proxy <span>{activeSession?.upstreamProxyEnabled ? activeSession.proxyEnabled ? "On" : "Configured · inactive" : "Off"}<ChevronDown size={14} aria-hidden="true" /></span></summary>
+        {!activeSession?.proxyEnabled && <p>Enable capture proxy to configure upstream chaining.</p>}
+        <fieldset className="browser-upstream-controls" disabled={!desktop || !activeSession?.proxyEnabled}>
+          <legend>Upstream connection</legend>
+          <label><input type="checkbox" checked={upstreamProxyEnabledDraft} onChange={(event) => setUpstreamProxyEnabledDraft(event.target.checked)} /> Chain in-scope traffic through an upstream proxy</label>
+          <label>Proxy URL<input value={upstreamProxyUrlDraft} onChange={(event) => setUpstreamProxyUrlDraft(event.target.value)} placeholder="http://proxy.example:8080 or socks5://proxy.example:1080" /></label>
+          <label>Credential reference<input value={upstreamProxyCredentialRefDraft} onChange={(event) => setUpstreamProxyCredentialRefDraft(event.target.value)} placeholder="vault:… or env:NEBULA_PROXY" autoComplete="off" /></label>
+          <small>Use an opaque vault/env reference to a <code>username:password</code> pair. The secret is resolved only inside the native connector.</small>
+          <button className="button secondary" type="button" onClick={() => void updateUpstreamProxy()}>Apply upstream settings</button>
+        </fieldset>
+      </details>
       <section className="browser-automation-card" aria-labelledby="browser-automation-title">
         <header><div><strong id="browser-automation-title">Autonomous web test</strong><small>Run-owned browser and proxy control inside the frozen Project scope.</small></div>{activeAutomationLease && <span className="browser-action-status executing">{activeAutomationLease.status}</span>}</header>
         {activeAutomationLease ? <>
@@ -1865,7 +1915,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     </div>}
   </SecurityBrowserWorkspacePanel> : null;
 
-  if (!desktop) return <div className={`workbench-browser web-browser-fallback${researchOpen ? " research-open" : ""}`} style={researchPanelWidth ? { "--security-browser-panel-width": `${researchPanelWidth}px` } as CSSProperties : undefined}>
+  if (!desktop) return <div ref={browserRootRef} className={`workbench-browser web-browser-fallback${researchOpen ? " research-open" : ""}`} style={researchPanelWidth ? { "--security-browser-panel-width": `${researchPanelWidth}px` } as CSSProperties : undefined}>
     {!researchOpen && transportControls}
     <div className="browser-web-research-bar"><button className="button secondary" type="button" aria-expanded={researchOpen} onClick={() => setResearchOpen((value) => !value)}><Network size={14} /> Research workbench</button><span>Durable history and desktop handoff are available on paired devices.</span></div>
     {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
@@ -1893,7 +1943,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   </div>;
 
   return (
-    <div className={`workbench-browser${researchOpen ? " research-open" : ""}`} style={researchPanelWidth ? { "--security-browser-panel-width": `${researchPanelWidth}px` } as CSSProperties : undefined}>
+    <div ref={browserRootRef} className={`workbench-browser${researchOpen ? " research-open" : ""}`} style={researchPanelWidth ? { "--security-browser-panel-width": `${researchPanelWidth}px` } as CSSProperties : undefined}>
       <div className="browser-tab-strip" role="tablist" aria-label="Browser tabs">
         {tabs.map((tab) => <div className={tab.id === activeId ? "browser-tab active" : "browser-tab"} key={tab.id}><button type="button" role="tab" aria-selected={tab.id === activeId} title={tab.title} onClick={() => setActiveId(tab.id)}>{tab.loading ? <LoaderCircle className="spin" size={13} /> : <Globe2 size={13} />}<span>{tab.title}</span></button><button type="button" aria-label={`Close ${tab.title}`} onClick={() => void closeTab(tab.id)}><X size={13} /></button></div>)}
         <button className="browser-new-tab" type="button" aria-label="New browser tab" disabled={tabs.length >= MAX_TABS} onClick={() => addTab()}><Plus size={15} /></button>

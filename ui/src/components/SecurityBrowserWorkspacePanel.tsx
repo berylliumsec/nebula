@@ -31,6 +31,7 @@ import { useResizableSidePanel } from "./useResizableSidePanel";
 
 interface SecurityBrowserWorkspacePanelProps {
   api: ApiClient;
+  compact: boolean;
   desktop: boolean;
   projectId: string;
   identity?: SecurityBrowserIdentity;
@@ -66,6 +67,7 @@ function percent(value: number): string {
 
 export function SecurityBrowserWorkspacePanel({
   api,
+  compact,
   desktop,
   projectId,
   identity,
@@ -94,7 +96,6 @@ export function SecurityBrowserWorkspacePanel({
   // Raw text so a cleared budget field stays empty instead of snapping to 0; parsed below.
   const [validationMaxRequests, setValidationMaxRequests] = useState("10");
   const [validationDurationSeconds, setValidationDurationSeconds] = useState("600");
-  const [compact, setCompact] = useState(() => globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false);
   const size = useResizableSidePanel({
     defaultWidth: 920,
     enabled: !compact,
@@ -105,14 +106,6 @@ export function SecurityBrowserWorkspacePanel({
     onWidthChange,
     storageKey: "nebula.security-browser-workspace.width",
   });
-
-  useEffect(() => {
-    const media = globalThis.matchMedia?.("(max-width: 1100px)");
-    if (!media) return;
-    const update = () => setCompact(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
 
   const selectedId = searchParams.get("assessment") ?? undefined;
   const selected = workspace?.assessments.find((assessment) => assessment.id === selectedId);

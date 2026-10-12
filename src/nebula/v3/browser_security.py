@@ -530,6 +530,8 @@ class BrowserSecurityService:
             raise BrowserWorkflowError(
                 "enabling the capture proxy requires explicit Project CA trust acknowledgement"
             )
+        if request.interception_enabled and not request.proxy_enabled:
+            raise BrowserWorkflowError("interception requires an enabled capture proxy")
         if request.upstream_proxy_enabled and not request.upstream_proxy_url:
             raise BrowserWorkflowError(
                 "an enabled upstream proxy requires an explicit URL"
