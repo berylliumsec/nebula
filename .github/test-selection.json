@@ -1,5 +1,5 @@
 {
-  "change_digest": "53d71b5735a3e3253e5d82b6fa51414d1dd75937927e281038c9b34881dded43",
+  "change_digest": "8a936f8bc880b0b41d4cda112ce1e2eed55788e966b72b43fc3b8463e880c6e1",
   "reviewed_by": "Codex focused conversation image-preview review",
   "reason": "The change adds a canvas-tile preview to warm conversation switching and changes transcript presentation while Core refreshes. Three collected unit cases cover invalidation, complete multi-tile rasterization, and cache disposal. The selected browser journey exercises held history refresh, keyboard/touch text reveal, scroll restoration, retry and rapid switching at 1440/1024 px desktop and 320/390/430 px emulated Chromium and WebKit widths. Its real-Core entry exercises durable history and reload through the production bundle.",
   "exclusions": "No Python backend, database schema, API route, or native runtime changes are present, so Python and native tests are unrelated. No full frontend or browser suite, unrelated workspace/provider journeys, live provider execution, or physical-device run is selected. The image is a transient presentation cache; the real-Core case checks the existing durable authority.",

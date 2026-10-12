@@ -6011,8 +6011,13 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   const imagePreview = page.getByTestId("chat-image-preview");
   await expect(imagePreview).toBeVisible();
   expect(await imagePreview.locator("img").count()).toBeGreaterThan(1);
-  if ((page.viewportSize()?.width ?? 1_000) <= 760) await imagePreview.tap();
-  else { await imagePreview.focus(); await imagePreview.press("Enter"); }
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
+    // Tap the visible viewport. Locator.tap() targets the center of the entire
+    // tall image and scrolls it before the gesture, changing the reading place.
+    const viewport = await page.locator(".chat-scroll").boundingBox();
+    if (!viewport) throw new Error("Expected a visible chat viewport");
+    await page.touchscreen.tap(viewport.x + viewport.width / 2, viewport.y + Math.min(viewport.height / 2, 120));
+  } else { await imagePreview.focus(); await imagePreview.press("Enter"); }
   const readingAnchor = page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true});
   await expect(readingAnchor).toBeAttached();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
