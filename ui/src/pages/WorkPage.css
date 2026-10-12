@@ -83,7 +83,7 @@
 .work-project-list a > svg { color: var(--muted); flex: 0 0 auto; }
 .work-update-preview { display: grid; grid-template-columns: minmax(0, 190px) minmax(0, 1fr); gap: 18px; color: inherit; text-decoration: none; padding: 14px 18px; border-bottom: 1px solid var(--border-soft); }
 .work-update-preview p { font-size: 12px; line-height: 1.45; margin: 0; color: var(--text); overflow-wrap: anywhere; }
-.work-project-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.work-project-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; margin-bottom: 12px; }
 .work-project-layout.has-detail { grid-template-columns: minmax(0, 1fr) minmax(300px, 320px); }
 .work-board { display: grid; grid-template-columns: repeat(6, minmax(170px, 1fr)); gap: 9px; min-width: 0; overflow-x: auto; align-items: start; padding-bottom: 12px; }
 .work-project-layout.has-detail .work-board { grid-template-columns: repeat(6, minmax(0, 1fr)); overflow: visible; }

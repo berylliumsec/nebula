@@ -748,35 +748,32 @@ test("runtime usage real Core shows persisted provider and harness turns on LAN"
 
 test("work hub project board keeps check-ins after refresh and agent access revocation", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
+  page.setDefaultTimeout(15_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   await withOwnedCleanup(async () => {
     const projectResponse = await api.post("engagements", { data: { name: "Documentation portal" } });
     expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
     const project = await projectResponse.json() as { id: string };
-    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Work browser" } })).json() as { secret: string; confirmation_code: string };
-    await pairingApi.dispose();
-    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
-    await page.getByLabel("Device name").fill("Work browser");
-    await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
-    const mobileMore = page.getByRole("button", { name: "More workbench views" });
-    if (await mobileMore.isVisible()) {
-      await mobileMore.click();
-      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Projects" }).click();
-    } else {
-      const sidebar = page.getByRole("button", { name: "Show sidebar" });
-      if (await sidebar.isVisible()) await sidebar.click();
-      await page.getByRole("link", { name: "Projects", exact: true }).click();
-    }
-    await expect(page.getByRole("heading", { name: "Current progress" })).toBeVisible();
-    await page.getByRole("link", { name: "All projects" }).click();
+    const childResponse = await api.post("engagements", { data: { name: "Review plan" } });
+    expect(childResponse.ok(), await childResponse.text()).toBe(true);
+    const child = await childResponse.json() as { id: string };
+    const groupResponse = await api.patch("work/projects", { data: { project_ids: [child.id], parent_engagement_id: project.id } });
+    expect(groupResponse.ok(), await groupResponse.text()).toBe(true);
+    await pairRealCoreBrowser(page, core, "Work browser", { requireReady: false });
+    await page.goto(`${core.origin}/projects`);
     await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     await page.locator(".work-project-list").getByRole("link", { name: /Documentation portal/ }).click();
     await expect(page.getByRole("heading", { name: "Documentation portal", exact: true })).toBeVisible();
     await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: "Work" }).click();
     await expect(page.getByRole("heading", { name: "Project work" })).toBeVisible();
+    const board = page.getByRole("region", { name: "Project board" });
+    const subprojectSearch = page.getByRole("searchbox", { name: "Search subprojects" });
+    await expect(board).toBeVisible();
+    await expect(subprojectSearch).toBeVisible();
+    expect((await board.boundingBox())!.y).toBeLessThan((await subprojectSearch.boundingBox())!.y);
+    await subprojectSearch.fill("Review plan");
+    await expect(page.getByRole("region", { name: "Subprojects" }).getByRole("link", { name: /Review plan/ })).toBeVisible();
     const enableAgentTools = page.getByRole("button", { name: "Enable agent tools" });
     if (await enableAgentTools.isVisible()) await enableAgentTools.click();
     await expect(page.getByRole("button", { name: "Disable agent tools" })).toBeVisible();
@@ -786,6 +783,9 @@ test("work hub project board keeps check-ins after refresh and agent access revo
     await dialog.getByRole("textbox", { name: "Description" }).fill("Add filters and result cards");
     await dialog.getByRole("button", { name: "Create item" }).click();
     await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+    expect((await board.boundingBox())!.y).toBeLessThan((await subprojectSearch.boundingBox())!.y);
+    const detail = page.getByRole("complementary", { name: "Build the search page" });
+    expect((await detail.boundingBox())!.y).toBeLessThan((await subprojectSearch.boundingBox())!.y);
     const updateForm = page.getByRole("heading", { name: "Post an update" }).locator("..");
     await updateForm.getByRole("textbox", { name: "Progress" }).fill("Search layout is ready");
     await updateForm.getByRole("textbox", { name: "Next step" }).fill("Review copy");

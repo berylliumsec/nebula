@@ -289,6 +289,22 @@ describe("Work operator journey", () => {
     expect(within(projects).getByRole("link", { name: /^Review plan/ })).toBeVisible();
   });
 
+  it("puts the current project's board and selected item above subproject search", async () => {
+    const user = userEvent.setup();
+    workspace.engagements = [workspace.engagement, { id: "child-1", name: "Review plan", status: "active", workEnabled: true, parentEngagementId: "project-1" }];
+    openItem();
+
+    const board = await screen.findByRole("region", { name: "Project board" });
+    const detail = screen.getByRole("complementary", { name: "Build the search page" });
+    const subprojects = screen.getByRole("region", { name: "Subprojects" });
+    expect(board.compareDocumentPosition(subprojects) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(detail.compareDocumentPosition(subprojects) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.type(within(subprojects).getByRole("searchbox", { name: "Search subprojects" }), "Review plan");
+    expect(within(subprojects).getByRole("link", { name: /Review plan/ })).toBeVisible();
+    expect(within(board).getByRole("link", { name: /Build the search page/ })).toHaveAttribute("href", "/projects/project-1/work/item-1");
+  });
+
   it("keeps other top-level projects visible when one project has many subprojects", async () => {
     workspace.engagements = [workspace.engagement, ...Array.from({ length: 90 }, (_, index) => ({
       id: `child-${index}`, name: `Child project ${index}`, status: "active", workEnabled: true, parentEngagementId: "project-1",
