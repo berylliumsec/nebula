@@ -11,6 +11,15 @@ First, I would like to thank Almighty God, who is the source of all knowledge. W
 
 > Use Nebula only on systems and networks you own or are explicitly authorized to test.
 
+## Key features
+
+- **One Project for the engagement.** Keep assets, browser sessions, Kali terminals, code, files, notes, findings, and reports together.
+- **Security browser and interception.** Capture in-scope traffic in the desktop browser, intercept and edit requests, and use Repeater and Intruder for follow-up testing.
+- **Bring your own skills.** Add `SKILL.md` skills to a Project and select them in chat for assistant work.
+- **Kali tools and optional VPN egress.** Run container commands with Docker or Podman and route authorized container traffic through a Project-selected OpenVPN profile.
+- **Operator-controlled automation.** Set scope, approvals, and budgets for assistant and mission actions.
+- **Evidence through reporting.** Preserve hashed artifacts and execution provenance, link evidence to findings, and export reports or engagement bundles.
+
 ## Nebula assistant
 
 <img src="docs/images/nebula-assistant-icon.svg" alt="Nebula assistant bot icon" width="36" height="36">
