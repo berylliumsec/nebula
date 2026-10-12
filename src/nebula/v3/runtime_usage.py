@@ -14,6 +14,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from .credentials import CredentialStore
+from .diagnostics import record_diagnostic
 from .domain import (
     AgentAttempt,
     AgentRun,
@@ -87,6 +88,7 @@ def _number(value: Any) -> float | None:
     try:
         number = float(Decimal(str(value)))
     except (InvalidOperation, ValueError, OverflowError):
+        # diagnostic-expected: an unreadable vendor number is represented as unknown.
         return None
     return number if math.isfinite(number) and number >= 0 else None
 
@@ -148,9 +150,13 @@ def _recorded(
         for session in store.iter_readable_entities(HarnessSession)
         if session.harness_profile_id in harnesses
     }
-    for turn in store.iter_readable_entities(HarnessTurn):
-        if turn.usage.total_tokens:
-            add("harness", sessions.get(turn.harness_session_id), turn.usage)
+    for harness_turn in store.iter_readable_entities(HarnessTurn):
+        if harness_turn.usage.total_tokens:
+            add(
+                "harness",
+                sessions.get(harness_turn.harness_session_id),
+                harness_turn.usage,
+            )
     return rows
 
 
@@ -346,6 +352,7 @@ class RuntimeUsageService:
             try:
                 endpoint = urlsplit(profile.endpoint or "")
             except ValueError:
+                # diagnostic-expected: a malformed saved endpoint has no safe balance read.
                 return VendorUsage(
                     state="unavailable",
                     source="Vendor account",
@@ -357,12 +364,6 @@ class RuntimeUsageService:
                     source="Vendor account",
                     detail="Balance reads require the provider's official HTTPS endpoint.",
                 )
-            if not profile.secret_ref:
-                return VendorUsage(
-                    state="unavailable",
-                    source="Vendor account",
-                    detail="Add a provider credential to read its balance.",
-                )
         try:
             if isinstance(profile, HarnessProfile):
                 payload = await CodexAppServerAdapter().read_account_usage(
@@ -370,9 +371,14 @@ class RuntimeUsageService:
                 )
                 value = parse_codex_usage(payload)
             else:
-                secret = await asyncio.to_thread(
-                    self.credentials.resolve, profile.secret_ref
-                )
+                secret_ref = profile.secret_ref
+                if secret_ref is None:
+                    return VendorUsage(
+                        state="unavailable",
+                        source="Vendor account",
+                        detail="Add a provider credential to read its balance.",
+                    )
+                secret = await asyncio.to_thread(self.credentials.resolve, secret_ref)
                 url = (
                     "https://openrouter.ai/api/v1/key"
                     if profile.provider_type == "openrouter"
@@ -397,6 +403,14 @@ class RuntimeUsageService:
         except Exception:
             # Credential, transport and vendor errors can contain secret-bearing
             # URLs or response bodies. The operator needs a safe retry message.
+            record_diagnostic(
+                "warning",
+                "harnesses" if kind == "harness" else "providers",
+                f"{kind}.runtime_usage.vendor_read_failed",
+                "Vendor account usage could not be read for a configured runtime.",
+                outcome="failure",
+                stage="account-usage",
+            )
             value = VendorUsage(
                 state="error",
                 source="Vendor account",
