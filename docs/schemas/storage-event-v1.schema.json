@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/berylliumsec/nebula/main/docs/schemas/storage-event-v1.schema.json",
+  "description": "Nebula storage observation version 1. Available volumes require byte counters; Core also checks free_bytes <= total_bytes.",
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "enum": ["healthy", "warning", "critical"] } } },
+      "then": {
+        "required": ["free_bytes", "total_bytes"],
+        "properties": {
+          "free_bytes": { "type": "integer" },
+          "total_bytes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "StorageIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "title": "StorageIdentity",
+      "type": "object"
+    },
+    "StorageVolumeReport": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "title": "StorageVolumeReport",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "device": {
+      "$ref": "#/$defs/StorageIdentity"
+    },
+    "event_id": {
+      "maxLength": 200,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]+$",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "free_bytes": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Free Bytes"
+    },
+    "kind": {
+      "default": "snapshot",
+      "enum": [
+        "snapshot",
+        "transition"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "state": {
+      "enum": [
+        "healthy",
+        "warning",
+        "critical",
+        "unavailable"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "total_bytes": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Total Bytes"
+    },
+    "volume": {
+      "$ref": "#/$defs/StorageVolumeReport"
+    }
+  },
+  "required": [
+    "schema_version",
+    "event_id",
+    "observed_at",
+    "device",
+    "volume",
+    "state"
+  ],
+  "title": "StorageEvent",
+  "type": "object"
+}
