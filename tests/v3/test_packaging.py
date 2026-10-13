@@ -200,11 +200,8 @@ def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():
     )
 
 
-def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_deploy():
+def test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke():
     release = (ROOT / ".github/workflows/nebula3-release.yml").read_text(
-        encoding="utf-8"
-    )
-    continuous_integration = (ROOT / ".github/workflows/ci.yml").read_text(
         encoding="utf-8"
     )
     playwright_impact = (ROOT / ".github/workflows/playwright-impact.yml").read_text(
@@ -212,30 +209,56 @@ def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_depl
     )
     command = "python -m scripts.stage_playwright_runtime"
     assert command in release
-    assert command not in continuous_integration
-    assert "impact-baseline:" in release
-    assert "sandbox-integration:" in release
-    assert "playwright:" in release
-    assert (
-        "needs: [validate, impact-baseline, sandbox-integration, playwright]" in release
+    jobs = yaml.safe_load(release)["jobs"]
+    assert set(jobs) == {"validate", "build", "ubuntu-core-smoke"}
+    validation = next(
+        step for step in jobs["validate"]["steps"] if step.get("id") == "release"
     )
+    assert 'test "$source_commit" = "$(git rev-parse origin/main)"' in validation["run"]
+    assert "actions/workflows/ci.yml/runs?head_sha=$source_commit" in validation["run"]
+    assert jobs["build"]["needs"] == "validate"
+    assert jobs["ubuntu-core-smoke"]["needs"] == ["validate", "build"]
+    assert jobs["ubuntu-core-smoke"]["container"] == "ubuntu:24.04"
+    assert jobs["ubuntu-core-smoke"].get("strategy") is None
+    assert "release-core-smoke.json" in release
+    assert "--retries=0" in release and "--workers=1" in release
+    assert 'NEBULA_TEST_CORE_EMBEDDED_UI: "1"' in release
+    assert "poetry run pytest" not in release
+    assert "cargo check" not in release
+    assert "test_desktop_crash_cleanup" not in release
+    assert "tampered updater" not in release
     assert "npm --prefix ui run test:e2e" in playwright_impact
     assert (
         "name: Retain browser failure and retry evidence\n        if: always()"
         in playwright_impact
     )
-    assert (
-        "name: playwright-failure-${{ strategy.job-index }}-${{ matrix.project }}"
-        in playwright_impact
-    )
     assert "path: ui/test-results/" in playwright_impact
-    assert "npm --prefix ui run test:e2e" not in continuous_integration
     assert "ui/src-tauri/resources/playwright-browsers" in release
     assert "NO_STRIP=1 NEBULA_DISTRIBUTION=direct" in release
     assert (
         "-name chrome -o -name headless_shell -o -name chrome-headless-shell" in release
     )
     assert "--dump-dom about:blank" in release
+
+
+def test_wider_release_diagnostics_require_manual_dispatch():
+    diagnostics = yaml.safe_load(
+        (ROOT / ".github/workflows/nebula3-release-diagnostics.yml").read_text()
+    )
+    triggers = diagnostics.get("on", diagnostics.get(True))
+    assert set(triggers) == {"workflow_dispatch"}
+    jobs = diagnostics["jobs"]
+    assert set(jobs) == {"source", "sandbox", "installers", "artifact"}
+    source = str(jobs["source"])
+    sandbox = str(jobs["sandbox"])
+    installers = str(jobs["installers"])
+    artifact = str(jobs["artifact"])
+    assert "tests/v3/test_packaging.py" in source and "cargo check" in source
+    assert "tests/v3/test_sandbox_integration.py" in sandbox
+    assert (
+        "debian:12-slim" in installers and "kalilinux/kali-rolling:latest" in installers
+    )
+    assert "test_desktop_crash_cleanup.py" in artifact and "tampered" in artifact
 
 
 def test_linux_deb_declares_bundled_chromium_runtime_dependencies():

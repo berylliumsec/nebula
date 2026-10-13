@@ -388,7 +388,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
         ...options.env,
         PYTHONUNBUFFERED: "1",
         ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
-        PYTHONPATH: [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+        PYTHONPATH: embedded ? "" : [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
       },
     },
   );
@@ -3838,7 +3838,11 @@ test("real Core persists a project folder chosen through the host browser", asyn
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
     if (lanAddress) expect(new URL(page.url()).hostname).toBe(lanAddress);
-    const switcher = await openProjectSwitcherFromShell(page);
+    // Pairing can finish while the shell is still opening its navigation.
+    // Wait for the actual project control before interacting with it.
+    await expect(page.getByRole("button", {name: "Switch project", exact: true})).toBeVisible({timeout: 20_000});
+    await page.getByRole("button", {name: "Switch project", exact: true}).click();
+    const switcher = page.getByRole("dialog", {name: "Project switcher"});
     await switcher.getByRole("button", { name: "New project" }).click();
     await switcher.getByLabel("Name", { exact: true }).fill("Linked Folder Acceptance");
     await switcher.getByRole("button", { name: "Browse folders" }).click();
@@ -4097,6 +4101,84 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
   }, [
     {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("release core smoke pairs, creates a project, and retains one answer", async ({ page }) => {
+  test.setTimeout(90_000);
+  const commit = process.env.NEBULA_RELEASE_COMMIT ?? spawnSync("git", ["rev-parse", "HEAD"], {encoding: "utf8"}).stdout.trim();
+  expect(commit).toMatch(/^[0-9a-f]{40}$/);
+  const core = await startRealCore({
+    bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    env: process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1" ? undefined : {NEBULA_BUILD_COMMIT: commit!},
+  });
+  const stub = await startLocalModelStub({responseContent: "RELEASE_CORE_SMOKE_OK", streamDelayMs: 10});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const healthResponse = await api.get("health");
+    expect(healthResponse.ok(), await healthResponse.text()).toBe(true);
+    expect((await healthResponse.json() as {commit: string}).commit).toBe(commit);
+    const buildResponse = await page.request.get(`${core.origin}/web-build.json`);
+    expect(buildResponse.ok(), await buildResponse.text()).toBe(true);
+    expect((await buildResponse.json() as {commit: string}).commit).toBe(commit);
+
+    // The provider is local fixture setup; the release journey begins in the UI.
+    const providerResponse = await api.post("providers", {data: {
+      name: "Release smoke model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+    });
+    const pairingResponse = await pairingApi.post("auth/pairings", {data: {name: "Release smoke browser"}});
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as {secret: string; confirmation_code: string};
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Release smoke browser");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+
+    const switcher = await openProjectSwitcherFromShell(page);
+    await switcher.getByRole("button", {name: "New project"}).click();
+    await switcher.getByLabel("Name", {exact: true}).fill("Release smoke project");
+    await switcher.getByRole("button", {name: "Create in Host mode", exact: true}).click();
+    await expect(switcher).toBeHidden();
+    const projects = await (await api.get("engagements")).json() as Array<{id: string; name: string}>;
+    const project = projects.find(item => item.name === "Release smoke project");
+    expect(project).toBeTruthy();
+    await expect(page).toHaveURL(`${core.origin}/projects/${project!.id}/workbench?view=chat`);
+    await page.getByRole("button", {name: "Start new chat", exact: true}).click();
+    await clickAssistantSettings(page);
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("provider");
+    await settings.getByRole("combobox", {name: "Chat provider"}).selectOption(provider.id);
+    await expect(settings.getByRole("combobox", {name: "Chat model"})).toHaveValue("security-model");
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+
+    await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Reply with the release marker");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText("RELEASE_CORE_SMOKE_OK", {timeout: 30_000});
+    const session = new URL(page.url()).searchParams.get("session");
+    expect(session).toBeTruthy();
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(`/projects/${project!.id}/workbench\\?view=chat&session=${session}`));
+    await expect(page.locator(".chat-message.operator")).toContainText("Reply with the release marker");
+    await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText("RELEASE_CORE_SMOKE_OK");
+    expect((await (await api.get(`chat-sessions?engagement_id=${project!.id}`)).json() as Array<{id: string}>).map(item => item.id)).toContain(session);
+    expect(stub.requests.some(request => JSON.stringify(request.messages).includes("Reply with the release marker"))).toBe(true);
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
   ]);
 });

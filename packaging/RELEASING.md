@@ -7,8 +7,9 @@ tests exercise both installed commands.
 
 ## Daily stable publication
 
-`daily-stable-release.yml` checks `main` every day at 9:00 AM
-`America/New_York`. It skips when no commits have landed since the source commit
+`daily-stable-release.yml` is currently disabled pending a separately authorized
+release candidate and schedule resumption. When enabled, it checks `main` every
+day at 9:00 AM `America/New_York`. It skips when no commits have landed since the source commit
 of the latest published Nebula 3 release. A manual dispatch runs the same gate.
 It requires the exact main commit's CI run to have passed before it acts.
 
@@ -17,9 +18,9 @@ next stable patch version and a changelog of commit subjects. The first stable
 release after a prerelease keeps its base version, for example
 `3.0.0-beta.3` becomes `3.0.0`; later stable releases advance the patch.
 The release-only commit records both main and the prior release in its ancestry,
-so impact selection can compare immutable releases without changing main.
+so release ancestry stays intact without changing main.
 It pushes only an immutable tag, then dispatches the existing preparation and
-draft workflows. The release driver checks the Playwright impact receipt,
+draft workflows. The release driver checks the one installed-Core smoke receipt,
 checksums, and provenance attestations before publishing the stable GitHub
 Release. It explicitly dispatches updater metadata publication because releases
 made by `GITHUB_TOKEN` do not recursively trigger another workflow.
@@ -43,31 +44,38 @@ unrelated bot, tag push by the App or authorization denial fails closed.
 
 Checkout uses its ordinary job token with credential persistence disabled. The
 App token is injected into Git's temporary credential helper only for the push.
-Reads, selectors, version tools, artifact downloads, checksum/provenance
+Reads, version tools, artifact downloads, checksum/provenance
 verification and draft publication use the job token. Ordinary child processes
 never inherit the App key or an App token; the signing subprocess has only a
 private temporary key file, removed before any release operation. No PAT fallback
 is supported. Revocation failure stops the driver for review.
 
 The generated release-only commit includes `[skip ci]` to avoid a second tag-push
-preparation without the selected coverage inputs. This commit never changes main.
-Explicit `workflow_dispatch` still runs preparation, coverage, signing, package
+preparation beside the explicit dispatch. This commit never changes main.
+Explicit `workflow_dispatch` still runs preparation, signing, package
 smoke checks, and draft validation, and the driver must verify their successful
 runs and receipts. Ordinary release tag pushes retain their existing trigger.
 The final draft publication uses `GITHUB_TOKEN` to suppress a duplicate
 release-event updater run. The
 updater dispatch uses a fresh Actions-only App token and its exact-identity gate.
 
-Daily releases resolve coverage automatically before tagging. Known changes use
-the existing impact rules. Shared or unmapped changes select the catalog's
-`desktop-interface`, `mobile-layout`, and `core-api` areas, together with every
-feature area whose rule matches the diff. This conservative selection covers
-desktop/compact, small/wide mobile Chromium and WebKit, and real-Core contracts.
-It can cost more runner time than focused coverage and excludes other full-matrix
-profiles. The exact selection and rationale are passed to preparation and recorded
-in its impact receipt; every selected job must pass before building. Missing or
-invalid baselines and selector errors still stop before tagging. Daily releases
-do not require a separate coverage-review file or authorize `scope=full`.
+Preparation has exactly three jobs: validate the immutable green-main candidate,
+build the managed DEB and signed direct AppImage, and install the DEB in one clean
+Ubuntu 24.04 container. The Ubuntu job launches the installed Core and bundled
+Chromium, then runs one desktop Chromium case against the Core's embedded production
+UI on a disposable LAN origin. It pairs, creates a project, sends one request to an
+inert local model, and checks that the project, session, and answer survive reload.
+Core and UI must identify the tagged commit. A receipt binds that passing case to
+the tag, commit, and installed DEB SHA-256. Draft creation and daily publication
+both reject a missing, failed, or mismatched receipt.
+
+Packaging unit tests, redundant compile checks, sandbox integration, crash cleanup,
+negative signature checks, and Debian/Kali installs are available in the optional
+`nebula3-release-diagnostics.yml` manual workflow. The existing manually selected
+Playwright workflow retains its explicit full-suite approval guard. Focused PR
+selection remains separate; the release gate claims only this install and core
+journey. Main branch protection requires the PR Playwright `gate` check. The exact
+release smoke is an independent browser check before publication.
 
 Any failed check before publication stops publication. An existing release tag or draft is a
 recovery case for a release manager; the daily job never moves a tag or replaces
@@ -81,7 +89,7 @@ its response is lost. After tag creation, a failure or cancellation leaves that
 immutable tag (and possibly a draft) reserved for release-manager recovery;
 subsequent daily runs stop rather than retagging or replacing assets. Since the
 release commit has `[skip ci]`, a failed preparation dispatch requires an approved
-manual preparation on the same tag with the recorded selection and rationale.
+manual preparation on the same tag on that immutable tag.
 Recover finalization using its verified successful preparation run. A publication
 response failure requires reading actual release state before any next action.
 If updater dispatch or execution fails after publication, the release stays
@@ -174,18 +182,9 @@ manual draft creation must complete before a GitHub Release exists.
 3. Review the checked-in notes. They are the exact GitHub Release body; do not
    describe an artifact, platform, migration, or security property that the
    workflow does not verify.
-4. Review the diff-bound CI test selection and its receipt. Run the focused
-   packaging contracts and portable build checks; the preparation workflow
-   separately verifies the native build, sandbox, and package installation:
-
-   ```console
-   poetry install --with dev --no-interaction
-   poetry run pytest --collect-only -q tests/v3/test_packaging.py packaging/updater/test_generate_manifest.py
-   poetry run pytest -q tests/v3/test_packaging.py packaging/updater/test_generate_manifest.py
-   npm --prefix ui ci
-   npm --prefix ui run audit:diagnostics
-   npm --prefix ui run build
-   ```
+4. Review the diff-bound PR CI test selection and its receipt. Invoke optional
+   release diagnostics only for a specific unresolved risk; they are not a
+   preparation prerequisite.
 
 5. Create the immutable tag at the reviewed `main` commit and push it:
 
@@ -196,44 +195,22 @@ manual draft creation must complete before a GitHub Release exists.
    git push origin "$release_tag"
    ```
 
-The tag push starts the preparation workflow on Ubuntu 22.04 x86_64. It builds
-the direct AppImage and managed DEB, audits and self-tests both packages,
-smoke-tests the bundled Playwright Chromium headless shell, verifies the updater
-signature against a tampered copy, generates SBOMs and checksums, creates GitHub
-provenance attestations, and runs clean DEB install tests on Ubuntu 24.04,
-Debian 12, and Kali rolling containers.
+The tag push starts the three-job preparation workflow. It builds the direct
+AppImage and managed DEB, checks versions, required contents, the positive AppImage
+signature, checksums, SBOMs, and provenance, then installs the DEB in Ubuntu 24.04
+and runs exactly one packaged-Core Chromium journey. Its
+`release-core-smoke-<tag>` artifact contains `release-core-smoke.json` with the
+case name, tag, tagged commit, installed DEB SHA-256, selected count, retries, and
+result. Review this receipt and the native artifacts before finalization. A failed
+or missing smoke blocks draft creation and publication.
 
-The preparation workflow diffs the candidate against the newest earlier
-successful Nebula preparation and uploads a `release-playwright-impact-*`
-receipt. Review its immutable baseline and candidate SHAs, changed files,
-matched rules, selected projects/tests, counts, exclusions, and review blockers
-before draft finalization. A failed or cancelled release (for
-example, a tag whose preparation never reached success) is never a trusted
-baseline. Missing baselines and shared/unmapped changes block ordinary tag/manual
-impact selection for explicit coverage review; the daily driver supplies the
-conservative catalog selection described above. They never launch the full matrix
-automatically.
-
-An agent or release manager may replace automatic impact selection with a
-reviewable catalog selection on manual dispatch. The `selection` input accepts
-comma-separated `area:NAME`, `project:NAME`, and `entry:AREA/PROJECT` tokens;
-for example, `area:assistant,entry:themes/mobile-webkit`. These selectors resolve
-only entries declared in `ui/playwright-impact.json`: arbitrary paths, projects,
-or grep expressions are rejected. An explicit selection is recorded in the
-receipt with the required `review_reason`. Full scope and a selection override
-cannot be combined. Full coverage should almost never run: only a fresh explicit
-user approval permits manual `scope=full`, `full_approval=RUN_FULL_SUITE`, and a
-reason identifying the approval and why focused tests are insufficient.
-PR/tag events cannot authorize full coverage. See [focused test policy](../docs/TEST_SELECTION.md).
-The packaging stage runs package/updater contract tests and native compile checks;
-it does not repeat the entire backend, frontend, or native test suites. Existing
-package smoke, clean-install, signature, and provenance checks remain mandatory.
-
-List the accepted selectors before dispatching with:
-
-```console
-python scripts/playwright_impact.py catalog --manifest ui/playwright-impact.json
-```
+The optional **Optional Nebula 3 release diagnostics** workflow is manual only.
+Select `source`, `sandbox`, `installers`, `artifact`, or `all`; installer and
+artifact diagnostics require the successful preparation run ID. The separate
+**Change-aware Playwright matrix** manual selector keeps its explicit full-suite
+approval guard. These diagnostics do not gate release preparation. The daily
+schedule remains disabled until a later authorized candidate passes and schedule
+resumption is separately approved.
 
 Record the successful preparation workflow run ID. Then manually run **Create
 Nebula 3 Linux release draft** with the immutable tag and preparation run ID:
@@ -254,14 +231,13 @@ Linux artifact, signature, SBOM, and checksum set still exists.
 
 Before publishing the draft, a release manager must verify:
 
-- the Playwright impact receipt was reviewed and every selected matrix entry passed;
-- the Linux build and clean-install matrix passed;
+- the exact installed-DEB core-smoke receipt passed and matches the tag, commit, and DEB hash;
+- the three preparation jobs passed, including one Ubuntu 24.04 clean install;
 - the artifact names and counts match the workflow's immutable manifest;
-- updater signatures accept the original AppImage and reject the tampered test;
+- the original AppImage updater signature verifies; the negative tamper test is optional manual diagnostics;
 - the AppImage and DEB layouts pass `nebula --self-test` and
   `nebula-core doctor --json`;
-- the bundled Playwright Chromium headless shell launches in the clean-install
-  matrix;
+- the bundled Playwright Chromium headless shell launches in the Ubuntu install;
 - CycloneDX and SPDX SBOMs, SHA-256 sums, and GitHub provenance attestations are
   present for every required deliverable;
 - the version is marked as a prerelease when it contains a semantic-version

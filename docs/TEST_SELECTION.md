@@ -63,19 +63,22 @@ These guards prevent accidents, not a determined actor editing/bypassing the too
 
 ## Releases and the exceptional full run
 
-Release tags do not authorize full coverage. Supply reviewed `selection` and
-`review_reason` through manual dispatch if automatic impact needs review. `none`
-is allowed only with an explicit explanation. Missing baseline/shared paths block
-for review; downstream build and sandbox preparation wait for selected coverage.
-The daily stable driver automatically supplies conservative catalog coverage for
-shared/unmapped changes: desktop/compact interface, small/wide mobile Chromium and
-WebKit, real-Core contracts, plus all matched feature areas. It validates that
-selection before tagging and retains the existing downstream test gates. Missing
-or invalid baselines still stop the daily release. This exception applies only to
-daily coverage selection, not routine PR/local runs or exceptional full suites.
-Release packaging runs its focused package/updater contract tests and compile
-checks, not another complete backend, frontend, or Rust test suite. Package
-installation/smoke checks remain required; they are not full product-suite runs.
+Release tags do not authorize full coverage. Preparation has exactly three jobs:
+validate the tagged commit, build the DEB and AppImage, and perform one Ubuntu 24.04
+clean install with one desktop Chromium case against the installed Core and embedded
+production UI. The case is collected as exactly one test before execution and has
+zero retries. Its passing receipt must match the tag, commit, and installed DEB hash
+before a draft can be created or a daily release published.
+
+The release-only Playwright impact matrix and baseline are gone. The PR Playwright
+selector and its diff-bound review remain in place, with the `gate` check required
+by main branch protection. Packaging unit tests, redundant
+compile checks, sandbox integration, crash cleanup, negative signature testing,
+and Debian/Kali installs are optional manual diagnostics in
+`nebula3-release-diagnostics.yml`; the existing manual Playwright selector remains
+available. The daily schedule remains disabled until separately authorized after
+a candidate run. This release gate claims only artifact integrity, installation,
+and the stated core journey; it does not claim broad UI coverage.
 
 Only after a fresh explicit user approval, manually dispatch Playwright with
 `scope=full`, `full_approval=RUN_FULL_SUITE`, and a nonempty `review_reason` recording
