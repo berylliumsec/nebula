@@ -11,10 +11,11 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .automation_runtime import AutomationRuntimeManager, ContainerRuntimeSession
 from .diagnostics import create_diagnostic_task, record_caught_exception
@@ -25,6 +26,7 @@ from .storage import NebulaStore
 MAX_NOTEBOOK_BYTES = 20_000_000
 MAX_SOURCE_BYTES = 1_000_000
 MAX_WARM_KERNELS = 4
+NOTEBOOK_LIST_CACHE_SECONDS = 10
 
 
 class NotebookError(ValueError):
@@ -127,9 +129,33 @@ class NotebookDocumentStore:
             or document.get("nbformat") != 4
         ):
             raise NotebookError("notebook must use Jupyter nbformat 4")
-        for cell in document["cells"]:
-            if not isinstance(cell, dict) or not isinstance(cell.get("id"), str):
-                raise NotebookError("notebook cells need stable IDs")
+        used_ids = {
+            cell.get("id")
+            for cell in document["cells"]
+            if isinstance(cell, dict)
+            and isinstance(cell.get("id"), str)
+            and cell.get("id")
+        }
+        seen_ids: set[str] = set()
+        for index, cell in enumerate(document["cells"]):
+            if not isinstance(cell, dict):
+                raise NotebookError("notebook cells must be objects")
+            cell_id = cell.get("id")
+            if not isinstance(cell_id, str) or not cell_id or cell_id in seen_ids:
+                # Older nbformat 4 files have no cell IDs. Supply stable IDs for
+                # display without changing the workspace file on a read. A save
+                # writes them alongside the requested change.
+                seed = f"{relative_path}:{index}:{_source_hash(_cell_source(cell))}"
+                suffix = 0
+                while True:
+                    generated = uuid5(NAMESPACE_URL, f"{seed}:{suffix}").hex
+                    if generated not in used_ids:
+                        break
+                    suffix += 1
+                cell["id"] = generated
+                used_ids.add(generated)
+                cell_id = generated
+            seen_ids.add(cell_id)
         return {
             "path": relative_path,
             "revision": _digest(data),
@@ -453,6 +479,8 @@ class NotebookService:
         self._run_done: dict[str, asyncio.Event] = {}
         self._sessions: dict[str, tuple[str, int]] = {}
         self._mode_changes: set[str] = set()
+        self._list_locks: dict[str, asyncio.Lock] = {}
+        self._list_cache: dict[str, tuple[float, builtins.list[dict[str, Any]]]] = {}
 
     def startup(self) -> None:
         for run in self.store.find_entities(NotebookRun, {}, limit=None):
@@ -536,13 +564,32 @@ class NotebookService:
         self.store.get(Engagement, engagement_id)
         return self.documents.list(engagement_id)
 
+    async def list_async(
+        self, engagement_id: str, *, refresh: bool = False
+    ) -> builtins.list[dict[str, Any]]:
+        self.store.get(Engagement, engagement_id)
+        async with self._list_locks.setdefault(engagement_id, asyncio.Lock()):
+            cached = self._list_cache.get(engagement_id)
+            if not refresh and cached and cached[0] > time.monotonic():
+                return cached[1]
+            # A linked workspace can contain a very large tree. Never walk it
+            # on the FastAPI event loop, and share the result between callers.
+            entries = await asyncio.to_thread(self.documents.list, engagement_id)
+            self._list_cache[engagement_id] = (
+                time.monotonic() + NOTEBOOK_LIST_CACHE_SECONDS,
+                entries,
+            )
+            return entries
+
     def read(self, engagement_id: str, path: str) -> dict[str, Any]:
         self.store.get(Engagement, engagement_id)
         return self.documents.read(engagement_id, path)
 
     async def create(self, engagement_id: str, path: str) -> dict[str, Any]:
         self.store.get(Engagement, engagement_id)
-        return await self.documents.create(engagement_id, path)
+        result = await self.documents.create(engagement_id, path)
+        self._list_cache.pop(engagement_id, None)
+        return result
 
     async def upsert_cell(
         self, engagement_id: str, path: str, **changes: Any

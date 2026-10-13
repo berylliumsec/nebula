@@ -6815,8 +6815,8 @@ export class ApiClient {
     }));
   }
 
-  listNotebooks(projectId: string): Promise<import("./types").NotebookListing[]> {
-    return this.request<Array<{ path: string; size: number; modified_at: string }>>(`engagements/${encodeURIComponent(projectId)}/notebooks`).then(items => items.map(item => ({path: item.path, size: item.size, modifiedAt: item.modified_at})));
+  listNotebooks(projectId: string, refresh = false): Promise<import("./types").NotebookListing[]> {
+    return this.request<Array<{ path: string; size: number; modified_at: string }>>(`engagements/${encodeURIComponent(projectId)}/notebooks${refresh ? "?refresh=true" : ""}`).then(items => items.map(item => ({path: item.path, size: item.size, modifiedAt: item.modified_at})));
   }
 
   createNotebook(projectId: string, path: string): Promise<import("./types").NotebookFile> {

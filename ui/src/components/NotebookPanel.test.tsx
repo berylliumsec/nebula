@@ -66,3 +66,34 @@ it("shows authenticated notebook events as they arrive", async () => {
   expect(await screen.findByText("live output")).toBeVisible();
   expect(api.watchNotebookRun).toHaveBeenCalledWith("p", "run1", 0, expect.any(Function), expect.any(AbortSignal));
 });
+
+it("opens a selected notebook while a large workspace inventory is still running", async () => {
+  api.listNotebooks.mockImplementation(() => new Promise(() => undefined));
+  render(<NotebookPanel api={api as unknown as ApiClient} projectId="p" active path="quick.ipynb" onPathChange={vi.fn()} onProjectSettings={vi.fn()} />);
+  expect(await screen.findByRole("textbox", {name: "code cell editor"})).toHaveValue("print(1)");
+  expect(screen.getByRole("combobox", {name: "Notebook"})).toHaveValue("quick.ipynb");
+  expect(screen.getByRole("combobox", {name: "Notebook"})).toHaveTextContent("Finding notebooks…");
+  await new Promise(resolve => setTimeout(resolve, 1600));
+  expect(api.listNotebooks).toHaveBeenCalledTimes(1);
+  expect(api.readNotebook.mock.calls.length).toBeGreaterThan(1);
+});
+
+it("explicit refresh reloads the inventory even when Core has a cached list", async () => {
+  const user = userEvent.setup();
+  render(<NotebookPanel api={api as unknown as ApiClient} projectId="p" active path="quick.ipynb" onPathChange={vi.fn()} onProjectSettings={vi.fn()} />);
+  await screen.findByRole("textbox", {name: "code cell editor"});
+  await waitFor(() => expect(api.listNotebooks).toHaveBeenCalledWith("p", false));
+  await user.click(screen.getByRole("button", {name: "Refresh notebook"}));
+  await waitFor(() => expect(api.listNotebooks).toHaveBeenCalledWith("p", true));
+});
+
+it("keeps the selected file usable and retries a failed inventory", async () => {
+  api.listNotebooks.mockRejectedValueOnce(new Error("Inventory unavailable"));
+  const user = userEvent.setup();
+  render(<NotebookPanel api={api as unknown as ApiClient} projectId="p" active path="quick.ipynb" onPathChange={vi.fn()} onProjectSettings={vi.fn()} />);
+  expect(await screen.findByRole("textbox", {name: "code cell editor"})).toHaveValue("print(1)");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Inventory unavailable");
+  await user.click(screen.getByRole("button", {name: "Retry"}));
+  await waitFor(() => expect(api.listNotebooks).toHaveBeenCalledWith("p", true));
+  await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+});
