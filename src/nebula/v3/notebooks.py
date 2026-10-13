@@ -20,6 +20,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from .automation_runtime import AutomationRuntimeManager, ContainerRuntimeSession
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import AutomationProjectPolicy, ChatSession, Engagement, NotebookRun
+from .notebook_file_index import FileIndexUnavailable, list_indexed_notebooks
 from .storage import NebulaStore
 
 
@@ -481,6 +482,8 @@ class NotebookService:
         self._mode_changes: set[str] = set()
         self._list_locks: dict[str, asyncio.Lock] = {}
         self._list_cache: dict[str, tuple[float, builtins.list[dict[str, Any]]]] = {}
+        self._index_errors: dict[str, str] = {}
+        self._created_notebooks: dict[str, set[str]] = {}
 
     def startup(self) -> None:
         for run in self.store.find_entities(NotebookRun, {}, limit=None):
@@ -564,6 +567,44 @@ class NotebookService:
         self.store.get(Engagement, engagement_id)
         return self.documents.list(engagement_id)
 
+    def file_index_status(self, engagement_id: str) -> dict[str, Any]:
+        engagement = self.store.get(Engagement, engagement_id)
+        path = engagement.metadata.get("notebook_file_index")
+        return {
+            "path": path if isinstance(path, str) else None,
+            "state": "fallback"
+            if path and engagement_id in self._index_errors
+            else ("connected" if path else "none"),
+            "detail": self._index_errors.get(engagement_id),
+        }
+
+    async def set_file_index(
+        self, engagement_id: str, path: str | None
+    ) -> dict[str, Any]:
+        engagement = self.store.get(Engagement, engagement_id)
+        if path is not None:
+            await asyncio.to_thread(
+                list_indexed_notebooks,
+                path,
+                self.documents.workspace_resolver(engagement_id),
+            )
+        metadata = dict(engagement.metadata)
+        if path is None:
+            metadata.pop("notebook_file_index", None)
+        else:
+            metadata["notebook_file_index"] = str(
+                Path(path).expanduser().resolve(strict=True)
+            )
+        self.store.update(
+            Engagement,
+            engagement_id,
+            {"metadata": metadata},
+            expected_revision=engagement.revision,
+        )
+        self._list_cache.pop(engagement_id, None)
+        self._index_errors.pop(engagement_id, None)
+        return self.file_index_status(engagement_id)
+
     async def list_async(
         self, engagement_id: str, *, refresh: bool = False
     ) -> builtins.list[dict[str, Any]]:
@@ -572,6 +613,49 @@ class NotebookService:
             cached = self._list_cache.get(engagement_id)
             if not refresh and cached and cached[0] > time.monotonic():
                 return cached[1]
+            engagement = self.store.get(Engagement, engagement_id)
+            index_path = engagement.metadata.get("notebook_file_index")
+            if isinstance(index_path, str):
+                try:
+                    entries = await asyncio.to_thread(
+                        list_indexed_notebooks,
+                        index_path,
+                        self.documents.workspace_resolver(engagement_id),
+                    )
+                    self._index_errors.pop(engagement_id, None)
+                    if entries:
+                        indexed = {str(item["path"]) for item in entries}
+                        created = self._created_notebooks.get(engagement_id, set())
+                        created.difference_update(indexed)
+                        for path in sorted(created):
+                            try:
+                                candidate = self.documents.path(engagement_id, path)
+                                info = candidate.stat()
+                            except (OSError, NotebookError):
+                                created.discard(path)
+                                continue
+                            entries.append(
+                                {
+                                    "path": path,
+                                    "size": info.st_size,
+                                    "modified_at": datetime.fromtimestamp(
+                                        info.st_mtime, timezone.utc
+                                    ).isoformat(),
+                                }
+                            )
+                        entries = sorted(
+                            entries, key=lambda item: str(item["path"]).lower()
+                        )[:1000]
+                        self._list_cache[engagement_id] = (
+                            time.monotonic() + NOTEBOOK_LIST_CACHE_SECONDS,
+                            entries,
+                        )
+                        return entries
+                    self._index_errors[engagement_id] = (
+                        "The file index has no notebooks; scanning the project folder."
+                    )
+                except (FileIndexUnavailable, OSError, ValueError) as exc:
+                    self._index_errors[engagement_id] = str(exc)
             # A linked workspace can contain a very large tree. Never walk it
             # on the FastAPI event loop, and share the result between callers.
             entries = await asyncio.to_thread(self.documents.list, engagement_id)
@@ -588,6 +672,7 @@ class NotebookService:
     async def create(self, engagement_id: str, path: str) -> dict[str, Any]:
         self.store.get(Engagement, engagement_id)
         result = await self.documents.create(engagement_id, path)
+        self._created_notebooks.setdefault(engagement_id, set()).add(path)
         self._list_cache.pop(engagement_id, None)
         return result
 
