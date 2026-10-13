@@ -3043,6 +3043,7 @@ test("assistant upgrade settings assistant saves all URL targets and starts head
   }
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress,
     env: {
+      NEBULA_AGENT_SECURITY_ENABLED: "1",
       PLAYWRIGHT_BROWSERS_PATH: runtimeRoot,
       NEBULA_MITMDUMP_EXECUTABLE: proxyExecutable!,
       NEBULA_SECURITY_PROXY_ADDON: path.join(repository, "security-proxy", "addon.py"),
@@ -3089,6 +3090,30 @@ test("assistant upgrade settings assistant saves all URL targets and starts head
       await policyGroup.locator(":scope > summary").click({ noWaitAfter: true, timeout: 10_000 });
     }
     await expect(page.locator("#engagement-policy-settings").getByRole("radio", { name: /All destinations/ })).toBeChecked({ timeout: 20_000 });
+    const mode = await api.get("desktop-browser-mode");
+    expect(mode.ok(), await mode.text()).toBe(true);
+    expect(await mode.json()).toMatchObject({ one_browser_cutover: false, agent_security_enabled: true });
+
+    await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+    await expect(page.getByRole("region", { name: "Assistant browser" })).toBeVisible();
+    await page.locator(".server-security-dashboard > summary").click();
+    const dashboard = page.getByRole("region", { name: "Security dashboard" });
+    await expect(dashboard.getByText("1 session", { exact: true })).toBeVisible();
+    await expect(dashboard.getByRole("button", { name: "Emergency stop" })).toBeEnabled();
+    const stopResponse = page.waitForResponse((response) => response.url().endsWith(`/engagements/${projectId}/agent-security/stop`) && response.request().method() === "POST");
+    await dashboard.getByRole("button", { name: "Emergency stop" }).click();
+    expect((await stopResponse).ok()).toBe(true);
+    await expect(dashboard.getByRole("button", { name: "Emergency stop" })).toBeDisabled();
+    const stopped = await api.get(`engagements/${projectId}/agent-security/status`);
+    expect(stopped.ok(), await stopped.text()).toBe(true);
+    expect(await stopped.json()).toMatchObject({ state: "paused" });
+    await page.reload();
+    await expect(page.getByRole("alert").filter({ hasText: /Pair this browser to continue|Browser session expired/ }).first()).toBeVisible();
+    await page.goto("about:blank");
+    await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+    await expect(page.locator(".server-security-dashboard > summary")).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
   }, [
     { name: "API context", dispose: () => api.dispose() },
