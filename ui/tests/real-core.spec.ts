@@ -496,7 +496,12 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await settings.getByLabel("Project").selectOption(project.id);
     await settings.getByLabel("Assistant runtime").selectOption(`provider:${providerProfile.id}`);
     await expect(settings.getByRole("combobox", { name: "Storage model" })).toHaveValue("security-model");
-    await settings.getByText("Optional diagnostic and action callbacks").click();
+    const callbackDetails = settings.locator(".storage-source-form details");
+    const callbackSummary = callbackDetails.locator("summary");
+    await callbackSummary.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+    await expect(callbackSummary).toBeInViewport();
+    await callbackSummary.click();
+    await expect(callbackDetails).toHaveAttribute("open", "");
     await settings.getByLabel("Callback origin").fill(`http://127.0.0.1:${(callback.address() as AddressInfo).port}`);
     await settings.getByLabel("Credential reference").fill("env:STORAGE_CALLBACK_TOKEN");
     await settings.getByRole("button", { name: "Add disabled source" }).click();
