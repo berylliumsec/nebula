@@ -87,11 +87,20 @@ jobs:
         run: poetry install --no-interaction
       - name: Install Chromium for browser runtime regression tests
         if: env.RUN_SELECTED == 'true' && needs.selection.outputs.python_browser == 'true'
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
         run: poetry run playwright install --with-deps chromium
+      - name: Install isolated proxy for selected headless integration tests
+        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/v3/test_agent_security_headless.py')
+        run: |
+          python -m venv "$RUNNER_TEMP/nebula-security-proxy"
+          "$RUNNER_TEMP/nebula-security-proxy/bin/pip" install 'mitmproxy==12.2.3'
       - name: Test
         if: env.RUN_SELECTED == 'true'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.python }}
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
+          NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
           poetry run pytest --collect-only -q "${targets[@]}"
