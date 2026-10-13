@@ -1,8 +1,8 @@
 {
-  "change_digest": "41be1cf7f9b3a7f16aeb948ae041f6f8747b32d1652fb2199398b86a5d0102e5",
-  "reviewed_by": "Codex review of 3.0.18 installed-DEB smoke failure and DEB contents",
-  "reason": "The 3.0.18 clean-install smoke failed before Core doctor or Playwright because its browser path used lowercase nebula, while the built DEB installs resources under uppercase Nebula. Select the exact release workflow shape test, extended to bind both browser-path references to the Tauri product name. A fresh release preparation will exercise the actual installed DEB and one core browser case.",
-  "exclusions": "No application source, frontend, native code, or browser test changed. No unrelated tests, Playwright PR entries, optional release diagnostics, or full suite are selected. The existing installed-DEB release smoke is the integration acceptance gate after merge.",
+  "change_digest": "01cb3ae00c4d297a3ffb7ae7e7424c30f7761207b3645386ad9b98a83e0e9176",
+  "reviewed_by": "Codex review of the 3.0.19 Ubuntu container shell failure and the one release smoke step",
+  "reason": "The 3.0.19 Ubuntu install reached the installed Core doctor, then the single browser step failed during shell parsing because the container uses sh and the step uses a Bash array. Select the exact release workflow shape test, extended to require Bash for this step. A fresh release preparation will run the actual installed-DEB browser case.",
+  "exclusions": "No application source, frontend, native code, or browser test changed. No unrelated tests, Playwright PR entries, optional release diagnostics, or full suite are selected. The installed-DEB release smoke is the integration acceptance gate after merge.",
   "expected_tests": {
     "python": 1,
     "frontend": 0,
