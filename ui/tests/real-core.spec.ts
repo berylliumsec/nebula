@@ -7941,11 +7941,7 @@ test("notebook real Core runs bundled Python on a LAN origin and restores output
     const file = await created.json() as {revision: string};
     const saved = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {path: "smoke.ipynb", source: "import sys\nprint(40 + 2)\nprint(sys.executable)", cell_type: "code", expected_revision: file.revision}});
     expect(saved.ok(), await saved.text()).toBe(true);
-    const pairing = await (await api.post("auth/pairings", {data: {name: "Notebook LAN browser"}})).json() as {secret: string; confirmation_code: string};
-    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
-    await page.getByLabel("Device name").fill("Notebook LAN browser");
-    await page.getByRole("button", {name: "Pair device"}).click();
-    await expect(coreConnected(page).or(page.getByRole("heading", {name: "Terminal unavailable"})).first()).toBeVisible({timeout: 20_000});
+    await pairRealCoreBrowser(page, core, "Notebook LAN browser");
     await page.goto(`${core.origin}/settings#engagement-policy-settings`);
     await expect(page.getByRole("checkbox", {name: /Allow host filesystem and network access/})).toBeChecked();
     await expect(page.getByRole("checkbox", {name: /Allow notebook package downloads/})).toBeChecked();
