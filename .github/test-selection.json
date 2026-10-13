@@ -1,50 +1,14 @@
 {
-  "change_digest": "27b1174a2b3daa97530280f12077e087e862fa2c421882b94b0b5da410247d77",
-  "reviewed_by": "Codex review of nebula-v3.0.13 selected release failures and production Host consent contract",
-  "reason": "The v3.0.13 daily candidate scheduled its accepted matrix but failed selected Host startup, sticky Host acknowledgement, MCP import, Browser Repeater, narrow project switcher, compact Workbench navigation, desktop toolbar visual, and mobile WebKit goal-panel journeys. Creation now records explicit Host consent atomically while Scratch and API default creation remain pending. The goal helper waits for the visible entry point after Core's goal loads. Focused Python and component tests cover the policy boundary and UI request. Catalogued browser entries reproduce each failed journey on production real-Core LAN, desktop, mobile Chromium and WebKit, including 430 px WebKit goal access, the exact narrow viewport regression, and desktop navigation and visual profiles.",
-  "exclusions": "No native shell behavior changed, so native tests are excluded. Unrelated provider, mission, notebook execution, packaging, and broad UI suites are excluded. The full suite was not requested. The daily release will separately run its change-aware browser selection and packaging gates after this repair merges.",
-  "expected_tests": {
-    "python": 6,
-    "frontend": 25,
-    "native": 0,
-    "playwright": 59
-  },
+  "change_digest": "edf584e8fcc39190d908a1459e3991a5fc39e51d206c80a588aa6e2d4ad9b2c3",
+  "reviewed_by": "Codex focused review of notebook inventory and legacy cell ID recovery",
+  "reason": "The operator opens a linked project, selects an existing notebook while inventory is slow, edits a legacy cell without an ID, and sees the saved cell after refresh. The selected Python file covers stable IDs, read-only opening, save persistence, scan coalescing, MCP and existing notebook execution. The Notebook panel component file covers independent file loading and explicit inventory refresh. The catalogued notebook browser journeys cover desktop and mobile Chromium and WebKit, plus a production real-Core LAN workflow that opens and saves a legacy notebook.",
+  "exclusions": "No native shell code or unrelated provider, browser, workspace, and release workflows changed, so native tests and unrelated suites are excluded. These cases use browser emulation; physical-device testing is not available in this environment. The shared API change is limited to the notebook list route and was reviewed with the notebook-specific coverage.",
+  "expected_tests": {"python": 13, "frontend": 7, "native": 0, "playwright": 10},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_setup.py::test_fresh_database_creates_scratch_once_and_never_recreates_after_delete",
-    "tests/v3/test_setup.py::test_new_project_starts_with_durable_host_policy",
-    "tests/v3/test_setup.py::test_new_project_records_explicit_host_access_in_same_transaction",
-    "tests/v3/test_api.py::test_project_creation_records_explicit_host_consent_without_persisting_request_field",
-    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
-    "tests/v3/test_automation_runtime.py::test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker"
-  ],
-  "frontend": ["ui/src/components/SideNav.test.tsx"],
+  "python": ["tests/v3/test_notebooks.py"],
+  "frontend": ["ui/src/components/NotebookPanel.test.tsx"],
   "native": [],
-  "playwright": [
-    "area:host-startup-default",
-    "entry:host-startup-compat/assistant-real-desktop",
-    "entry:project-runtime-policy/assistant-real-desktop",
-    "entry:project-runtime-policy/assistant-real-compact",
-    "entry:project-runtime-policy/assistant-real-chromium-320",
-    "entry:project-runtime-policy/assistant-real-chromium-390",
-    "entry:project-runtime-policy/assistant-real-chromium-430",
-    "entry:project-runtime-policy/assistant-real-webkit-320",
-    "entry:project-runtime-policy/assistant-real-webkit-390",
-    "entry:project-runtime-policy/assistant-real-webkit-430",
-    "area:mcp-import",
-    "entry:browser-complete/real-core",
-    "entry:phone-shell/narrow",
-    "entry:project-switcher-search/desktop",
-    "entry:project-switcher-search/mobile-chromium-small",
-    "entry:project-switcher-search/mobile-webkit-wide",
-    "entry:structured-results/desktop",
-    "entry:structured-results/mobile-chromium",
-    "entry:structured-results/mobile-webkit",
-    "entry:structured-results/mobile-webkit-wide",
-    "entry:workbench-navigation/desktop",
-    "entry:workbench-navigation/compact",
-    "entry:release-ui-visual-baselines/desktop"
-  ]
+  "playwright": ["area:notebooks"]
 }
