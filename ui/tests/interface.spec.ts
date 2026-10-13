@@ -11770,6 +11770,7 @@ test("stabilization Grok harness delete explains a conflict beside the card and 
 });
 test("stabilization compact Workbench header icons", async ({ page }, testInfo) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
+  await expect(page.getByRole('button', {name: 'New chat', exact: true})).toHaveCount(1);
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   // Phones replace the shell top bar with one chat header.
   const header = page.locator(mobile ? '.mobile-conversation-header' : '.top-bar');
@@ -11824,6 +11825,11 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
   if (!mobile) await expect(header.locator('.command-trigger:not(.guides-trigger)')).toHaveAttribute('aria-label', 'Search pages, actions, and settings');
   await newChat.click();
   await expect(page.locator('#analyst-message')).toBeVisible();
+  await page.evaluate(() => document.addEventListener('click', event => {
+    if ((event.target as Element).closest('button[aria-label="New chat"]')) document.documentElement.dataset.newChatShortcut = 'used';
+  }, {once: true}));
+  await page.keyboard.press('Control+n');
+  await expect(page.locator('html')).toHaveAttribute('data-new-chat-shortcut', 'used');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const context = page.locator('.conversation-toolbar');
   if (mobile) {
