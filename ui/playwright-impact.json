@@ -142,6 +142,14 @@
         "shard": "1/1"
       }
     ],
+    "release-core-project-switch": [
+      {"area":"release-core-project-switch","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production assistant work survives a project switch through real Core","runtime":"real-core","shard":"1/1"},
+      {"area":"release-core-project-switch","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production assistant work survives a project switch through real Core","runtime":"real-core","shard":"1/1"},
+      {"area":"release-core-project-switch","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production assistant work survives a project switch through real Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "release-core-quiet-settings": [
+      {"area":"release-core-quiet-settings","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Daybreak selection persists across Codex chat refresh|stabilization real Core keeps the Subagents choice across refresh","runtime":"real-core","shard":"1/1"}
+    ],
     "release-inert-provider-ui": [
       {
         "area": "release-inert-provider-ui",

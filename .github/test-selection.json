@@ -1,14 +1,35 @@
 {
-  "change_digest": "9adf3d49d961a6c4bdd11f841fbd68880a1de80198f1dff531a02bd695487472",
-  "reviewed_by": "Codex focused review of notebook inventory and legacy cell ID recovery",
-  "reason": "The operator opens a linked project, selects an existing notebook while inventory is slow, edits a legacy cell without an ID, and sees the saved cell after refresh. The selected Python file covers stable IDs, read-only opening, save persistence, scan coalescing, MCP and existing notebook execution. The Notebook panel component file covers independent file loading and explicit inventory refresh. The catalogued notebook browser journeys cover desktop and mobile Chromium and WebKit, plus a production real-Core LAN workflow that opens and saves a legacy notebook.",
-  "exclusions": "No native shell code or unrelated provider, browser, workspace, and release workflows changed, so native tests and unrelated suites are excluded. These cases use browser emulation; physical-device testing is not available in this environment. The shared API change is limited to the notebook list route and was reviewed with the notebook-specific coverage.",
-  "expected_tests": {"python": 13, "frontend": 7, "native": 0, "playwright": 10},
+  "change_digest": "ea801c6c0b93629992a77d86f2dc780acc2c3c1ef64ea9bfb65c51b879cb007d",
+  "reviewed_by": "Codex review of remaining nebula-v3.0.13 broad real-Core release failures",
+  "reason": "The failed release's broad real-Core shard reached an authenticated Terminal landing screen without a visible Workbench Core chip, looked for project switching outside the current navigation control, and included managed-browser journeys without staging their prerequisites. Quiet Lens also hid composer settings until hover and covered a provider context button in the desktop journey. The mobile navigation handle intercepted Open conversations after a project switch. Select exact production LAN journeys for pairing, context actions, project switching, settings after reload, managed browser runtime and security proxy, plus the Quiet Lens desktop and 320/390 px Chromium/WebKit navigation journey.",
+  "exclusions": "Python, frontend unit, and native behavior are unchanged, so those layers have no selected cases. The browser selection is sixteen named cases; unrelated real-Core, provider, and interface suites are excluded. The full suite was not requested.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 16
+  },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_notebooks.py"],
-  "frontend": ["ui/src/components/NotebookPanel.test.tsx"],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:notebooks"]
+  "playwright": [
+    "entry:openrouter-profile-policy-core/real-core",
+    "entry:provider-request-breakdown-core/assistant-real-desktop",
+    "entry:provider-request-breakdown-core/assistant-real-chromium-390",
+    "entry:provider-request-breakdown-core/assistant-real-webkit-390",
+    "entry:release-core-project-switch/assistant-real-desktop",
+    "entry:release-core-project-switch/assistant-real-chromium-390",
+    "entry:release-core-project-switch/assistant-real-webkit-390",
+    "entry:assistant-links/assistant-real-desktop",
+    "entry:headless-lan/assistant-real-desktop",
+    "entry:quiet-lens/desktop",
+    "entry:quiet-lens/mobile-chromium-small",
+    "entry:quiet-lens/mobile-chromium",
+    "entry:quiet-lens/mobile-webkit-small",
+    "entry:quiet-lens/mobile-webkit",
+    "entry:release-core-quiet-settings/real-core"
+  ]
 }
