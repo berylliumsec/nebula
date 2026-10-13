@@ -153,6 +153,11 @@
     "release-mobile-debugger": [
       {"area":"release-mobile-debugger","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade mobile Code keeps its controls readable and saves to authoritative real-Core state","runtime":"real-core","shard":"1/1"}
     ],
+    "release-goal-panel-race": [
+      {"area":"release-goal-panel-race","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode keeps the panel and its actions on Core's revision","runtime":"mock","shard":"1/1"},
+      {"area":"release-goal-panel-race","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode keeps the panel and its actions on Core's revision","runtime":"mock","shard":"1/1"},
+      {"area":"release-goal-panel-race","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode keeps the panel and its actions on Core's revision","runtime":"mock","shard":"1/1"}
+    ],
     "release-inert-provider-ui": [
       {
         "area": "release-inert-provider-ui",
