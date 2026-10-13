@@ -1514,6 +1514,7 @@ interface WireHarnessTurn extends WireEntity {
 interface WireChatSession extends WireEntity {
   engagement_id: string;
   title: string;
+  notebook_path?: string | null;
   backend?: "provider" | "harness";
   provider_profile_id?: string | null;
   harness_profile_id?: string | null;
@@ -1606,6 +1607,7 @@ interface WireHarnessInteraction extends WireEntity {
 
 interface WireMcpServerProfile extends WireEntity {
   name: string;
+  metadata?: JsonObject;
   description?: string | null;
   transport: McpServerProfile["transport"];
   command?: string | null;
@@ -3607,6 +3609,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     id: value.id,
     engagementId: value.engagement_id,
     title: value.title,
+    notebookPath: value.notebook_path ?? undefined,
     initialTitleState: typeof value.metadata?.initial_title_state === "string"
       ? value.metadata.initial_title_state as ChatSessionSummary["initialTitleState"] : undefined,
     messageCount: typeof value.metadata?.message_count === "number" ? value.metadata.message_count : undefined,
@@ -3965,6 +3968,7 @@ function mapSshEnvironmentDiscovery(value: WireSshEnvironmentDiscovery): SshEnvi
 function mapMcpServer(value: WireMcpServerProfile): McpServerProfile {
   return {
     id: value.id,
+    projectId: typeof value.metadata?.engagement_id === "string" ? value.metadata.engagement_id : undefined,
     name: value.name,
     description: value.description || undefined,
     transport: value.transport,
@@ -6798,6 +6802,110 @@ export class ApiClient {
         expected_revision: request.expectedRevision,
       }),
     }).then(() => this.getAutomationPolicy(engagementId));
+  }
+
+  notebookStatus(projectId: string): Promise<import("./types").NotebookStatus> {
+    return this.request<Record<string, unknown>>(`engagements/${encodeURIComponent(projectId)}/notebooks/status`).then(value => ({
+      projectId, executionMode: value.execution_mode === "docker" ? "docker" : "host",
+      hostAccessAcknowledged: value.host_access_acknowledged === true,
+      consentRequired: value.consent_required === true,
+      runtimeReady: value.runtime_ready === true,
+      mcpProfileId: String(value.mcp_profile_id), mcpEnabled: value.mcp_enabled === true,
+    }));
+  }
+
+  listNotebooks(projectId: string): Promise<import("./types").NotebookListing[]> {
+    return this.request<Array<{ path: string; size: number; modified_at: string }>>(`engagements/${encodeURIComponent(projectId)}/notebooks`).then(items => items.map(item => ({path: item.path, size: item.size, modifiedAt: item.modified_at})));
+  }
+
+  createNotebook(projectId: string, path: string): Promise<import("./types").NotebookFile> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks`, {method: "POST", body: JSON.stringify({path})});
+  }
+
+  readNotebook(projectId: string, path: string): Promise<import("./types").NotebookFile> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file?path=${encodeURIComponent(path)}`);
+  }
+
+  saveNotebookCell(projectId: string, body: {path: string; cellId?: string; source: string; cellType: "code" | "markdown"; expectedRevision?: string; expectedSourceHash?: string}): Promise<import("./types").NotebookFile & {cell_id: string}> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/cell`, {method: "PUT", body: JSON.stringify({path: body.path, cell_id: body.cellId ?? null, source: body.source, cell_type: body.cellType, expected_revision: body.expectedRevision ?? null, expected_source_hash: body.expectedSourceHash ?? null})});
+  }
+
+  listNotebookRuns(projectId: string, path: string): Promise<import("./types").NotebookRun[]> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/runs?path=${encodeURIComponent(path)}`);
+  }
+
+  listActiveNotebookRuns(projectId: string): Promise<import("./types").NotebookRun[]> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/runs/active`);
+  }
+
+  runNotebookCell(projectId: string, path: string, cellId: string): Promise<import("./types").NotebookRun> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/runs`, {method: "POST", body: JSON.stringify({path, cell_id: cellId})});
+  }
+
+  readNotebookRun(projectId: string, runId: string, afterSequence = 0): Promise<import("./types").NotebookRunState> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/runs/${encodeURIComponent(runId)}?after_sequence=${afterSequence}`);
+  }
+
+  async watchNotebookRun(
+    projectId: string,
+    runId: string,
+    afterSequence: number,
+    onEvent: (event: import("./types").NotebookRunEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const headers = this.authorizeHeaders(new Headers({Accept: "text/event-stream"}));
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/engagements/${encodeURIComponent(projectId)}/notebooks/runs/${encodeURIComponent(runId)}/events?after_sequence=${afterSequence}`,
+      {headers, credentials: "same-origin", signal},
+    );
+    if (!response.ok) throw await responseError(response);
+    if (!response.body) throw new Error("Core did not provide notebook events.");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    try {
+      while (!signal.aborted) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, {stream: true}).replaceAll("\r\n", "\n");
+        let end = pending.indexOf("\n\n");
+        while (end >= 0) {
+          const frame = pending.slice(0, end);
+          pending = pending.slice(end + 2);
+          if (frame.split("\n").some(line => line === "event: notebook")) {
+            const data = frame.split("\n").find(line => line.startsWith("data: "))?.slice(6);
+            if (data) onEvent(JSON.parse(data) as import("./types").NotebookRunEvent);
+          }
+          end = pending.indexOf("\n\n");
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => { /* diagnostic-expected: an already closed stream needs no further cancellation. */ });
+    }
+  }
+
+  waitNotebookRun(projectId: string, runId: string, timeout = 30): Promise<import("./types").NotebookRunState> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/runs/${encodeURIComponent(runId)}/wait?timeout=${timeout}`);
+  }
+
+  interruptNotebookRun(projectId: string, runId: string): Promise<import("./types").NotebookRun> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/runs/${encodeURIComponent(runId)}/interrupt`, {method: "POST"});
+  }
+
+  restartNotebookKernel(projectId: string, path: string): Promise<{restarted: boolean}> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/kernel/restart`, {method: "POST", body: JSON.stringify({path})});
+  }
+
+  installNotebookPackage(projectId: string, path: string, requirement: string): Promise<{requirement: string; installed: boolean; detail: string; restart_recommended: boolean}> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/packages`, {method: "POST", body: JSON.stringify({path, requirement})});
+  }
+
+  searchNotebookPackage(projectId: string, path: string, name: string): Promise<{name: string; version: string; summary: string; url: string}> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/packages/search?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`);
+  }
+
+  pinChatNotebook(sessionId: string, path: string | null, expectedRevision: number): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(`chat-sessions/${encodeURIComponent(sessionId)}/notebook`, {method: "PUT", body: JSON.stringify({path, expected_revision: expectedRevision})}).then(mapChatSession);
   }
 
   listVpnProfiles(): Promise<import("./types").VpnProfile[]> {
