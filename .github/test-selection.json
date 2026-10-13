@@ -1,13 +1,13 @@
 {
-  "change_digest": "2dc1130fd9437d20ce37a44e6b361145072e420356912eb6e153a94eaf4cd98e",
-  "reviewed_by": "Codex review of nebula-v3.0.11 release failure artifacts",
-  "reason": "The release matrix failed in Work import desktop/compact, two 320 px project picker journeys, and two 320 px phone navigation journeys. Work import now gates on completed pairing and visible durable state instead of obsolete ready-chip, chat-tab, and parent-link assumptions. Phone project switching starts in Workbench More. At 320 px the shell deliberately hides its sidebar toggle and keeps a Workbench return above resource inspectors; wider phones retain the drawer. Exact catalogued cases cover these routes, their 390 px controls, desktop/compact behavior, and the production real-Core LAN boundary.",
-  "exclusions": "Changes are limited to browser tests and their exact impact catalog entries. Backend, frontend unit, native, unrelated browser journeys, and the full suite are excluded. Work import uses a production UI bundle and real Core on a non-loopback LAN origin; interface journeys use the browser fixture.",
+  "change_digest": "a7fb3e7b38ac12ad4e434c6d1212d858eabd53e39b8c4f957aa680b73566dabd",
+  "reviewed_by": "Codex review of nebula-v3.0.11 failure artifacts and PR #778 current main",
+  "reason": "The release matrix failed in Work import desktop/compact, two 320 px project picker journeys, two 320 px phone navigation journeys, and a 430 px WebKit conversation switching case. Work import now gates on completed pairing and visible durable state instead of obsolete ready-chip, chat-tab, and parent-link assumptions. Phone project switching starts in Workbench More. At 320 px the shell deliberately hides its sidebar toggle and keeps a Workbench return above resource inspectors; wider phones retain the drawer. The 430 px conversation test waits for preview preparation before simulating rich-content growth and atomically reveals a transient image preview before asserting the selected session's text. Exact WebKit and Chromium cases test saved state, scroll-follow, and recovery. Catalogued cases cover those routes, desktop/compact behavior, and the production real-Core LAN boundary.",
+  "exclusions": "The branch diff from current main changes only browser tests and their exact impact catalog entries. PR #778 notebook code is already in the baseline and its selected checks passed separately. Backend, frontend unit, native, unrelated browser journeys, and the full suite are excluded. Work import uses a production UI bundle and real Core on a non-loopback LAN origin; interface journeys use the browser fixture.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 20
+    "playwright": 22
   },
   "python_versions": [
     "3.12"
@@ -37,6 +37,8 @@
     "entry:phone-inspector-return/mobile-chromium-small",
     "entry:phone-inspector-return/mobile-webkit-small",
     "entry:phone-inspector-return/mobile-chromium",
-    "entry:phone-inspector-return/mobile-webkit"
+    "entry:phone-inspector-return/mobile-webkit",
+    "entry:chat-switching-scroll/mobile-chromium-wide",
+    "entry:chat-switching-scroll/mobile-webkit-wide"
   ]
 }

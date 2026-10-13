@@ -6123,6 +6123,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await openWorkspace(page, `/?view=chat&session=${sourceSessionId}`, "Workbench");
   await expect(page.getByText("Source transcript")).toBeVisible();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(4);
+  await expect.poll(() => page.evaluate((id) => performance.getEntriesByName(`nebula.chat_image.ready:${id}`, "mark").length, sourceSessionId)).toBeGreaterThan(0);
   // Rich content can grow after the transcript has initially reached the bottom.
   await page.locator(".chat-message").last().evaluate(element => {element.style.minHeight = "1200px";});
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(4);
@@ -6130,7 +6131,6 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await page.locator(".chat-scroll").evaluate(element => {element.scrollTop = 150; element.dispatchEvent(new Event("scroll"));});
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
   const sourceAnchorTopBeforeList = await page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true}).evaluate(element => element.getBoundingClientRect().top);
-  await expect.poll(() => page.evaluate((id) => performance.getEntriesByName(`nebula.chat_image.ready:${id}`, "mark").length, sourceSessionId)).toBeGreaterThan(0);
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations", exact: true }).click();
   else await page.getByRole("button", { name: "Show conversations" }).click();
   await page.locator(".session-select").filter({ hasText: "Target conversation" }).click();
@@ -6173,6 +6173,15 @@ test("conversation switching commits URL identity and keeps prefetched work deta
     if ((page.viewportSize()?.width ?? 1_000) <= 760) await button.tap();
     else { await button.focus(); await button.press("Enter"); }
   };
+  const expectTranscriptAfterPreview = async (text: string) => {
+    // Preview visibility may change between two Playwright locator operations.
+    // Query and reveal in one browser task, then require the authoritative text.
+    await expect.poll(() => page.evaluate((expected) => {
+      document.querySelector<HTMLElement>('[data-testid="chat-image-preview"]')?.click();
+      return [...document.querySelectorAll(".chat-message")].some((message) => message.textContent?.includes(expected));
+    }, text)).toBe(true);
+    await expect(page.getByText(text, { exact: true })).toBeVisible();
+  };
   // Hold the network response: preview visibility must not depend on a timer.
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
@@ -6208,8 +6217,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   freshTarget = true;
   targetPendingGate = new Promise<void>(resolve => { releaseTargetPending = resolve; });
   await selectChat("Target conversation");
-  if (await page.getByTestId("chat-image-preview").isVisible()) await page.getByTestId("chat-image-preview").click();
-  await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
+  await expectTranscriptAfterPreview("Fresh target transcript");
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
   releaseTargetPending(); targetPendingGate = undefined;
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
@@ -6237,9 +6245,8 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
-  if (await page.getByTestId("chat-image-preview").isVisible()) await page.getByTestId("chat-image-preview").click();
   await page.locator(".chat-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
-  await expect(page.getByText("Fresh source transcript", {exact: true})).toBeVisible();
+  await expectTranscriptAfterPreview("Fresh source transcript");
   await selectChat("Target conversation");
   releaseRefresh(); refreshGate = undefined;
   await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
