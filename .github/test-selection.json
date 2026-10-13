@@ -1,45 +1,29 @@
 {
-  "change_digest": "8bcdb7820f4d8a0c1ce99f03ab39fe6e0f93a1ec52a5eceb303ff6239f9f7faf",
-  "reviewed_by": "Codex focused review of the Host startup default diff",
-  "reason": "New project and fresh Scratch creation now save an acknowledged Host command policy atomically. The API deletion path removes that owned policy with the project. Four focused Python cases cover startup, API creation and deletion, Host runtime selection without Docker, and the older-project Docker fallback. The SideNav component file covers the visible Host access boundary and creation control. Production real-Core LAN browser cases cover creation, usable form targets, project-switcher layering, and touch access to the top menu in the default Quiet Lens theme, plus command execution, refresh, mobile presentation, policy failure and retry, frozen sessions, and the existing assistant transition from Docker to Host and back. One mock browser case covers the changed empty-project creation label after reload.",
-  "exclusions": "No Rust or native code changed. Provider, harness, terminal, and unrelated workspace journeys are excluded because their session execution logic was not modified; existing mode and frozen-session behavior is covered by the selected runtime policy browser cases. The historical release notes are unchanged. Physical-device acceptance and full suites are excluded.",
+  "change_digest": "6938c8fbcf8af0c406f38990dc2394fbee480333e06e326323c922317c7ba75c",
+  "reviewed_by": "Codex focused review for grouped subagent transcript results",
+  "reason": "Consecutive Core-posted subagent results become one expandable transcript row. A small shared chat scroll button offset separates overlapping current-turn and latest-message touch targets exposed by this journey. Two collected unit cases cover grouping and message-to-row navigation, eight collected mocked browser cases cover collapsed failure summaries, reveal, virtualized scroll return, current-turn jump, refresh, direct message navigation, accessibility, and desktop/mobile Chromium/WebKit layouts. One collected real-Core case exercises durable interrupted and recovered results through the production UI at a LAN origin.",
+  "exclusions": "No backend or native behavior changed, so Python and native test lists are empty. Unrelated chat, provider, browser, and workbench journeys are excluded. Physical-device testing is unavailable; the selected mobile browser projects use emulation. No full suite is authorized.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 25,
+    "python": 0,
+    "frontend": 2,
     "native": 0,
-    "playwright": 19
+    "playwright": 9
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_setup.py::test_fresh_database_creates_scratch_once_and_never_recreates_after_delete",
-    "tests/v3/test_setup.py::test_new_project_starts_with_durable_host_policy",
-    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
-    "tests/v3/test_automation_runtime.py::test_new_project_uses_host_without_docker_and_legacy_project_keeps_docker"
-  ],
-  "frontend": [
-    "ui/src/components/SideNav.test.tsx"
-  ],
+  "python": [],
+  "frontend": ["ui/src/pages/subagentTranscriptGroups.test.ts"],
   "native": [],
   "playwright": [
-    "entry:host-startup-default/assistant-real-desktop",
-    "entry:host-startup-default/assistant-real-compact",
-    "entry:host-startup-default/assistant-real-chromium-320",
-    "entry:host-startup-default/assistant-real-webkit-320",
-    "entry:host-startup-default/assistant-real-chromium-390",
-    "entry:host-startup-default/assistant-real-webkit-390",
-    "entry:host-startup-default/assistant-real-chromium-430",
-    "entry:host-startup-default/assistant-real-webkit-430",
-    "entry:project-runtime-policy/assistant-real-desktop",
-    "entry:project-runtime-policy/assistant-real-compact",
-    "entry:project-runtime-policy/assistant-real-chromium-320",
-    "entry:project-runtime-policy/assistant-real-webkit-320",
-    "entry:project-runtime-policy/assistant-real-chromium-390",
-    "entry:project-runtime-policy/assistant-real-webkit-390",
-    "entry:project-runtime-policy/assistant-real-chromium-430",
-    "entry:project-runtime-policy/assistant-real-webkit-430",
-    "entry:host-startup-compat/assistant-real-desktop",
-    "entry:host-startup-compat/desktop"
+    "chat-subagent-result-collapse/desktop",
+    "chat-subagent-result-collapse/compact",
+    "chat-subagent-result-collapse/mobile-chromium-small",
+    "chat-subagent-result-collapse/mobile-chromium-ledger-390",
+    "chat-subagent-result-collapse/mobile-chromium-wide",
+    "chat-subagent-result-collapse/mobile-webkit-small",
+    "chat-subagent-result-collapse/mobile-webkit",
+    "chat-subagent-result-collapse/mobile-webkit-wide",
+    "chat-subagent-result-real-core/real-core"
   ]
 }
