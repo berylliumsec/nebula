@@ -1,8 +1,8 @@
 {
-  "change_digest": "87b097e65457cd0011b09d467c29294d5af4fad279995e57c82bb7a07d6aeca6",
-  "reviewed_by": "Codex review of nebula-v3.0.11 runner disk exhaustion and real-Core impact catalog",
+  "change_digest": "66ff036a5b43b4d4bf01c949167bd7244be44d9427ad0ee57ed768797da8041e",
+  "reviewed_by": "Codex review of nebula-v3.0.11 runner disk exhaustion against merged PR #779 main",
   "reason": "The desktop-shell real-Core job crashed when its GitHub runner ran out of disk. Three broad real-Core catalog entries are partitioned into four bounded Playwright shards each without changing the selected journeys. Three exact selector tests verify shard identities, shared Core/shell deduplication, and that the real-Core runtime remains required. Browser collection confirms real-core has 27 tests per shard and assistant-real-desktop has 22-23; the next daily release executes those catalogued shards in its selected matrix.",
-  "exclusions": "This change edits only the impact catalog and its focused selector assertions. The Python selector tests and browser collection verify that no cases are omitted or duplicated. Backend, frontend, native, unrelated browser journeys, actual browser execution, and the full suite are excluded from this PR; the next release preparation exercises the changed runner partitioning.",
+  "exclusions": "This branch changes only the impact catalog and its focused selector assertions; the browser repairs from PR #779 are already in the baseline. The Python selector tests and browser collection verify that no cases are omitted or duplicated. Backend, frontend, native, unrelated browser journeys, actual browser execution, and the full suite are excluded from this PR; the next release preparation exercises the changed runner partitioning.",
   "expected_tests": {
     "python": 3,
     "frontend": 0,
