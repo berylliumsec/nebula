@@ -2941,6 +2941,81 @@ test("assistant upgrade real Core persists network scope changed through univers
   ]);
 });
 
+test("assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core", async ({ page }) => {
+  test.setTimeout(180_000);
+  const lanAddress = localNetworkIpv4();
+  const repository = path.resolve(import.meta.dirname, "../..");
+  const runtimeContainer = process.env.NEBULA_TEST_MANAGED_BROWSER_RUNTIME
+    ? undefined : await mkdtemp(path.join(tmpdir(), "nebula-assistant-browser-runtime-"));
+  const runtimeRoot = process.env.NEBULA_TEST_MANAGED_BROWSER_RUNTIME
+    ?? path.join(runtimeContainer!, "playwright-browsers");
+  const proxyExecutable = process.env.NEBULA_TEST_SECURITY_PROXY_EXECUTABLE;
+  expect(proxyExecutable, "A staged mitmdump security proxy is required for the headless browser journey").toBeTruthy();
+  expect(existsSync(proxyExecutable!), `The mitmdump security proxy is missing: ${proxyExecutable}`).toBe(true);
+  if (runtimeContainer) {
+    const staged = spawnSync("poetry", ["run", "python", "-m", "scripts.stage_playwright_runtime",
+      runtimeRoot, "--target", "integration-fixture"], {
+      cwd: repository, encoding: "utf8", timeout: 120_000,
+      env: { ...process.env, PYTHONPATH: path.join(repository, "src") },
+    });
+    expect(staged.status, `${staged.stdout}\n${staged.stderr}`).toBe(0);
+  }
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress,
+    env: {
+      PLAYWRIGHT_BROWSERS_PATH: runtimeRoot,
+      NEBULA_MITMDUMP_EXECUTABLE: proxyExecutable!,
+      NEBULA_SECURITY_PROXY_ADDON: path.join(repository, "security-proxy", "addon.py"),
+    } });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  await withOwnedCleanup(async () => {
+    const created = await api.post("engagements", { data: {
+      name: "Assistant Scope Acceptance", description: "", client_name: null,
+      status: "active", tags: [], workspace_path: null, metadata: {},
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = ((await created.json()) as { id: string }).id;
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
+    const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
+    if (!await launcher.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click({ noWaitAfter: true, timeout: 10_000 });
+    await launcher.click({ noWaitAfter: true, timeout: 10_000 });
+    const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+    const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
+    await composer.fill("set project policy to allow all URLs and network targets, then start the headless browser session");
+    await composer.press("Enter");
+    await expect(assistant).toContainText("All destinations mode at scope revision", { timeout: 45_000 });
+    await expect(assistant).toContainText("headless security browser: active", { timeout: 45_000 });
+    await expect(page.getByRole("dialog", { name: "Allow every network target and port?" })).toHaveCount(0);
+    const saved = await api.get(`engagements/${projectId}/scope`);
+    expect(saved.ok(), await saved.text()).toBe(true);
+    expect(await saved.json()).toMatchObject({ allow_all_targets: true, bypass_permissions: false });
+
+    const status = await api.get(`engagements/${projectId}/agent-security/status`);
+    expect(status.ok(), await status.text()).toBe(true);
+    expect(await status.json()).toMatchObject({ state: "active" });
+
+    // This disposable LAN fixture uses a one-time URL token. Re-enter with it
+    // to inspect the durable policy in the actual Settings page on a fresh load.
+    await page.goto("about:blank");
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    const policyGroup = page.locator("#project-policy-settings");
+    await expect(policyGroup).toBeVisible({ timeout: 20_000 });
+    if (!await policyGroup.evaluate((element) => (element as HTMLDetailsElement).open)) {
+      await policyGroup.locator(":scope > summary").click({ noWaitAfter: true, timeout: 10_000 });
+    }
+    await expect(page.locator("#engagement-policy-settings").getByRole("radio", { name: /All destinations/ })).toBeChecked({ timeout: 20_000 });
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+    ...(runtimeContainer ? [{ name: "verified browser runtime", dispose: () => rm(runtimeContainer, { recursive: true, force: true }) }] : []),
+  ]);
+});
+
 test("production LAN handoff survives reload without persisting unsent bytes", async ({ page }) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();
@@ -5634,8 +5709,6 @@ test("project execution mode assistant saves and shows Host then Docker on produ
       return lens;
     };
     const hostLens = await askMode("open project policy and change from dockermode to host mode");
-    await expect(page.getByRole("heading", { name: `Switch ${projectName} to Host mode?` })).toBeVisible();
-    await page.getByRole("button", { name: "Switch to Host mode" }).click();
     await expect(hostLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("host");
     await expect(hostLens.getByText(`${projectName} saved in Host mode for new sessions.`)).toBeVisible();
     await expect(hostLens).toHaveCount(0, { timeout: 5000 });
@@ -5644,7 +5717,6 @@ test("project execution mode assistant saves and shows Host then Docker on produ
     await page.goto("about:blank");
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     const dockerLens = await askMode("switch project execution mode to Docker");
-    await page.getByRole("button", { name: "Switch to Docker mode" }).click();
     await expect(dockerLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("docker");
     await expect(dockerLens).toHaveCount(0, { timeout: 5000 });
     expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
@@ -5657,7 +5729,7 @@ test("project execution mode assistant saves and shows Host then Docker on produ
 test("project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core", async ({ page }, info) => {
   test.setTimeout(120_000);
   page.setDefaultTimeout(10_000);
-  expect(settingCatalog).toHaveLength(17);
+  expect(settingCatalog).toHaveLength(18);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   await withOwnedCleanup(async () => {
@@ -5668,9 +5740,11 @@ test("project execution mode settings assistant opens every catalog setting from
     expect(created.ok(), await created.text()).toBe(true);
     const projectId = ((await created.json()) as { id: string }).id;
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
-    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
+    await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();
     const timings: { setting: string; prompt: string; panelMs: number; controlsMs: number }[] = [];
     const naturalPrompts: Record<string, string> = {
+      "settings.usage": "open usage limits",
       "settings.appearance": "open theme",
       "settings.providers": "show provider",
       "settings.skills": "bring up playbook",
@@ -5690,6 +5764,7 @@ test("project execution mode settings assistant opens every catalog setting from
       "settings.setup": "open readiness",
     };
     const conversationalPrompts: Record<string, string> = {
+      "settings.usage": "where can I see usage limits?",
       "settings.appearance": "where can I change the theme colors?",
       "settings.providers": "which setting holds API keys for models?",
       "settings.skills": "where are the shared skills?",
@@ -5710,9 +5785,14 @@ test("project execution mode settings assistant opens every catalog setting from
     };
     expect(Object.keys(naturalPrompts)).toHaveLength(settingCatalog.length);
     expect(Object.keys(conversationalPrompts)).toHaveLength(settingCatalog.length);
+    const openAssistant = async () => {
+      const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
+      if (!await launcher.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click({ noWaitAfter: true });
+      await launcher.click({ noWaitAfter: true });
+    };
     for (const entry of settingCatalog) {
       for (const prompt of [`open ${entry.label}`, naturalPrompts[entry.id], conversationalPrompts[entry.id]]) {
-        await page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ }).click();
+        await openAssistant();
         const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
         const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
         await composer.fill(prompt);
@@ -5728,7 +5808,7 @@ test("project execution mode settings assistant opens every catalog setting from
         await expect(lens).toHaveCount(0);
       }
     }
-    await page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ }).click();
+    await openAssistant();
     const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
     const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
     await composer.fill("open a setting named pineapple moon");
@@ -5737,7 +5817,7 @@ test("project execution mode settings assistant opens every catalog setting from
     await expect(assistant).toContainText("I couldn't identify a Nebula destination");
     expect(Date.now() - unknownStarted).toBeLessThan(2000);
     await expect(assistant.getByText("Settings I can help with")).toBeVisible();
-    expect(new URL(page.url()).pathname).toContain(`/projects/${projectId}/workbench`);
+    expect(new URL(page.url()).pathname).toBe(`/projects/${projectId}/findings`);
     await info.attach("settings-assistant-catalog-timings", {
       body: Buffer.from(JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), timings }, null, 2)),
       contentType: "application/json",

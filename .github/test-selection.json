@@ -1,21 +1,39 @@
 {
-  "change_digest": "4b43353f17169943fb87a5faa349e9668018fcc1f0a9821df066df7bd177500a",
-  "reviewed_by": "Codex focused review with independent subagent review of the troubleshooting gate",
-  "reason": "AGENTS.md links a new code-troubleshooting skill requiring evidence for a root cause and fresh-context subagent validation before a behavior-changing fix. This changes agent guidance only; no product code, test logic, API, UI, or runtime behavior changes.",
-  "exclusions": "No product or operator journey changes, so no Python, frontend, native, or Playwright tests are relevant. No LAN Core workflow applies to this guidance-only change. The skill structural validator and diff-bound selection validation are run separately; no full suite is authorized.",
+  "change_digest": "91dbda040271e7a9bb87e21a956fafe4eb715def362a2063d1bdb5508b585cbb",
+  "reviewed_by": "Codex focused review for settings assistant save, headless session, and product knowledge synchronization",
+  "reason": "The selected Python cases cover provider and harness settings-only tool exposure, Core Settings route discovery and project binding, saved scope readback, headless start/status without the visible-browser cutover, secret redaction, and the bundled product index mirrored into Chroma. Frontend cases cover exact tool receipts, no-second-dialog scope and Host mutations, combined headless and scope requests, revision preservation, and assistant navigation. The native case checks the Mac launcher keeps its bundled security addon inside app resources. Four real-Core browser cases exercise the assistant's URL/target scope and headless session journey on the candidate production bundle at a non-loopback LAN origin across desktop Chromium and mobile Chromium/WebKit. One real-Core desktop case checks all listed Settings destinations, including the added Usage section. One existing focused desktop entry covers both Host-mode save and policy explanation after removing the second dialog.",
+  "exclusions": "One focused macOS native resource-boundary case covers the Tauri launcher change; other native tests are excluded. Python browser execution and Node integration are unnecessary for the selected Python cases. Unrelated provider, mission, browser research, and workbench suites are excluded. The browser cases use emulation; no physical Mac is available in this workspace. No full suite is authorized.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
+    "python": 24,
+    "frontend": 28,
+    "native": 1,
+    "playwright": 7
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [],
-  "native": [],
-  "playwright": []
+  "python": [
+    "tests/v3/test_settings_assistant_tools.py",
+    "tests/v3/test_settings_assistant_api.py",
+    "tests/v3/test_product_knowledge.py",
+    "tests/v3/test_agent_security_tools.py",
+    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session"
+  ],
+  "frontend": [
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/components/assistantSettingsMutations.test.ts"
+  ],
+  "native": [
+    "sidecar::tests::bundled_security_proxy_addon_stays_inside_resources"
+  ],
+  "playwright": [
+    "entry:settings-assistant-full-control/assistant-real-desktop",
+    "entry:settings-assistant-full-control/assistant-real-compact",
+    "entry:settings-assistant-full-control/assistant-real-chromium-390",
+    "entry:settings-assistant-full-control/assistant-real-webkit-390",
+    "entry:host-startup-compat/assistant-real-desktop"
+  ]
 }

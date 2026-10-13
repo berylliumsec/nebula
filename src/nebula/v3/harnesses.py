@@ -32,6 +32,7 @@ from .harness_commands import (
     parse_harness_command,
     usage_reply,
 )
+from .settings_assistant_api import SettingsAssistantApi
 
 import asyncio
 import inspect
@@ -8407,6 +8408,7 @@ class HarnessRuntimeService:
         self.tool_platform = tool_platform
         self.automation_tool_platform = automation_tool_platform
         self.browser_automation_platform = browser_automation_platform
+        self.settings_assistant_api: SettingsAssistantApi | None = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
             raise ValueError("tool platform must use the harness runtime store")
@@ -8466,6 +8468,9 @@ class HarnessRuntimeService:
                 "harness runtime is already bound to a knowledge retriever"
             )
         self.knowledge_retriever = retriever
+
+    def bind_settings_assistant_api(self, gateway: SettingsAssistantApi) -> None:
+        self.settings_assistant_api = gateway
 
     def bind_provider_subagents(self, service: SubagentService) -> None:
         """Bind the provider-chat subagent service harness chats delegate to."""
@@ -10830,13 +10835,20 @@ class HarnessRuntimeService:
             "default, not a saved policy. A stored Docker policy may be auto-created, so never claim "
             "the operator explicitly chose it. Docker commands can access their project workspace, including a "
             "linked host folder, but not arbitrary host paths. Host mode grants new command sessions "
-            "the Nebula server user's filesystem access after explicit confirmation; existing sessions "
+            "the Nebula server user's filesystem access after an explicit operator instruction; existing sessions "
             "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
             "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
             "host files from this assistant; after fixing access, the operator can ask the general "
             "assistant in a new session to make the edit. Call only nebula.help, nebula.settings, and nebula.navigate "
             "tools. For a theme change, call nebula.settings.set_device_theme; 'Zero theme' means zero-dark. "
             "For a Docker or Host mode change, call nebula.settings.set_project_mode. "
+            "For URL, target, port, or permission scope changes, call nebula.settings.set_project_scope; "
+            "all_destinations keeps other permission checks, while allow_all bypasses them. "
+            "For a request to start or stop the headless security browser, call nebula.settings.headless_session; "
+            "the Kali automation runtime is separate. "
+            "For other Core settings, use nebula.settings.api_schema to discover the exact current route and body, "
+            "then nebula.settings.api_request. Preserve unrelated fields and revisions. An explicit operator "
+            "instruction authorizes the change without another confirmation. "
             "For a request to show a setting, call nebula.settings.open with its catalog id. If unsure, "
             "call nebula.settings.catalog to list exact actions. For a request to open a Nebula page "
             "such as All projects or a Workbench view, call nebula.navigate.open with a listed destination_id. "
@@ -10845,7 +10857,7 @@ class HarnessRuntimeService:
             "action was saved from the tool result alone. Confirm Core changes only after a saved "
             "read-back. Link a relevant setting as /settings#target only when explaining where it is. "
             "The assistant window handles explicit Docker/Host mode changes "
-            "with confirmation and Core read-back. If facts are unavailable, say what needs checking."
+            "with Core read-back. If facts are unavailable, say what needs checking."
             if control_assistant
             else "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
             "Do not claim to have changed a Nebula setting from this conversation."
@@ -13595,6 +13607,10 @@ class HarnessRuntimeService:
             OPEN_SCHEMA,
             POST_TOOL_SCHEMA,
             PROJECT_MODE_SCHEMA,
+            PROJECT_SCOPE_SCHEMA,
+            HEADLESS_SESSION_SCHEMA,
+            SETTINGS_API_SCHEMA_SCHEMA,
+            SETTINGS_API_REQUEST_SCHEMA,
             SEARCH_SCHEMA,
             THEME_SCHEMA,
         )
@@ -13623,6 +13639,18 @@ class HarnessRuntimeService:
                     True,
                 ),
                 (
+                    "nebula.settings.api_schema",
+                    "List this Core build's supported Settings routes or inspect one route's request schema.",
+                    SETTINGS_API_SCHEMA_SCHEMA,
+                    True,
+                ),
+                (
+                    "nebula.settings.api_request",
+                    "Call a listed authenticated Core Settings route for the selected project; read back when available. Explicit operator instructions need no second confirmation.",
+                    SETTINGS_API_REQUEST_SCHEMA,
+                    False,
+                ),
+                (
                     "nebula.settings.open",
                     "Open one listed Nebula setting on the requesting browser. Call with its setting_id; use the catalog first if unsure. Returns a pending browser action.",
                     OPEN_SCHEMA,
@@ -13642,8 +13670,20 @@ class HarnessRuntimeService:
                 ),
                 (
                     "nebula.settings.set_project_mode",
-                    "Request Docker or Host mode for the selected project's future sessions. The browser opens Project Policy, confirms Host access if needed, saves and reads back. Returns a pending browser action.",
+                    "Set Docker or Host mode for the selected project's future sessions without another confirmation. The browser saves and reads back; this tool returns a pending action.",
                     PROJECT_MODE_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.settings.set_project_scope",
+                    "Set this project's target, URL and network scope. Use all_destinations to allow every destination while keeping other checks, or allow_all to bypass Nebula permission checks. The browser saves and reads back without another confirmation.",
+                    PROJECT_SCOPE_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.settings.headless_session",
+                    "Start or stop this project's Core-owned headless security browser, separate from the Kali command runtime. The browser reads back the resulting state.",
+                    HEADLESS_SESSION_SCHEMA,
                     False,
                 ),
                 (
@@ -14141,10 +14181,14 @@ class HarnessRuntimeService:
             "nebula.help.search",
             "nebula.help.project_context",
             "nebula.settings.catalog",
+            "nebula.settings.api_schema",
+            "nebula.settings.api_request",
             "nebula.settings.open",
             "nebula.navigate.open",
             "nebula.settings.set_device_theme",
             "nebula.settings.set_project_mode",
+            "nebula.settings.set_project_scope",
+            "nebula.settings.headless_session",
             "nebula.settings.set_post_tool",
             "nebula.settings.models",
             "nebula.settings.set_default_model",
@@ -14157,6 +14201,8 @@ class HarnessRuntimeService:
                 project_context,
                 request_device_theme,
                 request_project_execution_mode,
+                request_project_scope,
+                request_headless_session,
                 set_default_model,
                 set_post_tool_preference,
             )
@@ -14177,6 +14223,21 @@ class HarnessRuntimeService:
                 value = project_context(self.store, turn.engagement_id)
             elif name == "nebula.settings.catalog":
                 value = catalog()
+            elif name == "nebula.settings.api_schema":
+                if self.settings_assistant_api is None:
+                    raise HarnessConfigurationError("Core Settings API is unavailable")
+                value = self.settings_assistant_api.schema(
+                    path=arguments.get("path"), method=arguments.get("method")
+                )
+            elif name == "nebula.settings.api_request":
+                if self.settings_assistant_api is None:
+                    raise HarnessConfigurationError("Core Settings API is unavailable")
+                value = await self.settings_assistant_api.request(
+                    turn.engagement_id,
+                    path=arguments.get("path"),
+                    method=arguments.get("method"),
+                    body=arguments.get("body"),
+                )
             elif name == "nebula.settings.open":
                 value = open_setting(arguments)
             elif name == "nebula.navigate.open":
@@ -14185,6 +14246,10 @@ class HarnessRuntimeService:
                 value = request_device_theme(arguments)
             elif name == "nebula.settings.set_project_mode":
                 value = request_project_execution_mode(arguments)
+            elif name == "nebula.settings.set_project_scope":
+                value = request_project_scope(arguments)
+            elif name == "nebula.settings.headless_session":
+                value = request_headless_session(arguments)
             elif name == "nebula.settings.models":
                 value = model_choices(self.store)
             elif name == "nebula.settings.set_default_model":

@@ -412,7 +412,12 @@ from .knowledge import (
     reindex_document,
     reindex_library_item,
 )
-from .knowledge_index import KnowledgeIndex, KnowledgeIndexError, KnowledgeIndexStatus
+from .knowledge_index import (
+    ChromaKnowledgeIndex,
+    KnowledgeIndex,
+    KnowledgeIndexError,
+    KnowledgeIndexStatus,
+)
 from .missions import (
     MAX_API_MISSION_COST_USD,
     MAX_API_MISSION_RETRIES,
@@ -2231,6 +2236,20 @@ def create_app(
             return failures
 
         try:
+            if isinstance(knowledge_index, ChromaKnowledgeIndex):
+                try:
+                    await asyncio.to_thread(knowledge_index.sync_product_knowledge)
+                except KnowledgeIndexError as exc:
+                    emit_diagnostic(
+                        "warning",
+                        "knowledge",
+                        "knowledge.product_chroma_sync_failed",
+                        "Packaged product guidance remains searchable; its Chroma mirror will retry next startup.",
+                        outcome="degraded",
+                        stage="startup",
+                        retryable=True,
+                        exception=exc,
+                    )
             if knowledge_index is not None and knowledge_index.status.state == "ready":
                 try:
                     await asyncio.to_thread(
@@ -2395,6 +2414,12 @@ def create_app(
         description="Local-first, UI-independent security engagement control plane.",
         lifespan=lifespan,
     )
+    from .settings_assistant_api import SettingsAssistantApi
+
+    settings_assistant_api = SettingsAssistantApi(app, token)
+    if tool_platform is not None:
+        tool_platform.bind_settings_assistant_api(settings_assistant_api)
+    harness_runtime.bind_settings_assistant_api(settings_assistant_api)
     app.state.store = store
     app.state.application_model = application_model
     app.state.browser_companion = browser_companion
@@ -8259,15 +8284,44 @@ def create_app(
         }
 
     @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/agent-security/start",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_agent_security(engagement_id: str) -> dict[str, str]:
+        store.get(Engagement, engagement_id)
+        try:
+            session = await agent_security_sessions.ensure(engagement_id)
+        except Exception as exc:
+            cause = (
+                str(exc).strip()
+                or "Core timed out while starting Chromium or the security proxy"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="The headless security browser could not start: "
+                + scrub_host_paths(cause)[:300]
+                + ". Check the session status and retry.",
+            ) from exc
+        return {"session_id": session.id, "state": session.status.value}
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/agent-security/status",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def agent_security_status(engagement_id: str) -> dict[str, Any]:
+        store.get(Engagement, engagement_id)
+        result = await agent_security_tools.call_tool(engagement_id, "status", {})
+        return result["structuredContent"]
+
+    @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/agent-security/stop",
         tags=["security-browser"],
         dependencies=[Depends(require_auth)],
     )
     async def stop_agent_security(engagement_id: str) -> dict[str, int]:
-        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") != "1":
-            raise HTTPException(
-                status_code=404, detail="agent security runtime is unavailable"
-            )
+        store.get(Engagement, engagement_id)
         stopped = await agent_security_tools.stop(
             engagement_id,
             reason="Operator emergency stop",

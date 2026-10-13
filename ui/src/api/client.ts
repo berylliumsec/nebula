@@ -6769,6 +6769,18 @@ export class ApiClient {
     }));
   }
 
+  getHeadlessSecuritySession(engagementId: string): Promise<{ session_id: string | null; state: string; last_start_error?: string | null }> {
+    return this.request(`engagements/${encodeURIComponent(engagementId)}/agent-security/status`);
+  }
+
+  startHeadlessSecuritySession(engagementId: string): Promise<{ session_id: string; state: string }> {
+    return this.request(`engagements/${encodeURIComponent(engagementId)}/agent-security/start`, { method: "POST" });
+  }
+
+  stopHeadlessSecuritySession(engagementId: string): Promise<{ stopped_sessions: number }> {
+    return this.request(`engagements/${encodeURIComponent(engagementId)}/agent-security/stop`, { method: "POST" });
+  }
+
   updateAutomationPolicy(
     engagementId: string,
     request: { executionMode?: "docker" | "host"; hostAccessAcknowledged?: boolean; approvalPolicy: "always" | "on_boundary" | "never"; networkEnabled: boolean; runnerProfileId?: string; vpnProfileId?: string; maxTimeoutMs: number; expectedRevision: number },

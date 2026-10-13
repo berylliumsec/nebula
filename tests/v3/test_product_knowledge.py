@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from nebula.v3.product_knowledge import search_product_knowledge
+from nebula.v3.knowledge_index import ChromaKnowledgeIndex
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -68,3 +69,16 @@ def test_product_search_finds_other_operator_destinations(monkeypatch):
     ):
         matches = search_product_knowledge(question)
         assert any(item["heading"] == destination for item in matches), question
+
+
+def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
+    index = ChromaKnowledgeIndex(tmp_path / "chroma")
+    first = index.sync_product_knowledge()
+    assert first["updated"] is True
+    assert index._product_collection.count() == first["passage_count"]
+    assert index._product_collection.metadata["source_digest"] == first["source_digest"]
+    assert index.sync_product_knowledge()["updated"] is False
+    index._product_collection.modify(metadata={"source_digest": "stale"})
+    replaced = index.sync_product_knowledge()
+    assert replaced["updated"] is True
+    assert index._product_collection.metadata["source_digest"] == first["source_digest"]

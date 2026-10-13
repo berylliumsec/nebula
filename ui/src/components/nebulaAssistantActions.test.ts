@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatStreamEvent, HarnessProfile } from "../api/types";
-import { assistantTurnOptions, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
+import { assistantTurnOptions, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
   it("maps explicit device-theme commands to bounded values without taking over questions", () => {
@@ -47,6 +47,14 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({ ...event, capability: "nebula_settings_set_project_mode_1234567890abcdef",
       receipt: { state: "pending_browser_apply", client_action: { kind: "project_execution_mode", mode: "host", from: "docker" } } }))
       .toEqual({ kind: "project_execution_mode", mode: "host", from: "docker" });
+    expect(settingClientAction({ ...event, capability: "nebula.settings.set_project_scope",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "project_scope", changes: { mode: "all_destinations" } } } }))
+      .toEqual({ kind: "project_scope", changes: { mode: "all_destinations" } });
+    expect(settingClientAction({ ...event, capability: "nebula.settings.headless_session",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "headless_session", action: "start" } } }))
+      .toEqual({ kind: "headless_session", action: "start" });
+    expect(settingClientAction({ ...event, capability: "nebula.settings.set_project_scope",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "project_scope", changes: { mode: "allow_all", unknown: true } } } })).toBeUndefined();
     expect(settingClientAction({ ...event, receipt: { state: "pending_browser_apply", client_action: { kind: "device_theme", theme: "unlisted" } } })).toBeUndefined();
   });
   it("recognizes explicit project mode changes without treating questions as commands", () => {
@@ -56,6 +64,24 @@ describe("settings assistant actions", () => {
       .toEqual({ mode: "docker" });
     expect(projectModeChange("Where is Host mode?")).toBeUndefined();
     expect(projectModeChange("open project policy")).toBeUndefined();
+  });
+  it("distinguishes all destinations from permission bypass and starts headless sessions", () => {
+    expect(projectScopeChange("set project scope to allow all URLs and all network targets"))
+      .toEqual({ mode: "all_destinations" });
+    expect(projectScopeChange("allow all URLs and network targets"))
+      .toEqual({ mode: "all_destinations" });
+    expect(projectScopeChange("set project policy to allow all mode"))
+      .toEqual({ mode: "allow_all" });
+    expect(projectScopeChange("how do I allow all URLs?"))
+      .toBeUndefined();
+    expect(headlessSessionChange("configure the headless browser session"))
+      .toBe("start");
+    expect(headlessSessionChange("set project policy to allow all URLs and network targets, then start the headless browser session"))
+      .toBe("start");
+    expect(headlessSessionChange("stop the headless browser"))
+      .toBe("stop");
+    expect(headlessSessionChange("why is my headless browser stopped?"))
+      .toBeUndefined();
   });
   it("opens an unambiguous named setting and ignores ordinary questions", () => {
     expect(settingToOpen("Please open MCP servers settings")?.id).toBe("settings.mcp");
@@ -69,6 +95,7 @@ describe("settings assistant actions", () => {
 
   it("routes plain-language requests for every catalog setting without a model turn", () => {
     const cases = [
+      ["open usage limits", "settings.usage"],
       ["open theme", "settings.appearance"],
       ["show provider", "settings.providers"],
       ["bring up playbook", "settings.skills"],
@@ -92,6 +119,7 @@ describe("settings assistant actions", () => {
 
   it("finds the intended setting in conversational navigation requests", () => {
     const cases = [
+      ["where can I see usage limits?", "settings.usage"],
       ["where can I change the theme colors?", "settings.appearance"],
       ["which setting holds API keys for models?", "settings.providers"],
       ["where are the shared skills?", "settings.skills"],

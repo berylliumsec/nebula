@@ -111,7 +111,7 @@ describe("NebulaControlAssistant", () => {
     expect(await screen.findByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
   });
 
-  it("routes a model-selected Host action through confirmation and Core readback", async () => {
+  it("routes a model-selected Host action through Core readback without another dialog", async () => {
     const user = userEvent.setup();
     const original = { executionMode: "docker", approvalPolicy: "always", networkEnabled: false, revision: 2 };
     const saved = { ...original, executionMode: "host", revision: 3 };
@@ -135,13 +135,70 @@ describe("NebulaControlAssistant", () => {
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "could you get this project's commands running on the host for me?{enter}");
     await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" })));
-    expect(updateAutomationPolicy).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Switch to Host mode" }));
     await waitFor(() => expect(updateAutomationPolicy).toHaveBeenCalledWith("project", expect.objectContaining({
       executionMode: "host", hostAccessAcknowledged: true, expectedRevision: 2,
     })));
     await waitFor(() => expect(getAutomationPolicy).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText(/Project is now in Host mode for new sessions/)).toBeInTheDocument(), { timeout: 4000 });
+  });
+
+  it("saves an all-destinations policy from a model receipt and refreshes Project Policy", async () => {
+    const user = userEvent.setup();
+    const current = { revision: 2, allow_all_targets: false, bypass_permissions: false, local_only: true,
+      allowed_cidrs: [], allowed_domains: ["example.test"], allowed_urls: [], allowed_ports: [443],
+      prohibited_actions: [], grants: [], max_concurrency: 1 };
+    const saved = { ...current, revision: 3, allow_all_targets: true };
+    const request = vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(saved).mockResolvedValueOnce(saved);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({ type: "tool_completed", turnId: "turn", toolCallId: "scope-call", capability: "nebula.settings.set_project_scope",
+        status: "complete", summary: "Action requested", evidenceIds: [], artifacts: [], step: 0,
+        receipt: { state: "pending_browser_apply", client_action: { kind: "project_scope", changes: { mode: "all_destinations" } } } });
+      return { sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: { role: "assistant", content: "Applying the scope." } };
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, request },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    const onSavedSetting = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} onSavedSetting={onSavedSetting} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "allow all URLs and network targets{enter}");
+    await waitFor(() => expect(onSavedSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" }), expect.stringContaining("All destinations")));
+    expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({ allow_all_targets: true, bypass_permissions: false, local_only: true, expected_revision: 2 });
+    expect(screen.queryByRole("button", { name: /Confirm|Allow all/ })).not.toBeInTheDocument();
+  });
+
+  it("starts the Core headless browser and reports its observed session", async () => {
+    const user = userEvent.setup();
+    const currentScope = { revision: 2, allow_all_targets: false, bypass_permissions: false, local_only: true };
+    const savedScope = { ...currentScope, revision: 3, allow_all_targets: true };
+    const request = vi.fn().mockResolvedValueOnce(currentScope).mockResolvedValueOnce(savedScope).mockResolvedValueOnce(savedScope);
+    const startHeadlessSecuritySession = vi.fn().mockResolvedValue({ session_id: "headless", state: "active" });
+    const getHeadlessSecuritySession = vi.fn().mockResolvedValue({ session_id: "headless", state: "active" });
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({ type: "tool_completed", turnId: "turn", toolCallId: "headless-call", capability: "nebula.settings.headless_session",
+        status: "complete", summary: "Action requested", evidenceIds: [], artifacts: [], step: 0,
+        receipt: { state: "pending_browser_apply", client_action: { kind: "headless_session", action: "start" } } });
+      return { sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: { role: "assistant", content: "Starting the browser." } };
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, request, startHeadlessSecuritySession, getHeadlessSecuritySession },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "set project policy to allow all URLs and network targets, then start the headless browser session{enter}");
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(startHeadlessSecuritySession).toHaveBeenCalledWith("project"));
+    expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({ allow_all_targets: true, bypass_permissions: false });
+    await waitFor(() => expect(screen.getByText(/headless security browser: active/)).toBeInTheDocument());
+    expect(getHeadlessSecuritySession).toHaveBeenCalledWith("project");
   });
 
   it("hides, restores, and closes without discarding the draft", async () => {
@@ -266,7 +323,7 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("button", { name: "Show Nebula assistant" })).toBeInTheDocument();
   });
 
-  it("opens Project Policy, confirms Host access, preserves policy fields, and reads Core back", async () => {
+  it("opens Project Policy, saves Host acknowledgment, preserves fields, and reads Core back", async () => {
     const user = userEvent.setup();
     const original = {
       id: "policy", engagementId: "project", executionMode: "docker", hostAccessAcknowledged: false,
@@ -289,9 +346,6 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(composer).toBeEnabled());
     await user.type(composer, "open project policy and change from dockermode to host mode{enter}");
     await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" })));
-    expect(updateAutomationPolicy).not.toHaveBeenCalled();
-    expect(screen.getByText(/Docker isolation, scope-filtered networking/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Switch to Host mode" }));
     await waitFor(() => expect(updateAutomationPolicy).toHaveBeenCalledWith("project", {
       executionMode: "host", hostAccessAcknowledged: true, approvalPolicy: "always",
       networkEnabled: true, runnerProfileId: "runner", vpnProfileId: "vpn",

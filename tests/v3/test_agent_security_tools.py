@@ -21,6 +21,7 @@ from nebula.v3.domain import (
     BrowserIdentity,
     BrowserRepeaterResult,
     BrowserSession,
+    BrowserSessionStatus,
     BrowserTabState,
     Engagement,
     Evidence,
@@ -123,6 +124,29 @@ def test_security_tools_profile_is_optional_and_schemas_are_valid(tmp_path):
         "evidence_from_exchange",
         "finding_candidate",
     }
+
+
+def test_headless_status_explains_a_failed_start(tmp_path):
+    store, project, session = _project(tmp_path)
+    paused = store.update(
+        BrowserSession,
+        session.id,
+        {
+            "status": BrowserSessionStatus.PAUSED.value,
+            "metadata": {"last_start_error": "Chromium could not launch"},
+        },
+        expected_revision=session.revision,
+    )
+    assert paused.status == BrowserSessionStatus.PAUSED
+    result = asyncio.run(
+        SecurityToolsRuntime(store, StubSessions(paused)).call_tool(
+            project.id, "status", {}
+        )
+    )
+    assert result["structuredContent"]["state"] == "paused"
+    assert (
+        result["structuredContent"]["last_start_error"] == "Chromium could not launch"
+    )
 
 
 def test_repeater_uses_headless_identity_and_saves_durable_result(

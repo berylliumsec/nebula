@@ -28,6 +28,7 @@ const MAX_PENDING_LOG_BYTES: usize = 16 * 1024;
 const STARTUP_LOG_NAME: &str = "nebula-core-startup.log";
 const PLAYWRIGHT_RESOURCE_DIRECTORY: &str = "playwright-browsers";
 const PLAYWRIGHT_RESOURCE_MANIFEST: &str = "nebula-playwright-runtime.json";
+const SECURITY_PROXY_ADDON: &str = "security-proxy/addon.py";
 const LOG_TRUNCATED_MARKER: &[u8] = b"\n[nebula] startup log truncated at 256 KiB\n";
 const TRUSTED_SYSTEM_PATH: &str =
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/homebrew/bin";
@@ -66,6 +67,8 @@ const SIDECAR_ENV_ALLOWLIST: &[&str] = &[
     "NEBULA_HUMAN_TERMINAL_SOURCE_IMAGE",
     "NEBULA_KALI_SOURCE_IMAGE",
     "NEBULA_PLAYWRIGHT_EXECUTABLE",
+    "NEBULA_MITMDUMP_EXECUTABLE",
+    "NEBULA_SECURITY_PROXY_ADDON",
     "NEBULA_V3_CONTAINER_RUNTIME",
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
@@ -220,6 +223,39 @@ fn bundled_playwright_browsers_path(resource_dir: &Path) -> Result<Option<PathBu
         );
     }
     Ok(Some(resolved))
+}
+
+fn bundled_security_proxy_addon_path(resource_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let candidate = resource_dir.join(SECURITY_PROXY_ADDON);
+    if !candidate.is_file() {
+        return Ok(None);
+    }
+    let root = resource_dir
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve the Nebula resource directory: {error}"))?;
+    let addon = candidate
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve the bundled security proxy addon: {error}"))?;
+    if !addon.starts_with(root) {
+        return Err(
+            "refusing to use a security proxy addon outside application resources".to_string(),
+        );
+    }
+    Ok(Some(addon))
+}
+
+fn trusted_mitmdump_path() -> Option<PathBuf> {
+    TRUSTED_SYSTEM_PATH.split(':').find_map(|directory| {
+        let candidate = Path::new(directory).join(if cfg!(windows) {
+            "mitmdump.exe"
+        } else {
+            "mitmdump"
+        });
+        candidate
+            .is_file()
+            .then(|| candidate.canonicalize().ok())
+            .flatten()
+    })
 }
 
 fn secure_token() -> Result<String, String> {
@@ -879,6 +915,7 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
         .resource_dir()
         .map_err(|error| format!("cannot locate the Nebula resource directory: {error}"))?;
     let playwright_browsers = bundled_playwright_browsers_path(&resource_dir)?;
+    let security_proxy_addon = bundled_security_proxy_addon_path(&resource_dir)?;
 
     let mut command = Command::new(sidecar);
     command
@@ -908,6 +945,14 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
     for name in SIDECAR_ENV_ALLOWLIST {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
+        }
+    }
+    if let Some(addon) = security_proxy_addon {
+        command.env("NEBULA_SECURITY_PROXY_ADDON", addon);
+    }
+    if std::env::var_os("NEBULA_MITMDUMP_EXECUTABLE").is_none() {
+        if let Some(executable) = trusted_mitmdump_path() {
+            command.env("NEBULA_MITMDUMP_EXECUTABLE", executable);
         }
     }
 
@@ -1351,6 +1396,32 @@ mod tests {
             )
         );
         fs::remove_dir_all(directory).expect("browser resource should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundled_security_proxy_addon_stays_inside_resources() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "nebula-security-proxy-resource-test-{}",
+            secure_token().expect("token generation should work")
+        ));
+        let resources = root.join("resources");
+        let addon = resources.join(SECURITY_PROXY_ADDON);
+        fs::create_dir_all(addon.parent().expect("addon has a parent"))
+            .expect("security proxy resource directory should be created");
+        fs::write(&addon, b"# bundled addon\n").expect("security proxy addon should be created");
+        assert_eq!(
+            bundled_security_proxy_addon_path(&resources).expect("bundled addon should resolve"),
+            Some(addon.canonicalize().expect("addon should canonicalize"))
+        );
+        let outside = root.join("outside.py");
+        fs::write(&outside, b"# outside addon\n").expect("outside file should be created");
+        fs::remove_file(&addon).expect("bundled addon should be removable");
+        symlink(&outside, &addon).expect("escape symlink should be created");
+        assert!(bundled_security_proxy_addon_path(&resources).is_err());
+        fs::remove_dir_all(root).expect("security proxy test directory should be removed");
     }
 
     #[cfg(unix)]

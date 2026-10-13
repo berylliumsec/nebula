@@ -11,7 +11,7 @@ The operator may open Settings from a catalog result without losing the draft.
 | Select runtime | Healthy configured provider or harness is chosen and named | Core profiles, shell selection | Component and real Core |
 | Ask and stream | One durable control conversation receives ordered output | Core transcript and provider or harness turn | Real Core |
 | Change setting | Exact target and value are validated; saved state is read back | Browser preference or Core entity | Browser and real Core |
-| Confirm sensitive change | The operator sees scope and consequence before a write | Core approval and UI | Real Core |
+| Authorize a setting change | An explicit request in the dedicated assistant acts on the selected project; Core validates any required acknowledgment and reads saved state back | Assistant tool boundary and Core policy | Real Core |
 | Hide and restore | Draft, turn, and transcript remain available | React presentation, Core turn | Browser and real Core |
 | Refresh and reconnect | Transcript and pending action return without duplicates | Core and saved conversation identity | Real Core |
 | Stop and retry | Only this assistant turn stops; the question remains editable | Core turn, React draft | Real Core |
@@ -22,21 +22,30 @@ The operator may open Settings from a catalog result without losing the draft.
 | Change this device's theme | An explicit theme command opens Appearance, applies and confirms the browser preference, then closes the lens; “Zero theme” means Zero Dark | Browser theme context and storage; shell lens owns presentation | Component and desktop/mobile browser |
 | Model-selected browser action | The model calls an exact open-setting or device-theme tool; Core returns a typed pending action, and only the requesting browser applies and confirms it | Scoped tool receipt and browser theme/lens state | Tool unit, component, real-Core browser and live model |
 | Fast answer | Provider turns request low effort; harness turns select advertised low effort and fast tier or matching fast model | Runtime model options and Core provider adapters | Component and real Core |
-| Change project execution mode | An explicit request opens Project Policy, names the selected project, confirms Host access, saves through the existing policy API, reads back the mode, refreshes the visible control, and closes the lens after showing the result | Core automation policy; shell lens owns presentation | Component, browser, real Core and LAN |
+| Change project execution mode | An explicit request opens Project Policy, names the selected project, saves through the existing policy API with Host acknowledgment when needed, reads back the mode, refreshes the visible control, and closes the lens after showing the result | Core automation policy; shell lens owns presentation | Component, browser, real Core and LAN |
+| Change target and URL scope | A request for all destinations saves the selected project's URL, network and port scope while retaining unrelated policy fields; Allow all is a separate permission bypass | Core scope revision and assistant browser receipt | Component, browser, real Core and LAN |
+| Start the headless security browser | An explicit start request asks Core to establish the selected project's session and reports the observed status or startup error | Core agent-security session | API, browser, real Core and LAN |
+| Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
-| Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Host access confirmation | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
+| Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 
-The setting catalog lists every Settings section. Current direct actions cover
-device appearance, provider and harness default models from their advertised
-lists, project post-tool note and suggestion preferences, and project execution
-mode through the assistant UI with explicit consent. Other sections
-open their existing Settings controls. A direct action is allowed only
-for bounded values handled by an existing validation and save path. Browser
-appearance is applied in the active browser. Core-owned settings are applied by
-Core, with read-back before reporting success. Secrets, uploads, record creation,
-deletion, and multi-step setup open their existing Settings controls. Security,
-connectivity, runtime, and disruptive changes require explicit confirmation.
-Neither model text nor an MCP annotation substitutes for that confirmation.
+The setting catalog lists every Settings section. Dedicated actions handle
+device appearance, provider and harness default models, post-tool preferences,
+project execution mode, target scope and headless browser sessions. For other
+Core-backed settings, `nebula.settings.api_schema` lists only the current build's
+Settings routes and request schemas. `nebula.settings.api_request` calls one of
+those existing routes through Core authentication. The selected project ID is
+supplied by Core, and the assistant cannot select a different project in a
+route. Existing API validation, revision checks and required acknowledgments
+still apply. Browser appearance remains device-owned. Uploads and local desktop
+operations remain subject to the capabilities of the active device. An explicit
+operator setting request authorizes the assistant action without a second
+confirmation dialog. A pending browser action is never reported as saved.
+The headless security session is independent of the visible-browser desktop
+cutover. It needs the verified Chromium runtime and the mitmdump security proxy.
+The Mac desktop shell supplies the bundled addon and discovers mitmdump in its
+trusted system paths or accepts an explicit absolute executable path. A missing
+proxy is reported as a startup failure instead of a saved session.
 
 State owners: the URL owns the active project, Core owns the conversation and
 Core settings, browser storage owns device preferences and the last conversation
@@ -53,7 +62,8 @@ browser storage retained it. A question about how themes work remains a model
 question. The legacy “Zero theme” name resolves to Zero Dark on this device.
 For requests that reach a model, `nebula.settings.open`,
 `nebula.settings.set_device_theme`, and
-`nebula.settings.set_project_mode` expose exact bounded actions. The tool receipt
+`nebula.settings.set_project_mode`, `nebula.settings.set_project_scope`, and
+`nebula.settings.headless_session` expose exact bounded actions. The tool receipt
 is an intent, not a completed browser change. The requesting assistant window
 validates the action, applies it, and reports the observed result. The
 `nebula.settings.catalog` tool lists exact action names and argument values when
@@ -73,7 +83,7 @@ links such as an individual finding or conversation require a selected record
 and are not guessed from a name. URL state remains authoritative after reload,
 back and forward. Settings mutations remain exclusive to this assistant.
 An explicit project execution-mode command is also handled by the UI so the
-operator sees the existing control and approves Host access before Core saves.
+operator sees the existing control before Core saves with Host acknowledgment.
 The requested source mode, when supplied, must match Core's current policy;
 the assistant preserves unrelated policy fields and uses revision checks. A
 failure leaves the policy unchanged and keeps a retryable draft. The saved
@@ -89,7 +99,7 @@ project workspace or, with explicit Host access consent, switching future
 sessions to Host mode are the two relevant remedies. The assistant must explain
 that a previously opened command session keeps its frozen mode. Its product
 help scope does not grant filesystem commands, arbitrary MCP servers, web
-search, or a way to bypass the existing Settings approval path. General chat
+search, or permission to use settings tools from general chat. General chat
 still does not receive Nebula settings tools. When its answer cites a known
 Settings destination, the UI opens that destination as a lens on click.
 The product knowledge index is generated from current top-level product
@@ -99,7 +109,11 @@ that the package build generates and Core loads as a read-only SQLite vector dat
 model has not been prepared; dense retrieval is added when that model is
 ready. Build verification rejects an index whose source digest no longer
 matches the documentation. The index describes product behavior; Core-owned
-project policy and workspace state always come from the live context tool.
+project policy and workspace state always come from the live context tool. On
+startup, Core mirrors the bundled passages and their precomputed vectors into
+the local Chroma product-help collection. The source digest and passage count
+determine whether the mirror needs replacement; product help remains searchable
+from the bundled index if Chroma is unavailable.
 Provider turns request low effort; Core's provider adapter maps or omits that
 control for the selected model. Harness model options determine low effort and
 fast selection. An existing harness conversation may rebind to its advertised

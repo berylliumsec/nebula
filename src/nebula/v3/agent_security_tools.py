@@ -34,7 +34,7 @@ from .browser_security import (
     BrowserWorkflowError,
 )
 from .browserd import BrowserdSecurityRequest
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, scrub_host_paths
 from .domain import (
     BrowserAttack,
     BrowserCaptureMode,
@@ -443,6 +443,20 @@ class SecurityToolsRuntime:
     ) -> dict[str, Any]:
         if name == "status":
             session = self._active(project_id)
+            if session is None:
+                session = next(
+                    (
+                        item
+                        for item in self.store.find_entities(
+                            BrowserSession,
+                            {"runtime_kind": "agent_security"},
+                            engagement_id=project_id,
+                            newest_first=True,
+                        )
+                        if item.status != BrowserSessionStatus.CLOSED
+                    ),
+                    None,
+                )
             security = self.security.workspace(project_id)
             research = self.research.workspace(project_id)
 
@@ -453,6 +467,11 @@ class SecurityToolsRuntime:
                 {
                     "session_id": session.id if session else None,
                     "state": session.status.value if session else "not_started",
+                    "last_start_error": scrub_host_paths(
+                        str(session.metadata["last_start_error"])
+                    )
+                    if session and session.metadata.get("last_start_error")
+                    else None,
                     "interception_enabled": session.interception_enabled
                     if session
                     else False,
