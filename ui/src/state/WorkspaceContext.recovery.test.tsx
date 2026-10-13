@@ -25,9 +25,9 @@ function Probe() {
     workspace: value.workspaceState, status: value.resourceStatus,
     library: value.libraryItems, harnesses: value.harnesses, assets: value.assets,
     run: value.run, runs: value.runs, events: value.events,
-    approvals: value.approvals, engagement: value.engagement?.id,
+    approvals: value.approvals, evidence: value.evidence, engagement: value.engagement?.id,
     observations: value.observations,
-  })}</output>{(["library", "harnesses", "activity"] as const).map((resource) =>
+  })}</output>{(["library", "harnesses", "activity", "evidence"] as const).map((resource) =>
     <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}
   <button onClick={() => value.selectEngagement("project-b")}>Select project B</button>
   <button onClick={() => value.selectEngagement("project")}>Select project A</button>
@@ -61,7 +61,7 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
-  it("opens the selected project and publishes notes while evidence is still loading", async () => {
+  it("makes the selected project ready while evidence is still loading", async () => {
     let finishEvidence!: (value: unknown) => void;
     fixture.methods.listEvidence.mockImplementationOnce(() => new Promise((resolve) => { finishEvidence = resolve; }));
     fixture.methods.listObservations.mockResolvedValue({ items: [{ id: "note-1", title: "Ready note" }] });
@@ -71,10 +71,31 @@ describe("workspace resource recovery", () => {
     await waitFor(() => expect(state().status.notes.state).toBe("ready"));
     expect(state().observations).toEqual([{ id: "note-1", title: "Ready note" }]);
     expect(state().status.evidence.state).toBe("loading");
-    expect(state().workspace).toBe("bootstrapping");
+    expect(state().workspace).toBe("ready");
+    expect(state().evidence).toEqual([]);
     expect(fixture.methods.listObservations).toHaveBeenCalledTimes(1);
 
-    await act(async () => finishEvidence({ items: [] }));
+    await act(async () => finishEvidence({ items: [{ id: "evidence-1" }] }));
+    await waitFor(() => expect(state().evidence).toEqual([{ id: "evidence-1" }]));
+    expect(state().status.evidence.state).toBe("ready");
+  });
+
+  it("shows an evidence failure after startup and restores the collection on retry", async () => {
+    let failEvidence!: (error: Error) => void;
+    fixture.methods.listEvidence.mockImplementationOnce(() => new Promise((_, reject) => { failEvidence = reject; }));
+
+    render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+    expect(state().status.evidence.state).toBe("loading");
+
+    await act(async () => failEvidence(new Error("Evidence listing stopped")));
+    await waitFor(() => expect(state().status.evidence.state).toBe("failed"));
+    expect(state().workspace).toBe("degraded");
+
+    fixture.methods.listEvidence.mockResolvedValueOnce({ items: [{ id: "recovered-evidence" }] });
+    fireEvent.click(screen.getByText("Retry evidence"));
+    await waitFor(() => expect(state().evidence).toEqual([{ id: "recovered-evidence" }]));
+    expect(state().status.evidence.state).toBe("ready");
     await waitFor(() => expect(state().workspace).toBe("ready"));
   });
 

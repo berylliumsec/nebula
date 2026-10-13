@@ -26,7 +26,11 @@ those as `NEBULA_BUILD_COMMIT`, `NEBULA_BUILD_TIMESTAMP` and
    --core-identity build/nebula-core-metadata/BUILD_INFO.json --commit <commit>`.
    It rejects dirty/mixed builds, missing/extra assets and changed service workers.
 4. Stage the locked browser runtime with `python -m scripts.stage_playwright_runtime
-   ui/src-tauri/resources/playwright-browsers --target <target>`.
+   ui/src-tauri/resources/playwright-browsers --target <target>` and the Host
+   notebook runtime with `python -m scripts.stage_notebook_runtime
+   ui/src-tauri/resources/notebook-runtime --target <target>`. A standalone
+   frozen Core service also needs `NEBULA_NOTEBOOK_RUNTIME_DIR` set to that
+   verified notebook resource directory; the Core executable does not embed it.
 5. From `ui`, build the managed DEB with `npm exec -- tauri build --ci
    --target <target> --bundles deb --config src-tauri/tauri.managed.conf.json`.
    Keep the same identity environment during Tauri's frontend rebuild; repeat the
@@ -67,8 +71,9 @@ Stop writers during a coordinated maintenance window before taking a consistent
 database/artifact/configuration backup. A raw copy of a live SQLite file without
 its WAL is not a consistent backup. Record the backup location and verification.
 Install the candidate desktop package and switch the LAN service to the same
-candidate Core. Preserve service options and runtime policies. Never copy just
-`ui/dist` into an older installation.
+candidate Core. Preserve service options and runtime policies, including the
+staged `NEBULA_NOTEBOOK_RUNTIME_DIR` for standalone Host notebooks. Never copy
+just `ui/dist` into an older installation.
 
 ## Accept or roll back
 
