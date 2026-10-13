@@ -1,27 +1,26 @@
 {
-  "change_digest": "2af7468d3dccdd44c9492aac207ea4846f9822b3ec0477ab9857c7306c690d02",
-  "reviewed_by": "Codex PR #750 conflict review against main, 2026-10-13",
-  "reason": "The changed journey opens a parent project's Work page, sees its board and selected item before the searchable subproject list, then searches a child project and saves and reloads a Work update. The URL identifies the project and selected item; Core owns Work records and the subproject relationship; React owns only the transient search text. The board must precede subproject search at desktop and mobile widths, including when an item is selected, while existing navigation and check-ins remain usable. Select the 14 WorkPage component cases and the single catalogued real-Core Work journey in each of the 8 permanent desktop Chromium and emulated mobile Chromium/WebKit profiles. The real-Core journey uses a production UI bundle on a non-loopback LAN origin, creates a subproject and item, and checks order, update, refresh, reconnect, and accessibility. The main branch changed the shared real-core.spec.ts file after this PR opened; its merged Work hunk and pairing helper were reviewed against current main. The previous post-pairing readiness assertion landed on an unconfigured terminal, so the focused journey uses the established pairing helper, opens Projects, then selects the project row and Work tab. A 12 px layout margin keeps the selected-item panel and following subproject section separated after reordering.",
-  "exclusions": "No Python or Rust source changed; backend and native tests are excluded. Streaming, interrupt, and deletion are outside this presentation-order change. No browser security or device-only API changed; the production LAN run checks layout and existing persistence behavior. Physical devices are unavailable. Other Playwright areas and full suites are excluded.",
+  "change_digest": "0b039fd5447f2dc0d5d2d004bd6d0014f2846af4315b855bb48fe8bfd0500565",
+  "reviewed_by": "Codex review of v3.0.10 MCP failure and PR #750 main merge",
+  "reason": "The affected real Core, production-bundle, non-loopback LAN MCP import journey at 430 px WebKit reproduced the release failure: the Edit icon began outside the viewport, Playwright completed its click, and no dialog appeared. CI then showed the same sticky Settings tab intercepting the empty-state Import action at 320 px WebKit. The focused test centers Settings actions, checks that each button owns its hit point, uses touch input on phones, and requires import and edit dialogs to appear before proceeding through trust, probe, enable, refresh, and update. Desktop, 320 px Chromium, 320 px WebKit, and 430 px WebKit cover mouse and phone touch behavior.",
+  "exclusions": "This test-only change excludes other device profiles, backend and frontend unit files, native tests, unrelated journeys, and the full suite. The product MCP flow is unchanged; release package and other real-Core gates remain separate.",
   "expected_tests": {
     "python": 0,
-    "frontend": 14,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 4
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/WorkPage.test.tsx"
+  "python_versions": [
+    "3.12"
   ],
+  "python_browser": false,
+  "python_node": false,
+  "python": [],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:work-hub/assistant-real-desktop",
-    "entry:work-hub/assistant-real-compact",
-    "entry:work-hub/assistant-real-chromium-320",
-    "entry:work-hub/assistant-real-chromium-390",
-    "entry:work-hub/assistant-real-chromium-430",
-    "entry:work-hub/assistant-real-webkit-320",
-    "entry:work-hub/assistant-real-webkit-390",
-    "entry:work-hub/assistant-real-webkit-430"
+    "entry:mcp-import/assistant-real-desktop",
+    "entry:mcp-import/assistant-real-chromium-320",
+    "entry:mcp-import/assistant-real-webkit-320",
+    "entry:mcp-import/assistant-real-webkit-430"
   ]
 }

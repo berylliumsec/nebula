@@ -7,7 +7,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
-import { expect, request as playwrightRequest, test, type APIRequestContext, type Page, type TestInfo } from "@playwright/test";
+import { expect, request as playwrightRequest, test, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import {startApprovalCore} from "./fixtures/approval-core";
 import {OwnedCleanupError, withOwnedCleanup} from "./fixtures/owned-cleanup";
 import {settingCatalog} from "../src/settingsCatalog";
@@ -6660,6 +6660,16 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
     }}, null, 2)),
   };
   const mobile = (page.viewportSize()?.width ?? 1440) <= 430;
+  const activateSettingsAction = async (button: Locator) => {
+    await button.evaluate(element => element.scrollIntoView({block: "center"}));
+    await expect.poll(() => button.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      const target = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return target === element || element.contains(target);
+    })).toBe(true);
+    if (mobile) await button.tap();
+    else await button.click();
+  };
   const auditDialog = async (dialog: ReturnType<typeof page.getByRole>, label: string) => {
     const a11y = await new AxeBuilder({page}).include(".mcp-import-dialog").withTags(["wcag2a", "wcag2aa"]).analyze();
     expect(a11y.violations).toEqual([]);
@@ -6686,8 +6696,9 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
     const section = page.locator("#mcp-settings");
 
     // Empty state entry point, source step, example, schema download.
-    await section.getByRole("button", {name: "Import from file", exact: true}).click();
+    await activateSettingsAction(section.getByRole("button", {name: "Import from file", exact: true}));
     const dialog = page.getByRole("dialog", {name: "Import MCP servers"});
+    await expect(dialog).toBeVisible();
     await expect(dialog.locator(".mcp-import-example")).toHaveAttribute("open", "");
     await expect(dialog.getByRole("link", {name: "Format guide"})).toHaveAttribute("href", /docs\/MCP-SERVERS\.md$/);
     await auditDialog(dialog, "source");
@@ -6729,18 +6740,21 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
     await expect(card("fixture")).toContainText("Trust this local program in Edit before probing.");
 
     // Trust, probe for real, and enable the imported stdio server.
-    await card("fixture").getByRole("button", {name: "Edit fixture"}).click();
+    const editFixture = card("fixture").getByRole("button", {name: "Edit fixture"});
+    await activateSettingsAction(editFixture);
     const edit = page.getByRole("dialog", {name: "Edit MCP server"});
+    await expect(edit).toBeVisible();
     await edit.getByRole("checkbox", {name: /I trust this local program/}).check();
     await edit.getByRole("button", {name: "Save MCP server"}).click();
     await expect(edit).toHaveCount(0);
-    await card("fixture").getByRole("button", {name: "Probe"}).click();
+    await activateSettingsAction(card("fixture").getByRole("button", {name: "Probe"}));
     await expect(card("fixture")).toContainText("read_file", {timeout: 20_000});
-    await card("fixture").getByRole("button", {name: "Enable"}).click();
+    await activateSettingsAction(card("fixture").getByRole("button", {name: "Enable"}));
     await expect(card("fixture").getByRole("button", {name: "Disable"})).toBeVisible();
 
     // Re-importing the same file changes nothing.
-    await section.getByRole("button", {name: "Import", exact: true}).click();
+    await activateSettingsAction(section.getByRole("button", {name: "Import", exact: true}));
+    await expect(dialog).toBeVisible();
     await dialog.getByLabel("Choose MCP configuration file").setInputFiles(file);
     await dialog.getByRole("button", {name: "Preview", exact: true}).click();
     await expect(row("fixture")).toContainText("Unchanged");
