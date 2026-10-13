@@ -281,6 +281,19 @@ def test_known_changes_remain_focused(impact_repo):
     )
 
 
+@pytest.mark.parametrize("path", ["ui/src/components/ThemePicker.tsx", "ui/src/ui.css"])
+def test_preflight_rejects_matrix_overflow_before_tag(impact_repo, path):
+    baseline, commit = impact_repo
+    changed = Path(path)
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    changed.write_text("selected change")
+    with (
+        patch.object(daily, "matrix_lanes", side_effect=ValueError("over capacity")),
+        pytest.raises(ValueError, match="over capacity"),
+    ):
+        daily.preflight_impact(baseline, commit())
+
+
 def test_documentation_changes_keep_no_browser_jobs(impact_repo):
     baseline, commit = impact_repo
     Path("README.md").write_text("documentation only")

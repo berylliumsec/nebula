@@ -1,10 +1,10 @@
 {
-  "change_digest": "66ff036a5b43b4d4bf01c949167bd7244be44d9427ad0ee57ed768797da8041e",
-  "reviewed_by": "Codex review of nebula-v3.0.11 runner disk exhaustion against merged PR #779 main",
-  "reason": "The desktop-shell real-Core job crashed when its GitHub runner ran out of disk. Three broad real-Core catalog entries are partitioned into four bounded Playwright shards each without changing the selected journeys. Three exact selector tests verify shard identities, shared Core/shell deduplication, and that the real-Core runtime remains required. Browser collection confirms real-core has 27 tests per shard and assistant-real-desktop has 22-23; the next daily release executes those catalogued shards in its selected matrix.",
-  "exclusions": "This branch changes only the impact catalog and its focused selector assertions; the browser repairs from PR #779 are already in the baseline. The Python selector tests and browser collection verify that no cases are omitted or duplicated. Backend, frontend, native, unrelated browser journeys, actual browser execution, and the full suite are excluded from this PR; the next release preparation exercises the changed runner partitioning.",
+  "change_digest": "4c806f00068d9c4c801966fae1ec43d31d42c6cd86e86758e14168cc65709b9a",
+  "reviewed_by": "Codex review of nebula-v3.0.12 matrix gate failure and GitHub Actions 256-job limit",
+  "reason": "The accepted daily release coverage contained 285 entries, but GitHub allows at most 256 jobs in one matrix, so the browser job could not schedule and the release gate failed. The same reviewed selection is partitioned into four 200-entry matrices, each retaining its exact project, test, grep, runtime, and shard. The gate now requires every nonempty matrix; the daily preflight rejects more than 800 entries before creating an immutable tag. Five focused Python cases verify lane conservation, output encoding, workflow gate wiring, and both preflight paths.",
+  "exclusions": "The diff changes only release coverage scheduling and exact selector checks. No operator UI or product runtime code changed. The current candidate stopped before browser execution, and the next immutable candidate will run its already-reviewed change-aware browser journeys. Browser, frontend, native, unrelated Python tests, and the full suite are excluded from this PR.",
   "expected_tests": {
-    "python": 3,
+    "python": 5,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,9 +15,10 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/test_playwright_impact.py::test_sharded_core_api_and_shell_entries_deduplicate",
-    "tests/test_playwright_impact.py::test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build",
-    "tests/test_playwright_impact.py::test_assistant_real_core_uses_bounded_shards"
+    "tests/test_playwright_impact.py::test_matrix_lanes_preserve_a_release_selection_below_github_limit",
+    "tests/test_playwright_impact.py::test_matrix_lane_cli_writes_every_output",
+    "tests/test_playwright_impact.py::test_workflow_gates_every_matrix_lane",
+    "tests/test_daily_stable_release.py::test_preflight_rejects_matrix_overflow_before_tag"
   ],
   "frontend": [],
   "native": [],

@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import release_app
+from playwright_impact import matrix_lanes
 
 REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 MAIN_SHA = os.environ.get("GITHUB_SHA", "")
@@ -208,6 +209,7 @@ def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
             env=child_env(),
         )
         if result.returncode == 0:
+            matrix_lanes(json.loads(output.read_text())["include"])
             return "", "Daily stable release: automatic impacted selection."
         plan = json.loads(output.read_text()) if output.exists() else {}
         blockers = plan.get("fallbacks", [])
@@ -240,6 +242,7 @@ def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
                 "Conservative daily coverage failed validation before tagging: "
                 + result.stderr.strip()
             )
+        matrix_lanes(accepted["include"])
         print(Path(directory, "receipt.md").read_text(), flush=True)
         return selection, review_reason
 

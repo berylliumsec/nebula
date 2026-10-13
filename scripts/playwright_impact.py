@@ -12,6 +12,26 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+MATRIX_LANE_SIZE = 200
+MATRIX_LANE_COUNT = 4
+
+
+def matrix_lanes(
+    entries: list[dict[str, Any]],
+) -> list[dict[str, list[dict[str, Any]]]]:
+    """Partition an accepted selection below GitHub's 256-job matrix limit."""
+    capacity = MATRIX_LANE_SIZE * MATRIX_LANE_COUNT
+    if len(entries) > capacity:
+        raise ValueError(
+            f"Selected {len(entries)} Playwright jobs exceeds {capacity} matrix slots; "
+            "review coverage before creating an immutable release tag"
+        )
+    return [
+        {"include": entries[start : start + MATRIX_LANE_SIZE]}
+        for start in range(0, capacity, MATRIX_LANE_SIZE)
+    ]
+
+
 def matches(path: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
@@ -317,7 +337,30 @@ def main(argv: list[str] | None = None) -> int:
     catalog = subparsers.add_parser("catalog")
     catalog.add_argument("--manifest", type=Path, required=True)
 
+    lanes = subparsers.add_parser("lanes")
+    lanes.add_argument("--plan", type=Path, required=True)
+    lanes.add_argument("--github-output", type=Path, required=True)
+
     args = parser.parse_args(argv)
+    if args.command == "lanes":
+        plan = json.loads(args.plan.read_text())
+        if plan.get("coverage_review_required"):
+            raise ValueError("Cannot schedule an unreviewed Playwright selection")
+        matrices = matrix_lanes(plan["include"])
+        with args.github_output.open("a") as output:
+            for index, matrix in enumerate(matrices, start=1):
+                print(
+                    f"matrix_{index}={json.dumps(matrix, separators=(',', ':'))}",
+                    file=output,
+                )
+                print(
+                    f"has_{index}={str(bool(matrix['include'])).lower()}", file=output
+                )
+        print(
+            "Playwright matrix lanes: "
+            + ", ".join(str(len(m["include"])) for m in matrices)
+        )
+        return 0
     if args.command == "catalog":
         print(
             json.dumps(

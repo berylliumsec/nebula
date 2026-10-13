@@ -2,9 +2,12 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.playwright_impact import (
     changed_paths,
+    main as impact_main,
+    matrix_lanes,
     select_plan,
     selection_catalog,
     selected_entries,
@@ -301,3 +304,58 @@ def test_assistant_real_core_uses_bounded_shards():
     assert {entry["shard"] for entry in entries} == {"1/4", "2/4", "3/4", "4/4"}
     assert all(entry["test_match"] == "tests/real-core.spec.ts" for entry in entries)
     assert all(entry["runtime"] == "real-core" for entry in entries)
+
+
+def test_matrix_lanes_preserve_a_release_selection_below_github_limit():
+    entries = [{"project": f"selected-{index}"} for index in range(285)]
+    lanes = matrix_lanes(entries)
+    assert [len(lane["include"]) for lane in lanes] == [200, 85, 0, 0]
+    assert [entry for lane in lanes for entry in lane["include"]] == entries
+    assert all(len(lane["include"]) < 256 for lane in lanes)
+    with pytest.raises(ValueError, match="review coverage before creating"):
+        matrix_lanes([{"project": str(index)} for index in range(801)])
+
+
+def test_matrix_lane_cli_writes_every_output(tmp_path):
+    plan = tmp_path / "plan.json"
+    output = tmp_path / "github-output"
+    plan.write_text(
+        json.dumps(
+            {
+                "coverage_review_required": False,
+                "include": [{"project": str(index)} for index in range(285)],
+            }
+        )
+    )
+    assert (
+        impact_main(["lanes", "--plan", str(plan), "--github-output", str(output)]) == 0
+    )
+    lines = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert [lines[f"has_{index}"] for index in range(1, 5)] == [
+        "true",
+        "true",
+        "false",
+        "false",
+    ]
+    assert [
+        len(json.loads(lines[f"matrix_{index}"])["include"]) for index in range(1, 5)
+    ] == [200, 85, 0, 0]
+
+
+def test_workflow_gates_every_matrix_lane():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/playwright-impact.yml").read_text()
+    )
+    jobs = workflow["jobs"]
+    names = ["playwright", "playwright-2", "playwright-3", "playwright-4"]
+    assert jobs["gate"]["needs"] == ["plan", *names]
+    for index, name in enumerate(names, start=1):
+        assert (
+            jobs[name]["strategy"]["matrix"]
+            == "${{ fromJSON(needs.plan.outputs.matrix_" + str(index) + ") }}"
+        )
+        assert jobs[name]["env"]["PLAYWRIGHT_LANE"] == str(index)
+        assert jobs[name]["steps"] == jobs["playwright"]["steps"]
+        assert jobs["gate"]["steps"][0]["env"][f"HAS_{index}"] == (
+            "${{ needs.plan.outputs.has_" + str(index) + " }}"
+        )
