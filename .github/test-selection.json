@@ -1,25 +1,37 @@
 {
-  "change_digest": "4ee8fc03e1ed740326ef75343f46c720b764298264f76c7742da1ab255abd3f9",
-  "reviewed_by": "Codex focused review of workspace bootstrap readiness",
-  "reason": "A LAN browser opens a linked project with many evidence records. Core and global catalogs establish a usable workspace while project collections retain their own loading, success, failure, retry, switch, and reconnect state. The selected component tests cover those state transitions. The selected production-bundle browser journey holds evidence loading and checks that the Workbench becomes usable on desktop Chromium, 320 px mobile Chromium, and mobile WebKit.",
-  "exclusions": "No Python runtime, persistence, native shell, provider, or notebook execution source changed in this follow-up, so Python, native, and unrelated browser suites are excluded. The browser CI fixture delays evidence deliberately; the real production Core and LAN origin will be verified against the live high-volume project after deployment. Physical-device testing is unavailable in this environment.",
+  "change_digest": "a725282658c5b092dea16966446a96d0e77e0881e001b481ae53508da1aae78c",
+  "reviewed_by": "Codex review of nebula-v3.0.14 native command release failure",
+  "reason": "The v3.0.14 real-Core gate exposed native command parsing of appended Core instructions, stale Guides and top-bar action entry under Quiet Lens, and fourteen real-Core journeys that still assumed an older navigation shell. A separate goal-panel release failure used an opener that a responsive rerender had already replaced with the open panel. Select the focused command unit file, production LAN real-Core commands and Guides on desktop and 390 px Chromium/WebKit, Quiet Lens mock journeys on desktop and mobile Chromium/WebKit, the fourteen exact failing real-Core desktop journeys, and the three goal-panel revision cases. The shared AppShell and TopBar impact was reviewed against their rendered menu workflow.",
+  "exclusions": "No focused component test covers the shell menu interaction and no native source changed, so frontend unit and native selections are empty; the real-Core and mock browser journeys exercise the rendered state. Unrelated browser and backend journeys are excluded. The selected browser entries collect thirty cases; a full suite was not requested.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 13,
+    "python": 42,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 30
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+  "python": [
+    "tests/v3/test_harness_commands.py"
   ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:workspace-bootstrap"
+    "entry:harness-commands-real/assistant-real-desktop",
+    "entry:harness-commands-real/assistant-real-chromium-390",
+    "entry:harness-commands-real/assistant-real-webkit-390",
+    "entry:interactive-guides/assistant-real-desktop",
+    "entry:interactive-guides/assistant-real-chromium-390",
+    "entry:interactive-guides/assistant-real-webkit-390",
+    "entry:quiet-lens/desktop",
+    "entry:quiet-lens/mobile-chromium",
+    "entry:quiet-lens/mobile-webkit",
+    "entry:release-core-gate-repairs/real-core",
+    "entry:release-goal-panel-race/desktop",
+    "entry:release-goal-panel-race/mobile-chromium",
+    "entry:release-goal-panel-race/mobile-webkit-wide"
   ]
 }
