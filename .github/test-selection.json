@@ -1,17 +1,34 @@
 {
-  "change_digest": "2eb4e293f06d1f87842a11fc03941a097a83499c477b33fede1a7f52801ebce0",
-  "reviewed_by": "Codex focused review of the October 13 LAN headless Core rollout",
-  "reason": "The operator opens the existing LAN Assistant browser, discovers the headless security MCP and dashboard, starts a scoped Core-owned headless session, observes its status, stops it, and reloads the LAN page. The selected Python API and real browser/proxy integration tests cover capability registration, isolated request capture and protected upstream access. The dashboard component and browser matrix cover presentation and controls. Production real-Core journeys cover desktop, compact, mobile Chromium and mobile WebKit over a non-loopback origin. CI stages the proxy only for the selected headless Python file.",
-  "exclusions": "No Electron visible-browser cutover or native shell change is included. The current LAN browser remains available, so native tests and unrelated browser, settings, and full suites are excluded. Physical device and packaged Electron acceptance remain separate from this server-focused rollout.",
-  "expected_tests": {"python": 8, "frontend": 2, "native": 0, "playwright": 12},
-  "python_versions": ["3.12"],
-  "python_browser": true,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_one_browser_cutover.py",
-    "tests/v3/test_agent_security_headless.py"
+  "change_digest": "90362dba5b690d2623f7a34ad66eab7ef1cf0d4a370f53c2330a6ef9071ebe47",
+  "reviewed_by": "Codex review of nebula-v3.0.11 release failure artifacts",
+  "reason": "The release matrix failed in three exact journeys. The real-Core Work import test required a ready chip that is absent when its disposable Core has no terminal runner; pairing completion and the durable Projects view are the correct gates. The focused rerun exposed a stale desktop Analyst chat tab assertion after the saved conversation opened and a missing parent breadcrumb on the child project page; the test now checks the visible conversation title and composer, then returns through the project list to open the parent and inspect its subproject board. Two 320 px interface tests opened Settings and tried to use a desktop sidebar button that the phone shell does not show; phone project switching starts in Workbench More. Run those three catalogued journeys on the failed profiles plus desktop and mobile controls to cover pairing, touch entry, search, host-folder selection, refresh, and the production LAN boundary.",
+  "exclusions": "The changes are limited to two browser test fixtures. Backend, frontend unit, native, unrelated browser journeys, and the full suite are excluded. The Work import selections use a production UI bundle and real Core on a non-loopback LAN origin; the project picker selections use the browser fixture on desktop and 320 px phone profiles.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 12
+  },
+  "python_versions": [
+    "3.12"
   ],
-  "frontend": ["ui/src/components/SecurityDashboard.test.tsx"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:headless-lan"]
+  "playwright": [
+    "entry:work-import/assistant-real-desktop",
+    "entry:work-import/assistant-real-compact",
+    "entry:work-import/assistant-real-chromium-320",
+    "entry:work-import/assistant-real-webkit-320",
+    "entry:project-lifecycle/desktop",
+    "entry:project-lifecycle/compact",
+    "entry:project-lifecycle/mobile-chromium-small",
+    "entry:project-lifecycle/mobile-webkit-small",
+    "entry:project-switcher-search/desktop",
+    "entry:project-switcher-search/compact",
+    "entry:project-switcher-search/mobile-chromium-small",
+    "entry:project-switcher-search/mobile-webkit-small"
+  ]
 }

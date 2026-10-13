@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
-import { expect, request as playwrightRequest, test, type Page } from "@playwright/test";
+import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 interface TestCore {
   process: ChildProcessWithoutNullStreams;
@@ -20,11 +20,6 @@ function localNetworkIpv4(): string {
     }
   }
   throw new Error("A non-loopback IPv4 address is required for LAN acceptance.");
-}
-
-function coreReady(page: Page) {
-  return page.getByRole("button", { name: /^Nebula Core ready$/ })
-    .or(page.getByRole("navigation", { name: "Mobile operator navigation" })).first();
 }
 
 async function startCore(): Promise<TestCore> {
@@ -126,20 +121,11 @@ test("work hub import finds a project and its saved task after refresh", async (
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Work import browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0);
     await page.route("**/api/v1/work/agents", (route) => route.fulfill({ json: [{
       session_id: "sample-active-session", engagement_id: parentId,
       title: "Sample research handoff", state: "working", turn_id: "sample-turn",
     }] }));
-    const mobileMore = page.getByRole("button", { name: "More workbench views" });
-    if (await mobileMore.isVisible()) {
-      await mobileMore.click();
-      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Projects" }).click();
-    } else {
-      const sidebar = page.getByRole("button", { name: "Show sidebar" });
-      if (await sidebar.isVisible()) await sidebar.click();
-      await page.getByRole("link", { name: "Projects", exact: true }).click();
-    }
     await page.goto(`${core.origin}/projects`);
     await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     const parentProject = page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ }).first();
@@ -161,11 +147,8 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(workingDetails.getByRole("link", { name: /Sample research handoff/ })).toHaveAttribute("href", new RegExp(`/projects/${parentId}/workbench\\?view=chat&session=sample-active-session$`));
     await workingDetails.getByRole("link", { name: /Sample research handoff/ }).click();
     await expect(page).toHaveURL(new RegExp(`/projects/${parentId}/workbench\\?view=chat&session=sample-active-session$`));
-    const desktopChat = page.getByRole("tab", { name: "Analyst chat" });
-    const mobileChat = page.getByRole("button", { name: "Chat", exact: true });
-    await expect(desktopChat.or(mobileChat).first()).toBeVisible({ timeout: 20_000 });
-    if (await desktopChat.isVisible()) await expect(desktopChat).toHaveAttribute("aria-selected", "true");
-    else await expect(mobileChat).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("main").getByText("Sample research handoff", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
     await page.goBack();
     await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     await expect(page.getByText("Showing 80 rows. Search to narrow the list.")).toBeVisible();
@@ -173,8 +156,11 @@ test("work hub import finds a project and its saved task after refresh", async (
     await page.getByRole("searchbox", { name: "Search projects" }).fill("Imported plan");
     await expect(page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ })).toBeVisible();
     await page.locator(".work-project-list .work-project-primary").filter({ hasText: "Imported plan" }).click();
-    await expect(page.getByRole("link", { name: "Sample project 1" })).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("link", { name: "Sample project 1" }).click();
+    await expect(page.getByRole("heading", { name: "Imported plan", exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
+    await page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ }).first().click();
+    await expect(page.getByRole("heading", { name: "Sample project 1", exact: true })).toBeVisible();
     await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: "Work" }).click();
     await expect(page.getByRole("heading", { name: "Subprojects" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Imported plan/ })).toBeVisible();

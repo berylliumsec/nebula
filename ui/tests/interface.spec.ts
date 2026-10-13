@@ -3943,10 +3943,9 @@ test("the 320px mobile companion keeps controls visible and the composer above n
 test("host folder picker remains usable as a bounded project workflow", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile browser projects.");
   await setInitialZeroDark(page);
-  await openWorkspace(page, "/settings", "Settings");
-  if (testInfo.project.name.startsWith("mobile-")) {
-    await page.getByRole("button", { name: "Show sidebar" }).click();
-  }
+  const mobile = testInfo.project.name.startsWith("mobile-");
+  await openWorkspace(page, mobile ? "/?view=chat" : "/settings", mobile ? "Workbench" : "Settings");
+  if (mobile) await page.getByRole("button", { name: "More workbench views" }).click();
   await page.getByRole("button", { name: "Switch project" }).click();
   const switcher = page.getByRole("dialog", { name: "Project switcher" });
   await switcher.getByRole("button", { name: "New project" }).click();
@@ -4024,15 +4023,15 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   expect(accessibility.violations).toEqual([]);
 });
 
-test("phone shell project switcher search finds active and archived projects", async ({ page }) => {
+test("phone shell project switcher search finds active and archived projects", async ({ page }, testInfo) => {
   await page.route(/\/api\/v1\/engagements(?:\?|$)/, route => route.fulfill({ json: [
     { ...entity, id: "scratch-project", name: "Scratch Project", status: "active", tags: [], metadata: {} },
     { ...entity, id: "alpha-project", name: "Alpha Project", client_name: "Example Org", status: "active", tags: [], metadata: {} },
     { ...entity, id: "past-project", name: "Past Review", client_name: "Orion", status: "archived", tags: [], metadata: {} },
   ] }));
-  await openWorkspace(page, "/settings", "Settings");
-  const sidebar = page.getByRole("button", { name: "Show sidebar" });
-  if (await sidebar.isVisible()) await sidebar.click();
+  const mobile = testInfo.project.name.startsWith("mobile-");
+  await openWorkspace(page, mobile ? "/?view=chat" : "/settings", mobile ? "Workbench" : "Settings");
+  if (mobile) await page.getByRole("button", { name: "More workbench views" }).click();
   await page.getByRole("button", { name: "Switch project" }).click();
   const switcher = page.getByRole("dialog", { name: "Project switcher" });
   const search = switcher.getByRole("textbox", { name: "Search projects" });
@@ -4074,6 +4073,9 @@ test("phone shell project switcher search finds active and archived projects", a
   const accessibility = await new AxeBuilder({ page }).include(".engagement-menu").withTags(["wcag2a", "wcag2aa"]).analyze();
   expect(accessibility.violations).toEqual([]);
   await page.keyboard.press("Escape");
+  if (mobile && !(await page.getByRole("button", { name: "Switch project" }).isVisible())) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+  }
   await page.getByRole("button", { name: "Switch project" }).click();
   await expect(switcher.getByRole("textbox", { name: "Search projects" })).toHaveValue("");
 });
