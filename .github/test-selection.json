@@ -1,29 +1,21 @@
 {
-  "change_digest": "6938c8fbcf8af0c406f38990dc2394fbee480333e06e326323c922317c7ba75c",
-  "reviewed_by": "Codex focused review for grouped subagent transcript results",
-  "reason": "Consecutive Core-posted subagent results become one expandable transcript row. A small shared chat scroll button offset separates overlapping current-turn and latest-message touch targets exposed by this journey. Two collected unit cases cover grouping and message-to-row navigation, eight collected mocked browser cases cover collapsed failure summaries, reveal, virtualized scroll return, current-turn jump, refresh, direct message navigation, accessibility, and desktop/mobile Chromium/WebKit layouts. One collected real-Core case exercises durable interrupted and recovered results through the production UI at a LAN origin.",
-  "exclusions": "No backend or native behavior changed, so Python and native test lists are empty. Unrelated chat, provider, browser, and workbench journeys are excluded. Physical-device testing is unavailable; the selected mobile browser projects use emulation. No full suite is authorized.",
+  "change_digest": "4b43353f17169943fb87a5faa349e9668018fcc1f0a9821df066df7bd177500a",
+  "reviewed_by": "Codex focused review with independent subagent review of the troubleshooting gate",
+  "reason": "AGENTS.md links a new code-troubleshooting skill requiring evidence for a root cause and fresh-context subagent validation before a behavior-changing fix. This changes agent guidance only; no product code, test logic, API, UI, or runtime behavior changes.",
+  "exclusions": "No product or operator journey changes, so no Python, frontend, native, or Playwright tests are relevant. No LAN Core workflow applies to this guidance-only change. The skill structural validator and diff-bound selection validation are run separately; no full suite is authorized.",
   "expected_tests": {
     "python": 0,
-    "frontend": 2,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": ["ui/src/pages/subagentTranscriptGroups.test.ts"],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:chat-subagent-result-collapse/desktop",
-    "entry:chat-subagent-result-collapse/compact",
-    "entry:chat-subagent-result-collapse/mobile-chromium-small",
-    "entry:chat-subagent-result-collapse/mobile-chromium-ledger-390",
-    "entry:chat-subagent-result-collapse/mobile-chromium-wide",
-    "entry:chat-subagent-result-collapse/mobile-webkit-small",
-    "entry:chat-subagent-result-collapse/mobile-webkit",
-    "entry:chat-subagent-result-collapse/mobile-webkit-wide",
-    "entry:chat-subagent-result-real-core/real-core"
-  ]
+  "playwright": []
 }
