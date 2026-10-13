@@ -146,14 +146,33 @@ jobs:
           poetry install --with dev --no-interaction
       - name: Build production UI
         run: npm --prefix ui run build
+      - name: List selected tests and their runtime needs
+        id: selected_tests
+        env:
+          PROJECT: ${{ matrix.project }}
+          TEST_MATCH: ${{ matrix.test_match }}
+          TEST_GREP: ${{ matrix.grep }}
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
+          if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
+          if test "$PROJECT" = real-core && test "$TEST_SHARD" != 1/1; then args+=(--fully-parallel); fi
+          npm --prefix ui run test:e2e -- "${args[@]}" --list | tee "$RUNNER_TEMP/selected-tests.txt"
+          if grep -Fq 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' "$RUNNER_TEMP/selected-tests.txt" ||
+             grep -Fq 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core' "$RUNNER_TEMP/selected-tests.txt"; then
+            echo 'managed_browser=true' >> "$GITHUB_OUTPUT"
+          fi
+          if grep -Fq 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core' "$RUNNER_TEMP/selected-tests.txt"; then
+            echo 'security_proxy=true' >> "$GITHUB_OUTPUT"
+          fi
       - name: Prepare verified Chromium for the selected assistant browser journeys
-        if: matrix.grep == 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' || matrix.grep == 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'
+        if: steps.selected_tests.outputs.managed_browser == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y patchelf xvfb
           poetry run python -m scripts.stage_playwright_runtime "$RUNNER_TEMP/playwright-browsers" --target x86_64-unknown-linux-gnu
       - name: Prepare isolated security proxy for the selected headless browser journey
-        if: matrix.grep == 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'
+        if: steps.selected_tests.outputs.security_proxy == 'true'
         run: |
           python -m venv "$RUNNER_TEMP/nebula-security-proxy"
           "$RUNNER_TEMP/nebula-security-proxy/bin/pip" install 'mitmproxy==12.2.3'
@@ -163,6 +182,8 @@ jobs:
           TEST_MATCH: ${{ matrix.test_match }}
           TEST_GREP: ${{ matrix.grep }}
           TEST_SHARD: ${{ matrix.shard }}
+          MANAGED_BROWSER: ${{ steps.selected_tests.outputs.managed_browser }}
+          SECURITY_PROXY: ${{ steps.selected_tests.outputs.security_proxy }}
           NEBULA_UI_TEST_COMMAND: npm run preview -- --host 0.0.0.0 --port 1420
         run: |
           args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
@@ -173,11 +194,8 @@ jobs:
           if test "$PROJECT" = real-core && test "$TEST_SHARD" != 1/1; then
             args+=(--fully-parallel)
           fi
-          # Listing is cheap and records the actual selected tests/count before running.
-          npm --prefix ui run test:e2e -- "${args[@]}" --list
-          if test "$TEST_GREP" = 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' ||
-             test "$TEST_GREP" = 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'; then
-            if test "$TEST_GREP" = 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'; then
+          if test "$MANAGED_BROWSER" = true; then
+            if test "$SECURITY_PROXY" = true; then
               export NEBULA_TEST_SECURITY_PROXY_EXECUTABLE="$RUNNER_TEMP/nebula-security-proxy/bin/mitmdump"
             fi
             NEBULA_TEST_MANAGED_BROWSER_RUNTIME="$RUNNER_TEMP/playwright-browsers" xvfb-run -a npm --prefix ui run test:e2e -- "${args[@]}"

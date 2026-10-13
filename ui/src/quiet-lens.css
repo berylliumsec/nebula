@@ -350,7 +350,8 @@
     border-radius: 0 24px 24px 0;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-side-handle {
-    top: 8px;
+    /* Share the top row with the menu lens; the Workbench header owns the row below. */
+    top: calc(-74px + env(safe-area-inset-top, 0px));
     left: 4px;
     height: 44px;
     opacity: .72;
@@ -359,6 +360,11 @@
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .sidebar-scrim { display: none; }
   :root[data-theme="quiet-lens"] .quiet-lens-shell:has(> .side-nav[data-lens-open="true"]) > .sidebar-scrim { display: block; z-index: 75; inset: 64px 0 0; }
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar { z-index: 76; }
+  /* The fixed mobile debugger starts above this row; keep its close control tappable. */
+  :root[data-theme="quiet-lens"] .quiet-lens-shell > .main-content:has(.editor-debugger) {
+    position: relative;
+    z-index: 81;
+  }
   :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .brand-lockup { display: flex; }
   :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .nav-list { display: flex; }
   :root[data-theme="quiet-lens"] .mobile-companion-nav {

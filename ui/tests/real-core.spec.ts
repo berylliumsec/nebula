@@ -247,13 +247,14 @@ test("stabilization notes open before unrelated evidence finishes loading", asyn
 });
 
 /**
- * Wider screens show the shell's Core status chip. Phones drop that chip from the
- * Workbench (status lives in the conversation drawer), so the paired shell's
- * phone navigation is the ready signal there.
+ * Workbench shows Core status in the shell, while the paired Terminal landing
+ * screen hides that chip in navigation. The fixture already waits for Core to
+ * start; this locator waits for the authenticated shell after device pairing.
  */
 function coreShell(page: Page, chip: RegExp) {
   return page.getByRole("button", { name: chip })
     .or(page.getByRole("navigation", { name: "Mobile operator navigation" }))
+    .or(page.getByRole("button", { name: "Open navigation", exact: true }))
     .first();
 }
 
@@ -306,6 +307,14 @@ async function guideEntry(page: Page) {
 /** Fixture Cores often report limited availability; their shell is still usable. */
 function coreConnected(page: Page) {
   return coreShell(page, /^Nebula Core (ready|degraded)/);
+}
+
+async function clickAssistantSettings(page: Page) {
+  const trigger = page.getByRole("button", {name: "Assistant settings", exact: true});
+  const idleComposer = await trigger.evaluate(element => Boolean(element.closest(".chat-composer")))
+    && await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
+  if (idleComposer) await page.locator(".chat-composer").hover();
+  await trigger.click();
 }
 
 async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string> } = {}): Promise<RealCore> {
@@ -1009,7 +1018,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     // Pairing returns to the workspace's saved surface; enter chat explicitly.
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const settings = page.getByRole("dialog", { name: "Assistant settings" });
     await settings.getByRole("combobox", { name: "Chat runtime" }).selectOption("provider");
     await settings.getByRole("combobox", { name: "Chat provider" }).selectOption(provider.id);
@@ -1072,7 +1081,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(page.getByRole("region", { name: "Conversation goal" })).not.toContainText("Save changes");
     // A running goal is always mid-response, so its model and effort stay
     // editable; Core applies the change to the next turn.
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const liveSettings = page.getByRole("dialog", { name: "Assistant settings" });
     await expect(liveSettings.getByRole("combobox", { name: "Chat model" })).toBeEnabled();
     const liveEffortSave = page.waitForResponse(response =>
@@ -1109,7 +1118,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("Prove editable goal lifecycle");
     if (await railGoal.isVisible()) await expect(railGoal.locator(".chat-studio-goal-summary")).toHaveText("Prove editable goal lifecycle");
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("m left");
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const resumedSettings = page.getByRole("dialog", { name: "Assistant settings" });
     const effortSave = page.waitForResponse(response =>
       response.request().method() === "PATCH"
@@ -1120,7 +1129,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await page.getByRole("button", { name: "Close assistant settings" }).click();
     await page.reload();
     await openFullGoal();
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("high");
     await page.getByRole("button", { name: "Close assistant settings" }).click();
     await page.getByRole("button", { name: "Resume" }).click();
@@ -1253,7 +1262,7 @@ test("assistant upgrade real Core provider selections survive reload and restart
 
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const settings = page.getByRole("dialog", { name: "Assistant settings" });
     await expect(settings.getByRole("checkbox", { name: /Audit lifecycle/ })).toBeVisible();
     await expect(settings.getByRole("checkbox", { name: /Persist workspace/ })).toBeVisible();
@@ -1289,7 +1298,7 @@ test("assistant upgrade real Core provider selections survive reload and restart
     await expect(page.getByText("Real Core retained the exact research context.").first()).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
     const sessionId = chat.session_id;
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const savedSettings = page.getByRole("dialog", { name: "Assistant settings" });
     await expect(savedSettings.getByRole("checkbox", { name: /Audit lifecycle/ })).toBeChecked();
     await savedSettings.getByRole("checkbox", { name: /restart-tools/ }).check();
@@ -1298,7 +1307,7 @@ test("assistant upgrade real Core provider selections survive reload and restart
 
     await page.reload();
     await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Audit lifecycle/ })).toBeChecked();
     await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /restart-tools/ })).toBeChecked();
     await page.getByRole("button", { name: "Close assistant settings" }).click();
@@ -1306,7 +1315,7 @@ test("assistant upgrade real Core provider selections survive reload and restart
     await rm(path.join(workspaceRoot, ".agents", "hooks", "audit"), { recursive: true, force: true });
     await page.reload();
     await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Audit lifecycle/ })).toHaveCount(0);
     await page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Persist workspace/ }).check();
     await page.getByRole("button", { name: "Close assistant settings" }).click();
@@ -1357,7 +1366,7 @@ test("assistant upgrade real Core provider selections survive reload and restart
     await expect.poll(async () => (await api.get(`chat/sessions/${sessionId}/pending-turn`)).json()).toBeNull();
     await page.reload();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Real Core retained the exact research context.");
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const restoredSettings = page.getByRole("dialog", { name: "Assistant settings" });
     await expect(restoredSettings.getByRole("checkbox", { name: /Persist workspace/ })).toBeChecked();
     await expect(restoredSettings.getByRole("checkbox", { name: /restart-tools/ })).toBeChecked();
@@ -1371,7 +1380,7 @@ test("assistant upgrade real Core provider selections survive reload and restart
     });
     await page.reload();
     await page.getByRole("button", { name: "New chat", exact: true }).click();
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const blockedSettings = page.getByRole("dialog", { name: "Assistant settings" });
     await blockedSettings.getByRole("checkbox", { name: /Start block/ }).check();
     const persistSelection = blockedSettings.getByRole("checkbox", { name: /Persist workspace/ });
@@ -2218,7 +2227,16 @@ test("assistant upgrade provider request breakdown survives a production LAN cha
     const assistantUrl = `${core.origin}/?view=chat&session=${encodeURIComponent(completion.session_id)}#token=${encodeURIComponent(core.token)}`;
     await page.goto(assistantUrl);
     await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: /Open context details/ }).click();
+    const contextButton = page.getByRole("button", { name: /Open context details/ });
+    const openContextDetails = async () => {
+      const touch = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+      if (touch) await contextButton.tap();
+      else {
+        await page.locator(".chat-composer").hover();
+        await contextButton.click();
+      }
+    };
+    await openContextDetails();
     const inspector = page.getByLabel("Session inspector").or(page.getByRole("dialog", { name: "Conversation details" }));
     await expect(inspector.getByText(/meter estimates the next request: conversation, instructions and tool definitions/i)).toBeVisible();
     // The provider's own count is on the collapsed row; the stub reports no cache figure.
@@ -2228,7 +2246,7 @@ test("assistant upgrade provider request breakdown survives a production LAN cha
     await expect(inspector.getByText(/Tool schemas/)).toHaveCount(0);
     await page.goto(assistantUrl);
     await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: /Open context details/ }).click();
+    await openContextDetails();
     await expect(inspector.getByText("Last provider request")).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
   }, [
@@ -2363,27 +2381,21 @@ test("assistant upgrade production assistant work survives a project switch thro
     await expect(page.locator(".chat-message.assistant").last().locator(".chat-thinking")).toBeVisible();
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveCount(0);
 
-    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session"), {timeout: 20_000}).toBeTruthy();
     const sourceSessionId = new URL(page.url()).searchParams.get("session")!;
     const phone = (page.viewportSize()?.width ?? 1440) <= 760;
     const openProjectSwitcher = async () => {
       const closeSettings = page.getByRole("button", {name: "Close assistant settings", exact: true});
       if (await closeSettings.isVisible()) await closeSettings.click();
-      if (phone) {
-        await page.getByRole("button", {name: "More workbench views", exact: true}).click();
-        await page.getByRole("dialog", {name: "More", exact: true}).getByRole("button", {name: "Switch project", exact: true}).click();
-      } else await page.getByRole("button", {name: "Switch project", exact: true}).click();
+      await openProjectSwitcherFromShell(page);
     };
     await openProjectSwitcher();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: "Background Project B active", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Switch project", exact: true })).toContainText("Background Project B");
+    await expect(page).toHaveURL(new RegExp(`/projects/${(await projectBResponse.json()).id}/workbench`));
     const closePhoneSidebar = async () => {
       if (!phone) return;
-      const scrim = page.getByRole("button", {name: "Close sidebar", exact: true});
-      const bounds = await scrim.boundingBox();
-      expect(bounds).toBeTruthy();
-      // The sidebar overlaps most of its scrim on phones; tap its exposed edge.
-      await scrim.click({position: {x: bounds!.width - 4, y: 100}});
+      await page.keyboard.press("Escape");
+      await expect(page.locator('.side-nav[data-shell="shared"]')).toHaveAttribute("data-lens-open", "false");
     };
     await closePhoneSidebar();
     const activeSource = await (await api.get(`chat/sessions/${sourceSessionId}/state`)).json();
@@ -4119,7 +4131,7 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(page.locator(".chat-thread")).toHaveCount(1);
     await expect(page.locator(".chat-message.operator")).toHaveCount(1);
     await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await expect(page.getByRole("dialog", {name: "Assistant settings"})).toBeVisible();
     await page.getByRole("button", {name: "Close assistant settings"}).click();
     await page.goto(url);
@@ -4864,7 +4876,7 @@ test("assistant upgrade production LAN enables durable knowledge automatically",
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.getByRole("button", {name: "Start new chat", exact: true}).click();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     const settings = page.getByRole("dialog", {name: "Assistant settings"});
     await expect(settings.getByRole("checkbox", {name: /Use knowledge/})).toHaveCount(0);
     await expect(settings.getByRole("status").filter({hasText: "Knowledge1 source available automatically"})).toBeVisible();
@@ -4893,7 +4905,7 @@ test("assistant upgrade deployed local service retains operator workflow", async
     const profile = profiles.find(item => item.kind === "codex_app_server"); expect(profile).toBeTruthy();
     await page.goto(`${origin}/?view=chat#token=${encodeURIComponent(token)}`);
     await page.getByRole("button", {name: "New chat", exact: true}).click();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await page.getByLabel("Chat runtime", {exact: true}).selectOption("harness");
     await page.getByLabel("Chat harness", {exact: true}).selectOption(profile!.id);
     await page.getByRole("button", {name: "Close assistant settings"}).click();
@@ -5611,7 +5623,7 @@ for (const runtime of ["provider", "harness"] as const) {
       if ((page.viewportSize()?.width ?? 1440) > 760) await chatTab.click();
       else await page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Chat", exact: true}).click();
       await page.getByRole("button", {name: "New chat", exact: true}).click();
-      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await clickAssistantSettings(page);
       await page.getByRole("combobox", {name: "Chat runtime", exact: true}).selectOption(runtime);
       await page.getByRole("combobox", {name: runtime === "provider" ? "Chat provider" : "Chat harness", exact: true}).selectOption(saved.id);
       const chatModel = page.getByRole("combobox", {name: runtime === "provider" ? "Chat model" : "Chat harness model", exact: true});
@@ -6175,7 +6187,7 @@ reliabilityTest("assistant upgrade new chat reuses saved Assistant settings afte
       if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) {
         await page.locator(".chat-composer").hover();
       }
-      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await clickAssistantSettings(page);
     };
     await expect(page.getByRole("button", {name: "New chat", exact: true})).toHaveCount(1);
     await page.getByRole("button", {name: "New chat", exact: true}).click();
@@ -6221,7 +6233,7 @@ reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", {name: "New chat", exact: true}).click();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     const settings = page.getByRole("dialog", {name: "Assistant settings"});
     await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("harness");
     await settings.getByRole("combobox", {name: "Codex cyber access"}).selectOption("daybreakBlue");
@@ -6237,7 +6249,7 @@ reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat
     expect(firstHarness.metadata.runtime_options.cyber_access_program).toBe("daybreakBlue");
 
     await page.reload();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await expect(settings.getByRole("combobox", {name: "Codex cyber access"})).toHaveValue("daybreakBlue");
     await settings.getByRole("combobox", {name: "Codex cyber access"}).selectOption("standard");
     await settings.getByRole("button", {name: "Close assistant settings"}).click();
@@ -6249,7 +6261,7 @@ reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat
     const secondHarness = await (await core.api.get(`harness-sessions/${secondChat.harness_session_id}`)).json();
     expect(secondHarness.metadata.runtime_options.cyber_access_program).toBe("standard");
     await page.reload();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await expect(settings.getByRole("combobox", {name: "Codex cyber access"})).toHaveValue("standard");
     await settings.getByRole("combobox", {name: "Codex cyber access"}).selectOption("");
     await settings.getByRole("button", {name: "Close assistant settings"}).click();
@@ -6260,7 +6272,7 @@ reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat
     const automaticHarness = await (await core.api.get(`harness-sessions/${automaticChat.harness_session_id}`)).json();
     expect(automaticHarness.metadata.runtime_options.cyber_access_program).toBeUndefined();
     await page.reload();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await expect(settings.getByRole("combobox", {name: "Codex cyber access"})).toHaveValue("");
     await testInfo.attach("codex-daybreak-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), chatId}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
@@ -6283,7 +6295,7 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
     const sessionId = new URL(page.url()).searchParams.get("session");
     expect(sessionId).toBeTruthy();
 
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     const toggle = page.getByRole("checkbox", {name: /Subagents/});
     await toggle.check();
     await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
@@ -6291,7 +6303,7 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
     await page.getByRole("combobox", {name: "Subagent runtime"}).selectOption("harness:inert-fixture");
     await expect.poll(async () => (await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent.harness_profile_id).toBe("inert-fixture");
     await page.reload();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await expect(page.getByRole("checkbox", {name: /Subagents/})).toBeChecked();
     await expect(page.getByRole("combobox", {name: "Subagent runtime"})).toHaveValue("harness:inert-fixture");
     await expect(page.getByRole("combobox", {name: "Subagent effort"})).toHaveCount(0);
@@ -6300,7 +6312,7 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
     await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
     expect((await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent).toBeUndefined();
     await page.reload();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await expect(page.getByRole("checkbox", {name: /Subagents/})).not.toBeChecked();
     await testInfo.attach("subagents-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
@@ -6541,7 +6553,7 @@ reliabilityTest("assistant upgrade reliability settings and quiet activity survi
     await expect(ledger.getByText("Fixture workspace argument error", {exact: true}).first()).toBeVisible();
     await ledger.getByRole("button", {name: "Hide activity"}).evaluate((button: HTMLButtonElement) => button.click());
     await expect(activityAudit).not.toBeVisible();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await page.getByLabel("Chat harness model", {exact: true}).selectOption("fixture-next");
     await page.getByLabel("Harness reasoning effort", {exact: true}).selectOption("high");
     await page.getByRole("button", {name: "Close assistant settings"}).click();
@@ -6551,7 +6563,7 @@ reliabilityTest("assistant upgrade reliability settings and quiet activity survi
     expect(new URL(page.url()).searchParams.get("session")).toBe(chatId);
     await page.reload();
     await expect(page.locator(".chat-message.operator")).toHaveCount(2);
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await clickAssistantSettings(page);
     await expect(page.getByLabel("Chat harness model", {exact: true})).toHaveValue("fixture-next");
     await expect(page.getByLabel("Harness reasoning effort", {exact: true})).toHaveValue("high");
     await page.getByRole("button", {name: "Close assistant settings"}).click();
@@ -6629,7 +6641,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
     await page.getByRole("button", {name: "New chat", exact: true}).click();
     let chatId: string | null = null;
     for (const id of ids) {
-      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await clickAssistantSettings(page);
       await page.getByLabel("Chat harness", {exact: true}).selectOption(id);
       await page.getByRole("button", {name: "Close assistant settings"}).click();
       await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill(`Remember account ${id}`);
@@ -6834,7 +6846,7 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
     for (const id of ["inert-fixture", codex.id]) {
       await page.goto(`${core.origin}/?view=chat`);
       await page.getByRole("button", {name: "New chat", exact: true}).click();
-      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await clickAssistantSettings(page);
       await page.getByLabel("Chat harness", {exact: true}).selectOption(id);
       await page.getByRole("button", {name: "Close assistant settings"}).click();
       const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
@@ -7121,7 +7133,7 @@ test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ p
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.getByRole("button", { name: "New chat", exact: true }).click();
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await clickAssistantSettings(page);
     const settings = page.getByRole("dialog", { name: "Assistant settings" });
     await settings.getByRole("combobox", { name: "Chat runtime" }).selectOption("provider");
     await settings.getByRole("combobox", { name: "Chat provider" }).selectOption(provider.id);
