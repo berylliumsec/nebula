@@ -211,16 +211,18 @@ def test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke():
     assert command in release
     jobs = yaml.safe_load(release)["jobs"]
     assert set(jobs) == {"validate", "build", "ubuntu-core-smoke"}
-    validation = next(step for step in jobs["validate"]["steps"] if step.get("id") == "release")
+    validation = next(
+        step for step in jobs["validate"]["steps"] if step.get("id") == "release"
+    )
     assert 'test "$source_commit" = "$(git rev-parse origin/main)"' in validation["run"]
-    assert 'actions/workflows/ci.yml/runs?head_sha=$source_commit' in validation["run"]
+    assert "actions/workflows/ci.yml/runs?head_sha=$source_commit" in validation["run"]
     assert jobs["build"]["needs"] == "validate"
     assert jobs["ubuntu-core-smoke"]["needs"] == ["validate", "build"]
     assert jobs["ubuntu-core-smoke"]["container"] == "ubuntu:24.04"
     assert jobs["ubuntu-core-smoke"].get("strategy") is None
     assert "release-core-smoke.json" in release
     assert "--retries=0" in release and "--workers=1" in release
-    assert "NEBULA_TEST_CORE_EMBEDDED_UI: \"1\"" in release
+    assert 'NEBULA_TEST_CORE_EMBEDDED_UI: "1"' in release
     assert "poetry run pytest" not in release
     assert "cargo check" not in release
     assert "test_desktop_crash_cleanup" not in release
@@ -253,7 +255,9 @@ def test_wider_release_diagnostics_require_manual_dispatch():
     artifact = str(jobs["artifact"])
     assert "tests/v3/test_packaging.py" in source and "cargo check" in source
     assert "tests/v3/test_sandbox_integration.py" in sandbox
-    assert "debian:12-slim" in installers and "kalilinux/kali-rolling:latest" in installers
+    assert (
+        "debian:12-slim" in installers and "kalilinux/kali-rolling:latest" in installers
+    )
     assert "test_desktop_crash_cleanup.py" in artifact and "tampered" in artifact
 
 

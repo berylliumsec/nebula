@@ -1,5 +1,5 @@
 {
-  "change_digest": "c247671d1a33fc447cc94a129da40387e593c9d69a1091a1d40172d840c3aa51",
+  "change_digest": "678b49ff6adab868c464c9848169d67f6febb37029276a36a2be411444d54256",
   "reviewed_by": "Codex review of slim release preparation and the one installed-Core smoke",
   "reason": "Release preparation now has three jobs and one packaged-Core Chromium journey. Select the exact driver, receipt, and workflow-shape contracts plus the single real-Core pairing, project, chat, and reload case. The Python contracts verify a failed or absent smoke receipt blocks finalization and that diagnostics are manual only. The browser case proves the operator journey against disposable LAN Core; the release job repeats it against the installed DEB and embedded UI.",
   "exclusions": "No product UI, API, or Rust behavior changed. Frontend unit and native tests are empty. Broad Playwright, sandbox, packaging, crash cleanup, tampered-signature, and Debian/Kali checks are intentionally moved to optional manual diagnostics. The local browser run uses source Core and a candidate production bundle; an installed artifact, signature, and provenance are verified by a later authorized release candidate, not this branch run.",
