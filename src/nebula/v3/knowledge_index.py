@@ -351,12 +351,15 @@ class ChromaKnowledgeIndex:
                         }
                         for row in batch
                     ],
-                    embeddings=[
-                        np.frombuffer(cast(bytes, row["vector"]), dtype="<f2")
-                        .astype(np.float32)
-                        .tolist()
-                        for row in batch
-                    ],
+                    embeddings=cast(
+                        Embeddings,
+                        [
+                            np.frombuffer(
+                                cast(bytes, row["vector"]), dtype="<f2"
+                            ).astype(np.float32)
+                            for row in batch
+                        ],
+                    ),
                 )
             self._product_collection.modify(
                 metadata={
