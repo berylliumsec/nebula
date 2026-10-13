@@ -1,13 +1,13 @@
 {
-  "change_digest": "b016e97eaaae3095e2912e2c5c0676bf3dfa3b573ec0805adc88f9b23d445b12",
-  "reviewed_by": "Codex review of October 12 failed release browser jobs and current theme tokens",
-  "reason": "Six October 12 release jobs failed in the same Studio conversation test because it expected Zero Classic colors under the Zero Dark name. The studio-conversation catalog selects that palette journey and the related Workbench geometry journey on each of desktop and 320 px Chromium/WebKit, for six production-preview browser cases.",
-  "exclusions": "This changes a stale mocked-browser assertion only. Python, frontend component, native, real-Core, and other Playwright areas are excluded; the daily release's impact gate remains authoritative. Mobile browsers are emulated, with no physical device available. No full suite is authorized.",
+  "change_digest": "cc9f40f2201a5bb5b16b6bd77ef377abb5bc3cbbf2151775f8d9b5ae068b1695",
+  "reviewed_by": "Codex visual review of October 13 narrow release screenshots and three identical CI retries",
+  "reason": "The narrow dark and light snapshots still showed the previous shell. The current production UI adds the page title and fifth Nebula navigation item on Terminal, plus revised Project and Settings headers. Update the six Linux baselines after visual review, then exercise the selected narrow visual, navigation, and accessibility cases.",
+  "exclusions": "Only six screenshot baselines change. Python, frontend component, native, real-Core, desktop and unrelated mobile browser cases are excluded. The daily release impact gate remains authoritative. Browser viewport is emulated; no physical device is available. No full suite is authorized.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 7
   },
   "python_versions": ["3.12"],
   "python_browser": false,
@@ -16,8 +16,6 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:studio-conversation/desktop",
-    "entry:studio-conversation/mobile-chromium-small",
-    "entry:studio-conversation/mobile-webkit-small"
+    "entry:critical-workspaces/narrow"
   ]
 }
