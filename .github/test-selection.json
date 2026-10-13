@@ -21,6 +21,6 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "release-core-smoke/real-core"
+    "entry:release-core-smoke/real-core"
   ]
 }
