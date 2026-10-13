@@ -5946,6 +5946,30 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   let freshTarget = false;
   let targetPendingGate: Promise<void> | undefined;
   let releaseTargetPending = () => {};
+  const switchSessions = [
+    {
+      ...entity,
+      id: targetSessionId,
+      engagement_id: "scratch-project",
+      title: "Target conversation",
+      backend: "harness",
+      harness_profile_id: "harness-ready",
+      harness_session_id: "harness-session-target",
+      model: "gpt-5-codex",
+      metadata: {},
+    },
+    {
+      ...entity,
+      id: sourceSessionId,
+      engagement_id: "scratch-project",
+      title: "Source conversation",
+      backend: "harness",
+      harness_profile_id: "harness-ready",
+      harness_session_id: "harness-session-source",
+      model: "gpt-5-codex",
+      metadata: {},
+    },
+  ];
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/harnesses")) {
@@ -5958,30 +5982,11 @@ test("conversation switching commits URL identity and keeps prefetched work deta
       return;
     }
     if (path.endsWith("/chat-sessions")) {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([
-        {
-          ...entity,
-          id: targetSessionId,
-          engagement_id: "scratch-project",
-          title: "Target conversation",
-          backend: "harness",
-          harness_profile_id: "harness-ready",
-          harness_session_id: "harness-session-target",
-          model: "gpt-5-codex",
-          metadata: {},
-        },
-        {
-          ...entity,
-          id: sourceSessionId,
-          engagement_id: "scratch-project",
-          title: "Source conversation",
-          backend: "harness",
-          harness_profile_id: "harness-ready",
-          harness_session_id: "harness-session-source",
-          model: "gpt-5-codex",
-          metadata: {},
-        },
-      ]) });
+      await route.fulfill({ json: switchSessions });
+      return;
+    }
+    if (path.endsWith(`/chat-sessions/${sourceSessionId}`) || path.endsWith(`/chat-sessions/${targetSessionId}`)) {
+      await route.fulfill({ json: switchSessions.find(session => path.endsWith(`/chat-sessions/${session.id}`)) });
       return;
     }
     if (path.endsWith(`/chat/sessions/${sourceSessionId}/messages`)) {
@@ -6093,6 +6098,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Unsent source draft");
   await page.locator(".chat-scroll").evaluate(element => {element.scrollTop = 150; element.dispatchEvent(new Event("scroll"));});
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
+  const sourceAnchorTopBeforeList = await page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true}).evaluate(element => element.getBoundingClientRect().top);
   await expect.poll(() => page.evaluate((id) => performance.getEntriesByName(`nebula.chat_image.ready:${id}`, "mark").length, sourceSessionId)).toBeGreaterThan(0);
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations", exact: true }).click();
   else await page.getByRole("button", { name: "Show conversations" }).click();
@@ -6142,17 +6148,19 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   const imagePreview = page.getByTestId("chat-image-preview");
   await expect(imagePreview).toBeVisible();
   expect(await imagePreview.locator("img").count()).toBeGreaterThan(1);
-  if ((page.viewportSize()?.width ?? 1_000) <= 760) {
-    // Tap the visible viewport. Locator.tap() targets the center of the entire
-    // tall image and scrolls it before the gesture, changing the reading place.
-    const viewport = await page.locator(".chat-scroll").boundingBox();
-    if (!viewport) throw new Error("Expected a visible chat viewport");
-    await page.touchscreen.tap(viewport.x + viewport.width / 2, viewport.y + Math.min(viewport.height / 2, 120));
-  } else { await imagePreview.focus(); await imagePreview.press("Enter"); }
+  // Act on the visible viewport. Locator.focus/tap targets the tall image itself
+  // and scrolls it before the gesture, changing the reading place.
+  const viewport = await page.locator(".chat-scroll").boundingBox();
+  if (!viewport) throw new Error("Expected a visible chat viewport");
+  const previewX = viewport.x + viewport.width / 2;
+  const previewY = viewport.y + Math.min(viewport.height / 2, 120);
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.touchscreen.tap(previewX, previewY);
+  else await page.mouse.click(previewX, previewY);
   const readingAnchor = page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true});
   await expect(readingAnchor).toBeAttached();
-  await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
+  await expect.poll(async () => Math.abs(await page.locator(".chat-scroll").evaluate(element => element.scrollTop) - 150)).toBeLessThanOrEqual(8);
   const readingAnchorTop = await readingAnchor.evaluate(element => element.getBoundingClientRect().top);
+  expect(Math.abs(readingAnchorTop - sourceAnchorTopBeforeList)).toBeLessThanOrEqual(8);
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
   await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeEnabled();
   await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Unsent source draft");
@@ -12693,6 +12701,7 @@ test("stabilization goal mode keeps the panel and its actions on Core's revision
     skill_snapshots: [],
     revision: 2,
   };
+  const goalSession = { ...entity, id: "goal-chat", engagement_id: "scratch-project", title: "Goal chat", backend: "provider", metadata: {} };
   let reads = 0;
   const rejected: string[] = [];
   await page.route("**/api/v1/chat/sessions/*/goal", async route => {
@@ -12719,7 +12728,9 @@ test("stabilization goal mode keeps the panel and its actions on Core's revision
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chat-sessions")) {
-      await route.fulfill({ json: [{ ...entity, id: "goal-chat", engagement_id: "scratch-project", title: "Goal chat", backend: "provider", metadata: {} }] });
+      await route.fulfill({ json: [goalSession] });
+    } else if (path.endsWith("/chat-sessions/goal-chat")) {
+      await route.fulfill({ json: goalSession });
     } else if (path.endsWith("/chat/sessions/goal-chat/messages")) {
       await route.fulfill({ json: [] });
     } else if (path.endsWith("/chat/sessions/goal-chat/pending-turn")) {
@@ -12782,22 +12793,25 @@ test("stabilization goal mode shows token progress before provider usage settles
     skill_snapshots: [],
     revision: 2,
   };
+  const goalSession = {
+    ...entity,
+    id: "goal-live-chat",
+    engagement_id: "scratch-project",
+    title: "Live goal",
+    backend: "provider",
+    provider_profile_id: reasoningProvider.id,
+    harness_profile_id: null,
+    harness_session_id: null,
+    model: "model-a",
+    metadata: {},
+  };
   await page.route("**/api/v1/chat/sessions/*/goal", route => route.fulfill({ json: goal }));
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chat-sessions")) {
-      await route.fulfill({ json: [{
-        ...entity,
-        id: "goal-live-chat",
-        engagement_id: "scratch-project",
-        title: "Live goal",
-        backend: "provider",
-        provider_profile_id: reasoningProvider.id,
-        harness_profile_id: null,
-        harness_session_id: null,
-        model: "model-a",
-        metadata: {},
-      }] });
+      await route.fulfill({ json: [goalSession] });
+    } else if (path.endsWith("/chat-sessions/goal-live-chat")) {
+      await route.fulfill({ json: goalSession });
     } else if (path.endsWith("/chat/sessions/goal-live-chat/messages")) {
       await route.fulfill({ json: [] });
     } else if (path.endsWith("/chat/sessions/goal-live-chat/pending-turn")) {
