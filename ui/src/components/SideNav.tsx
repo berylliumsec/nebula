@@ -157,7 +157,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
     savingRef.current = true;
     setError(undefined);
     try {
-      const created = await createEngagement({ name, clientName: clientName || undefined, workspacePath: workspacePath || undefined });
+      const created = await createEngagement({ name, clientName: clientName || undefined, workspacePath: workspacePath || undefined, hostAccessAcknowledged: true });
       navigate(`${projectSurface(created.id, "workbench")}?view=chat`);
       onNavigate();
       setName("");

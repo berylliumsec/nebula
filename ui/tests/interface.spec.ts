@@ -23,13 +23,14 @@ function expectTouchTarget(measurement: number | undefined, label?: string): voi
 
 /** Open the goal through its visible entry point when a wide workspace uses the context rail. */
 async function openConversationGoal(page: Page) {
-  const panel = page.locator(".chat-goal-panel");
-  await expect(panel).toBeAttached();
+  const panel = page.getByRole("region", {name: "Conversation goal", exact: true});
+  const opener = page.getByRole("button", {name: "View full goal and evidence gates", exact: true});
+  await expect.poll(async () => await panel.isVisible() || await opener.isVisible()).toBe(true);
   if (!await panel.isVisible()) {
-    await page.getByRole("button", {name: "View full goal and evidence gates", exact: true}).click();
+    await opener.click();
   }
   await expect(panel).toBeVisible();
-  return page.getByRole("region", {name: "Conversation goal", exact: true});
+  return panel;
 }
 
 async function installCoreQueueFixture(page: Page) {
@@ -4034,13 +4035,13 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   expect(accessibility.violations).toEqual([]);
 });
 
-test("phone shell project switcher search finds active and archived projects", async ({ page }, testInfo) => {
+test("phone shell project switcher search finds active and archived projects", async ({ page }) => {
   await page.route(/\/api\/v1\/engagements(?:\?|$)/, route => route.fulfill({ json: [
     { ...entity, id: "scratch-project", name: "Scratch Project", status: "active", tags: [], metadata: {} },
     { ...entity, id: "alpha-project", name: "Alpha Project", client_name: "Example Org", status: "active", tags: [], metadata: {} },
     { ...entity, id: "past-project", name: "Past Review", client_name: "Orion", status: "archived", tags: [], metadata: {} },
   ] }));
-  const mobile = testInfo.project.name.startsWith("mobile-");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   await openWorkspace(page, mobile ? "/?view=chat" : "/settings", mobile ? "Workbench" : "Settings");
   if (mobile) await page.getByRole("button", { name: "More workbench views" }).click();
   await page.getByRole("button", { name: "Switch project" }).click();
@@ -11899,7 +11900,8 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
     const focusBox = await header.getByRole('button', {name: 'Enter focus mode'}).boundingBox();
     expect(Math.abs(focusBox!.y - plusBox!.y)).toBeLessThanOrEqual(2);
     const tabs = header.getByRole('tablist', {name: 'Workbench views'});
-    await expect(tabs.getByRole('tab')).toHaveCount(8);
+    await expect(tabs.getByRole('tab')).toHaveCount(9);
+    await expect(tabs.getByRole('tab', {name: 'Python notebook'})).toBeVisible();
     for (const tab of await tabs.getByRole('tab').all()) {
       if ((page.viewportSize()?.width ?? 1440) > 1250 && await tab.evaluate(el => el.classList.contains('workbench-primary-tab'))) expect(await tab.innerText()).not.toBe('');
       else expect(await tab.innerText()).toBe('');

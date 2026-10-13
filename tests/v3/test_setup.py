@@ -98,7 +98,10 @@ def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
         AutomationProjectPolicy, engagement_id=scratch.id
     )
     assert host_policy.execution_mode == "host"
-    assert host_policy.host_access_acknowledged is True
+    assert host_policy.host_access_acknowledged is False
+    assert (
+        host_policy.metadata["host_access_source"] == "pending_operator_acknowledgement"
+    )
     assert host_policy.network_enabled is False
     assert bootstrap_scratch_project(store) == scratch.id
     assert store.count(Engagement) == 1
@@ -117,10 +120,25 @@ def test_new_project_starts_with_durable_host_policy(tmp_path):
 
     [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=created.id)
     assert policy.execution_mode == "host"
-    assert policy.host_access_acknowledged is True
+    assert policy.host_access_acknowledged is False
     assert policy.network_enabled is False
-    assert policy.metadata["host_access_source"] == "project_creation_default"
+    assert policy.metadata["host_access_source"] == "pending_operator_acknowledgement"
     assert store.get(AutomationProjectPolicy, policy.id) == policy
+
+
+def test_new_project_records_explicit_host_access_in_same_transaction(tmp_path):
+    store = NebulaStore(tmp_path / "consented-project.db")
+    created = create_engagement_with_default_scope(
+        store, Engagement(name="Consented Host project"), host_access_acknowledged=True
+    )
+
+    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=created.id)
+    assert policy.execution_mode == "host"
+    assert policy.host_access_acknowledged is True
+    assert policy.metadata["host_access_source"] == (
+        "project_creation_operator_acknowledgement"
+    )
+    assert store.get(Engagement, created.id) == created
 
 
 def test_import_content_arriving_before_first_launch_suppresses_scratch(tmp_path):

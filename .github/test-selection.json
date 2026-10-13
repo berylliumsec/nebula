@@ -1,26 +1,50 @@
 {
-  "change_digest": "4c806f00068d9c4c801966fae1ec43d31d42c6cd86e86758e14168cc65709b9a",
-  "reviewed_by": "Codex review of nebula-v3.0.12 matrix gate failure and GitHub Actions 256-job limit",
-  "reason": "The accepted daily release coverage contained 285 entries, but GitHub allows at most 256 jobs in one matrix, so the browser job could not schedule and the release gate failed. The same reviewed selection is partitioned into four 200-entry matrices, each retaining its exact project, test, grep, runtime, and shard. The gate now requires every nonempty matrix; the daily preflight rejects more than 800 entries before creating an immutable tag. Five focused Python cases verify lane conservation, output encoding, workflow gate wiring, and both preflight paths.",
-  "exclusions": "The diff changes only release coverage scheduling and exact selector checks. No operator UI or product runtime code changed. The current candidate stopped before browser execution, and the next immutable candidate will run its already-reviewed change-aware browser journeys. Browser, frontend, native, unrelated Python tests, and the full suite are excluded from this PR.",
+  "change_digest": "27b1174a2b3daa97530280f12077e087e862fa2c421882b94b0b5da410247d77",
+  "reviewed_by": "Codex review of nebula-v3.0.13 selected release failures and production Host consent contract",
+  "reason": "The v3.0.13 daily candidate scheduled its accepted matrix but failed selected Host startup, sticky Host acknowledgement, MCP import, Browser Repeater, narrow project switcher, compact Workbench navigation, desktop toolbar visual, and mobile WebKit goal-panel journeys. Creation now records explicit Host consent atomically while Scratch and API default creation remain pending. The goal helper waits for the visible entry point after Core's goal loads. Focused Python and component tests cover the policy boundary and UI request. Catalogued browser entries reproduce each failed journey on production real-Core LAN, desktop, mobile Chromium and WebKit, including 430 px WebKit goal access, the exact narrow viewport regression, and desktop navigation and visual profiles.",
+  "exclusions": "No native shell behavior changed, so native tests are excluded. Unrelated provider, mission, notebook execution, packaging, and broad UI suites are excluded. The full suite was not requested. The daily release will separately run its change-aware browser selection and packaging gates after this repair merges.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 0,
+    "python": 6,
+    "frontend": 25,
     "native": 0,
-    "playwright": 0
+    "playwright": 59
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/test_playwright_impact.py::test_matrix_lanes_preserve_a_release_selection_below_github_limit",
-    "tests/test_playwright_impact.py::test_matrix_lane_cli_writes_every_output",
-    "tests/test_playwright_impact.py::test_workflow_gates_every_matrix_lane",
-    "tests/test_daily_stable_release.py::test_preflight_rejects_matrix_overflow_before_tag"
+    "tests/v3/test_setup.py::test_fresh_database_creates_scratch_once_and_never_recreates_after_delete",
+    "tests/v3/test_setup.py::test_new_project_starts_with_durable_host_policy",
+    "tests/v3/test_setup.py::test_new_project_records_explicit_host_access_in_same_transaction",
+    "tests/v3/test_api.py::test_project_creation_records_explicit_host_consent_without_persisting_request_field",
+    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
+    "tests/v3/test_automation_runtime.py::test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker"
   ],
-  "frontend": [],
+  "frontend": ["ui/src/components/SideNav.test.tsx"],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:host-startup-default",
+    "entry:host-startup-compat/assistant-real-desktop",
+    "entry:project-runtime-policy/assistant-real-desktop",
+    "entry:project-runtime-policy/assistant-real-compact",
+    "entry:project-runtime-policy/assistant-real-chromium-320",
+    "entry:project-runtime-policy/assistant-real-chromium-390",
+    "entry:project-runtime-policy/assistant-real-chromium-430",
+    "entry:project-runtime-policy/assistant-real-webkit-320",
+    "entry:project-runtime-policy/assistant-real-webkit-390",
+    "entry:project-runtime-policy/assistant-real-webkit-430",
+    "area:mcp-import",
+    "entry:browser-complete/real-core",
+    "entry:phone-shell/narrow",
+    "entry:project-switcher-search/desktop",
+    "entry:project-switcher-search/mobile-chromium-small",
+    "entry:project-switcher-search/mobile-webkit-wide",
+    "entry:structured-results/desktop",
+    "entry:structured-results/mobile-chromium",
+    "entry:structured-results/mobile-webkit",
+    "entry:structured-results/mobile-webkit-wide",
+    "entry:workbench-navigation/desktop",
+    "entry:workbench-navigation/compact",
+    "entry:release-ui-visual-baselines/desktop"
+  ]
 }

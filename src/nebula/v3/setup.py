@@ -277,28 +277,41 @@ def default_scope_policy(engagement_id: str) -> ScopePolicy:
     )
 
 
-def default_host_policy(engagement_id: str) -> AutomationProjectPolicy:
-    """Select Host for new projects without granting execution implicitly."""
+def default_host_policy(
+    engagement_id: str, *, host_access_acknowledged: bool = False
+) -> AutomationProjectPolicy:
+    """Select Host, granting access only when project creation records consent."""
 
     return AutomationProjectPolicy(
         id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")),
         engagement_id=engagement_id,
         execution_mode="host",
-        host_access_acknowledged=False,
+        host_access_acknowledged=host_access_acknowledged,
         network_enabled=False,
-        metadata={"host_access_source": "pending_operator_acknowledgement"},
+        metadata={
+            "host_access_source": (
+                "project_creation_operator_acknowledgement"
+                if host_access_acknowledged
+                else "pending_operator_acknowledgement"
+            )
+        },
     )
 
 
 def create_engagement_with_default_scope(
-    store: NebulaStore, engagement: Engagement
+    store: NebulaStore,
+    engagement: Engagement,
+    *,
+    host_access_acknowledged: bool = False,
 ) -> Engagement:
     """Atomically create a Project with scope and Host runtime policy."""
 
     if engagement.scope_policy_id is not None:
         raise ValueError("new Projects cannot supply a scope policy reference")
     scope = default_scope_policy(engagement.id)
-    runtime_policy = default_host_policy(engagement.id)
+    runtime_policy = default_host_policy(
+        engagement.id, host_access_acknowledged=host_access_acknowledged
+    )
     prepared = engagement.model_copy(update={"scope_policy_id": scope.id})
     with store.transaction() as transaction:
         transaction.add(scope)

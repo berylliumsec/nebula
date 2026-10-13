@@ -1482,6 +1482,26 @@ def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
     assert client.delete("/api/v1/artifacts/nope", headers=_auth()).status_code == 405
 
 
+def test_project_creation_records_explicit_host_consent_without_persisting_request_field(
+    api,
+):
+    client, store, _ = api
+    created = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={"name": "Host consent project", "host_access_acknowledged": True},
+    )
+    assert created.status_code == 201
+    project = created.json()
+    assert "host_access_acknowledged" not in project
+    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=project["id"])
+    assert policy.execution_mode == "host"
+    assert policy.host_access_acknowledged is True
+    assert policy.metadata["host_access_source"] == (
+        "project_creation_operator_acknowledgement"
+    )
+
+
 def test_typed_crud_revision_and_overview(api):
     client, store, _ = api
     created = client.post(
@@ -1494,7 +1514,7 @@ def test_typed_crud_revision_and_overview(api):
         AutomationProjectPolicy, engagement_id=engagement_id
     )
     assert runtime_policy.execution_mode == "host"
-    assert runtime_policy.host_access_acknowledged is True
+    assert runtime_policy.host_access_acknowledged is False
 
     patched = client.patch(
         f"/api/v1/engagements/{engagement_id}",
