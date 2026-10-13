@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Copy, Database, RefreshCw } from "lucide-react";
 import type { HarnessProfile, StorageSource } from "../api/types";
@@ -9,7 +9,7 @@ export function StorageIntegrations() {
   const { api, engagements, providers, previewMode } = useWorkspace();
   const [sources, setSources] = useState<StorageSource[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
-  const [name, setName] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
   const [projectId, setProjectId] = useState("");
   const [runtime, setRuntime] = useState("");
   const [model, setModel] = useState("");
@@ -47,13 +47,14 @@ export function StorageIntegrations() {
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (!api || !chosenRuntime || !model || !projectId) return;
+    const name = nameRef.current?.value ?? "";
     setBusy(true); setError(""); setMessage("");
     try {
       const [backend, profile_id] = runtime.split(":", 2);
       const result = await api.createStorageSource({ name, engagement_id: projectId, backend, profile_id, model,
         reporting_interval_seconds: interval, callback_url: callbackUrl.trim() || null,
         callback_credential_ref: callbackRef.trim() || null });
-      setIssued(result); setName(""); await refresh();
+      setIssued(result); if (nameRef.current) nameRef.current.value = ""; await refresh();
       setMessage(`${result.source.name} was added disabled. Save the token, configure the sender, then enable it.`);
     } catch (caught) { setError(String(caught)); }
     finally { setBusy(false); }
@@ -117,7 +118,7 @@ export function StorageIntegrations() {
     <form className="storage-source-form panel" onSubmit={(event) => void save(event)}>
       <h3>Add source</h3>
       <div className="storage-form-grid">
-        <label>Source name<input required maxLength={200} value={name} onChange={(event) => setName(event.target.value)} placeholder="NAS, cloud account, backup server…" /></label>
+        <label>Source name<input required maxLength={200} ref={nameRef} placeholder="NAS, cloud account, backup server…" /></label>
         <label>Project<select required value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Choose project</option>{engagements.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
         <label>Assistant runtime<select required value={runtime} onChange={(event) => { const next = runtimes.find((item) => item.key === event.target.value); setRuntime(event.target.value); setModel(next?.defaultModel ?? next?.models[0] ?? ""); }}><option value="">Choose runtime</option>{runtimes.map((item) => <option value={item.key} key={item.key}>{item.name} · {item.key.startsWith("harness") ? "harness" : "provider"}</option>)}</select></label>
         <label>Model<select required aria-label="Storage model" value={model} onChange={(event) => setModel(event.target.value)}><option value="">Choose model</option>{chosenRuntime?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>

@@ -458,8 +458,12 @@ test("stabilization storage public source reaches dashboard chat and approved re
   let api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   let sender = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/` });
   try {
-    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as { builtAt: string };
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as { builtAt: string; assets: Record<string, string> };
     expect(build.builtAt).toBeTruthy();
+    const entry = Object.keys(build.assets).find((asset) => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    const servedEntry = await (await page.request.get(`${core.origin}/${entry}`)).body();
+    expect(createHash("sha256").update(servedEntry).digest("hex")).toBe(build.assets[entry!]);
     const project = (await (await api.get("engagements")).json() as Array<{ id: string }>)[0];
     expect(project?.id).toBeTruthy();
     const provider = await api.post("providers", { data: {
@@ -510,8 +514,11 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await page.goto(`${core.origin}/storage`);
     await expect(page.locator(".storage-source-card").getByText("Disabled", { exact: true })).toBeVisible();
     await page.goto(`${core.origin}/settings#storage-integration-settings`);
-    await settings.getByRole("checkbox", { name: "Enable reports and alerts" }).click();
-    await expect(settings.getByRole("checkbox", { name: "Enable reports and alerts" })).toBeChecked();
+    const enableReports = settings.getByRole("checkbox", { name: "Enable reports and alerts" });
+    await enableReports.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+    await expect(enableReports).toBeInViewport();
+    await enableReports.click();
+    await expect(enableReports).toBeChecked();
     await expect.poll(async () => (await (await api.get("storage")).json() as { sources: Array<{ enabled: boolean }> }).sources[0].enabled).toBe(true);
     const posted = await sender.post("storage/events", { headers: { Authorization: `Bearer ${sourceToken}` }, data: observation });
     expect(posted.status(), await posted.text()).toBe(202);
@@ -540,6 +547,7 @@ test("stabilization storage public source reaches dashboard chat and approved re
     expect(callbackRequests).toContain("/v1/actions/copy/preview");
     expect(callbackRequests).toContain("/v1/actions/copy/execute");
     await testInfo.attach("storage-lan-production", { body: JSON.stringify({ origin: core.origin, build: build.builtAt,
+      bundleAsset: entry, assetSha256: build.assets[entry!],
       project: testInfo.project.name, viewport: page.viewportSize(), journey: "enroll-test-enable-report-chat-preview-approve-receipt" }), contentType: "application/json" });
     await sender.dispose(); await api.dispose();
     await stopRealCore(core, { keepData: true });
