@@ -1,13 +1,13 @@
 {
-  "change_digest": "a725282658c5b092dea16966446a96d0e77e0881e001b481ae53508da1aae78c",
+  "change_digest": "1d525c9ec85a346d0e45d7d31395f5f5d4018012485f512fe3868de2b4bf2e80",
   "reviewed_by": "Codex review of nebula-v3.0.14 native command release failure",
-  "reason": "The v3.0.14 real-Core gate exposed native command parsing of appended Core instructions, stale Guides and top-bar action entry under Quiet Lens, and fourteen real-Core journeys that still assumed an older navigation shell. A separate goal-panel release failure used an opener that a responsive rerender had already replaced with the open panel. Select the focused command unit file, production LAN real-Core commands and Guides on desktop and 390 px Chromium/WebKit, Quiet Lens mock journeys on desktop and mobile Chromium/WebKit, the fourteen exact failing real-Core desktop journeys, and the three goal-panel revision cases. The shared AppShell and TopBar impact was reviewed against their rendered menu workflow.",
-  "exclusions": "No focused component test covers the shell menu interaction and no native source changed, so frontend unit and native selections are empty; the real-Core and mock browser journeys exercise the rendered state. Unrelated browser and backend journeys are excluded. The selected browser entries collect thirty cases; a full suite was not requested.",
+  "reason": "The v3.0.14 real-Core gates exposed native command parsing of appended Core instructions, stale Guides and top-bar action entry under Quiet Lens, fourteen Core journeys that assumed an older shell, and goal controls covered by the collapsed conversation rail. A separate goal-panel release failure used an opener that a responsive rerender had already replaced with the open panel. Select the focused command unit file, production LAN real-Core commands and Guides on desktop and 390 px Chromium/WebKit, Quiet Lens mock journeys on desktop and mobile Chromium/WebKit, the fourteen exact failing Core desktop journeys, four additional assistant desktop goal/Guide journeys, and three goal-panel revision cases. The shared AppShell and TopBar impact was reviewed against their rendered menu workflow.",
+  "exclusions": "No focused component test covers the shell menu interaction and no native source changed, so frontend unit and native selections are empty; the real-Core and mock browser journeys exercise the rendered state. Unrelated browser and backend journeys are excluded. The selected browser entries collect thirty-four cases; a full suite was not requested.",
   "expected_tests": {
     "python": 42,
     "frontend": 0,
     "native": 0,
-    "playwright": 30
+    "playwright": 34
   },
   "python_versions": [
     "3.12"
@@ -30,6 +30,7 @@
     "entry:quiet-lens/mobile-chromium",
     "entry:quiet-lens/mobile-webkit",
     "entry:release-core-gate-repairs/real-core",
+    "entry:release-assistant-gate-repairs/assistant-real-desktop",
     "entry:release-goal-panel-race/desktop",
     "entry:release-goal-panel-race/mobile-chromium",
     "entry:release-goal-panel-race/mobile-webkit-wide"

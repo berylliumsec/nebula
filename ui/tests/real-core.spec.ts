@@ -947,7 +947,10 @@ test("assistant upgrade real Core retains editable goal skills through source lo
         (await goalRail.isVisible() && await railObjective.textContent() === goalObjective)
         || (await panelObjective.isVisible() && (await panelObjective.textContent())?.trim() === goalObjective),
       { timeout: 20_000 }).toBe(true);
-      if (await reveal.isVisible()) await reveal.click();
+      if (await reveal.isVisible()) {
+        await reveal.focus();
+        await reveal.click();
+      }
       await expect(goalPanel).toBeVisible({ timeout: 20_000 });
       if (await expand.isVisible()) await expand.click();
       await expect(goalPanel.getByRole("button", { name: "Edit skills" })).toBeVisible();
@@ -1076,7 +1079,10 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
         (await railGoal.isVisible() && (await railObjective.textContent()) === goalObjective)
         || (await panelObjective.isVisible() && (await panelObjective.textContent())?.trim() === goalObjective),
       { timeout: 20_000 }).toBe(true);
-      if (await reveal.isVisible()) await reveal.click();
+      if (await reveal.isVisible()) {
+        await reveal.focus();
+        await reveal.click();
+      }
       await expect(goalPanel).toBeVisible();
     };
     await openFullGoal();

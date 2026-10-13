@@ -1797,6 +1797,9 @@
     "release-core-gate-repairs": [
       {"area":"release-core-gate-repairs","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"persists network scope changed through universal settings search|focused work surfaces retain real Core project context|project execution mode uses production Code|project creation switches canonical project|foundation production LAN reads durable conversation|project removal archives, retries, restores|preserves note drafts and reuses saved notes|Library makes uploads visible|creation survives failure and remains discoverable|finding drafts stay bound|settings separate saving from health recovery","runtime":"real-core","shard":"1/1"}
     ],
+    "release-assistant-gate-repairs": [
+      {"area":"release-assistant-gate-repairs","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"retains editable goal skills through source loss|creates a goal before the first turn and pauses it on stop|terminal guide highlights existing controls on production LAN|goal guide opens its controls on production LAN","runtime":"real-core","shard":"1/1"}
+    ],
     "project-lifecycle": [
       {"area":"project-lifecycle","project":"desktop","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
       {"area":"project-lifecycle","project":"compact","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
