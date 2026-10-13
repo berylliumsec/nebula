@@ -1,5 +1,5 @@
 {
-  "change_digest": "6c969736864a8efc16190463e051fff4968f7e4cea4ddcaa7ab712c547ed3fe3",
+  "change_digest": "24103922b8836c143fed9c9350fd1fedc57181099e26c639c1fd30bba17ff0da",
   "reviewed_by": "Codex review of October 12 failed release browser journeys",
   "reason": "Workbench Chat showed two visible New chat actions on phone widths. The Quiet Lens theme also requires a pointer hover before clicking composer settings on desktop. Select the production real-Core Assistant defaults create and reload journey at desktop 1440/1024 and mobile Chromium/WebKit 320/390/430; select the matching mocked header geometry and keyboard-action journey. The focused App component case verifies responsive action ownership and the Ctrl+N route.",
   "exclusions": "Python and native layers do not own this UI action. Other release browser areas, packaging, and the broader October 12 failures are excluded from this focused change; they remain independent release gates. Mobile browsers are emulated, with no physical device available. No full suite is authorized.",

@@ -13,7 +13,7 @@ vi.mock("./components/CodeMirrorSurface", () => ({
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  delete (Element.prototype as Element & { scrollIntoView?: unknown }).scrollIntoView;
+  Reflect.deleteProperty(Element.prototype, "scrollIntoView");
   localStorage.clear();
   sessionStorage.clear();
 });
