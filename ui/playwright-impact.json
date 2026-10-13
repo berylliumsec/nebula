@@ -1861,6 +1861,13 @@
       {"area":"release-editor-caret","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"the code editor keeps its caret and syntax layers aligned while typing","runtime":"mock","shard":"1/1"},
       {"area":"release-editor-caret","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"editor typing production LAN preserves the latest buffer and saved bytes","runtime":"real-core","shard":"1/1"}
     ],
+    "release-vpn-selection": [
+      {"area":"release-vpn-selection","project":"desktop","test_match":"tests/interface.spec.ts","grep":"VPN settings keep upload and project routing calm at every width","runtime":"mock","shard":"1/1"},
+      {"area":"release-vpn-selection","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"VPN settings keep upload and project routing calm at every width","runtime":"mock","shard":"1/1"},
+      {"area":"release-vpn-selection","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"VPN settings keep upload and project routing calm at every width","runtime":"mock","shard":"1/1"},
+      {"area":"release-vpn-selection","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"VPN settings keep upload and project routing calm at every width","runtime":"mock","shard":"1/1"},
+      {"area":"release-vpn-selection","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"VPN settings keep upload and project routing calm at every width","runtime":"mock","shard":"1/1"}
+    ],
     "desktop-interface": [
       {"area":"desktop-interface","project":"desktop","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
       {"area":"desktop-interface","project":"compact","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}

@@ -4405,15 +4405,33 @@ test("VPN settings keep upload and project routing calm at every width", async (
     });
   });
   await openWorkspace(page, "/settings#setup-settings", "Settings");
-  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
-  await page.locator("details.settings-group > summary", { hasText: "Automation" }).click();
+  const advanced = page.getByRole("link", { name: "Advanced settings", exact: true });
+  await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".settings-detail")).toHaveAttribute("data-section", "advanced-settings");
+  const automation = page.locator("details#automation-settings");
+  const automationSummary = automation.locator(":scope > summary");
+  await automationSummary.evaluate(summary => summary.scrollIntoView({ block: "center" }));
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await automationSummary.tap();
+  else await automationSummary.click();
+  await expect(automation).toHaveJSProperty("open", true);
   const section = page.locator("#automation-runtime-settings");
   await expect(section.getByRole("heading", { name: "VPN egress" })).toBeVisible();
   await expect(section.getByText("Choose an OpenVPN profile")).toBeVisible();
   await expect(section.getByText("Credentials and storage")).toBeVisible();
   await expect(section.getByLabel("Username")).not.toBeVisible();
   await expect(section.getByText("Saved only — not connected to this project.")).toBeVisible();
-  await section.getByRole("button", { name: "Use for this project" }).click();
+  const useForProject = section.getByRole("button", { name: "Use for this project" });
+  // Scroll like a phone operator and prove the sticky Settings tabs do not cover the tap point.
+  await useForProject.evaluate(button => button.scrollIntoView({ block: "center" }));
+  await expect.poll(() => useForProject.evaluate(button => {
+    const box = button.getBoundingClientRect();
+    const target = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return target === button || button.contains(target);
+  })).toBe(true);
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await useForProject.tap();
+  else await useForProject.click();
+  await expect.poll(() => selectedVpnProfile).toBe("vpn-preview");
   await expect(section.getByText("In use", { exact: true })).toBeVisible();
   await expect(section.getByText(/Selected for .* New terminals wait for the tunnel/)).toBeVisible();
   expect(selectedVpnProfile).toBe("vpn-preview");
