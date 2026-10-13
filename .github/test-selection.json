@@ -1,5 +1,5 @@
 {
-  "change_digest": "04236b7e6590f6f17bbcfd60f7701cf0371315aca308395fe86d6b5912fe7cdc",
+  "change_digest": "4ee8fc03e1ed740326ef75343f46c720b764298264f76c7742da1ab255abd3f9",
   "reviewed_by": "Codex focused review of workspace bootstrap readiness",
   "reason": "A LAN browser opens a linked project with many evidence records. Core and global catalogs establish a usable workspace while project collections retain their own loading, success, failure, retry, switch, and reconnect state. The selected component tests cover those state transitions. The selected production-bundle browser journey holds evidence loading and checks that the Workbench becomes usable on desktop Chromium, 320 px mobile Chromium, and mobile WebKit.",
   "exclusions": "No Python runtime, persistence, native shell, provider, or notebook execution source changed in this follow-up, so Python, native, and unrelated browser suites are excluded. The browser CI fixture delays evidence deliberately; the real production Core and LAN origin will be verified against the live high-volume project after deployment. Physical-device testing is unavailable in this environment.",
