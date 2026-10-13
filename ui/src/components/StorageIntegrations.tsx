@@ -58,7 +58,7 @@ export function StorageIntegrations() {
       const result = await api.createStorageSource({ name, engagement_id: projectId, backend, profile_id, model,
         reporting_interval_seconds: interval, callback_url: callbackUrl.trim() || null,
         callback_credential_ref: callbackRef.trim() || null });
-      setIssued(result); if (nameRef.current) nameRef.current.value = ""; await refresh();
+      setIssued({ ...result, webhook_url: webhook }); if (nameRef.current) nameRef.current.value = ""; await refresh();
       setMessage(`${result.source.name} was added disabled. Save the token, configure the sender, then enable it.`);
     } catch (caught) {
       logCaughtDiagnostic("interface.storage.source_create_failed", "A storage source could not be created.", caught, "storage-settings");

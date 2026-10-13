@@ -1,5 +1,5 @@
 {
-  "change_digest": "d612367a1f85fbdd69f26b4b118ce7b40a0ef9f1b79f9f7c7943015d34b8257d",
+  "change_digest": "0fbe2d5322b57cc8ea96550ff768bee2d4fbeb668595e5dbf07f80beabb55bf1",
   "reviewed_by": "Codex focused storage integration review",
   "reason": "Public storage enrollment, sender and callback contracts, incident dispatch, settings assistant discovery, and the dashboard change Core and UI paths. Select exact storage, sender, entity classification, assistant catalog, and product-help checks; focused UI catalog checks; and the one production LAN journey across desktop and responsive mobile Chromium and WebKit widths.",
   "exclusions": "No native code changed. Unrelated backend, frontend, and browser journeys and the full suites are excluded. The same production real-Core journey supplies UI and LAN acceptance for the changed workflow.",

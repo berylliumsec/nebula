@@ -502,6 +502,7 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await settings.getByRole("button", { name: "Add disabled source" }).click();
     const issued = settings.locator(".storage-issued");
     await expect(issued.getByText("Save this token now")).toBeVisible();
+    await expect(issued.getByLabel("Webhook URL")).toHaveValue(`${core.origin}/api/v1/storage/events`);
     const sourceToken = await issued.getByLabel("Source token").inputValue();
     const dashboard = await (await api.get("storage")).json() as { sources: Array<{ id: string }> };
     const sourceId = dashboard.sources[0].id;
