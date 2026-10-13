@@ -8364,9 +8364,11 @@ def create_app(
         tags=["notebooks"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_notebooks(engagement_id: str) -> list[dict[str, Any]]:
+    async def list_notebooks(
+        engagement_id: str, refresh: bool = False
+    ) -> list[dict[str, Any]]:
         notebook_mcp.register_profile(engagement_id)
-        return notebook_service.list(engagement_id)
+        return await notebook_service.list_async(engagement_id, refresh=refresh)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks",

@@ -3,8 +3,10 @@ import hashlib
 import importlib.util
 import json
 import sys
+import threading
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -19,6 +21,7 @@ from nebula.v3.mcp import McpProbeError, McpProbeService, resolve_mcp_profiles
 from nebula.v3.notebook_mcp import NotebookMcpTools
 from nebula.v3.notebooks import (
     NotebookConflict,
+    NotebookDocumentStore,
     NotebookPermissionRequired,
     NotebookService,
     NotebookWorkerConnection,
@@ -86,6 +89,115 @@ def test_notebook_documents_are_atomic_and_reject_stale_cell_edits(tmp_path):
         assert saved["document"]["cells"][0]["outputs"] == []
         with pytest.raises(Exception, match="escapes|project-relative"):
             notebooks.read(project.id, "../outside.ipynb")
+
+    asyncio.run(scenario())
+
+
+def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
+    _, project, notebooks = _project(tmp_path)
+    path = tmp_path / "workspace" / "legacy.ipynb"
+    original = {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": ["A title"]},
+            {"cell_type": "code", "metadata": {}, "source": "print(1)", "outputs": [], "execution_count": None},
+            {"id": "existing", "cell_type": "code", "metadata": {}, "source": "print(2)", "outputs": [], "execution_count": None},
+            {"id": "existing", "cell_type": "code", "metadata": {}, "source": "print(3)", "outputs": [], "execution_count": None},
+        ],
+    }
+    raw = json.dumps(original).encode()
+    path.write_bytes(raw)
+    first = notebooks.read(project.id, "legacy.ipynb")
+    ids = [cell["id"] for cell in first["document"]["cells"]]
+    assert len(set(ids)) == len(ids)
+    assert ids[2] == "existing"
+    assert [cell["id"] for cell in notebooks.read(project.id, "legacy.ipynb")["document"]["cells"]] == ids
+    assert first["revision"] == hashlib.sha256(raw).hexdigest()
+    assert path.read_bytes() == raw
+
+    async def save():
+        return await notebooks.upsert_cell(
+            project.id,
+            "legacy.ipynb",
+            cell_id=ids[1],
+            source="print(4)",
+            expected_revision=None,
+            expected_source_hash=first["cell_revisions"][ids[1]],
+        )
+
+    saved = asyncio.run(save())
+    assert [cell["id"] for cell in saved["document"]["cells"]] == ids
+    assert [cell["id"] for cell in json.loads(path.read_bytes())["cells"]] == ids
+    assert saved["document"]["cells"][1]["source"] == "print(4)"
+
+
+def test_notebook_inventory_does_not_block_core_and_coalesces_scans(tmp_path, monkeypatch):
+    _, project, notebooks = _project(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_list(engagement_id):
+        calls.append(engagement_id)
+        started.set()
+        assert release.wait(2), "inventory was not released"
+        return [{"path": "legacy.ipynb", "size": 1, "modified_at": "now"}]
+
+    monkeypatch.setattr(notebooks.documents, "list", slow_list)
+
+    async def scenario():
+        first = asyncio.create_task(notebooks.list_async(project.id))
+        try:
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), 1.5)
+            second = asyncio.create_task(notebooks.list_async(project.id))
+            # This runs on the same loop while the workspace walk is still busy.
+            await asyncio.wait_for(asyncio.sleep(0.01), 0.5)
+            assert not first.done()
+        finally:
+            release.set()
+        assert await asyncio.gather(first, second) == [
+            [{"path": "legacy.ipynb", "size": 1, "modified_at": "now"}],
+        ] * 2
+        assert len(calls) == 1
+        await notebooks.list_async(project.id)
+        assert len(calls) == 1
+        await notebooks.list_async(project.id, refresh=True)
+        assert len(calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_notebook_inventory_route_keeps_core_health_responsive(tmp_path, monkeypatch):
+    store, project, _ = _project(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_list(self, engagement_id):
+        started.set()
+        assert release.wait(2), "inventory was not released"
+        return []
+
+    monkeypatch.setattr(NotebookDocumentStore, "list", slow_list)
+    app = create_app(store, auth_token="test-token")
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer test-token"},
+        ) as client:
+            listing = asyncio.create_task(
+                client.get(f"/api/v1/engagements/{project.id}/notebooks")
+            )
+            try:
+                assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), 1.5)
+                health = await asyncio.wait_for(client.get("/api/v1/health"), 0.5)
+                assert health.status_code == 200
+            finally:
+                release.set()
+            assert (await listing).status_code == 200
 
     asyncio.run(scenario())
 

@@ -230,7 +230,7 @@ class NotebookMcpTools:
         if name == "status":
             value = self.notebooks.status(project_id)
         elif name == "list":
-            value = self.notebooks.list(project_id)
+            value = await self.notebooks.list_async(project_id)
         elif name == "read":
             value = self.notebooks.read(project_id, path)
         elif name == "create":
