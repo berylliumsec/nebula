@@ -7,10 +7,12 @@ from nebula.v3.harnesses import (
     CodexAppServerConnection,
     GrokAcpConnection,
     HarnessEvent,
+    _chat_harness_command,
     _goal_outcome_message,
     _harness_goal_snapshot,
     _run_harness_command,
 )
+from nebula.v3.domain import HarnessTurn, HarnessTurnOrigin
 
 
 class Rpc:
@@ -52,6 +54,31 @@ class Rpc:
 )
 def test_command_parser_preserves_slash_syntax_for_catalog_validation(text, expected):
     assert parse_harness_command(text) == expected
+
+
+@pytest.mark.parametrize(
+    "user_prompt,expected",
+    [
+        ("/usage", ("/usage", "")),
+        ("/usage extra", ("/usage", "extra")),
+        ("/goal status", ("/goal", "status")),
+        ("Explain /usage", None),
+    ],
+)
+def test_chat_command_uses_operator_input_not_appended_core_context(
+    user_prompt, expected
+):
+    turn = HarnessTurn(
+        engagement_id="project",
+        harness_session_id="harness",
+        origin=HarnessTurnOrigin.CHAT,
+        chat_session_id="chat",
+        chat_turn_id="turn",
+        prompt=user_prompt
+        + "\n\nNebula settings changes belong to the dedicated Nebula settings assistant.",
+        metadata={"user_prompt": user_prompt},
+    )
+    assert _chat_harness_command(turn) == expected
 
 
 @pytest.mark.parametrize("grok", [True, False])
