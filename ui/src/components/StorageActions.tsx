@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import type { ApiClient } from "../api/client";
 import type { StorageAction } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import "../storage.css";
 
 function Effect({ value }: { value: Record<string, unknown> }) {
@@ -14,9 +15,18 @@ export function StorageActions({ api, actions, onRefresh }: { api: ApiClient; ac
   const [error, setError] = useState("");
   const call = async (action: StorageAction, step: "preview" | "approve" | "reconcile") => {
     setBusy(action.id); setError("");
-    try { await api.storageAction(action.id, step, step === "approve" ? action.digest ?? undefined : undefined); await onRefresh(); }
-    catch (caught) { setError(String(caught)); await onRefresh(); }
-    finally { setBusy(undefined); }
+    try {
+      try { await api.storageAction(action.id, step, step === "approve" ? action.digest ?? undefined : undefined); }
+      catch (caught) {
+        logCaughtDiagnostic("interface.storage.action_failed", "A storage source action could not be completed.", caught, "storage-actions");
+        setError(String(caught));
+      }
+      try { await onRefresh(); }
+      catch (caught) {
+        logCaughtDiagnostic("interface.storage.action_refresh_failed", "Storage action status could not be refreshed.", caught, "storage-actions");
+        setError((current) => current || String(caught));
+      }
+    } finally { setBusy(undefined); }
   };
   if (!actions.length) return null;
   return <section className="storage-actions" aria-label="Storage actions"><h3>Source actions</h3>
@@ -47,7 +57,9 @@ export function StorageChatActions({ api, sessionId }: { api: ApiClient | undefi
     setIncident(Boolean(linked));
     setActions(linked ? data.actions.filter((item) => item.incident_id === linked.id) : []);
   };
-  useEffect(() => { setIncident(false); setActions([]); void refresh().catch(() => undefined); }, [api, sessionId]);
+  useEffect(() => { setIncident(false); setActions([]); void refresh().catch((caught) => {
+    logCaughtDiagnostic("interface.storage.chat_actions_load_failed", "Storage source actions could not be loaded in chat.", caught, "storage-chat");
+  }); }, [api, sessionId]);
   if (!api || !incident) return null;
   return <div className="storage-chat-actions"><p>Storage incident · source reports are untrusted data. Remote changes require your approval.</p><StorageActions api={api} actions={actions} onRefresh={refresh} /></div>;
 }

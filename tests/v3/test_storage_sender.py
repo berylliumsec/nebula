@@ -24,12 +24,19 @@ def sender_module():
 def test_reference_sender_persists_one_event_id_across_retries(tmp_path):
     sender = sender_module()
     path = tmp_path / "observation.json"
-    path.write_text(json.dumps({
-        "schema_version": 1, "observed_at": "2026-10-13T14:00:00Z",
-        "device": {"id": "nas", "label": "NAS"},
-        "volume": {"id": "data", "label": "Data"},
-        "state": "warning", "free_bytes": 20, "total_bytes": 100,
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "observed_at": "2026-10-13T14:00:00Z",
+                "device": {"id": "nas", "label": "NAS"},
+                "volume": {"id": "data", "label": "Data"},
+                "state": "warning",
+                "free_bytes": 20,
+                "total_bytes": 100,
+            }
+        )
+    )
     first = sender.prepare(path)
     assert sender.prepare(path) == first
     assert json.loads(first)["event_id"] == json.loads(path.read_text())["event_id"]
@@ -66,11 +73,15 @@ def test_reference_sender_retries_identical_payload_and_requires_ack(monkeypatch
     monkeypatch.setattr(sender, "urlopen", post)
     monkeypatch.setattr(sender.time, "sleep", lambda _: None)
     monkeypatch.setattr(sender.random, "random", lambda: 0.0)
-    result = sender.send("https://storage.example/api/v1/storage/events", "secret", payload, attempts=2)
+    result = sender.send(
+        "https://storage.example/api/v1/storage/events", "secret", payload, attempts=2
+    )
     assert result["accepted"] is True
     assert len(requests) == 2
     assert all(request.data == payload for request in requests)
-    assert all(request.get_header("Authorization") == "Bearer secret" for request in requests)
+    assert all(
+        request.get_header("Authorization") == "Bearer secret" for request in requests
+    )
 
 
 def test_reference_sender_does_not_follow_redirect_with_source_token():
@@ -80,7 +91,8 @@ def test_reference_sender_does_not_follow_redirect_with_source_token():
     class Destination(BaseHTTPRequestHandler):
         def do_POST(self):
             forwarded.append(self.headers.get("Authorization"))
-            self.send_response(202); self.end_headers()
+            self.send_response(202)
+            self.end_headers()
 
         def log_message(self, *_):
             pass
@@ -92,7 +104,9 @@ def test_reference_sender_does_not_follow_redirect_with_source_token():
     class Redirect(BaseHTTPRequestHandler):
         def do_POST(self):
             self.send_response(307)
-            self.send_header("Location", f"http://127.0.0.1:{destination.server_port}/stolen")
+            self.send_header(
+                "Location", f"http://127.0.0.1:{destination.server_port}/stolen"
+            )
             self.end_headers()
 
         def log_message(self, *_):
@@ -104,9 +118,13 @@ def test_reference_sender_does_not_follow_redirect_with_source_token():
     try:
         url = f"http://127.0.0.1:{redirect.server_port}/api/v1/storage/events"
         with pytest.raises(HTTPError) as error:
-            sender.send(url, "source-secret", b'{}', attempts=1)
+            sender.send(url, "source-secret", b"{}", attempts=1)
         assert error.value.code == 307
         assert forwarded == []
     finally:
-        redirect.shutdown(); redirect.server_close(); redirect_thread.join(timeout=5)
-        destination.shutdown(); destination.server_close(); destination_thread.join(timeout=5)
+        redirect.shutdown()
+        redirect.server_close()
+        redirect_thread.join(timeout=5)
+        destination.shutdown()
+        destination.server_close()
+        destination_thread.join(timeout=5)

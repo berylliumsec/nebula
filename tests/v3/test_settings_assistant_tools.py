@@ -55,9 +55,18 @@ def test_catalog_covers_settings_destinations_without_secrets():
         == "/projects"
     )
     assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 19
-    assert next(item for item in result["destinations"] if item["id"] == "storage")["path"] == "/storage"
-    assert next(item for item in result["settings"] if item["id"] == "storage")["url"] == "/settings#storage-integration-settings"
-    assert open_setting({"setting_id": "storage"})["client_action"]["setting_id"] == "storage"
+    assert (
+        next(item for item in result["destinations"] if item["id"] == "storage")["path"]
+        == "/storage"
+    )
+    assert (
+        next(item for item in result["settings"] if item["id"] == "storage")["url"]
+        == "/settings#storage-integration-settings"
+    )
+    assert (
+        open_setting({"setting_id": "storage"})["client_action"]["setting_id"]
+        == "storage"
+    )
     assert {item["id"] for item in result["settings"]} == {
         item[0] for item in SETTING_DESTINATIONS
     }

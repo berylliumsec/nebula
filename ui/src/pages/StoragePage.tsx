@@ -5,6 +5,7 @@ import type { StorageDashboard } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { StorageActions } from "../components/StorageActions";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
 import "../storage.css";
 
@@ -24,8 +25,19 @@ export function StoragePage() {
     if (!api) return;
     setLoading(true); setError("");
     try { setData(await api.storageDashboard()); }
-    catch (caught) { setError(String(caught)); }
+    catch (caught) {
+      logCaughtDiagnostic("interface.storage.dashboard_load_failed", "The Storage dashboard could not be loaded.", caught, "storage-dashboard");
+      setError(String(caught));
+    }
     finally { setLoading(false); }
+  };
+  const retryDispatch = async (dispatchId: string) => {
+    if (!api) return;
+    try { await api.retryStorageDispatch(dispatchId); await refresh(); }
+    catch (caught) {
+      logCaughtDiagnostic("interface.storage.dispatch_retry_failed", "The storage assistant chat could not be retried.", caught, "storage-dashboard");
+      setError(String(caught));
+    }
   };
   useEffect(() => { void refresh(); }, [api, coreState]);
   useEffect(() => {
@@ -61,7 +73,7 @@ export function StoragePage() {
         return <article className="panel storage-incident" key={incident.id}><header><div><h3>{volume?.label ?? "Storage volume"} · {source?.name ?? "Unknown source"}</h3><small>Opened {new Date(incident.opened_at).toLocaleString()}</small></div><span className={`storage-state ${incident.state}`}>{incident.state}</span></header>
           <div className="storage-incident-actions"><Link className="button secondary" to={`/projects/${encodeURIComponent(source?.engagement_id ?? "")}/workbench?view=chat&session=${encodeURIComponent(incident.chat_session_id)}`}>Open assistant chat</Link></div>
           {incident.callback_error && <p className="storage-error" role="alert">Source diagnostics unavailable: {incident.callback_error}</p>}
-          {dispatches.filter((item) => item.status === "failed").map((item) => <p className="storage-error" key={item.id} role="alert">Chat dispatch failed: {item.error} <button className="button quiet" type="button" onClick={() => void api?.retryStorageDispatch(item.id).then(refresh)}>Retry</button></p>)}
+          {dispatches.filter((item) => item.status === "failed" || item.queue_status === "missing").map((item) => <p className="storage-error" key={item.id} role="alert">Chat dispatch failed: {item.error ?? item.queue_detail} <button className="button quiet" type="button" onClick={() => void retryDispatch(item.id)}>Retry</button></p>)}
           {dispatches.filter((item) => item.queue_status === "needs_review").map((item) => <p className="storage-error" key={item.id} role="alert">Assistant response needs review: {item.queue_detail ?? "The configured runtime could not finish."} Open the linked chat to inspect and retry.</p>)}
           {api && <StorageActions api={api} actions={data.actions.filter((item) => item.incident_id === incident.id)} onRefresh={refresh} />}
         </article>;

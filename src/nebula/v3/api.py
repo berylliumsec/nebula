@@ -2462,7 +2462,9 @@ def create_app(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
             await start_component(
-                "storage", "integrations", storage_integrations.startup,
+                "storage",
+                "integrations",
+                storage_integrations.startup,
                 storage_integrations.shutdown,
             )
             # Event history of records deleted before their events went with

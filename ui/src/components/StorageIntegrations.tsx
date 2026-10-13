@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Copy, Database, RefreshCw } from "lucide-react";
 import type { HarnessProfile, StorageSource } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
 import "../storage.css";
 
@@ -28,7 +29,10 @@ export function StorageIntegrations() {
     setSources(dashboard.sources);
     setHarnesses(choices);
   };
-  useEffect(() => { void refresh().catch((caught) => setError(String(caught))); }, [api]);
+  useEffect(() => { void refresh().catch((caught) => {
+    logCaughtDiagnostic("interface.storage.sources_load_failed", "Storage sources could not be loaded.", caught, "storage-settings");
+    setError(String(caught));
+  }); }, [api]);
   useEffect(() => { if (!projectId && engagements.length) setProjectId(engagements[0].id); }, [engagements, projectId]);
 
   const runtimes = useMemo(() => [
@@ -56,14 +60,20 @@ export function StorageIntegrations() {
         callback_credential_ref: callbackRef.trim() || null });
       setIssued(result); if (nameRef.current) nameRef.current.value = ""; await refresh();
       setMessage(`${result.source.name} was added disabled. Save the token, configure the sender, then enable it.`);
-    } catch (caught) { setError(String(caught)); }
+    } catch (caught) {
+      logCaughtDiagnostic("interface.storage.source_create_failed", "A storage source could not be created.", caught, "storage-settings");
+      setError(String(caught));
+    }
     finally { setBusy(false); }
   };
   const change = async (source: StorageSource, changes: Record<string, unknown>): Promise<boolean> => {
     if (!api) return false;
     setBusy(true); setError(""); setMessage("");
     try { await api.updateStorageSource(source, changes); await refresh(); return true; }
-    catch (caught) { setError(String(caught)); return false; }
+    catch (caught) {
+      logCaughtDiagnostic("interface.storage.source_update_failed", "Storage source settings could not be changed.", caught, "storage-settings");
+      setError(String(caught)); return false;
+    }
     finally { setBusy(false); }
   };
   const copy = async (value: string, inputId: string) => {
@@ -71,6 +81,7 @@ export function StorageIntegrations() {
       await navigator.clipboard.writeText(value);
       setMessage("Copied to clipboard.");
     } catch {
+      // diagnostic-expected: Clipboard permission can be denied; selecting the field preserves a manual copy path.
       document.getElementById(inputId)?.focus();
       (document.getElementById(inputId) as HTMLInputElement | null)?.select();
       setMessage("Copy the selected value from the field.");
@@ -91,14 +102,20 @@ export function StorageIntegrations() {
     setBusy(true); setError("");
     try { const result = await api.rotateStorageSource(source.id); setIssued({ ...result, webhook_url: webhook }); await refresh();
       setMessage(`Token rotated for ${source.name}. Update the sender before its next report.`); }
-    catch (caught) { setError(String(caught)); }
+    catch (caught) {
+      logCaughtDiagnostic("interface.storage.token_rotation_failed", "The storage source token could not be rotated.", caught, "storage-settings");
+      setError(String(caught));
+    }
     finally { setBusy(false); }
   };
   const revoke = async (source: StorageSource) => {
     if (!api || !window.confirm(`Revoke ${source.name}'s token and disable its reports?`)) return;
     setBusy(true); setError("");
     try { await api.revokeStorageSource(source.id); await refresh(); setMessage(`${source.name} was revoked.`); }
-    catch (caught) { setError(String(caught)); }
+    catch (caught) {
+      logCaughtDiagnostic("interface.storage.source_revoke_failed", "The storage source could not be revoked.", caught, "storage-settings");
+      setError(String(caught));
+    }
     finally { setBusy(false); }
   };
 

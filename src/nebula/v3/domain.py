@@ -5142,7 +5142,16 @@ class StorageAction(Entity):
     incident_id: str
     offer_id: str
     title: str = Field(min_length=1, max_length=300)
-    status: Literal["offered", "previewed", "expired", "approved", "executing", "uncertain", "complete", "failed"] = "offered"
+    status: Literal[
+        "offered",
+        "previewed",
+        "expired",
+        "approved",
+        "executing",
+        "uncertain",
+        "complete",
+        "failed",
+    ] = "offered"
     digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     effects: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     expires_at: datetime | None = None
