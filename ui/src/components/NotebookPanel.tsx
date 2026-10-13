@@ -4,11 +4,17 @@ import ReactMarkdown from "react-markdown";
 import { CircleStop, NotebookPen, PackageCheck, Bookmark, Play, Plus, RefreshCw, RotateCcw, Save, Plug, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { NotebookCell, NotebookFile, NotebookListing, NotebookRun, NotebookRunState, NotebookStatus } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { CodeMirrorSurface } from "./CodeMirrorSurface";
 import "./notebook.css";
 
 const cellText = (source: string | string[]) => Array.isArray(source) ? source.join("") : source;
 const activeRun = (run?: NotebookRun) => run?.status === "queued" || run?.status === "running";
+
+function logDiagnostic(code: string, message: string, error: unknown): string {
+  logCaughtDiagnostic(code, message, error, "notebook");
+  return error instanceof Error ? error.message : String(error);
+}
 
 function Output({ value }: { value: Record<string, unknown> }) {
   const kind = String(value.output_type ?? value.kind ?? "");
@@ -52,13 +58,13 @@ function Cell({ api, projectId, path, cell, file, run, live, active, onChanged, 
       setBaseline(next.cell_revisions[cell.id]);
       onChanged(next);
       return true;
-    } catch (error) { onError(error instanceof Error ? error.message : "Cell could not be saved"); return false; }
+    } catch (error) { onError(logDiagnostic("interface.notebook.cell_save_failed", "Notebook cell could not be saved.", error)); return false; }
     finally { setSaving(false); }
   };
   const execute = async () => {
     if (!await save()) return;
     try { onStarted(await api.runNotebookCell(projectId, path, cell.id)); }
-    catch (error) { onError(error instanceof Error ? error.message : "Cell could not start"); }
+    catch (error) { onError(logDiagnostic("interface.notebook.cell_run_failed", "Notebook cell could not start.", error)); }
   };
   const liveOutputs = live?.events.filter(event => event.event_type === "notebook.output").map(event => event.payload) ?? [];
   const outputs = activeRun(run) && liveOutputs.length ? liveOutputs : (cell.outputs ?? []);
@@ -68,7 +74,7 @@ function Cell({ api, projectId, path, cell, file, run, live, active, onChanged, 
       {cell.cell_type === "markdown" && <button type="button" className="button quiet" onClick={() => setPreview(value => !value)}>{preview ? "Edit" : "Preview"}</button>}
       {dirty && <button className="icon-button subtle" type="button" aria-label="Save cell" title="Save cell" disabled={saving || changedElsewhere} onClick={() => void save()}><Save size={16} /></button>}
       {cell.cell_type === "code" && (activeRun(run)
-        ? <button className="icon-button subtle" type="button" aria-label="Interrupt cell" title="Interrupt cell" onClick={() => {if (run) void api.interruptNotebookRun(projectId, run.id).catch(error => onError(String(error)));}}><CircleStop size={16} /></button>
+        ? <button className="icon-button subtle" type="button" aria-label="Interrupt cell" title="Interrupt cell" onClick={() => {if (run) void api.interruptNotebookRun(projectId, run.id).catch(error => onError(logDiagnostic("interface.notebook.interrupt_failed", "Notebook cell could not be interrupted.", error)));}}><CircleStop size={16} /></button>
         : <button className="icon-button subtle" type="button" aria-label="Run cell" title="Run cell" disabled={saving} onClick={() => void execute()}><Play size={16} /></button>)}
       {run && <span className={`notebook-run-status ${run.status}`} role="status">{run.status}</span>}
     </div>
@@ -113,10 +119,10 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
     } else setFile(undefined);
   }, [api, projectId, path, onPathChange]);
 
-  useEffect(() => { if (!active) return; void refresh().catch(err => setError(String(err))); }, [active, refresh]);
+  useEffect(() => { if (!active) return; void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err))); }, [active, refresh]);
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => { void refresh().catch(err => setError(String(err))); }, runs.some(activeRun) ? 450 : 1400);
+    const timer = window.setInterval(() => { void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err))); }, runs.some(activeRun) ? 450 : 1400);
     return () => window.clearInterval(timer);
   }, [active, refresh, runs]);
 
@@ -136,10 +142,10 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
           const result = String(event.payload.status);
           const status: NotebookRun["status"] = result === "succeeded" || result === "interrupted" ? result : "failed";
           setRuns(current => current.map(item => item.id === run.id ? {...item, status} : item));
-          void api.readNotebook(projectId, path).then(setFile).catch(err => setError(String(err)));
+          void api.readNotebook(projectId, path).then(setFile).catch(err => setError(logDiagnostic("interface.notebook.result_load_failed", "Notebook results could not be loaded.", err)));
         }
       }, controller.signal).catch(error => {
-        if (!controller.signal.aborted) setError(`Live notebook updates stopped: ${String(error)}`);
+        if (!controller.signal.aborted) setError(`Live notebook updates stopped: ${logDiagnostic("interface.notebook.events_failed", "Live notebook events stopped.", error)}`);
       });
       return controller;
     });
@@ -151,40 +157,40 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
     if (!newPath.trim()) return;
     setBusy("create"); setError("");
     try { const next = await api.createNotebook(projectId, name); setNewPath(""); setFile(next); onPathChange(name); await refresh(); }
-    catch (err) { setError(String(err)); }
+    catch (err) { setError(logDiagnostic("interface.notebook.create_failed", "Notebook could not be created.", err)); }
     finally { setBusy(""); }
   };
   const add = async (type: "code" | "markdown") => {
     if (!file || !path) return;
     setBusy("add"); setError("");
     try { setFile(await api.saveNotebookCell(projectId, {path, source: "", cellType: type, expectedRevision: file.revision})); }
-    catch (err) { setError(String(err)); }
+    catch (err) { setError(logDiagnostic("interface.notebook.cell_add_failed", "Notebook cell could not be added.", err)); }
     finally { setBusy(""); }
   };
   const install = async () => {
     if (!path || !packageName.trim()) return;
     setBusy("package"); setError(""); setNotice("");
     try { const result = await api.installNotebookPackage(projectId, path, packageName.trim()); setNotice(`${result.requirement} installed. Restart the kernel if it was already running.`); setPackageName(""); }
-    catch (err) { setError(String(err)); }
+    catch (err) { setError(logDiagnostic("interface.notebook.package_install_failed", "Notebook package could not be installed.", err)); }
     finally { setBusy(""); }
   };
   const searchPackage = async () => {
     if (!path || !packageName.trim()) return;
     setBusy("package-search"); setError(""); setPackageLookup(null);
     try { setPackageLookup(await api.searchNotebookPackage(projectId, path, packageName.trim())); }
-    catch (err) { setError(String(err)); }
+    catch (err) { setError(logDiagnostic("interface.notebook.package_search_failed", "Notebook package could not be found.", err)); }
     finally { setBusy(""); }
   };
   const latestRun = (id: string) => runs.find(run => run.cell_id === id);
 
   return <section className="notebook-panel" aria-label="Project notebook">
-    <header className="notebook-header"><div><NotebookPen size={18} /><strong>Notebook</strong>{status && <small>{status.executionMode === "host" ? "Host" : "Docker"} Python</small>}</div><button className="icon-button subtle" type="button" aria-label="Refresh notebook" title="Refresh notebook" onClick={() => void refresh().catch(err => setError(String(err)))}><RefreshCw size={16} /></button></header>
+    <header className="notebook-header"><div><NotebookPen size={18} /><strong>Notebook</strong>{status && <small>{status.executionMode === "host" ? "Host" : "Docker"} Python</small>}</div><button className="icon-button subtle" type="button" aria-label="Refresh notebook" title="Refresh notebook" onClick={() => void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err)))}><RefreshCw size={16} /></button></header>
     {error && <p className="notebook-error" role="alert">{error} <button className="button quiet" type="button" onClick={() => {setError(""); void refresh();}}>Retry</button></p>}
     {notice && <p className="notebook-notice" role="status">{notice}<button className="icon-button subtle" type="button" aria-label="Dismiss notice" onClick={() => setNotice("")}><X size={14} /></button></p>}
     {status?.consentRequired && <div className="notebook-consent"><Plug size={17} /><span>Host execution needs one-time project approval.</span><button className="button secondary" type="button" onClick={onProjectSettings}>Review Host access</button></div>}
-    <div className="notebook-filebar"><label>Notebook <select value={path ?? ""} onChange={event => onPathChange(event.target.value)}><option value="">Choose a notebook</option>{list.map(item => <option key={item.path} value={item.path}>{item.path}</option>)}</select></label>{path && onPin && <button className="icon-button subtle" type="button" aria-label={pinnedPath === path ? "Unpin notebook from chat" : "Pin notebook beside chat"} title={pinnedPath === path ? "Unpin from chat" : "Pin beside chat"} onClick={() => void onPin(pinnedPath === path ? null : path).catch(err => setError(String(err)))}><Bookmark size={16} fill={pinnedPath === path ? "currentColor" : "none"} /></button>}</div>
+    <div className="notebook-filebar"><label>Notebook <select value={path ?? ""} onChange={event => onPathChange(event.target.value)}><option value="">Choose a notebook</option>{list.map(item => <option key={item.path} value={item.path}>{item.path}</option>)}</select></label>{path && onPin && <button className="icon-button subtle" type="button" aria-label={pinnedPath === path ? "Unpin notebook from chat" : "Pin notebook beside chat"} title={pinnedPath === path ? "Unpin from chat" : "Pin beside chat"} onClick={() => void onPin(pinnedPath === path ? null : path).catch(err => setError(logDiagnostic("interface.notebook.pin_failed", "Notebook could not be pinned beside chat.", err)))}><Bookmark size={16} fill={pinnedPath === path ? "currentColor" : "none"} /></button>}</div>
     <form className="notebook-create" onSubmit={event => {event.preventDefault(); void create();}}><input aria-label="New notebook name" placeholder="New notebook name" value={newPath} onChange={event => setNewPath(event.target.value)} /><button className="icon-button subtle" type="submit" disabled={!newPath.trim() || busy === "create"} aria-label="Create notebook" title="Create notebook"><Plus size={17} /></button></form>
-    {file && path ? <div className="notebook-body"><div className="notebook-actions"><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("code")}><Plus size={15} /> Code</button><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("markdown")}><Plus size={15} /> Markdown</button><button className="button quiet" type="button" disabled={Boolean(busy) || runs.some(activeRun)} onClick={() => void api.restartNotebookKernel(projectId, path).then(() => setNotice("Kernel restarted; variables were cleared.")).catch(err => setError(String(err)))}><RotateCcw size={15} /> Restart</button></div>
+    {file && path ? <div className="notebook-body"><div className="notebook-actions"><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("code")}><Plus size={15} /> Code</button><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("markdown")}><Plus size={15} /> Markdown</button><button className="button quiet" type="button" disabled={Boolean(busy) || runs.some(activeRun)} onClick={() => void api.restartNotebookKernel(projectId, path).then(() => setNotice("Kernel restarted; variables were cleared.")).catch(err => setError(logDiagnostic("interface.notebook.restart_failed", "Notebook kernel could not be restarted.", err)))}><RotateCcw size={15} /> Restart</button></div>
       {file.document.cells.length ? file.document.cells.map(cell => <Cell key={`${path}:${cell.id}`} api={api} projectId={projectId} path={path} cell={cell} file={file} run={latestRun(cell.id)} live={live[latestRun(cell.id)?.id ?? ""]} active={active} onChanged={setFile} onStarted={run => {setRuns(current => [run, ...current]); void refresh();}} onError={setError} />) : <div className="notebook-empty"><strong>Empty notebook</strong><p>Add a code cell to try Python.</p><button className="button primary" type="button" onClick={() => void add("code")}><Plus size={15} /> Add code cell</button></div>}
       <form className="notebook-packages" onSubmit={event => {event.preventDefault(); void searchPackage();}}><label>Project Python packages<input value={packageName} onChange={event => {setPackageName(event.target.value); setPackageLookup(null);}} placeholder="Exact package name, for example numpy" /></label><button className="button quiet" type="submit" disabled={!packageName.trim() || Boolean(busy)}>{busy === "package-search" ? "Finding…" : "Find"}</button><button className="button secondary" type="button" onClick={() => void install()} disabled={!packageName.trim() || Boolean(busy)}><PackageCheck size={15} /> {busy === "package" ? "Installing…" : "Install"}</button>{packageLookup && <p className="notebook-package-result" role="status"><strong>{packageLookup.name} {packageLookup.version}</strong>{packageLookup.summary && <span>{packageLookup.summary}</span>}</p>}</form>
     </div> : <div className="notebook-empty"><strong>No notebook open</strong><p>Create a Python notebook or choose one from this project.</p></div>}
