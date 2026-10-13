@@ -360,9 +360,15 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             .map((resource) => [resource, { state: "loading" }])),
         } as Record<WorkspaceResource, ResourceStatus>));
 
-        // The project identity is known before its resources finish loading.
-        // Keep its Workbench usable while unrelated collections are still in flight.
-        if (!switching) setEngagement(nextEngagement);
+        // The project and core catalogs are ready. A large project collection
+        // can take many pages to load, so publish the workspace now and keep
+        // each collection's own loading, failure, and retry state visible.
+        setEngagement(nextEngagement);
+        if (!switching) bootstrappedAttempt.current = attempt;
+        setWorkspaceState(nextHealth?.status === "degraded" || loadErrors.length > 0 ? "degraded" : "ready");
+        setCoreError(loadErrors.length
+          ? undefined
+          : nextHealth?.status === "degraded" ? "Nebula Core reported limited availability." : undefined);
 
         if (nextEngagement) {
           const observationLoad = nextApi.listObservations(nextEngagement.id, controller.signal);
@@ -410,9 +416,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           if (reportResult.status === "fulfilled") setReports(reportResult.value.items);
         }
 
-        if (switching) setEngagement(nextEngagement);
         setRun(nextRun);
-        if (!switching) bootstrappedAttempt.current = attempt;
         const degraded = nextHealth?.status === "degraded" || loadErrors.length > 0;
         setWorkspaceState(degraded ? "degraded" : "ready");
         setCoreError(loadErrors.length

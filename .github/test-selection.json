@@ -1,36 +1,25 @@
 {
-  "change_digest": "0597410df73e87120136fc639083a7fcc81a007da2c31d84a16a152f03a62bcc",
-  "reviewed_by": "Codex review of remaining nebula-v3.0.13 broad real-Core release failures",
-  "reason": "The failed release's broad real-Core shard reached an authenticated Terminal landing screen without a visible Workbench Core chip, looked for project switching outside the current navigation control, and included managed-browser journeys without staging their prerequisites. Quiet Lens also hid composer settings until hover and covered a provider context button in the desktop journey. On mobile its navigation handle intercepted Open conversations, and its top bar covered the debugger Close button. Select exact production LAN journeys for pairing, context actions, project switching, settings after reload, mobile Code debugging, managed browser runtime and security proxy, plus the Quiet Lens desktop and 320/390 px Chromium/WebKit navigation journey.",
-  "exclusions": "Python, frontend unit, and native behavior are unchanged, so those layers have no selected cases. The browser selection collects eighteen tests in sixteen matrix entries; unrelated real-Core, provider, and interface suites are excluded. The full suite was not requested.",
+  "change_digest": "4ee8fc03e1ed740326ef75343f46c720b764298264f76c7742da1ab255abd3f9",
+  "reviewed_by": "Codex focused review of workspace bootstrap readiness",
+  "reason": "A LAN browser opens a linked project with many evidence records. Core and global catalogs establish a usable workspace while project collections retain their own loading, success, failure, retry, switch, and reconnect state. The selected component tests cover those state transitions. The selected production-bundle browser journey holds evidence loading and checks that the Workbench becomes usable on desktop Chromium, 320 px mobile Chromium, and mobile WebKit.",
+  "exclusions": "No Python runtime, persistence, native shell, provider, or notebook execution source changed in this follow-up, so Python, native, and unrelated browser suites are excluded. The browser CI fixture delays evidence deliberately; the real production Core and LAN origin will be verified against the live high-volume project after deployment. Physical-device testing is unavailable in this environment.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 13,
     "native": 0,
-    "playwright": 18
+    "playwright": 3
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:openrouter-profile-policy-core/real-core",
-    "entry:provider-request-breakdown-core/assistant-real-desktop",
-    "entry:provider-request-breakdown-core/assistant-real-chromium-390",
-    "entry:provider-request-breakdown-core/assistant-real-webkit-390",
-    "entry:release-core-project-switch/assistant-real-desktop",
-    "entry:release-core-project-switch/assistant-real-chromium-390",
-    "entry:release-core-project-switch/assistant-real-webkit-390",
-    "entry:assistant-links/assistant-real-desktop",
-    "entry:headless-lan/assistant-real-desktop",
-    "entry:quiet-lens/desktop",
-    "entry:quiet-lens/mobile-chromium-small",
-    "entry:quiet-lens/mobile-chromium",
-    "entry:quiet-lens/mobile-webkit-small",
-    "entry:quiet-lens/mobile-webkit",
-    "entry:release-core-quiet-settings/real-core",
-    "entry:release-mobile-debugger/real-core"
+    "area:workspace-bootstrap"
   ]
 }
