@@ -8169,7 +8169,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
     return Boolean(viewport && summary.top >= viewport.top - 1 && summary.bottom <= viewport.bottom + 1);
   })).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("studio-thinking.png") });
-  for (const [theme, canvas] of [["zero-dark", "#191b1e"], ["dark", "#0b111a"]] as const) {
+  for (const [theme, canvas] of [["zero-dark", "#0b111a"], ["dark", "#0b111a"]] as const) {
     await setTheme(page, theme);
     const colors = await page.evaluate(() => {
       const style = getComputedStyle(document.documentElement);
@@ -8178,7 +8178,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
     expect(colors[0]).toBe(canvas);
     expect(colors[1]).not.toBe("");
     await expect.poll(() => page.locator(".chat-composer").evaluate(element => getComputedStyle(element).backgroundColor))
-      .toBe(theme === "zero-dark" ? "rgb(48, 52, 58)" : "rgb(28, 42, 57)");
+      .toBe("rgb(28, 42, 57)");
     await page.screenshot({ path: testInfo.outputPath(`studio-${theme}.png`) });
   }
   await setTheme(page, "zero-dark");

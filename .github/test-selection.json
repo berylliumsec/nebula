@@ -1,40 +1,23 @@
 {
-  "change_digest": "c0b817ee817be36811406789e0e8363dc143b194b829d1d3d9f96d943367df32",
-  "reviewed_by": "Codex review of October 12 failed release browser journeys",
-  "reason": "Workbench Chat showed two visible New chat actions on phone widths. The Quiet Lens theme also requires a pointer hover before clicking composer settings on desktop. The compact header geometry check must account for horizontally scrollable tabs. Select the production real-Core Assistant defaults create and reload journey at desktop 1440/1024 and mobile Chromium/WebKit 320/390/430; select the matching mocked header geometry and keyboard-action journey. The focused App component case verifies responsive action ownership and the Ctrl+N route.",
-  "exclusions": "Python and native layers do not own this UI action. Other release browser areas, packaging, and the broader October 12 failures are excluded from this focused change; they remain independent release gates. Mobile browsers are emulated, with no physical device available. No full suite is authorized.",
+  "change_digest": "b016e97eaaae3095e2912e2c5c0676bf3dfa3b573ec0805adc88f9b23d445b12",
+  "reviewed_by": "Codex review of October 12 failed release browser jobs and current theme tokens",
+  "reason": "Six October 12 release jobs failed in the same Studio conversation test because it expected Zero Classic colors under the Zero Dark name. The studio-conversation catalog selects that palette journey and the related Workbench geometry journey on each of desktop and 320 px Chromium/WebKit, for six production-preview browser cases.",
+  "exclusions": "This changes a stale mocked-browser assertion only. Python, frontend component, native, real-Core, and other Playwright areas are excluded; the daily release's impact gate remains authoritative. Mobile browsers are emulated, with no physical device available. No full suite is authorized.",
   "expected_tests": {
     "python": 0,
-    "frontend": 1,
+    "frontend": 0,
     "native": 0,
-    "playwright": 16
+    "playwright": 6
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": [
-    "ui/src/AppMobileNewChat.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:assistant-defaults/assistant-real-desktop",
-    "entry:assistant-defaults/assistant-real-compact",
-    "entry:assistant-defaults/assistant-real-chromium-320",
-    "entry:assistant-defaults/assistant-real-chromium-390",
-    "entry:assistant-defaults/assistant-real-chromium-430",
-    "entry:assistant-defaults/assistant-real-webkit-320",
-    "entry:assistant-defaults/assistant-real-webkit-390",
-    "entry:assistant-defaults/assistant-real-webkit-430",
-    "entry:compact-header/desktop",
-    "entry:compact-header/compact",
-    "entry:compact-header/mobile-chromium-small",
-    "entry:compact-header/mobile-chromium-ledger-390",
-    "entry:compact-header/mobile-chromium-wide",
-    "entry:compact-header/mobile-webkit-small",
-    "entry:compact-header/mobile-webkit",
-    "entry:compact-header/mobile-webkit-wide"
+    "entry:studio-conversation/desktop",
+    "entry:studio-conversation/mobile-chromium-small",
+    "entry:studio-conversation/mobile-webkit-small"
   ]
 }
