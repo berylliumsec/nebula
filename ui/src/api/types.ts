@@ -123,6 +123,48 @@ export interface EngagementSummary {
   assistantDefaults?: AssistantDefaults;
 }
 
+export interface StorageSource {
+  id: string; name: string; enabled: boolean; engagement_id: string;
+  backend: "provider" | "harness"; profile_id: string; model: string;
+  reporting_interval_seconds: number; callback_url: string | null;
+  callback_credential_ref: string | null; last_report_at: string | null; revision: number;
+}
+
+export interface StorageDevice {
+  id: string; source_id: string; device_id: string; label: string; last_report_at: string | null;
+}
+
+export interface StorageVolume {
+  id: string; source_id: string; device_id: string; volume_id: string; label: string;
+  path: string | null; state: "healthy" | "warning" | "critical" | "unavailable";
+  free_bytes: number | null; total_bytes: number | null; observed_at: string;
+  received_at: string; incident_id: string | null; stale: boolean;
+}
+
+export interface StorageIncident {
+  id: string; source_id: string; volume_key: string; state: "warning" | "critical" | "unavailable" | "resolved";
+  opened_at: string; resolved_at: string | null; chat_session_id: string;
+  dispatch_status: "pending" | "queued" | "failed"; dispatch_error: string | null;
+  callback_error: string | null;
+}
+
+export interface StorageAction {
+  id: string; source_id: string; incident_id: string; title: string;
+  status: "offered" | "previewed" | "expired" | "approved" | "executing" | "uncertain" | "complete" | "failed";
+  digest: string | null; effects: Record<string, unknown>[]; expires_at: string | null;
+  receipt: Record<string, unknown> | null; error: string | null;
+}
+
+export interface StorageDispatch {
+  id: string; incident_id: string; status: "pending" | "queued" | "failed"; error: string | null;
+  queue_status: string | null; queue_detail: string | null;
+}
+
+export interface StorageDashboard {
+  sources: StorageSource[]; devices: StorageDevice[]; volumes: StorageVolume[];
+  incidents: StorageIncident[]; actions: StorageAction[]; dispatches: StorageDispatch[];
+}
+
 export interface AssistantDefaults {
   backend: "provider" | "harness" | null;
   providerId: string | null;

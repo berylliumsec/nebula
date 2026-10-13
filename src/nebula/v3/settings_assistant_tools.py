@@ -27,6 +27,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("providers", "Model providers", "provider-settings"),
     ("skills", "Shared skills", "native-skill-settings"),
     ("web-search", "Web search runtime", "web-search-runtime-settings"),
+    ("storage", "Storage sources", "storage-integration-settings"),
     ("follow-up", "Post-tool assistant", "post-tool-assistant-settings"),
     ("harnesses", "Assistant harnesses", "harness-settings"),
     ("mcp", "MCP servers", "mcp-settings"),

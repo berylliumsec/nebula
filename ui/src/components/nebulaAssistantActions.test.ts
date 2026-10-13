@@ -85,6 +85,7 @@ describe("settings assistant actions", () => {
   });
   it("opens an unambiguous named setting and ignores ordinary questions", () => {
     expect(settingToOpen("Please open MCP servers settings")?.id).toBe("settings.mcp");
+    expect(settingToOpen("Please open storage source settings")?.id).toBe("settings.storage");
     expect(settingToOpen("can you bring up model provider settings?")?.id).toBe("settings.providers");
     expect(settingToOpen("open project scope")?.id).toBe("settings.network-scope");
     expect(settingToOpen("What can I change in settings?")).toBeUndefined();
@@ -100,6 +101,7 @@ describe("settings assistant actions", () => {
       ["show provider", "settings.providers"],
       ["bring up playbook", "settings.skills"],
       ["open internet", "settings.web-search"],
+      ["open storage sources", "settings.storage"],
       ["show follow up", "settings.follow-up"],
       ["open codex", "settings.harnesses"],
       ["open mcp", "settings.mcp"],
@@ -124,6 +126,7 @@ describe("settings assistant actions", () => {
       ["which setting holds API keys for models?", "settings.providers"],
       ["where are the shared skills?", "settings.skills"],
       ["where can I find web research?", "settings.web-search"],
+      ["where can I connect a storage webhook?", "settings.storage"],
       ["where is automatic follow up?", "settings.follow-up"],
       ["where do I configure the harness?", "settings.harnesses"],
       ["where can I add an MCP server?", "settings.mcp"],

@@ -5064,7 +5064,111 @@ class StructuredResult(Entity):
     stats: StructuredResultStats = Field(default_factory=StructuredResultStats)
 
 
+class StorageSource(Entity):
+    """Operator-enrolled storage sender; only a digest of its bearer token persists."""
+
+    entity_kind: ClassVar[str] = "storage_sources"
+    name: str = Field(min_length=1, max_length=200)
+    engagement_id: str
+    backend: ChatBackend = ChatBackend.PROVIDER
+    profile_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    enabled: bool = False
+    token_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reporting_interval_seconds: int = Field(default=900, ge=60, le=604800)
+    callback_url: str | None = Field(default=None, max_length=2048)
+    callback_credential_ref: str | None = Field(default=None, max_length=200)
+    last_report_at: datetime | None = None
+
+
+class StorageDevice(Entity):
+    entity_kind: ClassVar[str] = "storage_devices"
+    source_id: str
+    device_id: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=300)
+    last_report_at: datetime | None = None
+
+
+class StorageVolume(Entity):
+    entity_kind: ClassVar[str] = "storage_volumes"
+    source_id: str
+    device_id: str
+    volume_id: str
+    label: str = Field(min_length=1, max_length=300)
+    path: str | None = Field(default=None, max_length=2048)
+    state: Literal["healthy", "warning", "critical", "unavailable"]
+    free_bytes: int | None = Field(default=None, ge=0)
+    total_bytes: int | None = Field(default=None, ge=0)
+    observed_at: datetime
+    received_at: datetime
+    incident_id: str | None = None
+
+
+class StorageIncident(Entity):
+    entity_kind: ClassVar[str] = "storage_incidents"
+    source_id: str
+    volume_key: str
+    state: Literal["warning", "critical", "unavailable", "resolved"]
+    opened_at: datetime
+    last_observed_at: datetime
+    resolved_at: datetime | None = None
+    chat_session_id: str
+    dispatch_status: Literal["pending", "queued", "failed"] = "pending"
+    dispatch_error: str | None = Field(default=None, max_length=1000)
+    callback_error: str | None = Field(default=None, max_length=1000)
+
+
+class StorageEventReceipt(Entity):
+    entity_kind: ClassVar[str] = "storage_event_receipts"
+    source_id: str
+    event_id: str
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_at: datetime
+
+
+class StorageDispatch(Entity):
+    entity_kind: ClassVar[str] = "storage_dispatches"
+    incident_id: str
+    source_id: str
+    event_id: str
+    prompt: str = Field(min_length=1, max_length=20000)
+    status: Literal["pending", "queued", "failed"] = "pending"
+    error: str | None = Field(default=None, max_length=1000)
+
+
+class StorageAction(Entity):
+    entity_kind: ClassVar[str] = "storage_actions"
+    source_id: str
+    incident_id: str
+    offer_id: str
+    title: str = Field(min_length=1, max_length=300)
+    status: Literal[
+        "offered",
+        "previewed",
+        "expired",
+        "approved",
+        "executing",
+        "uncertain",
+        "complete",
+        "failed",
+    ] = "offered"
+    digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    effects: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    expires_at: datetime | None = None
+    idempotency_key: str | None = None
+    approved_by: str | None = None
+    receipt: dict[str, Any] | None = None
+    error: str | None = Field(default=None, max_length=1000)
+
+
 ENTITY_MODELS: tuple[type[Entity], ...] = (
+    StorageSource,
+    StorageDevice,
+    StorageVolume,
+    StorageIncident,
+    StorageEventReceipt,
+    StorageDispatch,
+    StorageAction,
     CompanionAction,
     StructuredResult,
     GuideProgress,

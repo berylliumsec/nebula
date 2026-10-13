@@ -1,16 +1,44 @@
 {
-  "change_digest": "594810a4e58ce7c53fd61570ef329d457c8a9aab9eeb694714329997b736ef77",
-  "reviewed_by": "Codex review of live main branch-protection status checks",
-  "reason": "Document the confirmed main branch rule requiring the existing PR Playwright gate. This follow-up changes documentation only; the GitHub setting was verified directly after updating it.",
-  "exclusions": "No application, release workflow, selector, or test code changed. Python, frontend, native, and Playwright test lists are empty because there is no executable behavior to exercise. Live branch protection is checked separately.",
+  "change_digest": "ac72e4750b8b6f09a84c5bea763049c770ccb1df6d89482453b5cbc13782057c",
+  "reviewed_by": "Codex focused storage integration review after main integration",
+  "reason": "Public storage enrollment, sender and callback contracts, incident dispatch, settings assistant discovery, and the dashboard change Core and UI paths. Select exact storage, sender, entity classification, assistant catalog, and product-help checks; focused UI catalog checks; and the one production LAN journey across desktop and responsive mobile Chromium and WebKit widths.",
+  "exclusions": "No native code changed. Unrelated backend, frontend, and browser journeys and the full suites are excluded. The same production real-Core journey supplies UI and LAN acceptance for the changed workflow.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 23,
+    "frontend": 17,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python": [],
-  "frontend": [],
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_storage_action_responder.py",
+    "tests/v3/test_storage_sender.py",
+    "tests/v3/test_generic_crud_exposure.py::test_every_entity_kind_is_classified_exactly_once",
+    "tests/v3/test_generic_crud_exposure.py::test_generic_routes_follow_the_classification",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_other_operator_destinations",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+  ],
+  "frontend": [
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/assistantDestinations.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:storage-integrations/assistant-real-desktop",
+    "entry:storage-integrations/assistant-real-compact",
+    "entry:storage-integrations/assistant-real-chromium-320",
+    "entry:storage-integrations/assistant-real-chromium-390",
+    "entry:storage-integrations/assistant-real-chromium-430",
+    "entry:storage-integrations/assistant-real-webkit-320",
+    "entry:storage-integrations/assistant-real-webkit-390",
+    "entry:storage-integrations/assistant-real-webkit-430"
+  ]
 }

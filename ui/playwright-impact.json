@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name": "storage-integrations", "patterns": ["src/nebula/v3/storage_integrations.py", "ui/src/components/Storage*", "ui/src/pages/StoragePage.tsx", "ui/src/storage.css", "docs/storage-integrations.md"], "areas": ["storage-integrations"]},
     {"name": "notebooks", "patterns": ["ui/src/components/NotebookPanel*", "ui/src/components/notebook.css", "src/nebula/v3/notebooks.py", "src/nebula/v3/notebook_mcp.py", "packaging/notebook/**"], "areas": ["notebooks"]},
     {"name": "conversation-progress", "patterns": ["src/nebula/v3/chat.py", "src/nebula/v3/chat_subagents.py", "ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatProgressContent*", "ui/src/pages/chatMessageReconciliation*", "ui/src/components/ActivityLedger*", "ui/src/components/activityLedgerModel.ts", "ui/src/components/CallbackWaitingStatus*", "ui/src/components/AssistantMarkdown.tsx", "ui/src/api/client.ts", "ui/src/api/types.ts"], "areas": ["conversation-progress", "chat-switching-scroll"]},
     {"name": "provider-reasoning", "patterns": ["src/nebula/v3/providers.py", "src/nebula/v3/chat.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["provider-reasoning"]},
@@ -65,6 +66,16 @@
       {"area":"workspace-bootstrap","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization workspace bootstrap opens Workbench while evidence is still loading","runtime":"mock","shard":"1/1"},
       {"area":"workspace-bootstrap","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization workspace bootstrap opens Workbench while evidence is still loading","runtime":"mock","shard":"1/1"},
       {"area":"workspace-bootstrap","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization workspace bootstrap opens Workbench while evidence is still loading","runtime":"mock","shard":"1/1"}
+    ],
+    "storage-integrations": [
+      {"area":"storage-integrations","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"storage-integrations","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"storage-integrations","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"storage-integrations","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"storage-integrations","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"storage-integrations","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"storage-integrations","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"storage-integrations","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "settings-assistant-full-control": [
       {"area":"settings-assistant-full-control","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},

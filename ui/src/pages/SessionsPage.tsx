@@ -26,6 +26,7 @@ import { newEditorBufferId, useAdoptWorkbenchEditorSession } from "../state/Work
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { adoptNotePanelState } from "../components/NotesPanel";
 import { ChatQueuePanel } from "../components/ChatQueuePanel";
+import { StorageChatActions } from "../components/StorageActions";
 import { estimateTokensFromBytes, ProviderGoalPanel, utf8Length, type ProviderGoalDraft } from "../components/ProviderGoalPanel";
 import { ProviderGoalChildren } from "../components/ProviderGoalChildren";
 import { SearchableModelPicker, type ModelPickerOption } from "../components/SearchableModelPicker";
@@ -6287,6 +6288,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const panelIdSuffix = embeddedSideChat ? "-side-chat" : "";
   const assistantPanel = (
             <div className="chat-panel">
+              {!embeddedSideChat && sessionId && <StorageChatActions api={api} sessionId={sessionId} />}
               <ChatSearchPanel open={transcriptSearchOpen} onClose={closeTranscriptSearch} key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
                 updateSearchParams(next => {
                   next.set(embeddedSideChat ? "sideChat" : "session", hit.session_id);

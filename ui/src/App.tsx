@@ -12,6 +12,7 @@ const WorkPage = lazy(() => import("./pages/WorkPage").then((module) => ({ defau
 const LibraryPage = lazy(() => import("./pages/LibraryPage").then((module) => ({ default: module.LibraryPage })));
 const ReportsPage = lazy(() => import("./pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const StoragePage = lazy(() => import("./pages/StoragePage").then((module) => ({ default: module.StoragePage })));
 
 function route(element: ReactNode) {
   return <Suspense fallback={<div className="route-loading" role="status">Loading workspace…</div>}>{element}</Suspense>;
@@ -123,6 +124,7 @@ export function App() {
     </Route>
     <Route path="library/:resourceId?" element={route(<LibraryPage />)} />
     <Route path="projects" element={route(<WorkPage />)} />
+    <Route path="storage" element={route(<StoragePage />)} />
     <Route path="work" element={<Navigate to="/projects" replace />} />
     <Route path="settings" element={route(<SettingsPage />)} />
     <Route index element={<LegacyProjectRedirect surface="workbench" />} />
