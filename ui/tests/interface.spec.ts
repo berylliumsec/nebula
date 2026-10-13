@@ -11860,15 +11860,17 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
       const tabs = header.getByRole('tablist', {name: 'Workbench views'});
       for (const name of ['Workspace code editor', 'Analyst chat']) {
         await tabs.getByRole('tab', {name}).click();
-        const geometry = await header.evaluate(element => {
+        const overflowing = await header.evaluate(element => {
           const box = element.getBoundingClientRect();
-          return [...element.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0).every(button => {
+          return [...element.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0).flatMap(button => {
+            if (button.closest('[role=tablist]') && button.getAttribute('aria-selected') !== 'true') return [];
             const b = button.getBoundingClientRect();
             const tablist = button.closest('[role=tablist]')?.getBoundingClientRect();
-            return b.left >= box.left && b.right <= box.right + 1 && (!tablist || (b.left >= tablist.left - 1 && b.right <= tablist.right + 1));
+            return b.left >= box.left && b.right <= box.right + 1 && (!tablist || (b.left >= tablist.left - 1 && b.right <= tablist.right + 1))
+              ? [] : [{label: button.getAttribute('aria-label') ?? button.textContent?.trim(), left: b.left, right: b.right, headerLeft: box.left, headerRight: box.right, tablistLeft: tablist?.left, tablistRight: tablist?.right}];
           });
         });
-        expect(geometry).toBe(true);
+        expect(overflowing).toEqual([]);
       }
     }
   }
