@@ -1801,8 +1801,13 @@ test("assistant upgrade conversation switching restores durable Core history pro
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     expect((await redeemed).ok()).toBe(true);
     await page.waitForURL(url => url.pathname === "/" && !url.search && !url.hash, {waitUntil: "load"});
+    await page.setViewportSize({width: 820, height: 900});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sourceId}`);
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
+    const transcript = page.locator(".chat-scroll");
+    await expect.poll(() => transcript.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(150);
+    await transcript.evaluate(element => { element.scrollTop = 150; element.dispatchEvent(new Event("scroll")); });
+    await expect.poll(() => transcript.evaluate(element => element.scrollTop)).toBe(150);
     // Phones pick conversations from a drawer that closes after each choice.
     const selectConversation = async (id: string) => {
       const row = page.locator(`.session-select[data-session-id="${id}"]`);
@@ -1831,6 +1836,7 @@ test("assistant upgrade conversation switching restores durable Core history pro
     if (await imagePreview.isVisible()) await imagePreview.click();
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
     await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
+    await expect.poll(async () => Math.abs(await transcript.evaluate(element => element.scrollTop) - 150)).toBeLessThanOrEqual(8);
     releaseHistory();
     await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
     await selectConversation(targetId);
