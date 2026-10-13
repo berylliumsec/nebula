@@ -31,6 +31,7 @@ from scripts.stage_playwright_runtime import (
     PlaywrightRuntimeStageError,
     stage_playwright_runtime,
 )
+from scripts.stage_notebook_runtime import prune_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 CURRENT_VERSION = (ROOT / "NEBULA3_VERSION").read_text(encoding="utf-8").strip()
@@ -719,6 +720,40 @@ def test_artifact_member_audit_rejects_build_residue():
         )
 
 
+def test_notebook_runtime_stage_prunes_dependency_tests_and_bytecode(tmp_path):
+    runtime = tmp_path / "notebook-runtime"
+    packages = runtime / "python/lib/python3.13/site-packages"
+    tests = packages / "IPython/tests"
+    caches = runtime / "python/lib/python3.13/__pycache__"
+    tests.mkdir(parents=True)
+    caches.mkdir(parents=True)
+    (tests / "test_shell.py").write_text("assert True\n", encoding="utf-8")
+    (caches / "types.cpython-313.pyc").write_bytes(b"cache")
+    (packages / "IPython/__init__.py").write_text("", encoding="utf-8")
+    (runtime / "worker.py").write_text("print('worker')\n", encoding="utf-8")
+
+    prune_runtime(runtime)
+
+    assert not tests.exists()
+    assert not caches.exists()
+    assert (packages / "IPython/__init__.py").is_file()
+    assert (runtime / "worker.py").is_file()
+
+
+def test_release_restages_notebook_runtime_after_validation():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/nebula3-release.yml").read_text(encoding="utf-8")
+    )
+    build_step = next(
+        step["run"]
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Build signed direct AppImage and managed DEB"
+    )
+    assert build_step.index("scripts.stage_notebook_runtime") < build_step.index(
+        "NEBULA_DISTRIBUTION_CHANNEL=direct"
+    )
+
+
 def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_path):
     binary = tmp_path / "usr/bin"
     legal = tmp_path / "usr/share/doc/nebula"
@@ -741,6 +776,27 @@ def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_pat
     )
     (playwright_root / "nebula-playwright-sbom.spdx.json").write_text(
         json.dumps({"spdxVersion": "SPDX-2.3"}),
+        encoding="utf-8",
+    )
+    notebook_root = tmp_path / "usr/lib/nebula/notebook-runtime"
+    (notebook_root / "python/bin").mkdir(parents=True)
+    notebook_executables = {}
+    for relative in ("python/bin/python3", "uv"):
+        executable = notebook_root / relative
+        executable.write_bytes(b"portable tool")
+        executable.chmod(0o755)
+        notebook_executables[relative] = hashlib.sha256(b"portable tool").hexdigest()
+    worker = notebook_root / "worker.py"
+    worker.write_text("print('worker')\n", encoding="utf-8")
+    (notebook_root / "nebula-notebook-runtime.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "target": "x86_64-unknown-linux-gnu",
+                "executables": notebook_executables,
+                "worker_sha256": hashlib.sha256(worker.read_bytes()).hexdigest(),
+            }
+        ),
         encoding="utf-8",
     )
     (

@@ -71,4 +71,10 @@ describe("MCP server choices", () => {
     expect(screen.getByText("No enabled MCP profiles")).toBeInTheDocument();
     expect(screen.queryByText(/sent with every message/)).not.toBeInTheDocument();
   });
+
+  it("keeps an unselected project Notebook grant out of on-demand tools", async () => {
+    getEngagementScope.mockResolvedValue(scope({onDemandTools: true}));
+    render(<McpServerChoices api={api} projectId="project-1" servers={[{...server("Notebook", 11), projectId: "project-1"}]} selectedIds={[]} disabled={false} onChange={vi.fn()} />);
+    expect(await screen.findByRole("checkbox", {name: /Notebook\s*11 tools · Select to grant this assistant/})).not.toBeChecked();
+  });
 });

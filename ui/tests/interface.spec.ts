@@ -13999,3 +13999,40 @@ test("chat companions reveal Code, Browser, and Notes from the conversation", as
   await expect(page.locator(".notes-panel")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+reloadTest("notebook Workbench tab and chat companion keep the same Python file", async ({page}) => {
+  const notebook = {path: "quick.ipynb", revision: "r1", cell_revisions: {cell1: "h1"}, document: {nbformat: 4, nbformat_minor: 5, metadata: {}, cells: [{id: "cell1", cell_type: "code", source: "print(1)", execution_count: null, outputs: []}]}};
+  await page.route("**/api/v1/**", async route => {
+    const url = new URL(route.request().url());
+    const pathname = url.pathname;
+    if (pathname.endsWith("/notebooks/status")) return route.fulfill({json: {project_id: "scratch-project", execution_mode: "host", host_access_acknowledged: true, consent_required: false, runtime_ready: true, mcp_profile_id: "nebula-notebook-scratch-project", mcp_enabled: true}});
+    if (pathname.endsWith("/notebooks") && route.request().method() === "GET") return route.fulfill({json: [{path: "quick.ipynb", size: 123, modified_at: entity.updated_at}]});
+    if (pathname.endsWith("/notebooks/file")) return route.fulfill({json: notebook});
+    if (pathname.endsWith("/notebooks/runs") && route.request().method() === "GET") return route.fulfill({json: []});
+    if (pathname.endsWith("/chat-sessions") && route.request().method() === "GET") return route.fulfill({json: [{...entity, id: "notebook-chat", engagement_id: "scratch-project", title: "Notebook chat", backend: "provider", notebook_path: "quick.ipynb", metadata: {}}]});
+    if (pathname.endsWith("/chat/sessions/notebook-chat/messages")) return route.fulfill({json: []});
+    if (pathname.endsWith("/chat/sessions/notebook-chat/pending-turn")) return route.fulfill({json: null});
+    return route.fallback();
+  });
+  await openWorkspace(page, "/?view=notebook&notebook=quick.ipynb&session=notebook-chat", "Workbench");
+  const panel = page.getByRole("region", {name: "Project notebook"});
+  await expect(panel.getByRole("combobox", {name: "Notebook"})).toHaveValue("quick.ipynb");
+  await expect(panel.getByText("Host Python")).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Run cell"})).toBeVisible();
+  await page.reload();
+  await expect(panel.getByRole("combobox", {name: "Notebook"})).toHaveValue("quick.ipynb");
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Chat"}).click();
+    await page.getByRole("button", {name: "Conversation actions"}).click();
+    await page.getByRole("menuitem", {name: /Notebook/}).click();
+    const sheet = page.getByRole("region", {name: "Notebook beside chat"});
+    await expect(sheet).toBeVisible();
+    const bounds = await sheet.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  } else {
+    await page.getByRole("tab", {name: "Analyst chat"}).click();
+    await page.getByRole("button", {name: "Chat tools"}).click();
+    await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Notebook/}).click();
+    await expect(page.getByRole("region", {name: "Notebook beside chat"}).getByRole("combobox", {name: "Notebook"})).toHaveValue("quick.ipynb");
+  }
+});

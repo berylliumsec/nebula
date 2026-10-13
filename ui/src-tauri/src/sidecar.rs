@@ -27,6 +27,7 @@ const MAX_STARTUP_LOG_BYTES: usize = 256 * 1024;
 const MAX_PENDING_LOG_BYTES: usize = 16 * 1024;
 const STARTUP_LOG_NAME: &str = "nebula-core-startup.log";
 const PLAYWRIGHT_RESOURCE_DIRECTORY: &str = "playwright-browsers";
+const NOTEBOOK_RESOURCE_DIRECTORY: &str = "notebook-runtime";
 const PLAYWRIGHT_RESOURCE_MANIFEST: &str = "nebula-playwright-runtime.json";
 const SECURITY_PROXY_ADDON: &str = "security-proxy/addon.py";
 const LOG_TRUNCATED_MARKER: &[u8] = b"\n[nebula] startup log truncated at 256 KiB\n";
@@ -916,6 +917,7 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
         .map_err(|error| format!("cannot locate the Nebula resource directory: {error}"))?;
     let playwright_browsers = bundled_playwright_browsers_path(&resource_dir)?;
     let security_proxy_addon = bundled_security_proxy_addon_path(&resource_dir)?;
+    let notebook_runtime = resource_dir.join(NOTEBOOK_RESOURCE_DIRECTORY);
 
     let mut command = Command::new(sidecar);
     command
@@ -940,6 +942,9 @@ fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
 
     if let Some(path) = playwright_browsers {
         command.env("PLAYWRIGHT_BROWSERS_PATH", path);
+    }
+    if notebook_runtime.join("nebula-notebook-runtime.json").is_file() {
+        command.env("NEBULA_NOTEBOOK_RUNTIME_DIR", notebook_runtime);
     }
 
     for name in SIDECAR_ENV_ALLOWLIST {

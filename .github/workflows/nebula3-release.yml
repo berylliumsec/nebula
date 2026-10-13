@@ -324,6 +324,9 @@ jobs:
           poetry run python -m scripts.stage_playwright_runtime \
             ui/src-tauri/resources/playwright-browsers \
             --target "${{ matrix.target }}"
+          poetry run python -m scripts.stage_notebook_runtime \
+            ui/src-tauri/resources/notebook-runtime \
+            --target "${{ matrix.target }}"
       - name: Validate Linux packaging without repeating product suites
         env:
           NEBULA_UPDATER_PUBLIC_KEY: ${{ secrets.NEBULA_UPDATER_PUBLIC_KEY }}
@@ -353,6 +356,11 @@ jobs:
           bundle="ui/src-tauri/target/${{ matrix.target }}/release/bundle"
           install -d -m 0755 "$stage"
 
+          # Earlier validation can import the portable interpreter and create
+          # bytecode in the writable build tree. Restage pristine resources.
+          poetry run python -m scripts.stage_notebook_runtime \
+            ui/src-tauri/resources/notebook-runtime \
+            --target "${{ matrix.target }}"
           NEBULA_DISTRIBUTION_CHANNEL=direct poetry run python -m scripts.build_nebula_core
           sidecar="$(find ui/src-tauri/binaries -maxdepth 1 -type f -name 'nebula-core-*' -print -quit)"
           test -n "$sidecar"

@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "target": "x86_64-unknown-linux-gnu",
+  "python_version": "3.13.16",
+  "python_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.13.16%2B20261009-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+  "python_sha256": "24801ea31c7d406d559a17e2226325c723d50c56900b9c0da7b62adaae2affc9",
+  "uv_version": "0.13.0",
+  "uv_url": "https://github.com/astral-sh/uv/releases/download/0.13.0/uv-x86_64-unknown-linux-gnu.tar.gz",
+  "uv_sha256": "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
+}

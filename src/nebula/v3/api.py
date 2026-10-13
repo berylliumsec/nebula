@@ -290,6 +290,7 @@ from .domain import (
     BrowserWebSocketFrame,
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
+    NotebookRun,
     AutomationSession,
     AutomationSessionStatus,
     VpnProfile,
@@ -364,6 +365,10 @@ from .domain import (
     ToolCallOrigin,
     entity_engagement_id,
     utc_now,
+)
+from .notebooks import (
+    NotebookError,
+    NotebookService,
 )
 from .evidence import (
     EvidenceReferenceError,
@@ -838,6 +843,34 @@ class CodeCompletionRequest(NebulaModel):
 
 class CodeCompletionResponse(NebulaModel):
     items: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
+
+
+class NotebookCreateRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class NotebookCellRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    cell_id: str | None = Field(default=None, max_length=200)
+    source: str = Field(max_length=1_000_000)
+    cell_type: Literal["code", "markdown"] = "code"
+    expected_revision: str | None = None
+    expected_source_hash: str | None = None
+
+
+class NotebookRunRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    cell_id: str = Field(min_length=1, max_length=200)
+
+
+class NotebookPackageRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    requirement: str = Field(min_length=1, max_length=200)
+
+
+class NotebookPinRequest(NebulaModel):
+    path: str | None = Field(default=None, max_length=4096)
+    expected_revision: int = Field(ge=1)
 
 
 class HostWorkspaceFolderCreateRequest(NebulaModel):
@@ -1854,6 +1887,29 @@ def create_app(
             )
     elif automation_runtime.credential_store is None:
         automation_runtime.credential_store = credentials
+    notebook_service = NotebookService(
+        store=store,
+        workspace_resolver=native_workspace,
+        automation_runtime=automation_runtime,
+        data_root=(
+            automation_runtime.data_root
+            if automation_runtime is not None
+            else Path(execution_data_root or Path.home() / ".local/share/nebula/v3")
+        ),
+    )
+    from .notebook_mcp import NotebookMcpTools
+
+    notebook_mcp = NotebookMcpTools(store, notebook_service)
+    project_offset = 0
+    while True:
+        existing_projects = store.list_entities(
+            Engagement, limit=1000, offset=project_offset
+        )
+        for existing_project in existing_projects:
+            notebook_mcp.register_profile(existing_project.id)
+        if len(existing_projects) < 1000:
+            break
+        project_offset += len(existing_projects)
     automation_tool_platform = (
         AutomationToolPlatform(
             manager=automation_runtime,
@@ -1891,6 +1947,8 @@ def create_app(
         credential_store=credentials,
         workspace_resolver=harness_workspace,
     )
+    mcp_probes.bind_notebooks(notebook_service)
+    harness_runtime.mcp_service.bind_notebooks(notebook_service)
     if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
         mcp_probes.bind_security_tools(agent_security_tools)
         harness_runtime.mcp_service.bind_security_tools(agent_security_tools)
@@ -2275,6 +2333,12 @@ def create_app(
                     automation_runtime.startup,
                     automation_runtime.shutdown,
                 )
+            await start_component(
+                "runtime",
+                "notebooks",
+                notebook_service.startup,
+                notebook_service.shutdown,
+            )
             await start_component("setup", "coordinator", setup.start, setup.shutdown)
             if container_terminals is not None:
                 await start_component(
@@ -2440,6 +2504,7 @@ def create_app(
     app.state.credential_store = credentials
     app.state.tool_platform = tool_platform
     app.state.automation_runtime = automation_runtime
+    app.state.notebooks = notebook_service
     app.state.execution_service = executions
     app.state.container_terminal_service = container_terminals
     app.state.workspace_service = workspaces
@@ -3212,6 +3277,18 @@ def create_app(
     @app.exception_handler(ValueError)
     async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
         return diagnostic_error_response(request, exc, status_code=422, detail=str(exc))
+
+    @app.exception_handler(NotebookError)
+    async def notebook_error_handler(
+        request: Request, exc: NotebookError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=exc.status_code,
+            detail=str(exc),
+            code="notebook.error",
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(
@@ -7739,6 +7816,11 @@ def create_app(
         for profile in store.list_entities(McpServerProfile, limit=1000):
             if not profile.enabled or profile.capabilities.checked_at is None:
                 continue
+            if (
+                profile.metadata.get("built_in") == "notebook_v1"
+                and profile.metadata.get("engagement_id") != engagement_id
+            ):
+                continue
             # The same selection the runtime makes when it builds plugins.
             for tool in usable_mcp_tools(
                 profile, bypass_permissions=scope.bypass_permissions
@@ -8254,6 +8336,213 @@ def create_app(
             )
         return automation_runtime.project_policy(engagement_id)
 
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/status",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def notebook_status(engagement_id: str) -> dict[str, Any]:
+        profile = notebook_mcp.register_profile(engagement_id)
+        return {
+            **notebook_service.status(engagement_id),
+            "mcp_profile_id": profile.id,
+            "mcp_enabled": profile.enabled,
+        }
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_notebooks(engagement_id: str) -> list[dict[str, Any]]:
+        notebook_mcp.register_profile(engagement_id)
+        return notebook_service.list(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_notebook(
+        engagement_id: str, body: NotebookCreateRequest
+    ) -> dict[str, Any]:
+        return await notebook_service.create(engagement_id, body.path)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/file",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def read_notebook(
+        engagement_id: str, path: str = Query(min_length=1, max_length=4096)
+    ) -> dict[str, Any]:
+        return notebook_service.read(engagement_id, path)
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/cell",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def save_notebook_cell(
+        engagement_id: str, body: NotebookCellRequest
+    ) -> dict[str, Any]:
+        return await notebook_service.upsert_cell(
+            engagement_id,
+            body.path,
+            cell_id=body.cell_id,
+            source=body.source,
+            expected_revision=body.expected_revision,
+            expected_source_hash=body.expected_source_hash,
+            cell_type=body.cell_type,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs",
+        response_model=NotebookRun,
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_notebook_run(
+        engagement_id: str, body: NotebookRunRequest
+    ) -> NotebookRun:
+        return await notebook_service.start_run(engagement_id, body.path, body.cell_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def recent_notebook_runs(
+        engagement_id: str, path: str = Query(min_length=1, max_length=4096)
+    ) -> list[dict[str, Any]]:
+        return notebook_service.recent_runs(engagement_id, path)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs/active",
+        response_model=list[NotebookRun],
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def active_notebook_runs(engagement_id: str) -> list[NotebookRun]:
+        return notebook_service.active_runs(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs/{{run_id}}",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def read_notebook_run(
+        engagement_id: str, run_id: str, after_sequence: int = Query(default=0, ge=0)
+    ) -> dict[str, Any]:
+        return notebook_service.run(
+            run_id, engagement_id=engagement_id, after_sequence=after_sequence
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs/{{run_id}}/events",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stream_notebook_run(
+        engagement_id: str, run_id: str, after_sequence: int = Query(default=0, ge=0)
+    ) -> StreamingResponse:
+        # Validate project ownership before sending streaming response headers.
+        first = notebook_service.run(
+            run_id, engagement_id=engagement_id, after_sequence=after_sequence
+        )
+
+        async def stream() -> AsyncIterator[bytes]:
+            cursor = after_sequence
+            current = first
+            while True:
+                for event in current["events"]:
+                    cursor = event["sequence"]
+                    yield (
+                        f"id: {cursor}\nevent: notebook\ndata: "
+                        f"{json.dumps(event, ensure_ascii=False)}\n\n"
+                    ).encode("utf-8")
+                if current["run"]["status"] not in {"queued", "running"}:
+                    break
+                await asyncio.sleep(0.08)
+                current = notebook_service.run(
+                    run_id, engagement_id=engagement_id, after_sequence=cursor
+                )
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs/{{run_id}}/wait",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def wait_notebook_run(
+        engagement_id: str, run_id: str, timeout: float = Query(default=30, ge=0, le=60)
+    ) -> dict[str, Any]:
+        return await notebook_service.wait_run(
+            run_id, engagement_id=engagement_id, timeout=timeout
+        )
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs/{{run_id}}/interrupt",
+        response_model=NotebookRun,
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def interrupt_notebook_run(engagement_id: str, run_id: str) -> NotebookRun:
+        return await notebook_service.interrupt(run_id, engagement_id=engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/kernel/restart",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def restart_notebook_kernel(
+        engagement_id: str, body: NotebookCreateRequest
+    ) -> dict[str, bool]:
+        await notebook_service.restart(engagement_id, body.path)
+        return {"restarted": True}
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def install_notebook_package(
+        engagement_id: str, body: NotebookPackageRequest
+    ) -> dict[str, Any]:
+        return await notebook_service.install_package(
+            engagement_id, body.path, body.requirement
+        )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages/search",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def search_notebook_package(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+        name: str = Query(min_length=1, max_length=128),
+    ) -> dict[str, Any]:
+        return await notebook_service.search_package(engagement_id, path, name)
+
+    @app.put(
+        f"{API_PREFIX}/chat-sessions/{{session_id}}/notebook",
+        response_model=ChatSession,
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def pin_chat_notebook(
+        session_id: str, body: NotebookPinRequest
+    ) -> ChatSession:
+        return notebook_service.pin(
+            session_id, body.path, expected_revision=body.expected_revision
+        )
+
     def browser_security_policy(engagement_id: str) -> AutomationProjectPolicy:
         if automation_runtime is not None:
             return automation_runtime.project_policy(engagement_id)
@@ -8411,17 +8700,34 @@ def create_app(
             raise HTTPException(
                 status_code=501, detail="automation runtime is not configured"
             )
-        return automation_runtime.update_project_policy(
-            engagement_id,
-            approval_policy=request.approval_policy,
-            execution_mode=request.execution_mode,
-            host_access_acknowledged=request.host_access_acknowledged,
-            network_enabled=request.network_enabled,
-            runner_profile_id=request.runner_profile_id,
-            vpn_profile_id=request.vpn_profile_id,
-            max_timeout_ms=request.max_timeout_ms,
-            expected_revision=request.expected_revision,
-        )
+        current = automation_runtime.project_policy(engagement_id)
+        if (
+            request.expected_revision is not None
+            and request.expected_revision != current.revision
+        ):
+            raise HTTPException(
+                status_code=409, detail="Project policy changed; refresh and retry"
+            )
+        changing_mode = False
+        if request.execution_mode is not None:
+            changing_mode = await notebook_service.prepare_policy_change(
+                engagement_id, request.execution_mode
+            )
+        try:
+            return automation_runtime.update_project_policy(
+                engagement_id,
+                approval_policy=request.approval_policy,
+                execution_mode=request.execution_mode,
+                host_access_acknowledged=request.host_access_acknowledged,
+                network_enabled=request.network_enabled,
+                runner_profile_id=request.runner_profile_id,
+                vpn_profile_id=request.vpn_profile_id,
+                max_timeout_ms=request.max_timeout_ms,
+                expected_revision=request.expected_revision,
+            )
+        finally:
+            if changing_mode:
+                notebook_service.finish_policy_change(engagement_id)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/automation-sessions/"
@@ -14305,6 +14611,13 @@ def _register_crud_routes(
             if_match: int | None = Header(default=None, alias="If-Match"),
         ) -> Response:
             current = store.get(model, entity_id)
+            if (
+                isinstance(current, McpServerProfile)
+                and current.metadata.get("built_in") == "notebook_v1"
+            ):
+                raise ConflictError(
+                    "Notebook is bundled with this project; disable its MCP profile to revoke agent access"
+                )
             if if_match is not None and current.revision != if_match:
                 raise ConflictError(
                     f"revision conflict: expected {if_match}, found {current.revision}"

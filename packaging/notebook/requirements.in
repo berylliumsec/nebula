@@ -1,0 +1,3 @@
+# The worker and its kernel live outside the frozen Nebula Core.
+ipykernel==7.4.0
+jupyter-client==8.10.0

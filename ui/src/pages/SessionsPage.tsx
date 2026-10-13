@@ -180,6 +180,7 @@ import { HarnessThinking, ThinkingDisclosure } from "../components/HarnessThinki
 import { HarnessCommandHints, isHarnessCommand } from "../components/HarnessCommandHints";
 import { HarnessStatusRail } from "../components/HarnessStatusRail";
 import { WorkbenchBrowser } from "../components/WorkbenchBrowser";
+import { NotebookPanel } from "../components/NotebookPanel";
 import { LoadingSurface, TabBar, Toolbar } from "../components/SurfacePrimitives";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -223,7 +224,7 @@ import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptEx
 import { currentAgentTurnIndex, followsChatBottom, type ChatScrollGeometry } from "./chatScrollPosition";
 
 const CHAT_TERMINAL_OPEN_KEY = "nebula.chat-terminal.open";
-type ChatSide = "code" | "browser" | "notes";
+type ChatSide = "code" | "browser" | "notes" | "notebook";
 const chatSideStorageKey = (id: string) => `nebula.chat-side:${id}`;
 const chatCompanionModeKey = (id: string) => `nebula.chat-companion-expanded:${id}`;
 function storedCompanionExpanded(id: string): boolean {
@@ -240,7 +241,7 @@ function storedChatSide(id: string): ChatSide | undefined {
   if (!id) return undefined;
   try {
     const value = localStorage.getItem(chatSideStorageKey(id));
-    return value === "code" || value === "browser" || value === "notes" ? value : undefined;
+    return value === "code" || value === "browser" || value === "notes" || value === "notebook" ? value : undefined;
   } catch { /* diagnostic-expected: device-local panel preferences may be unavailable. */ return undefined; }
 }
 function rememberChatSide(id: string, side?: ChatSide) {
@@ -250,10 +251,10 @@ function rememberChatSide(id: string, side?: ChatSide) {
     else localStorage.removeItem(chatSideStorageKey(id));
   } catch { /* diagnostic-expected: device-local panel preferences may be unavailable. */ }
 }
-type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
-const sessionViews = new Set<string>(["chat", "code", "terminal", "browser", "missions", "activity", "workspace", "notes"] satisfies SessionView[]);
-const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser", "notes"]);
-const focusedWorkbenchViews = new Set<SessionView>(["chat", "code", "browser", "workspace"]);
+type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes" | "notebook";
+const sessionViews = new Set<string>(["chat", "code", "terminal", "browser", "missions", "activity", "workspace", "notes", "notebook"] satisfies SessionView[]);
+const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser", "notes", "notebook"]);
+const focusedWorkbenchViews = new Set<SessionView>(["chat", "code", "browser", "workspace", "notebook"]);
 
 function sessionViewFromParam(value: string | null): SessionView | undefined {
   const view = value === "executions" ? "activity" : value === "files" ? "workspace" : value;
@@ -1090,7 +1091,7 @@ function WorkbenchLayout({ view, chatTerminalOpen, sideChatId, sideView, compani
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [view]);
   const chatTerminalVisible = view === "chat" && chatTerminalOpen && !sideChatId && !sideView && !compact && hasWorkspace;
-  const chatSideVisible = view === "chat" && Boolean(sideView) && !sideChatId && !compact && hasWorkspace && !chatTerminalVisible;
+  const chatSideVisible = view === "chat" && Boolean(sideView) && !sideChatId && (!compact || sideView === "notebook") && hasWorkspace && !chatTerminalVisible;
   const sideBrowserVisible = chatSideVisible && sideView === "browser";
   const sideSize = useResizableSidePanel({
     defaultWidth: 500, defaultWidthRatio: 0.5,
@@ -1200,7 +1201,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const view = embeddedSideChat ? "chat" : requestedView ?? lastRequestedView;
   const [draftEditorKey, setDraftEditorKey] = useState(() => newEditorBufferId());
   const adoptEditorSession = useAdoptWorkbenchEditorSession();
-  const sideView = (["code", "browser", "notes"] as const).find(candidate => candidate === searchParams.get("side"));
+  const sideView = (["code", "browser", "notes", "notebook"] as const).find(candidate => candidate === searchParams.get("side"));
   const companionExpanded = (sideView !== undefined || chatTerminalOpen) && searchParams.get("companion") === "full";
 
   const updateSearchParams = useCallback((update: (params: URLSearchParams) => void, options?: NavigateOptions) => {
@@ -1938,6 +1939,16 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   ), [savedConversations, sessionActivity, sessionQuery, expandedSubagentParents]);
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+  const notebookPath = view === "chat" && sideView === "notebook" && activeChatSession?.notebookPath
+    ? activeChatSession.notebookPath : searchParams.get("notebook") ?? undefined;
+  const chooseNotebookPath = useCallback((next: string) => updateSearchParams(params => { if (next) params.set("notebook", next); else params.delete("notebook"); }, {replace: true}), [updateSearchParams]);
+  const pinNotebook = async (next: string | null) => {
+    if (!api || !sessionId) throw new Error("Save a conversation before pinning a notebook beside it.");
+    const current = await api.getChatSession(sessionId);
+    const saved = await api.pinChatNotebook(sessionId, next, current.revision);
+    setSessions(items => items.map(item => item.id === saved.id ? saved : item));
+    if (next) chooseNotebookPath(next);
+  };
   useEffect(() => {
     if (!activeChatSession) return;
     if (pendingSubagentSaveSessionRef.current === activeChatSession.id) return;
@@ -2379,8 +2390,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       if (active) setHarnessSessions([]);
     });
     if (!embeddedSideChat) {
-      void api.listMcpServers().then((nextServers) => {
-        if (active) setMcpServers(nextServers.filter((item) => item.enabled));
+      void api.notebookStatus(engagement.id).then(() => api.listMcpServers()).then((nextServers) => {
+        if (active) setMcpServers(nextServers.filter((item) => item.enabled && (!item.projectId || item.projectId === engagement.id)));
       }).catch((caughtError) => {
         void logCaughtDiagnostic("interface.sessions_page.mcp_servers", "MCP servers could not be loaded.", caughtError, "sessions_page");
         if (active) setMcpServers([]);
@@ -3207,10 +3218,24 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     void rememberAssistantDefaults({ backend: "harness", harnessId: id, model: nextModel || null, mcpServerIds: [] });
   };
 
-  const chooseHarnessMcpServer = (id: string, checked: boolean) => {
+  const ensureNotebookConsent = async (nextIds: string[]): Promise<boolean> => {
+    if (!api || !engagement) return false;
+    const notebook = mcpServers.find(item => item.projectId === engagement.id && nextIds.includes(item.id) && !selectedMcpIds.includes(item.id));
+    if (!notebook) return true;
+    const policy = await api.getAutomationPolicy(engagement.id);
+    if (policy.executionMode !== "host" || policy.hostAccessAcknowledged) return true;
+    const approved = await confirm({title: `Allow Host notebooks in ${engagement.name}?`, message: "Python cells will run as the Nebula server's OS user and can access files and networks allowed by that account. This one-time project approval is also shown in Project settings.", confirmLabel: "Allow Host access"});
+    if (!approved) return false;
+    await api.updateAutomationPolicy(engagement.id, {executionMode: "host", hostAccessAcknowledged: true, approvalPolicy: policy.approvalPolicy, networkEnabled: policy.networkEnabled, runnerProfileId: policy.runnerProfileId, vpnProfileId: policy.vpnProfileId, maxTimeoutMs: policy.maxTimeoutMs, expectedRevision: policy.revision});
+    return true;
+  };
+
+  const chooseHarnessMcpServer = async (id: string, checked: boolean) => {
     const nextIds = checked
       ? [...selectedMcpIds, id]
       : selectedMcpIds.filter((candidate) => candidate !== id);
+    try { if (!await ensureNotebookConsent(nextIds)) return; }
+    catch (error) { logCaughtDiagnostic("interface.sessions.notebook_consent_failed", "Notebook Host access could not be confirmed.", error, "assistant_settings"); setAssistantSettingsError(String(error)); return; }
     setSelectedMcpIds(nextIds);
     void rememberAssistantDefaults({ mcpServerIds: nextIds });
   };
@@ -6122,7 +6147,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 { id: "code", label: "Code editor", icon: Braces },
                 { id: "browser", label: "Browser", icon: Globe2 },
                 { id: "notes", label: "Notes", icon: NotebookPen },
-              ] as const).map(({ id, label, icon: Icon }) => <button className="workbench-menu-item" type="button" key={id} aria-pressed={sideView === id} onClick={() => { compact ? setView(id) : setSideView(sideView === id ? undefined : id); setChatToolsOpen(false); }}><Icon size={17} aria-hidden="true" /><span><strong>{label}</strong><small>{sideView === id ? "Hide from chat" : "Open beside chat"}</small></span></button>)}
+                { id: "notebook", label: "Notebook", icon: NotebookPen },
+              ] as const).map(({ id, label, icon: Icon }) => <button className="workbench-menu-item" type="button" key={id} aria-pressed={sideView === id} onClick={() => { compact && id !== "notebook" ? setView(id) : setSideView(sideView === id ? undefined : id); setChatToolsOpen(false); }}><Icon size={17} aria-hidden="true" /><span><strong>{label}</strong><small>{sideView === id ? "Hide from chat" : "Open beside chat"}</small></span></button>)}
               <button className="workbench-menu-item" type="button" aria-pressed={sessionInspectorOpen} onClick={() => { setSessionInspectorOpen(open => !open); setChatToolsOpen(false); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Chat details</strong><small>{sessionInspectorOpen ? "Hide details" : "Show context and results"}</small></span></button>
             </div>}
           </div> : toolAssistanceAction}
@@ -6297,7 +6323,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 />}
                 {runtimeKind === "provider" && <div className="chat-provider-subagents"><label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveSubagentChoice({ enabled: event.target.checked, providerId: "", model: "", limit: subagentLimit, reasoningEffort: subagentReasoningEffort })} /><span><strong>Subagents</strong><small>Delegate independent work to parallel children on this model · {subagentLimitLabel(subagentLimit)}</small></span></label>{allowSubagents && <SubagentEffortField effort={subagentReasoningEffort} disabled={sending || assistantSettingsBusy} onChange={(reasoningEffort) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit: subagentLimit, reasoningEffort })} />}{allowSubagents && <SubagentLimitField limit={subagentLimit} delegator="the assistant" disabled={sending || assistantSettingsBusy} onChange={(limit) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit, reasoningEffort: subagentReasoningEffort })} />}</div>}
                 {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>Coordinate with other opted-in main agents in this project. Messages appear in both conversations.</small></span></label>}
-                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void saveProviderAssistantSelections(nextIds, selectedHookIds)} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
+                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void (async () => { try { if (await ensureNotebookConsent(nextIds)) await saveProviderAssistantSelections(nextIds, selectedHookIds); } catch (error) { logCaughtDiagnostic("interface.sessions.notebook_mcp_selection_failed", "Notebook MCP selection could not be saved.", error, "assistant_settings"); setAssistantSettingsError(String(error)); } })()} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => void chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
                 <AssistantSetupLinks items={[
                   { entry: settingCatalogEntry(runtimeKind === "provider" ? "settings.providers" : "settings.harnesses"), icon: runtimeKind === "provider" ? Settings2 : Bot, label: runtimeKind === "provider" ? "Model providers" : "Assistant harnesses", detail: runtimeKind === "provider" ? `${enabledProviders.length} enabled` : `${harnesses.filter((item) => item.enabled).length} enabled` },
@@ -6483,7 +6509,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const focusedWorkbenchToolbar = fullScreen && view !== "chat" && focusedWorkbenchViews.has(view);
   const workbenchToolbar = focusedWorkbenchToolbar ? (
       <Toolbar className="session-toolbar focused-workbench-toolbar" label="Focus mode controls">
-        <strong className="focused-workbench-title">{view === "workspace" ? "Files" : view === "code" ? "Code" : "Browser"}</strong>
+        <strong className="focused-workbench-title">{view === "workspace" ? "Files" : view === "code" ? "Code" : view === "notebook" ? "Notebook" : "Browser"}</strong>
         <div className="session-toolbar-actions">{compact && <NebulaAssistantLauncherButton />}{focusAction}</div>
       </Toolbar>
   ) : (
@@ -6492,6 +6518,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", className: "workbench-primary-tab", icon: <MessageSquare size={18} /> },
           { id: "terminal", label: "Terminal", className: "workbench-primary-tab", icon: <SquareTerminal size={18} /> },
           { id: "code", label: "Code", ariaLabel: "Workspace code editor", className: "workbench-primary-tab", icon: <Braces size={18} /> },
+          { id: "notebook", label: "Notebook", ariaLabel: "Python notebook", className: "workbench-primary-tab", icon: <NotebookPen size={18} /> },
           { id: "browser", label: "Browser", ariaLabel: "Project browser", className: "workbench-primary-tab", icon: <Globe2 size={18} /> },
           { id: "workspace", label: "Files", ariaLabel: "Workspace files", iconOnly: true, className: "workbench-resource-start", icon: <FolderOpen size={18} /> },
           { id: "notes", label: "Notes", ariaLabel: "Project notes", iconOnly: true, icon: <NotebookPen size={18} /> },
@@ -6537,7 +6564,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         trailingActions={fullScreen || compact ? undefined : newChatAction}
       />
       {fullScreen && workbenchToolbar}
-      {compact && !fullScreen && view !== "chat" && <div className="mobile-workbench-focus"><strong>{({ terminal: "Terminal", code: "Code editor", browser: "Browser", workspace: "Files", notes: "Notes", missions: "Missions", activity: "Activity" } as const)[view]}</strong>{focusAction}</div>}
+      {compact && !fullScreen && view !== "chat" && <div className="mobile-workbench-focus"><strong>{({ terminal: "Terminal", code: "Code editor", notebook: "Notebook", browser: "Browser", workspace: "Files", notes: "Notes", missions: "Missions", activity: "Activity" } as const)[view]}</strong>{focusAction}</div>}
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sideChatId ? " side-chat-active" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`} style={sessionLayoutStyle}>
         {view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
@@ -6629,6 +6656,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setSessionInspectorOpen(true); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Session details</strong><small>Context and results</small></span></button>
                 {api && engagement && <>
                   <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setView("code"); }}><Braces size={17} aria-hidden="true" /><span><strong>Code editor</strong><small>Browse and edit project files</small></span></button>
+                  <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setSideView("notebook"); }}><NotebookPen size={17} aria-hidden="true" /><span><strong>Notebook</strong><small>Open beside chat</small></span></button>
                   <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setView("browser"); }}><Globe2 size={17} aria-hidden="true" /><span><strong>Browser</strong><small>Open the project browser</small></span></button>
                   <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setView("notes"); }}><NotebookPen size={17} aria-hidden="true" /><span><strong>Notes</strong><small>Open project notes</small></span></button>
                 </>}
@@ -6666,6 +6694,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             {chatSideVisible && sideView === "code" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Code editor</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Code editor to side" : "Expand Code editor in chat"} title={companionExpanded ? "Return Code editor to side" : "Expand Code editor in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Code editor" title="Hide Code editor" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
             <Suspense fallback={<LoadingSurface label="Loading code editor" />}><CodeEditorPanel key={`${engagement.id}:${sessionId || activeEditorDraftKey}`} active={view === "code" || (chatSideVisible && sideView === "code")} api={api} engagementId={engagement.id} editorSessionKey={sessionId || editorDraftSessionKey} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get("openFile") ?? undefined} initialOpenLine={Number(searchParams.get("openLine")) || undefined} initialOpenRequest={searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>
 
+          </div>}
+          {api && engagement && <div ref={(element) => { if (sideView === "notebook") sideSize.panelRef.current = element; }} id="chat-side-notebook" role={chatSideVisible && sideView === "notebook" ? "region" : undefined} aria-label={chatSideVisible && sideView === "notebook" ? "Notebook beside chat" : undefined} className={`persistent-notebook${chatSideVisible && sideView === "notebook" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "notebook" && !compact ? sideSize.panelStyle : undefined} hidden={view !== "notebook" && !(chatSideVisible && sideView === "notebook")}>
+            {chatSideVisible && sideView === "notebook" && <header className="chat-companion-header">{!compact && !companionExpanded && sideSize.resizeHandle}<strong>Notebook</strong><button className="icon-button subtle" type="button" aria-label="Open Notebook tab" title="Open Notebook tab" onClick={() => setView("notebook")}><Maximize2 size={16} /></button><button className="icon-button subtle" type="button" aria-label="Hide Notebook" title="Hide Notebook" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
+            <NotebookPanel api={api} projectId={engagement.id} active={view === "notebook" || (chatSideVisible && sideView === "notebook")} path={notebookPath} onPathChange={chooseNotebookPath} pinnedPath={activeChatSession?.notebookPath} onPin={sessionId ? pinNotebook : undefined} onProjectSettings={() => openSetting?.(settingCatalogEntry("settings.network-scope"))} />
           </div>}
           {api && engagement && <div ref={(element) => { if (sideView === "browser") sideSize.panelRef.current = element; }} id="chat-side-browser" role={chatSideVisible && sideView === "browser" ? "region" : undefined} aria-label={chatSideVisible && sideView === "browser" ? "Browser beside chat" : undefined} className={`persistent-browser integrated-browser-layout${browserAssistantOpen && view === "browser" ? " assistant-open" : ""}${chatSideVisible && sideView === "browser" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "browser" ? sideSize.panelStyle : undefined} hidden={view !== "browser" && !(chatSideVisible && sideView === "browser")}>
             {chatSideVisible && sideView === "browser" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Browser</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} title={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Browser" title="Hide Browser" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
@@ -6728,9 +6760,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               onAskNebula={requestNebulaDraft}
             />
           </div>}
-          {(view === "terminal" || view === "code") && (!api || !engagement) ? (
+          {(view === "terminal" || view === "code" || view === "notebook") && (!api || !engagement) ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>
-          ) : view === "terminal" || view === "code" || (view === "browser" && engagement) ? null : view === "missions" && api && engagement ? (
+          ) : view === "terminal" || view === "code" || view === "notebook" || (view === "browser" && engagement) ? null : view === "missions" && api && engagement ? (
             <AgentsPage embedded />
           ) : view === "activity" && api && engagement ? (
             <div className="workbench-activity-stack">
@@ -6802,7 +6834,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("chat"); }}><MessageSquare size={21} aria-hidden="true" /><span>Chat</span></button>
         <button type="button" aria-label="Terminal" data-guide="terminal-toggle" aria-current={!mobileMoreOpen && view === "terminal" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("terminal"); }}><SquareTerminal size={21} aria-hidden="true" /><span>Terminal</span></button>
         <button type="button" aria-label="Activity" aria-describedby={approvals.length ? "mobile-activity-waiting" : undefined} aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><Activity size={21} aria-hidden="true" /><span>Activity</span>{approvals.length > 0 && <i className="mobile-nav-badge" id="mobile-activity-waiting"><span className="sr-only">{approvals.length} waiting for you</span></i>}</button>
-        <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "code", "browser"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => { setMobileListOpen(false); setMobileMoreOpen((value) => !value); }}><LayoutGrid size={21} aria-hidden="true" /><span>More</span></button>
+        <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "code", "browser", "notebook"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => { setMobileListOpen(false); setMobileMoreOpen((value) => !value); }}><LayoutGrid size={21} aria-hidden="true" /><span>More</span></button>
         <NebulaAssistantLauncherButton mobile />
       </nav>
       {mobileMoreOpen && <MobileMorePanel view={view} onSelectView={setView} onFocusMode={() => setFullScreen(true)} onClose={() => setMobileMoreOpen(false)} />}

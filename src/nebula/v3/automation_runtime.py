@@ -297,6 +297,7 @@ class SessionLaunch:
     container_user: SandboxContainerUser = SandboxContainerUser.NON_ROOT
     loopback_only: bool = False
     vpn_config: str | None = None
+    notebook_data_directory: Path | None = None
 
 
 class _ContainerProcess(RuntimeBackendProcess):
@@ -540,6 +541,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
             ],
             workspace=launch.workspace,
             workspace_access=launch.workspace_access,
+            notebook_data_directory=launch.notebook_data_directory,
             network=network,
             execution_kind=(
                 SandboxExecutionKind.NETWORK_TOOL
@@ -1149,6 +1151,20 @@ class AutomationRuntimeManager:
                 # diagnostic-expected: a concurrent creator won; read its durable value.
                 return self.store.get(AutomationProjectPolicy, policy_id)
 
+    def notebook_data_directory(self, engagement_id: str) -> Path:
+        """Private project environment mount for the namespace-mapped container UID."""
+
+        self.store.get(Engagement, engagement_id)
+        key = hashlib.sha256(engagement_id.encode("utf-8")).hexdigest()[:32]
+        parent = self.data_root / "notebooks" / "envs" / key
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directory = parent / "docker"
+        directory.mkdir(mode=0o777, exist_ok=True)
+        # Parent directories remain owner-only. The bind root is writable by
+        # the isolated UID, which can differ under rootless Docker and Podman.
+        directory.chmod(0o777)
+        return directory
+
     def update_project_policy(
         self,
         engagement_id: str,
@@ -1165,9 +1181,7 @@ class AutomationRuntimeManager:
         current = self.project_policy(engagement_id)
         selected_mode = execution_mode or current.execution_mode
         if selected_mode == "host" and not (
-            host_access_acknowledged
-            or current.host_access_acknowledged
-            and current.execution_mode == "host"
+            host_access_acknowledged or current.host_access_acknowledged
         ):
             raise AutomationPolicyDenied(
                 "Acknowledge host filesystem and network access before enabling Host mode"
@@ -1203,7 +1217,9 @@ class AutomationRuntimeManager:
             {
                 "approval_policy": approval_policy,
                 "execution_mode": selected_mode,
-                "host_access_acknowledged": selected_mode == "host",
+                "host_access_acknowledged": (
+                    host_access_acknowledged or current.host_access_acknowledged
+                ),
                 "network_enabled": network_enabled,
                 "runner_profile_id": runner_profile_id,
                 "vpn_profile_id": vpn_profile_id,
@@ -1227,15 +1243,24 @@ class AutomationRuntimeManager:
             engagement_id
             and self.project_policy(engagement_id).execution_mode == "host"
         ):
-            ready = os.name == "posix" and Path("/bin/bash").is_file()
+            policy = self.project_policy(engagement_id)
+            ready = (
+                policy.host_access_acknowledged
+                and os.name == "posix"
+                and Path("/bin/bash").is_file()
+            )
             return AutomationRuntimeInfo(
                 configured=True,
                 ready=ready,
                 digest=self.project_runtime_digest(engagement_id),
                 runner_profile_id="host",
-                detail="Host mode: commands run as the Core OS user with host filesystem and network access"
-                if ready
-                else "Host mode requires POSIX and /bin/bash",
+                detail=(
+                    "Host mode: commands run as the Core OS user with host filesystem and network access"
+                    if ready
+                    else "Acknowledge host filesystem and network access in Project settings"
+                    if not policy.host_access_acknowledged
+                    else "Host mode requires POSIX and /bin/bash"
+                ),
             )
         prepared = self._refresh_cached_runtime()
         profiles = [
@@ -1405,7 +1430,7 @@ class AutomationRuntimeManager:
         self,
         *,
         engagement_id: str,
-        owner_kind: Literal["chat", "mission", "harness", "api"],
+        owner_kind: Literal["chat", "mission", "harness", "api", "notebook"],
         owner_id: str,
     ) -> AutomationSession:
         managed = await self._get_or_create_session(
@@ -1417,7 +1442,7 @@ class AutomationRuntimeManager:
         self,
         *,
         engagement_id: str,
-        owner_kind: Literal["chat", "mission", "harness", "api"],
+        owner_kind: Literal["chat", "mission", "harness", "api", "notebook"],
         owner_id: str,
         request: RunCommandRequest,
         approval: Approval | None = None,
@@ -2050,6 +2075,11 @@ class AutomationRuntimeManager:
                         resolv_conf=resolver_file,
                         network_granted=session.network_granted,
                         vpn_config=vpn_config,
+                        notebook_data_directory=(
+                            self.notebook_data_directory(engagement_id)
+                            if owner_kind == "notebook"
+                            else None
+                        ),
                     )
                 )
             except Exception as exc:

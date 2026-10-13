@@ -144,6 +144,16 @@ HEADLESS_SESSION_SCHEMA = {
     "properties": {"action": {"type": "string", "enum": ["start", "stop"]}},
     "required": ["action"],
 }
+NOTEBOOK_SETTINGS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "mode": {"enum": ["host", "docker"]},
+        "mcp_enabled": {"type": "boolean"},
+        "network_enabled": {"type": "boolean"},
+    },
+    "minProperties": 1,
+}
 POST_TOOL_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -232,6 +242,15 @@ def catalog() -> dict[str, Any]:
                 "effect": "call an existing authenticated Settings route for the selected project and read back when available",
             },
             {
+                "name": "nebula.settings.notebook",
+                "effect": "read project notebook mode, Host consent, and Notebook MCP grant",
+            },
+            {
+                "name": "nebula.settings.set_notebook",
+                "arguments": ["mode", "mcp_enabled", "network_enabled"],
+                "effect": "save notebook-relevant project settings in Core; first Host consent remains operator-only",
+            },
+            {
                 "name": "nebula.settings.set_post_tool",
                 "arguments": ["setting", "enabled"],
                 "effect": "save one project post-tool preference in Core",
@@ -248,7 +267,9 @@ def catalog() -> dict[str, Any]:
                 "label": label,
                 "url": f"/settings#{target}",
                 "direct_changes": (
-                    ["take_notes", "suggest_next_steps"]
+                    ["mode", "mcp_enabled", "network_enabled"]
+                    if identifier == "mcp"
+                    else ["take_notes", "suggest_next_steps"]
                     if identifier == "follow-up"
                     else ["default_model"]
                     if identifier in {"providers", "harnesses"}
@@ -272,6 +293,78 @@ def catalog() -> dict[str, Any]:
             "authority": "browser preference; the assistant UI applies explicit theme commands on the active device",
         },
     }
+
+
+def notebook_settings(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
+    from .notebook_mcp import NotebookMcpTools
+
+    store.get(Engagement, engagement_id)
+    profile = NotebookMcpTools.ensure_profile(store, engagement_id)
+    policies = store.find_entities(
+        AutomationProjectPolicy, {"engagement_id": engagement_id}, limit=1
+    )
+    policy = policies[0] if policies else None
+    return {
+        "project_id": engagement_id,
+        "mode": policy.execution_mode if policy else "docker",
+        "host_access_acknowledged": policy.host_access_acknowledged
+        if policy
+        else False,
+        "mcp_enabled": profile.enabled,
+        "network_enabled": policy.network_enabled if policy else True,
+        "profile_id": profile.id,
+        "revision": policy.revision if policy else None,
+    }
+
+
+async def set_notebook_settings(
+    store: NebulaStore, notebooks: Any, engagement_id: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    from .domain import McpServerProfile
+    from .notebook_mcp import NotebookMcpTools
+
+    if notebooks is None or notebooks.automation_runtime is None:
+        raise ValueError("Notebook settings are unavailable in this Core")
+    mode = arguments.get("mode")
+    enabled = arguments.get("mcp_enabled")
+    network = arguments.get("network_enabled")
+    if (
+        not arguments
+        or mode not in {None, "host", "docker"}
+        or (enabled is not None and not isinstance(enabled, bool))
+        or (network is not None and not isinstance(network, bool))
+    ):
+        raise ValueError(
+            "set mode, mcp_enabled, or network_enabled using listed values"
+        )
+    current = notebooks.policy(engagement_id)
+    if mode == "host" and not current.host_access_acknowledged:
+        raise ValueError(
+            "Host notebook execution needs the operator's one-time acknowledgement in Project settings"
+        )
+    if mode is not None:
+        await notebooks.prepare_policy_change(engagement_id, mode)
+    if mode is not None or network is not None:
+        notebooks.automation_runtime.update_project_policy(
+            engagement_id,
+            execution_mode=mode or current.execution_mode,
+            host_access_acknowledged=False,
+            approval_policy=current.approval_policy,
+            network_enabled=current.network_enabled if network is None else network,
+            runner_profile_id=current.runner_profile_id,
+            vpn_profile_id=current.vpn_profile_id,
+            max_timeout_ms=current.max_timeout_ms,
+            expected_revision=current.revision,
+        )
+    if enabled is not None:
+        profile = NotebookMcpTools.ensure_profile(store, engagement_id)
+        store.update(
+            McpServerProfile,
+            profile.id,
+            {"enabled": enabled},
+            expected_revision=profile.revision,
+        )
+    return {**notebook_settings(store, engagement_id), "saved": True}
 
 
 def open_setting(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -386,14 +479,18 @@ def project_context(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
     return {
         "project_id": engagement.id,
         "project_name": engagement.name,
-        "execution_mode": policy.execution_mode if policy else "docker",
+        "execution_mode": policy.execution_mode if policy else "host",
         "policy_source": "stored" if policy else "default",
         "policy_description": (
             "Host mode is stored in Core with host-access acknowledgment."
+            if policy
+            and policy.execution_mode == "host"
+            and policy.host_access_acknowledged
+            else "Host mode is selected, but execution awaits one-time host-access acknowledgment."
             if policy and policy.execution_mode == "host"
             else "Docker mode is stored in Core. It may be the automatically created default or an operator selection; Core does not record which."
             if policy
-            else "No execution policy is stored for this project; Docker is the effective default."
+            else "No execution policy is stored for this project; Host will be selected pending acknowledgment."
         ),
         "linked_workspace_path": engagement.workspace_path,
         "workspace_kind": "linked_host_folder"
@@ -526,6 +623,7 @@ def provider_plugins(
     engagement_id: str,
     *,
     settings_api: SettingsAssistantApi | None = None,
+    notebooks: Any = None,
 ) -> list[AnalysisTool]:
     async def list_settings(_arguments: dict[str, Any]) -> dict[str, Any]:
         return catalog()
@@ -590,7 +688,35 @@ def provider_plugins(
             body=arguments.get("body"),
         )
 
+    async def read_notebook(_arguments: dict[str, Any]) -> dict[str, Any]:
+        return notebook_settings(store, engagement_id)
+
+    async def save_notebook(arguments: dict[str, Any]) -> dict[str, Any]:
+        return await set_notebook_settings(store, notebooks, engagement_id, arguments)
+
     return [
+        AnalysisTool(
+            ToolSpec(
+                name="nebula.settings.notebook",
+                description="Read this project's Notebook mode, Host consent, network policy, and MCP grant before troubleshooting or changing them.",
+                input_schema=CATALOG_SCHEMA,
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.LOCAL_READ,
+                idempotency=IdempotencyBehavior.SAFE,
+            ),
+            read_notebook,
+        ),
+        AnalysisTool(
+            ToolSpec(
+                name="nebula.settings.set_notebook",
+                description="Save Notebook mode, MCP grant or project network availability, then read back Core state. First-time Host consent must come from the operator.",
+                input_schema=NOTEBOOK_SETTINGS_SCHEMA,
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                idempotency=IdempotencyBehavior.SAFE,
+            ),
+            save_notebook,
+        ),
         AnalysisTool(
             ToolSpec(
                 name="nebula.help.search",

@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name": "notebooks", "patterns": ["ui/src/components/NotebookPanel*", "ui/src/components/notebook.css", "src/nebula/v3/notebooks.py", "src/nebula/v3/notebook_mcp.py", "packaging/notebook/**"], "areas": ["notebooks"]},
     {"name": "conversation-progress", "patterns": ["src/nebula/v3/chat.py", "src/nebula/v3/chat_subagents.py", "ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatProgressContent*", "ui/src/pages/chatMessageReconciliation*", "ui/src/components/ActivityLedger*", "ui/src/components/activityLedgerModel.ts", "ui/src/components/CallbackWaitingStatus*", "ui/src/components/AssistantMarkdown.tsx", "ui/src/api/client.ts", "ui/src/api/types.ts"], "areas": ["conversation-progress"]},
     {"name": "provider-reasoning", "patterns": ["src/nebula/v3/providers.py", "src/nebula/v3/chat.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["provider-reasoning"]},
     {"name": "runtime-usage", "patterns": ["src/nebula/v3/runtime_usage.py", "ui/src/components/RuntimeUsagePanel*", "ui/src/settingsCatalog.ts"], "areas": ["runtime-usage"]},
@@ -62,6 +63,18 @@
       {"area":"settings-assistant-full-control","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"settings-assistant-full-control","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"settings-assistant-full-control","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "notebooks": [
+      {"area":"notebooks","project":"desktop","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file","runtime":"mock","shard":"1/1"},
+      {"area":"notebooks","project":"compact","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file","runtime":"mock","shard":"1/1"},
+      {"area":"notebooks","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file","runtime":"mock","shard":"1/1"},
+      {"area":"notebooks","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file","runtime":"mock","shard":"1/1"},
+      {"area":"notebooks","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file","runtime":"mock","shard":"1/1"},
+      {"area":"notebooks","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file","runtime":"mock","shard":"1/1"},
+      {"area":"notebooks","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file","runtime":"mock","shard":"1/1"},
+      {"area":"notebooks","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"notebook real Core runs bundled Python on a LAN origin and restores output","runtime":"real-core","shard":"1/1"},
+      {"area":"notebooks","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core runs bundled Python on a LAN origin and restores output","runtime":"real-core","shard":"1/1"},
+      {"area":"notebooks","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core runs bundled Python on a LAN origin and restores output","runtime":"real-core","shard":"1/1"}
     ],
     "harness-delete-core": [
       {"area":"harness-delete-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core Grok harness deletion survives conflict, retry, and reload on LAN","runtime":"real-core","shard":"1/1"},

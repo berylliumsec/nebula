@@ -2329,6 +2329,7 @@ export interface ChatSessionSummary {
   id: Identifier;
   engagementId: Identifier;
   title: string;
+  notebookPath?: string;
   initialTitleState?: "pending" | "generated" | "failed" | "operator";
   messageCount?: number;
   backend: "provider" | "harness";
@@ -2551,6 +2552,7 @@ export interface SshEnvironmentSettingsChange {
 
 export interface McpServerProfile {
   id: Identifier;
+  projectId?: Identifier;
   name: string;
   /** What the server is for, in the operator's words. */
   description?: string;
@@ -2568,6 +2570,50 @@ export interface McpServerProfile {
   checkedAt?: string;
   detail?: string;
   revision: number;
+}
+
+export interface NotebookStatus {
+  projectId: string;
+  executionMode: "host" | "docker";
+  hostAccessAcknowledged: boolean;
+  consentRequired: boolean;
+  runtimeReady: boolean;
+  mcpProfileId: string;
+  mcpEnabled: boolean;
+}
+
+export interface NotebookListing { path: string; size: number; modifiedAt: string }
+export interface NotebookCell {
+  id: string;
+  cell_type: "code" | "markdown";
+  source: string | string[];
+  execution_count?: number | null;
+  outputs?: Array<Record<string, unknown>>;
+}
+export interface NotebookFile {
+  path: string;
+  revision: string;
+  cell_revisions: Record<string, string>;
+  document: { cells: NotebookCell[]; metadata: Record<string, unknown>; nbformat: number; nbformat_minor: number };
+}
+export interface NotebookRun {
+  id: string;
+  engagement_id: string;
+  notebook_path: string;
+  cell_id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "interrupted";
+  detail: string;
+  revision: number;
+}
+export interface NotebookRunState {
+  run: NotebookRun;
+  events: NotebookRunEvent[];
+  next_sequence?: number;
+}
+export interface NotebookRunEvent {
+  sequence: number;
+  event_type: string;
+  payload: Record<string, unknown>;
 }
 
 export interface McpImportSecret {

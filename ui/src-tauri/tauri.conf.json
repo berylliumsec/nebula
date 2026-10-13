@@ -50,6 +50,7 @@
     "resources": {
       "../../LICENSE.md": "licenses/LICENSE.md",
       "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",
+      "resources/notebook-runtime": "notebook-runtime",
       "resources/playwright-browsers": "playwright-browsers",
       "../../security-proxy/addon.py": "security-proxy/addon.py"
     },
