@@ -1,14 +1,22 @@
 {
-  "change_digest": "5fbc3f406e6ad114e7f432bc9e262c322d610aad8ccb62003c574fb217364cb2",
-  "reviewed_by": "Codex review of October 13 Workbench follow-up toolbar release screenshot",
-  "reason": "The release's desktop Workbench follow-up journey enables next-step suggestions, confirms the saved toggle, and captures the visible toolbar before entering Settings. The image baseline shows controls from an older toolbar layout; the current toolbar uses the purpose-built next-step control. Four focused desktop visual cases check that the refreshed baseline matches the current operator layout and that neighboring Workbench, project, and appearance snapshots remain stable.",
-  "exclusions": "This is a desktop Linux screenshot baseline refresh, with no behavior or API change. Python, native, frontend unit, mobile browsers, unrelated browser areas, and a full suite are excluded. The visible image will be manually reviewed before any binary commit approval request.",
-  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 4},
+  "change_digest": "3f0a2cf2eb3f1b5316719e817e60b8b416d5e92697d731b19088748ed0534f2c",
+  "reviewed_by": "Codex review of October 13 Code editor release failure and state synchronization",
+  "reason": "The Code editor must preserve every keystroke and caret position while React echoes earlier buffer values, then accept a deliberate workspace reload. A real CodeMirror component regression covers delayed echoes and external replacement; six focused desktop and phone browser cases cover the visible editor journey; one production LAN real-Core case checks exact saved bytes and reopening. The editor view owns immediate unsaved input, React owns the recoverable draft, and Core owns saved workspace bytes.",
+  "exclusions": "Python and native tests, unrelated Workbench/VPN failures, other browser areas, and the full suite are excluded. Desktop and 320-430 px phone profiles are emulated; no physical device is available. The selected real-Core case uses the production bundle on a non-loopback LAN origin.",
+  "expected_tests": {"python": 0, "frontend": 1, "native": 0, "playwright": 7},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": [],
+  "frontend": ["ui/src/components/CodeMirrorSurface.sync.test.tsx"],
   "native": [],
-  "playwright": ["entry:release-ui-visual-baselines/desktop"]
+  "playwright": [
+    "entry:release-editor-caret/desktop",
+    "entry:release-editor-caret/compact",
+    "entry:release-editor-caret/mobile-chromium-small",
+    "entry:release-editor-caret/mobile-chromium",
+    "entry:release-editor-caret/mobile-webkit",
+    "entry:release-editor-caret/mobile-webkit-wide",
+    "entry:release-editor-caret/real-core"
+  ]
 }

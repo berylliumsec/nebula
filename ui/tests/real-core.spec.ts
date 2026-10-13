@@ -142,6 +142,48 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
   ]);
 });
 
+test("editor typing production LAN preserves the latest buffer and saved bytes", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const buildResponse = await page.request.get(`${core.origin}/web-build.json`);
+    expect(buildResponse.ok()).toBe(true);
+    const build = await buildResponse.json() as { commit: string; builtAt: string };
+    await testInfo.attach("editor-lan-build", { body: JSON.stringify({ origin: core.origin, buildCommit: build.commit, builtAt: build.builtAt }), contentType: "application/json" });
+
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible();
+    await page.getByRole("button", { name: "New file", exact: true }).first().click();
+    await page.getByRole("textbox", { name: "File path" }).fill("release-editor-echo.txt");
+    const editor = page.getByRole("textbox", { name: "Code editor" });
+    await editor.focus();
+    await page.keyboard.insertText("first");
+    await page.keyboard.insertText(" second");
+    await page.keyboard.insertText(" third");
+    await expect(page.locator(".cm-line")).toHaveText(["first second third"]);
+    await expect(page.getByText("Ln 1, Col 19", { exact: true })).toBeVisible();
+
+    await editor.press("Control+S");
+    await expect(page.getByText("Saved /workspace/release-editor-echo.txt. Use it from Terminal when you're ready.")).toBeVisible();
+    const saved = await api.get(`engagements/${projectId}/workspace/download?path=release-editor-echo.txt`);
+    expect(saved.ok()).toBe(true);
+    expect(await saved.text()).toBe("first second third");
+
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await page.getByRole("complementary", { name: "Editor files" }).getByRole("button", { name: /release-editor-echo\.txt 18 bytes/ }).click();
+    await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("release-editor-echo.txt");
+    await expect(page.locator(".cm-line")).toHaveText(["first second third"]);
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("stabilization notes open before unrelated evidence finishes loading", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
