@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import { CircleStop, NotebookPen, PackageCheck, Bookmark, Play, Plus, RefreshCw, RotateCcw, Save, Plug, X } from "lucide-react";
@@ -103,28 +103,74 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [listing, setListing] = useState(false);
+  const currentProject = useRef(projectId);
+  const currentPath = useRef(path);
+  const inventoryInFlight = useRef<{projectId: string; promise: Promise<void>} | null>(null);
+  const detailsInFlight = useRef<{key: string; promise: Promise<void>} | null>(null);
+  currentProject.current = projectId;
+  currentPath.current = path;
 
-  const refresh = useCallback(async () => {
-    const [nextStatus, nextList] = await Promise.all([api.notebookStatus(projectId), api.listNotebooks(projectId)]);
-    setStatus(nextStatus); setList(nextList);
-    if (!path && nextList.length) onPathChange(nextList[0].path);
-    if (path) {
+  const refreshInventory = useCallback((force = false): Promise<void> => {
+    if (inventoryInFlight.current?.projectId === projectId) return inventoryInFlight.current.promise;
+    setListing(true);
+    const promise = api.listNotebooks(projectId, force).then(nextList => {
+      if (currentProject.current !== projectId) return;
+      setList(nextList);
+      if (!currentPath.current && nextList.length) onPathChange(nextList[0].path);
+    }).finally(() => {
+      if (inventoryInFlight.current?.promise === promise) inventoryInFlight.current = null;
+      if (currentProject.current === projectId) setListing(false);
+    });
+    inventoryInFlight.current = {projectId, promise};
+    return promise;
+  }, [api, projectId, onPathChange]);
+
+  const refreshDetails = useCallback((): Promise<void> => {
+    if (!path) { setFile(undefined); setRuns([]); return Promise.resolve(); }
+    const key = `${projectId}:${path}`;
+    if (detailsInFlight.current?.key === key) return detailsInFlight.current.promise;
+    const promise = (async () => {
       const [nextFile, nextRuns] = await Promise.all([api.readNotebook(projectId, path), api.listNotebookRuns(projectId, path)]);
+      if (currentProject.current !== projectId || currentPath.current !== path) return;
       setFile(nextFile); setRuns(nextRuns);
       const active = nextRuns.filter(activeRun);
       if (active.length) {
         const states = await Promise.all(active.map(run => api.readNotebookRun(projectId, run.id)));
-        setLive(previous => ({...previous, ...Object.fromEntries(states.map((state, index) => [active[index].id, state]))}));
+        if (currentProject.current === projectId && currentPath.current === path) setLive(previous => ({...previous, ...Object.fromEntries(states.map((state, index) => [active[index].id, state]))}));
       }
-    } else setFile(undefined);
-  }, [api, projectId, path, onPathChange]);
+    })().finally(() => {
+      if (detailsInFlight.current?.promise === promise) detailsInFlight.current = null;
+    });
+    detailsInFlight.current = {key, promise};
+    return promise;
+  }, [api, projectId, path]);
 
-  useEffect(() => { if (!active) return; void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err))); }, [active, refresh]);
+  const refresh = useCallback(async () => {
+    const results = await Promise.allSettled([
+      api.notebookStatus(projectId).then(nextStatus => {if (currentProject.current === projectId) setStatus(nextStatus);}),
+      refreshInventory(true),
+      refreshDetails(),
+    ]);
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }, [api, projectId, refreshInventory, refreshDetails]);
+
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => { void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err))); }, runs.some(activeRun) ? 450 : 1400);
+    let current = true;
+    void api.notebookStatus(projectId).then(nextStatus => {if (current) setStatus(nextStatus);}).catch(err => {if (current) setError(logDiagnostic("interface.notebook.status_failed", "Notebook status could not be loaded.", err));});
+    void refreshInventory().catch(err => {if (current) setError(logDiagnostic("interface.notebook.list_failed", "Notebooks could not be listed.", err));});
+    return () => {current = false;};
+  }, [active, api, projectId, refreshInventory]);
+  useEffect(() => { setList([]); setStatus(undefined); }, [projectId]);
+  useEffect(() => { setFile(undefined); setRuns([]); setLive({}); }, [projectId, path]);
+  useEffect(() => { if (!active) return; void refreshDetails().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err))); }, [active, refreshDetails]);
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => { void refreshDetails().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err))); }, runs.some(activeRun) ? 450 : 1400);
     return () => window.clearInterval(timer);
-  }, [active, refresh, runs]);
+  }, [active, refreshDetails, runs]);
 
   const activeRunIds = runs.filter(activeRun).map(run => run.id).join(",");
   useEffect(() => {
@@ -156,7 +202,7 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
     const name = newPath.trim().endsWith(".ipynb") ? newPath.trim() : `${newPath.trim()}.ipynb`;
     if (!newPath.trim()) return;
     setBusy("create"); setError("");
-    try { const next = await api.createNotebook(projectId, name); setNewPath(""); setFile(next); onPathChange(name); await refresh(); }
+    try { const next = await api.createNotebook(projectId, name); setNewPath(""); setFile(next); currentPath.current = name; onPathChange(name); void refreshInventory(true).catch(err => setError(logDiagnostic("interface.notebook.list_failed", "Notebooks could not be listed.", err))); }
     catch (err) { setError(logDiagnostic("interface.notebook.create_failed", "Notebook could not be created.", err)); }
     finally { setBusy(""); }
   };
@@ -185,13 +231,13 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
 
   return <section className="notebook-panel" aria-label="Project notebook">
     <header className="notebook-header"><div><NotebookPen size={18} /><strong>Notebook</strong>{status && <small>{status.executionMode === "host" ? "Host" : "Docker"} Python</small>}</div><button className="icon-button subtle" type="button" aria-label="Refresh notebook" title="Refresh notebook" onClick={() => void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err)))}><RefreshCw size={16} /></button></header>
-    {error && <p className="notebook-error" role="alert">{error} <button className="button quiet" type="button" onClick={() => {setError(""); void refresh();}}>Retry</button></p>}
+    {error && <p className="notebook-error" role="alert">{error} <button className="button quiet" type="button" onClick={() => {setError(""); void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err)));}}>Retry</button></p>}
     {notice && <p className="notebook-notice" role="status">{notice}<button className="icon-button subtle" type="button" aria-label="Dismiss notice" onClick={() => setNotice("")}><X size={14} /></button></p>}
     {status?.consentRequired && <div className="notebook-consent"><Plug size={17} /><span>Host execution needs one-time project approval.</span><button className="button secondary" type="button" onClick={onProjectSettings}>Review Host access</button></div>}
-    <div className="notebook-filebar"><label>Notebook <select value={path ?? ""} onChange={event => onPathChange(event.target.value)}><option value="">Choose a notebook</option>{list.map(item => <option key={item.path} value={item.path}>{item.path}</option>)}</select></label>{path && onPin && <button className="icon-button subtle" type="button" aria-label={pinnedPath === path ? "Unpin notebook from chat" : "Pin notebook beside chat"} title={pinnedPath === path ? "Unpin from chat" : "Pin beside chat"} onClick={() => void onPin(pinnedPath === path ? null : path).catch(err => setError(logDiagnostic("interface.notebook.pin_failed", "Notebook could not be pinned beside chat.", err)))}><Bookmark size={16} fill={pinnedPath === path ? "currentColor" : "none"} /></button>}</div>
+    <div className="notebook-filebar"><label>Notebook <select value={path ?? ""} onChange={event => onPathChange(event.target.value)}><option value="">{listing ? "Finding notebooks…" : "Choose a notebook"}</option>{path && !list.some(item => item.path === path) && <option value={path}>{path}</option>}{list.map(item => <option key={item.path} value={item.path}>{item.path}</option>)}</select></label>{path && onPin && <button className="icon-button subtle" type="button" aria-label={pinnedPath === path ? "Unpin notebook from chat" : "Pin notebook beside chat"} title={pinnedPath === path ? "Unpin from chat" : "Pin beside chat"} onClick={() => void onPin(pinnedPath === path ? null : path).catch(err => setError(logDiagnostic("interface.notebook.pin_failed", "Notebook could not be pinned beside chat.", err)))}><Bookmark size={16} fill={pinnedPath === path ? "currentColor" : "none"} /></button>}</div>
     <form className="notebook-create" onSubmit={event => {event.preventDefault(); void create();}}><input aria-label="New notebook name" placeholder="New notebook name" value={newPath} onChange={event => setNewPath(event.target.value)} /><button className="icon-button subtle" type="submit" disabled={!newPath.trim() || busy === "create"} aria-label="Create notebook" title="Create notebook"><Plus size={17} /></button></form>
-    {file && path ? <div className="notebook-body"><div className="notebook-actions"><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("code")}><Plus size={15} /> Code</button><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("markdown")}><Plus size={15} /> Markdown</button><button className="button quiet" type="button" disabled={Boolean(busy) || runs.some(activeRun)} onClick={() => void api.restartNotebookKernel(projectId, path).then(() => setNotice("Kernel restarted; variables were cleared.")).catch(err => setError(logDiagnostic("interface.notebook.restart_failed", "Notebook kernel could not be restarted.", err)))}><RotateCcw size={15} /> Restart</button></div>
-      {file.document.cells.length ? file.document.cells.map(cell => <Cell key={`${path}:${cell.id}`} api={api} projectId={projectId} path={path} cell={cell} file={file} run={latestRun(cell.id)} live={live[latestRun(cell.id)?.id ?? ""]} active={active} onChanged={setFile} onStarted={run => {setRuns(current => [run, ...current]); void refresh();}} onError={setError} />) : <div className="notebook-empty"><strong>Empty notebook</strong><p>Add a code cell to try Python.</p><button className="button primary" type="button" onClick={() => void add("code")}><Plus size={15} /> Add code cell</button></div>}
+    {file && path && file.path === path ? <div className="notebook-body"><div className="notebook-actions"><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("code")}><Plus size={15} /> Code</button><button className="button quiet" type="button" disabled={Boolean(busy)} onClick={() => void add("markdown")}><Plus size={15} /> Markdown</button><button className="button quiet" type="button" disabled={Boolean(busy) || runs.some(activeRun)} onClick={() => void api.restartNotebookKernel(projectId, path).then(() => setNotice("Kernel restarted; variables were cleared.")).catch(err => setError(logDiagnostic("interface.notebook.restart_failed", "Notebook kernel could not be restarted.", err)))}><RotateCcw size={15} /> Restart</button></div>
+      {file.document.cells.length ? file.document.cells.map(cell => <Cell key={`${path}:${cell.id}`} api={api} projectId={projectId} path={path} cell={cell} file={file} run={latestRun(cell.id)} live={live[latestRun(cell.id)?.id ?? ""]} active={active} onChanged={setFile} onStarted={run => {setRuns(current => [run, ...current]); void refreshDetails().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err)));}} onError={setError} />) : <div className="notebook-empty"><strong>Empty notebook</strong><p>Add a code cell to try Python.</p><button className="button primary" type="button" onClick={() => void add("code")}><Plus size={15} /> Add code cell</button></div>}
       <form className="notebook-packages" onSubmit={event => {event.preventDefault(); void searchPackage();}}><label>Project Python packages<input value={packageName} onChange={event => {setPackageName(event.target.value); setPackageLookup(null);}} placeholder="Exact package name, for example numpy" /></label><button className="button quiet" type="submit" disabled={!packageName.trim() || Boolean(busy)}>{busy === "package-search" ? "Finding…" : "Find"}</button><button className="button secondary" type="button" onClick={() => void install()} disabled={!packageName.trim() || Boolean(busy)}><PackageCheck size={15} /> {busy === "package" ? "Installing…" : "Install"}</button>{packageLookup && <p className="notebook-package-result" role="status"><strong>{packageLookup.name} {packageLookup.version}</strong>{packageLookup.summary && <span>{packageLookup.summary}</span>}</p>}</form>
     </div> : <div className="notebook-empty"><strong>No notebook open</strong><p>Create a Python notebook or choose one from this project.</p></div>}
   </section>;
