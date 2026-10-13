@@ -57,6 +57,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["web search", "search", "internet", "research", "searxng", "metasearch", "google", "duckduckgo", "brave", "online"],
   },
   {
+    id: "settings.storage",
+    label: "Storage sources",
+    description: "Connect storage systems, reporting intervals, webhook tokens, and optional callbacks",
+    category: "Integrations",
+    scope: "Workspace",
+    target: "storage-integration-settings",
+    keywords: ["storage", "storage integration", "storage source", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
+  },
+  {
     id: "settings.follow-up",
     label: "Post-tool assistant",
     description: "Configure automatic follow-up after terminal and tool results",

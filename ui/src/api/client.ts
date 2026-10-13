@@ -1,5 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import type { StorageAction, StorageDashboard, StorageSource } from "./types";
 import type {
   AgentRunSummary,
   ActionDescriptor,
@@ -5289,6 +5290,38 @@ export class ApiClient {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.tokenSource = options.token;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  storageDashboard(signal?: AbortSignal): Promise<StorageDashboard> {
+    return this.request<StorageDashboard>("storage", { signal });
+  }
+
+  createStorageSource(body: Record<string, unknown>): Promise<{ source: StorageSource; token: string; webhook_url: string }> {
+    return this.request("storage/sources", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  updateStorageSource(source: StorageSource, changes: Record<string, unknown>): Promise<StorageSource> {
+    return this.request(`storage/sources/${encodeURIComponent(source.id)}`, {
+      method: "PATCH", body: JSON.stringify({ ...changes, expected_revision: source.revision }),
+    });
+  }
+
+  rotateStorageSource(id: string): Promise<{ source: StorageSource; token: string }> {
+    return this.request(`storage/sources/${encodeURIComponent(id)}/rotate`, { method: "POST" });
+  }
+
+  revokeStorageSource(id: string): Promise<StorageSource> {
+    return this.request(`storage/sources/${encodeURIComponent(id)}/revoke`, { method: "POST" });
+  }
+
+  storageAction(id: string, step: "preview" | "approve" | "reconcile", digest?: string): Promise<StorageAction> {
+    return this.request(`storage/actions/${encodeURIComponent(id)}/${step}`, {
+      method: "POST", body: JSON.stringify(digest ? { digest } : {}),
+    });
+  }
+
+  retryStorageDispatch(id: string): Promise<void> {
+    return this.request(`storage/dispatches/${encodeURIComponent(id)}/retry`, { method: "POST" });
   }
 
   openBrowserCompanionStream(sessionId: string, tabId: string): WebSocket {
