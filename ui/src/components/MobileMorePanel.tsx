@@ -21,11 +21,12 @@ import { projectRoot, projectSurface } from "../resourceRoutes";
 import { useOptionalChrome } from "../state/ChromeContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 
-export type MobileMoreView = "workspace" | "code" | "notes" | "missions" | "browser";
+export type MobileMoreView = "workspace" | "code" | "notes" | "missions" | "browser" | "notebook";
 
 const tools: ReadonlyArray<readonly [MobileMoreView, string, typeof FolderOpen]> = [
   ["workspace", "Files", FolderOpen],
   ["code", "Code", Braces],
+  ["notebook", "Notebook", NotebookPen],
   ["notes", "Notes", NotebookPen],
   ["missions", "Missions", Bot],
   ["browser", "Browser", Globe2],

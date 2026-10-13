@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
-import type { AutomationProjectPolicy, EngagementScopePolicy, ScopeToolCandidate, TypeSafeIntegration, VpnProfile, WebSearchRuntime } from "../api/types";
+import type { AutomationProjectPolicy, EngagementScopePolicy, NotebookRun, ScopeToolCandidate, TypeSafeIntegration, VpnProfile, WebSearchRuntime } from "../api/types";
 import { ApiError } from "../api/client";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -119,6 +119,7 @@ export function EngagementPolicySettings() {
   const [saving, setSaving] = useState<"scope" | "runtime">();
   const [error, setError] = useState<unknown>();
   const [validationError, setValidationError] = useState<string>();
+  const [conflictingNotebookRuns, setConflictingNotebookRuns] = useState<NotebookRun[]>([]);
   const loadRevision = useRef(0);
   const policyReady = Boolean(engagement && scope?.engagementId === engagement.id && policy?.engagementId === engagement.id);
   // A pinned tool whose server was removed, disabled or re-probed stays listed
@@ -162,6 +163,7 @@ export function EngagementPolicySettings() {
     setScope(undefined);
     setSaving(undefined);
     setError(undefined);
+    setConflictingNotebookRuns([]);
     try {
       const [nextScope, nextPolicy, nextVpnProfiles] = await Promise.all([
         api.getEngagementScope(engagement.id),
@@ -316,7 +318,7 @@ export function EngagementPolicySettings() {
       return;
     }
     if (executionMode === "host" && !hostAcknowledged) { setValidationError("Acknowledge host access before enabling Host mode."); return; }
-    setSaving("runtime"); setError(undefined); setValidationError(undefined);
+    setSaving("runtime"); setError(undefined); setValidationError(undefined); setConflictingNotebookRuns([]);
     try {
       const next = await api.updateAutomationPolicy(engagement.id, {
         executionMode,
@@ -335,20 +337,53 @@ export function EngagementPolicySettings() {
       if (revision !== loadRevision.current) return;
       void logCaughtDiagnostic("interface.engagement_policy.runtime_save_failed", "Project command-runtime policy could not be saved.", saveError, "engagement_policy");
       setError(saveError);
+      if (saveError instanceof ApiError && saveError.status === 409) {
+        try {
+          const active = await api.listActiveNotebookRuns(engagement.id);
+          if (revision === loadRevision.current) setConflictingNotebookRuns(active);
+        } catch (readError) {
+          void logCaughtDiagnostic("interface.engagement_policy.notebook_runs_unavailable", "Running notebook cells could not be listed after a policy conflict.", readError, "engagement_policy");
+        }
+      }
+    } finally { if (revision === loadRevision.current) setSaving(undefined); }
+  };
+
+  const interruptConflictingRuns = async () => {
+    if (!api || !engagement || !conflictingNotebookRuns.length || saving) return;
+    const revision = loadRevision.current;
+    setSaving("runtime");
+    setError(undefined);
+    try {
+      await Promise.all(conflictingNotebookRuns.map(async run => {
+        await api.interruptNotebookRun(engagement.id, run.id);
+        const settled = await api.waitNotebookRun(engagement.id, run.id);
+        if (settled.run.status === "queued" || settled.run.status === "running") {
+          throw new Error("A notebook cell is still stopping. Retry the interrupt before saving the mode change.");
+        }
+      }));
+      if (revision !== loadRevision.current) return;
+      setConflictingNotebookRuns([]);
+      setValidationError("Notebook cells interrupted. Save the runtime policy again.");
+    } catch (interruptError) {
+      if (revision !== loadRevision.current) return;
+      void logCaughtDiagnostic("interface.engagement_policy.notebook_interrupt_failed", "A notebook cell could not be interrupted.", interruptError, "engagement_policy");
+      setError(interruptError);
     } finally { if (revision === loadRevision.current) setSaving(undefined); }
   };
 
   return <section className="settings-section" id="engagement-policy-settings" data-guide="project-policy">
     <div className="section-heading"><div><h2>Project execution policy</h2><p>Freeze the scope, approval behavior, and whole-project network boundary used by new agent sessions.</p></div><ShieldCheck size={20} /></div>
     {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The project policy could not be updated." compact />}
+    {conflictingNotebookRuns.length > 0 && <button className="button secondary" type="button" disabled={Boolean(saving)} onClick={() => void interruptConflictingRuns()}>Interrupt {conflictingNotebookRuns.length === 1 ? "notebook cell" : `${conflictingNotebookRuns.length} notebook cells`}</button>}
     {!policyReady && (error ? <button className="button secondary" type="button" onClick={() => void load()}>Retry loading project policy</button> : <p role="status">Loading project policy…</p>)}
     {validationError && <InlineValidationNotice message={validationError} />}
     <div className="runner-layout policy-layout">
       <form className="panel policy-form" onSubmit={(event) => void saveRuntime(event)}>
         <header className="panel-header compact"><div><h3>Command runtime</h3><p>Workspace commands never need a target address.</p></div><TerminalSquare size={18} /></header>
         <fieldset className="policy-form-body" aria-label="Command runtime settings" disabled={!policyReady || Boolean(saving) || previewMode}>
-          <label>Execution mode<select aria-label="Project execution mode" disabled={!policy || saving === "runtime"} value={executionMode} onChange={(event) => { setExecutionMode(event.target.value as "docker" | "host"); setHostAcknowledged(false); }}><option value="docker">Docker mode</option><option value="host">Host mode</option></select><small>{executionMode === "docker" ? "Commands run inside Docker with the project folder mounted at /workspace." : "Commands run directly on the Nebula server as its OS user, starting in the project folder."}</small></label>
+          <label>Execution mode<select aria-label="Project execution mode" disabled={!policy || saving === "runtime"} value={executionMode} onChange={(event) => setExecutionMode(event.target.value as "docker" | "host")}><option value="docker">Docker mode</option><option value="host">Host mode</option></select><small>{executionMode === "docker" ? "Commands run inside Docker with the project folder mounted at /workspace." : "Commands run directly on the Nebula server as its OS user, starting in the project folder."}</small></label>
           {executionMode === "host" && <label className="provider-consent"><input type="checkbox" checked={hostAcknowledged} onChange={(event) => setHostAcknowledged(event.target.checked)} /><span><strong>Allow host filesystem and network access</strong><small>Agents can access and modify other host folders and mounted devices permitted by the server's OS account. Docker isolation, scope-filtered networking and container VPN routing do not apply. Command approvals and timeouts still apply. External MCP services keep their configured location.</small></span></label>}
+          {executionMode === "host" && <label className="provider-consent"><input type="checkbox" checked={networkEnabled} onChange={(event) => setNetworkEnabled(event.target.checked)} /><span><strong>Allow notebook package downloads</strong><small>Search PyPI and install packages into this project's managed Python environment. Host notebook code follows the server's OS network permissions.</small></span></label>}
           <label>Approval policy<select aria-describedby="command-approval-scope" value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as AutomationProjectPolicy["approvalPolicy"])}><option value="on_boundary">On boundary · prompt once for project networking</option><option value="always">Always · prompt before every command</option><option value="never">Never · no tool prompts</option></select></label>
           <p id="command-approval-scope" className="provider-dialog-note">Applies to provider and harness tool approvals for new sessions, including native, MCP and SSH tools. Scope and explicit deny rules still apply.</p>
           {approvalPolicy === "never" && <InlineValidationNotice message="Provider and harness tools run without approval prompts; scope and deny rules still apply." />}

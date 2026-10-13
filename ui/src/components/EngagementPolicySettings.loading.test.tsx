@@ -3,6 +3,7 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 import {MemoryRouter} from "react-router-dom";
 import {DialogProvider} from "./DialogSystem";
 import {EngagementPolicySettings} from "./EngagementPolicySettings";
+import {ApiError} from "../api/client";
 
 const fixture = vi.hoisted(() => ({api: {} as Record<string, ReturnType<typeof vi.fn>>, project: "first"}));
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api: fixture.api, coreState: "online", engagement: {id: fixture.project}, previewMode: false})}));
@@ -15,6 +16,44 @@ beforeEach(() => {
 });
 
 describe("project policy hydration", () => {
+  it("keeps one-time Host consent and exposes package downloads in Project settings", async () => {
+    fixture.api.getAutomationPolicy.mockResolvedValueOnce({...policy("first"), executionMode: "host", hostAccessAcknowledged: true});
+    fixture.api.updateAutomationPolicy = vi.fn(async (id: string, request: {networkEnabled: boolean}) => ({...policy(id), executionMode: "host", hostAccessAcknowledged: true, networkEnabled: request.networkEnabled, revision: 2}));
+    render(view());
+    const mode = await screen.findByRole("combobox", {name: "Project execution mode"});
+    await waitFor(() => expect(mode).toHaveValue("host"));
+    const consent = screen.getByRole("checkbox", {name: /Allow host filesystem and network access/});
+    expect(consent).toBeChecked();
+    fireEvent.change(mode, {target: {value: "docker"}});
+    fireEvent.change(mode, {target: {value: "host"}});
+    expect(consent).toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", {name: /Allow notebook package downloads/}));
+    fireEvent.click(screen.getByRole("button", {name: "Save runtime policy"}));
+    await waitFor(() => expect(fixture.api.updateAutomationPolicy).toHaveBeenCalledWith("first", expect.objectContaining({executionMode: "host", hostAccessAcknowledged: true, networkEnabled: true})));
+  });
+
+  it("offers an interrupt action for a running notebook before changing mode", async () => {
+    const active = {id: "run-1", engagement_id: "first", notebook_path: "quick.ipynb", cell_id: "cell", status: "running", detail: "", revision: 2};
+    fixture.api.getAutomationPolicy.mockResolvedValueOnce({...policy("first"), executionMode: "host", hostAccessAcknowledged: true});
+    fixture.api.updateAutomationPolicy = vi.fn()
+      .mockRejectedValueOnce(new ApiError("A notebook cell is running; interrupt it before changing project mode", 409))
+      .mockResolvedValueOnce({...policy("first"), executionMode: "docker", hostAccessAcknowledged: true, revision: 2});
+    fixture.api.listActiveNotebookRuns = vi.fn(async () => [active]);
+    fixture.api.interruptNotebookRun = vi.fn(async () => ({...active, status: "interrupted"}));
+    fixture.api.waitNotebookRun = vi.fn(async () => ({run: {...active, status: "interrupted"}, events: []}));
+    render(view());
+    const mode = await screen.findByRole("combobox", {name: "Project execution mode"});
+    await waitFor(() => expect(mode).toHaveValue("host"));
+    fireEvent.change(mode, {target: {value: "docker"}});
+    fireEvent.click(screen.getByRole("button", {name: "Save runtime policy"}));
+    const interrupt = await screen.findByRole("button", {name: "Interrupt notebook cell"});
+    fireEvent.click(interrupt);
+    await waitFor(() => expect(fixture.api.interruptNotebookRun).toHaveBeenCalledWith("first", "run-1"));
+    await waitFor(() => expect(screen.getByText(/Notebook cells interrupted/)).toBeVisible());
+    fireEvent.click(screen.getByRole("button", {name: "Save runtime policy"}));
+    await waitFor(() => expect(fixture.api.updateAutomationPolicy).toHaveBeenCalledTimes(2));
+  });
+
   it("disables all policy and scope inputs until their saved state arrives", async () => {
     let resolve!: (value: ReturnType<typeof policy>) => void;
     fixture.api.getAutomationPolicy.mockImplementation(() => new Promise(done => { resolve = done; }));
