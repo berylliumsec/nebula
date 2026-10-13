@@ -25,6 +25,8 @@ MAIN_SHA = os.environ.get("GITHUB_SHA", "")
 SOURCE_MARKER = re.compile(r"<!-- nebula-source-sha: ([0-9a-f]{40}) -->")
 WAIT_SECONDS = 3 * 60 * 60
 CONSERVATIVE_AREAS = ("desktop-interface", "mobile-layout", "core-api")
+GH_READ_ATTEMPTS = 5
+RETRYABLE_GH_READ_ERROR = re.compile(r"\bHTTP (?:429|5\d\d)\b")
 
 
 def child_env() -> dict[str, str]:
@@ -58,7 +60,18 @@ def run(*args: str, check: bool = True, release_permission: str | None = None) -
 
 
 def gh_json(endpoint: str) -> object:
-    return json.loads(run("gh", "api", endpoint))
+    # A transient Actions API error must not strand an already-dispatched,
+    # immutable release candidate. Only repeat this read-only request.
+    for attempt in range(GH_READ_ATTEMPTS):
+        try:
+            return json.loads(run("gh", "api", endpoint))
+        except RuntimeError as error:
+            if attempt == GH_READ_ATTEMPTS - 1 or not RETRYABLE_GH_READ_ERROR.search(str(error)):
+                raise
+            delay = 2**attempt
+            print(f"GitHub API read failed transiently; retrying in {delay}s", flush=True)
+            time.sleep(delay)
+    raise AssertionError("unreachable GitHub API retry state")
 
 
 def require_release_app() -> None:

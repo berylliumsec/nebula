@@ -1,13 +1,13 @@
 {
-  "change_digest": "91dbda040271e7a9bb87e21a956fafe4eb715def362a2063d1bdb5508b585cbb",
-  "reviewed_by": "Codex focused review for settings assistant save, headless session, and product knowledge synchronization",
-  "reason": "The selected Python cases cover provider and harness settings-only tool exposure, Core Settings route discovery and project binding, saved scope readback, headless start/status without the visible-browser cutover, secret redaction, and the bundled product index mirrored into Chroma. Frontend cases cover exact tool receipts, no-second-dialog scope and Host mutations, combined headless and scope requests, revision preservation, and assistant navigation. The native case checks the Mac launcher keeps its bundled security addon inside app resources. Four real-Core browser cases exercise the assistant's URL/target scope and headless session journey on the candidate production bundle at a non-loopback LAN origin across desktop Chromium and mobile Chromium/WebKit. One real-Core desktop case checks all listed Settings destinations, including the added Usage section. One existing focused desktop entry covers both Host-mode save and policy explanation after removing the second dialog.",
-  "exclusions": "One focused macOS native resource-boundary case covers the Tauri launcher change; other native tests are excluded. Python browser execution and Node integration are unnecessary for the selected Python cases. Unrelated provider, mission, browser research, and workbench suites are excluded. The browser cases use emulation; no physical Mac is available in this workspace. No full suite is authorized.",
+  "change_digest": "66590156a86b3ed879101914aebfde05038a6a85c624706f5060715d0b18fe6b",
+  "reviewed_by": "Codex review of October 12 daily release and child workflow logs",
+  "reason": "A transient HTTP 502 ended parent polling while the immutable preparation workflow was still running. The selected Python cases verify read-only HTTP 502/429 retry, fail-fast HTTP 403 handling, failed child-run reporting, and that the driver preserves release gates and publication order.",
+  "exclusions": "No product UI, Core, native code, or Playwright catalog changes are in this diff, so those layers are excluded from this driver regression selection. The existing 175-entry October 12 browser receipt and its failures are being investigated separately; no full suite is authorized.",
   "expected_tests": {
-    "python": 24,
-    "frontend": 28,
-    "native": 1,
-    "playwright": 7
+    "python": 4,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,25 +15,12 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_settings_assistant_tools.py",
-    "tests/v3/test_settings_assistant_api.py",
-    "tests/v3/test_product_knowledge.py",
-    "tests/v3/test_agent_security_tools.py",
-    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session"
+    "tests/test_daily_stable_release.py::test_transient_github_read_error_retries_without_repeating_mutations",
+    "tests/test_daily_stable_release.py::test_nonretryable_github_read_error_stops_immediately",
+    "tests/test_daily_stable_release.py::test_workflow_wait_stops_on_failed_run",
+    "tests/test_daily_stable_release.py::test_single_explicit_release_path_preserves_every_gate"
   ],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/components/assistantSettingsMutations.test.ts"
-  ],
-  "native": [
-    "sidecar::tests::bundled_security_proxy_addon_stays_inside_resources"
-  ],
-  "playwright": [
-    "entry:settings-assistant-full-control/assistant-real-desktop",
-    "entry:settings-assistant-full-control/assistant-real-compact",
-    "entry:settings-assistant-full-control/assistant-real-chromium-390",
-    "entry:settings-assistant-full-control/assistant-real-webkit-390",
-    "entry:host-startup-compat/assistant-real-desktop"
-  ]
+  "frontend": [],
+  "native": [],
+  "playwright": []
 }
