@@ -71,7 +71,8 @@ zero retries. Its passing receipt must match the tag, commit, and installed DEB 
 before a draft can be created or a daily release published.
 
 The release-only Playwright impact matrix and baseline are gone. The PR Playwright
-selector and its diff-bound review remain in place. Packaging unit tests, redundant
+selector and its diff-bound review remain in place, with the `gate` check required
+by main branch protection. Packaging unit tests, redundant
 compile checks, sandbox integration, crash cleanup, negative signature testing,
 and Debian/Kali installs are optional manual diagnostics in
 `nebula3-release-diagnostics.yml`; the existing manual Playwright selector remains

@@ -1,23 +1,16 @@
 {
-  "change_digest": "678b49ff6adab868c464c9848169d67f6febb37029276a36a2be411444d54256",
-  "reviewed_by": "Codex review of slim release preparation and the one installed-Core smoke",
-  "reason": "Release preparation now has three jobs and one packaged-Core Chromium journey. Select the exact driver, receipt, and workflow-shape contracts plus the single real-Core pairing, project, chat, and reload case. The Python contracts verify a failed or absent smoke receipt blocks finalization and that diagnostics are manual only. The browser case proves the operator journey against disposable LAN Core; the release job repeats it against the installed DEB and embedded UI.",
-  "exclusions": "No product UI, API, or Rust behavior changed. Frontend unit and native tests are empty. Broad Playwright, sandbox, packaging, crash cleanup, tampered-signature, and Debian/Kali checks are intentionally moved to optional manual diagnostics. The local browser run uses source Core and a candidate production bundle; an installed artifact, signature, and provenance are verified by a later authorized release candidate, not this branch run.",
+  "change_digest": "594810a4e58ce7c53fd61570ef329d457c8a9aab9eeb694714329997b736ef77",
+  "reviewed_by": "Codex review of live main branch-protection status checks",
+  "reason": "Document the confirmed main branch rule requiring the existing PR Playwright gate. This follow-up changes documentation only; the GitHub setting was verified directly after updating it.",
+  "exclusions": "No application, release workflow, selector, or test code changed. Python, frontend, native, and Playwright test lists are empty because there is no executable behavior to exercise. Live branch protection is checked separately.",
   "expected_tests": {
-    "python": 55,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 1
+    "playwright": 0
   },
-  "python": [
-    "tests/test_daily_stable_release.py",
-    "tests/test_release_core_smoke_receipt.py",
-    "tests/v3/test_packaging.py::test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke",
-    "tests/v3/test_packaging.py::test_wider_release_diagnostics_require_manual_dispatch"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:release-core-smoke/real-core"
-  ]
+  "playwright": []
 }
