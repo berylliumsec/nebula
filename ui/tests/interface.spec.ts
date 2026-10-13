@@ -3236,6 +3236,7 @@ test("stabilization project sections remain reachable without horizontal clippin
 test("phone shell and critical workspace navigation mark the section that owns detail and tab routes", async ({ page }) => {
   test.setTimeout(120_000);
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const narrowPhone = (page.viewportSize()?.width ?? 1440) <= 360;
   const finding = {
     ...entity,
     id: "finding-current",
@@ -3292,6 +3293,10 @@ test("phone shell and critical workspace navigation mark the section that owns d
   };
   const expectCurrentSection = async (pathname: string, label: string) => {
     await expect.poll(() => page.evaluate(() => location.pathname)).toBe(pathname);
+    if (narrowPhone) {
+      await expect(page.getByRole("button", { name: "Workbench", exact: true })).toBeVisible();
+      return;
+    }
     await openNavigation();
     const current = navigation.getByRole("link", { name: label, exact: true });
     await expect(current).toBeVisible();
@@ -3303,6 +3308,12 @@ test("phone shell and critical workspace navigation mark the section that owns d
     await closeNavigation();
   };
   const followNavigation = async (label: string) => {
+    if (narrowPhone) {
+      await page.getByRole("button", { name: "Workbench", exact: true }).click();
+      await page.getByRole("button", { name: "More workbench views" }).click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: label, exact: true }).click();
+      return;
+    }
     await openNavigation();
     await navigation.getByRole("link", { name: label, exact: true }).click();
     if (mobile) await expect(page.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
@@ -3943,10 +3954,9 @@ test("the 320px mobile companion keeps controls visible and the composer above n
 test("host folder picker remains usable as a bounded project workflow", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile browser projects.");
   await setInitialZeroDark(page);
-  await openWorkspace(page, "/settings", "Settings");
-  if (testInfo.project.name.startsWith("mobile-")) {
-    await page.getByRole("button", { name: "Show sidebar" }).click();
-  }
+  const mobile = testInfo.project.name.startsWith("mobile-");
+  await openWorkspace(page, mobile ? "/?view=chat" : "/settings", mobile ? "Workbench" : "Settings");
+  if (mobile) await page.getByRole("button", { name: "More workbench views" }).click();
   await page.getByRole("button", { name: "Switch project" }).click();
   const switcher = page.getByRole("dialog", { name: "Project switcher" });
   await switcher.getByRole("button", { name: "New project" }).click();
@@ -4024,15 +4034,15 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   expect(accessibility.violations).toEqual([]);
 });
 
-test("phone shell project switcher search finds active and archived projects", async ({ page }) => {
+test("phone shell project switcher search finds active and archived projects", async ({ page }, testInfo) => {
   await page.route(/\/api\/v1\/engagements(?:\?|$)/, route => route.fulfill({ json: [
     { ...entity, id: "scratch-project", name: "Scratch Project", status: "active", tags: [], metadata: {} },
     { ...entity, id: "alpha-project", name: "Alpha Project", client_name: "Example Org", status: "active", tags: [], metadata: {} },
     { ...entity, id: "past-project", name: "Past Review", client_name: "Orion", status: "archived", tags: [], metadata: {} },
   ] }));
-  await openWorkspace(page, "/settings", "Settings");
-  const sidebar = page.getByRole("button", { name: "Show sidebar" });
-  if (await sidebar.isVisible()) await sidebar.click();
+  const mobile = testInfo.project.name.startsWith("mobile-");
+  await openWorkspace(page, mobile ? "/?view=chat" : "/settings", mobile ? "Workbench" : "Settings");
+  if (mobile) await page.getByRole("button", { name: "More workbench views" }).click();
   await page.getByRole("button", { name: "Switch project" }).click();
   const switcher = page.getByRole("dialog", { name: "Project switcher" });
   const search = switcher.getByRole("textbox", { name: "Search projects" });
@@ -4074,6 +4084,9 @@ test("phone shell project switcher search finds active and archived projects", a
   const accessibility = await new AxeBuilder({ page }).include(".engagement-menu").withTags(["wcag2a", "wcag2aa"]).analyze();
   expect(accessibility.violations).toEqual([]);
   await page.keyboard.press("Escape");
+  if (mobile && !(await page.getByRole("button", { name: "Switch project" }).isVisible())) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+  }
   await page.getByRole("button", { name: "Switch project" }).click();
   await expect(switcher.getByRole("textbox", { name: "Search projects" })).toHaveValue("");
 });
@@ -6110,6 +6123,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await openWorkspace(page, `/?view=chat&session=${sourceSessionId}`, "Workbench");
   await expect(page.getByText("Source transcript")).toBeVisible();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(4);
+  await expect.poll(() => page.evaluate((id) => performance.getEntriesByName(`nebula.chat_image.ready:${id}`, "mark").length, sourceSessionId)).toBeGreaterThan(0);
   // Rich content can grow after the transcript has initially reached the bottom.
   await page.locator(".chat-message").last().evaluate(element => {element.style.minHeight = "1200px";});
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(4);
@@ -6117,7 +6131,6 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await page.locator(".chat-scroll").evaluate(element => {element.scrollTop = 150; element.dispatchEvent(new Event("scroll"));});
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
   const sourceAnchorTopBeforeList = await page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true}).evaluate(element => element.getBoundingClientRect().top);
-  await expect.poll(() => page.evaluate((id) => performance.getEntriesByName(`nebula.chat_image.ready:${id}`, "mark").length, sourceSessionId)).toBeGreaterThan(0);
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations", exact: true }).click();
   else await page.getByRole("button", { name: "Show conversations" }).click();
   await page.locator(".session-select").filter({ hasText: "Target conversation" }).click();
@@ -6160,6 +6173,15 @@ test("conversation switching commits URL identity and keeps prefetched work deta
     if ((page.viewportSize()?.width ?? 1_000) <= 760) await button.tap();
     else { await button.focus(); await button.press("Enter"); }
   };
+  const expectTranscriptAfterPreview = async (text: string) => {
+    // Preview visibility may change between two Playwright locator operations.
+    // Query and reveal in one browser task, then require the authoritative text.
+    await expect.poll(() => page.evaluate((expected) => {
+      document.querySelector<HTMLElement>('[data-testid="chat-image-preview"]')?.click();
+      return [...document.querySelectorAll(".chat-message")].some((message) => message.textContent?.includes(expected));
+    }, text)).toBe(true);
+    await expect(page.getByText(text, { exact: true })).toBeVisible();
+  };
   // Hold the network response: preview visibility must not depend on a timer.
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
@@ -6195,8 +6217,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   freshTarget = true;
   targetPendingGate = new Promise<void>(resolve => { releaseTargetPending = resolve; });
   await selectChat("Target conversation");
-  if (await page.getByTestId("chat-image-preview").isVisible()) await page.getByTestId("chat-image-preview").click();
-  await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
+  await expectTranscriptAfterPreview("Fresh target transcript");
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
   releaseTargetPending(); targetPendingGate = undefined;
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
@@ -6224,9 +6245,8 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
-  if (await page.getByTestId("chat-image-preview").isVisible()) await page.getByTestId("chat-image-preview").click();
   await page.locator(".chat-scroll").evaluate((element) => { element.scrollTop = element.scrollHeight; });
-  await expect(page.getByText("Fresh source transcript", {exact: true})).toBeVisible();
+  await expectTranscriptAfterPreview("Fresh source transcript");
   await selectChat("Target conversation");
   releaseRefresh(); refreshGate = undefined;
   await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
@@ -10586,6 +10606,32 @@ test("phone shell opens the sidebar drawer above resource inspectors", async ({ 
   const scrim = page.getByRole("button", { name: "Close sidebar" });
 
   await openWorkspace(page, "/findings", "Findings");
+  if (viewport.width <= 360) {
+    for (const theme of ["zero-dark", "dark"] as const) {
+      if (theme === "dark") await setTheme(page, theme);
+      for (const inspector of inspectors) {
+        await visit(inspector.surface);
+        await page.getByRole("button", { name: inspector.open, exact: true }).click();
+        const detail = `${inspector.surface}/${inspector.id}`;
+        await expect.poll(() => page.evaluate(() => location.pathname)).toBe(detail);
+        const panel = page.getByRole("complementary", { name: inspector.title });
+        await expect(panel).toBeVisible();
+        const back = page.getByRole("button", { name: "Workbench", exact: true });
+        const bounds = await back.boundingBox();
+        expect(bounds).not.toBeNull();
+        await expect.poll(() => page.evaluate(({ x, y }) =>
+          document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label"),
+        { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 })).toBe("Workbench");
+        await press(back);
+        await expect(page).toHaveURL(new RegExp(`/projects/${project}/workbench`));
+        await expect(panel).toHaveCount(0);
+      }
+    }
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Findings" }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${project}/findings$`));
+    return;
+  }
   for (const theme of ["zero-dark", "dark"] as const) {
     if (theme === "dark") await setTheme(page, theme);
     await expect(page.locator(".zero-anchor-dock")).toHaveCount(theme === "dark" ? 0 : 1);

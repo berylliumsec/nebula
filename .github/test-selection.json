@@ -1,17 +1,46 @@
 {
-  "change_digest": "2eb4e293f06d1f87842a11fc03941a097a83499c477b33fede1a7f52801ebce0",
-  "reviewed_by": "Codex focused review of the October 13 LAN headless Core rollout",
-  "reason": "The operator opens the existing LAN Assistant browser, discovers the headless security MCP and dashboard, starts a scoped Core-owned headless session, observes its status, stops it, and reloads the LAN page. The selected Python API and real browser/proxy integration tests cover capability registration, isolated request capture and protected upstream access. The dashboard component and browser matrix cover presentation and controls. Production real-Core journeys cover desktop, compact, mobile Chromium and mobile WebKit over a non-loopback origin. CI stages the proxy only for the selected headless Python file.",
-  "exclusions": "No Electron visible-browser cutover or native shell change is included. The current LAN browser remains available, so native tests and unrelated browser, settings, and full suites are excluded. Physical device and packaged Electron acceptance remain separate from this server-focused rollout.",
-  "expected_tests": {"python": 8, "frontend": 2, "native": 0, "playwright": 12},
-  "python_versions": ["3.12"],
-  "python_browser": true,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_one_browser_cutover.py",
-    "tests/v3/test_agent_security_headless.py"
+  "change_digest": "e68d30529ce724885e7befb1cd58ca27af5cacc395333ff3fec7e21dcb284167",
+  "reviewed_by": "Codex review of nebula-v3.0.11 failure artifacts and PR #778/#780 current main",
+  "reason": "The release matrix failed in Work import desktop/compact, two 320 px project picker journeys, two 320 px phone navigation journeys, and WebKit conversation switching at both 320 and 430 px. Work import now gates on completed pairing and visible durable state instead of obsolete ready-chip, chat-tab, and parent-link assumptions. Phone project switching starts in Workbench More. At 320 px the shell deliberately hides its sidebar toggle and keeps a Workbench return above resource inspectors; wider phones retain the drawer. The conversation test waits for preview preparation before simulating rich-content growth and atomically reveals a transient image preview before asserting the selected session's text. Exact WebKit and Chromium cases at 320 and 430 px test saved state, scroll-follow, and recovery. Catalogued cases cover those routes, desktop/compact behavior, and the production real-Core LAN boundary.",
+  "exclusions": "The branch diff from current main changes only browser tests and their exact impact catalog entries. PR #778 notebook and PR #780 headless browser code are already in the baseline and passed their selected checks separately; their shared chat and mobile shell boundaries are rechecked by this plan's exact journeys. Backend, frontend unit, native, unrelated browser journeys, and the full suite are excluded. Work import uses a production UI bundle and real Core on a non-loopback LAN origin; interface journeys use the browser fixture.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 24
+  },
+  "python_versions": [
+    "3.12"
   ],
-  "frontend": ["ui/src/components/SecurityDashboard.test.tsx"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:headless-lan"]
+  "playwright": [
+    "entry:work-import/assistant-real-desktop",
+    "entry:work-import/assistant-real-compact",
+    "entry:work-import/assistant-real-chromium-320",
+    "entry:work-import/assistant-real-webkit-320",
+    "entry:project-lifecycle/desktop",
+    "entry:project-lifecycle/compact",
+    "entry:project-lifecycle/mobile-chromium-small",
+    "entry:project-lifecycle/mobile-webkit-small",
+    "entry:project-switcher-search/desktop",
+    "entry:project-switcher-search/compact",
+    "entry:project-switcher-search/mobile-chromium-small",
+    "entry:project-switcher-search/mobile-webkit-small",
+    "entry:phone-route-ownership/mobile-chromium-small",
+    "entry:phone-route-ownership/mobile-webkit-small",
+    "entry:phone-route-ownership/mobile-chromium",
+    "entry:phone-route-ownership/mobile-webkit",
+    "entry:phone-inspector-return/mobile-chromium-small",
+    "entry:phone-inspector-return/mobile-webkit-small",
+    "entry:phone-inspector-return/mobile-chromium",
+    "entry:phone-inspector-return/mobile-webkit",
+    "entry:chat-switching-scroll/mobile-chromium-wide",
+    "entry:chat-switching-scroll/mobile-webkit-wide",
+    "entry:chat-switching-scroll/mobile-chromium-small",
+    "entry:chat-switching-scroll/mobile-webkit-small"
+  ]
 }
