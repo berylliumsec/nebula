@@ -1621,6 +1621,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const imageBuildsRef = useRef(new Map<string, {key: string; controller: AbortController}>());
   const [activeImagePreview, setActiveImagePreview] = useState<ChatImagePreview>();
   const imageRevealRef = useRef<{image: ChatImagePreview; scrollTop: number} | undefined>(undefined);
+  const imageInitialScrollRef = useRef<{sessionId: string; scrollTop: number} | undefined>(undefined);
   const previewOwnerRef = useRef("");
   const restoredScrollRef = useRef<{scrollTop: number; scrollHeight: number; followBottom: boolean} | undefined>(undefined);
   useEffect(() => () => {
@@ -1697,6 +1698,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
   const chatScrollGeometryRef = useRef<ChatScrollGeometry | undefined>(undefined);
   const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
+  const conversationPanelReadingPositionRef = useRef<{sessionId: string; scrollTop: number; scrollHeight: number; followBottom: boolean} | undefined>(undefined);
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const chatTouchYRef = useRef<number | undefined>(undefined);
@@ -1821,6 +1823,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             * Math.max(0, activeImagePreview.height - viewport.clientHeight)
           : position.scrollTop;
         viewport.scrollTop = imageTop;
+        if (activeImagePreview) imageInitialScrollRef.current = {sessionId, scrollTop: viewport.scrollTop};
         if (!activeImagePreview) transcriptVirtualizer.scrollToOffset(position.scrollTop);
       }
       setHasOlderMessages((chatViewportRef.current?.scrollTop ?? 0) > 24);
@@ -3051,12 +3054,27 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setMobileListOpen((current) => !current);
       return;
     }
+    if (!conversationPanelOpen && sessionId && chatViewportRef.current) {
+      const viewport = chatViewportRef.current;
+      conversationPanelReadingPositionRef.current = {
+        sessionId, scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight,
+        followBottom: chatFollowBottomRef.current,
+      };
+    }
     setConversationPanelOpen((current) => {
       const next = !current;
       writeConversationPanelOpen(localStorage, next);
       return next;
     });
   };
+
+  useLayoutEffect(() => {
+    const saved = conversationPanelReadingPositionRef.current;
+    if (conversationPanelOpen || !saved || saved.sessionId !== sessionId || !chatViewportRef.current) return;
+    chatFollowBottomRef.current = saved.followBottom;
+    chatViewportRef.current.scrollTop = saved.scrollTop;
+    conversationPanelReadingPositionRef.current = undefined;
+  }, [conversationPanelOpen, sessionId]);
 
   const closeConversationPanel = () => {
     setMobileListOpen(false);
@@ -3648,20 +3666,36 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       // reading position from before the drawer covered the transcript.
       const viewport = chatViewportRef.current;
       const lastPosition = chatReadingPositionRef.current.sessionId === sessionId ? chatReadingPositionRef.current : undefined;
-      const visibleViewport = !mobileListOpen && Boolean(viewport?.clientHeight);
+      const beforePanel = conversationPanelOpen && conversationPanelReadingPositionRef.current?.sessionId === sessionId
+        ? conversationPanelReadingPositionRef.current : undefined;
+      const visibleViewport = !mobileListOpen && !beforePanel && Boolean(viewport?.clientHeight);
+      const savedText = activeImagePreview && restoredScrollRef.current?.followBottom === false
+        ? restoredScrollRef.current : undefined;
+      const imageRange = savedText && viewport ? Math.max(1, activeImagePreview!.height - viewport.clientHeight) : 1;
+      const textRange = savedText && viewport ? Math.max(1, savedText.scrollHeight - viewport.clientHeight) : 1;
+      const initialImageTop = savedText && viewport
+        ? imageInitialScrollRef.current?.sessionId === sessionId
+          ? imageInitialScrollRef.current.scrollTop
+          : savedText.scrollTop / textRange * imageRange
+        : 0;
+      const visibleTextTop = savedText && viewport
+        ? Math.max(0, savedText.scrollTop + (viewport.scrollTop - initialImageTop) * textRange / imageRange)
+        : viewport?.scrollTop ?? 0;
       chatPreviews.set(sessionId, {
         messages: durable,
         toolCards: toolCards.filter(card => durableIds.has(card.assistantId)),
-        scrollTop: visibleViewport ? viewport!.scrollTop : lastPosition?.scrollTop ?? 0,
-        scrollHeight: visibleViewport ? viewport!.scrollHeight : viewport?.scrollHeight ?? 0,
-        followBottom: visibleViewport ? chatFollowBottomRef.current : lastPosition?.followBottom ?? true,
+        scrollTop: beforePanel?.scrollTop ?? (visibleViewport ? visibleTextTop : lastPosition?.scrollTop ?? 0),
+        scrollHeight: beforePanel?.scrollHeight ?? (savedText?.scrollHeight ?? viewport?.scrollHeight ?? 0),
+        followBottom: beforePanel?.followBottom ?? (visibleViewport ? chatFollowBottomRef.current : lastPosition?.followBottom ?? true),
       });
+      conversationPanelReadingPositionRef.current = undefined;
       if (!sending && !pendingResponse && !waitingCallback && !pendingSubagentApproval
         && !harnessInteractions.some((item) => item.status === "pending")) prepareChatImage(sessionId, durable);
       else chatImagePreviews.delete(sessionId);
     }
     const preview = chatPreviews.get(id);
     imageRevealRef.current = undefined;
+    imageInitialScrollRef.current = undefined;
     const summary = sessions.find((session) => session.id === id);
     const image = preview && !preserveTranscript ? chatImagePreviews.get(id) : undefined;
     const viewport = chatViewportRef.current;
@@ -4326,8 +4360,16 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       const imageRange = Math.max(1, reveal.image.height - viewportHeight);
       const textRange = Math.max(1, saved.scrollHeight - viewportHeight);
       const originalImageTop = saved.scrollTop / textRange * imageRange;
-      transcriptVirtualizer.scrollToOffset(Math.max(0, saved.scrollTop + (reveal.scrollTop - originalImageTop) * textRange / imageRange));
-      return;
+      const initialImageTop = imageInitialScrollRef.current?.sessionId === sessionId
+        ? imageInitialScrollRef.current.scrollTop : originalImageTop;
+      const textTop = Math.max(0, saved.scrollTop + (reveal.scrollTop - initialImageTop) * textRange / imageRange);
+      transcriptVirtualizer.scrollToOffset(textTop);
+      // The first row measurement can clamp a restored offset before the
+      // preview is replaced by text. Apply it once more after layout settles.
+      const frame = requestAnimationFrame(() => {
+        if (chatScrollJumpRef.current !== "reading") transcriptVirtualizer.scrollToOffset(textTop);
+      });
+      return () => cancelAnimationFrame(frame);
     }
     const tops = reveal.image.messageTops;
     let index = 0;
