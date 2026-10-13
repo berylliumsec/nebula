@@ -40,8 +40,14 @@ jobs:
   plan:
     runs-on: ubuntu-22.04
     outputs:
-      matrix: ${{ steps.select.outputs.matrix }}
-      has_jobs: ${{ steps.select.outputs.has_jobs }}
+      matrix_1: ${{ steps.select.outputs.matrix_1 }}
+      matrix_2: ${{ steps.select.outputs.matrix_2 }}
+      matrix_3: ${{ steps.select.outputs.matrix_3 }}
+      matrix_4: ${{ steps.select.outputs.matrix_4 }}
+      has_1: ${{ steps.select.outputs.has_1 }}
+      has_2: ${{ steps.select.outputs.has_2 }}
+      has_3: ${{ steps.select.outputs.has_3 }}
+      has_4: ${{ steps.select.outputs.has_4 }}
     steps:
       - name: Check out the candidate
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -85,9 +91,9 @@ jobs:
             args+=(--selection "$EXPLICIT_SELECTION")
           fi
           python scripts/playwright_impact.py select "${args[@]}" > "$RUNNER_TEMP/matrix.json"
-          matrix="$(cat "$RUNNER_TEMP/matrix.json")"
-          count="$(jq '.include | length' playwright-impact-plan.json)"
-          printf 'matrix=%s\nhas_jobs=%s\n' "$matrix" "$([[ "$count" -gt 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          python scripts/playwright_impact.py lanes \
+            --plan playwright-impact-plan.json \
+            --github-output "$GITHUB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
           cat playwright-impact-receipt.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload impact receipt
         if: always()
@@ -102,15 +108,16 @@ jobs:
 
   playwright:
     needs: plan
-    if: needs.plan.outputs.has_jobs == 'true'
+    if: needs.plan.outputs.has_1 == 'true'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix_1) }}
     runs-on: ubuntu-22.04
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
       NEBULA_PLAYWRIGHT_MATRIX: "1"
-    steps:
+      PLAYWRIGHT_LANE: "1"
+    steps: &playwright_steps
       - name: Check out the candidate
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -162,7 +169,7 @@ jobs:
           if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
           # This selected Core file is monolithic. Without fully-parallel
           # collection Playwright assigns all its tests to shard 1, leaving
-          # shard 2 empty even though each runner still uses one worker.
+          # later shards empty even though each runner still uses one worker.
           if test "$PROJECT" = real-core && test "$TEST_SHARD" != 1/1; then
             args+=(--fully-parallel)
           fi
@@ -181,25 +188,76 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-failure-${{ strategy.job-index }}-${{ matrix.project }}
+          name: playwright-failure-${{ env.PLAYWRIGHT_LANE }}-${{ strategy.job-index }}-${{ matrix.project }}
           path: ui/test-results/
           if-no-files-found: ignore
           retention-days: 7
 
+  playwright-2:
+    needs: plan
+    if: needs.plan.outputs.has_2 == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix_2) }}
+    runs-on: ubuntu-22.04
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+      NEBULA_PLAYWRIGHT_MATRIX: "1"
+      PLAYWRIGHT_LANE: "2"
+    steps: *playwright_steps
+
+  playwright-3:
+    needs: plan
+    if: needs.plan.outputs.has_3 == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix_3) }}
+    runs-on: ubuntu-22.04
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+      NEBULA_PLAYWRIGHT_MATRIX: "1"
+      PLAYWRIGHT_LANE: "3"
+    steps: *playwright_steps
+
+  playwright-4:
+    needs: plan
+    if: needs.plan.outputs.has_4 == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix_4) }}
+    runs-on: ubuntu-22.04
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+      NEBULA_PLAYWRIGHT_MATRIX: "1"
+      PLAYWRIGHT_LANE: "4"
+    steps: *playwright_steps
+
   gate:
-    needs: [plan, playwright]
+    needs: [plan, playwright, playwright-2, playwright-3, playwright-4]
     if: always()
     runs-on: ubuntu-22.04
     steps:
       - name: Require selector and every selected matrix entry
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
-          HAS_JOBS: ${{ needs.plan.outputs.has_jobs }}
-          PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
+          HAS_1: ${{ needs.plan.outputs.has_1 }}
+          HAS_2: ${{ needs.plan.outputs.has_2 }}
+          HAS_3: ${{ needs.plan.outputs.has_3 }}
+          HAS_4: ${{ needs.plan.outputs.has_4 }}
+          RESULT_1: ${{ needs.playwright.result }}
+          RESULT_2: ${{ needs['playwright-2'].result }}
+          RESULT_3: ${{ needs['playwright-3'].result }}
+          RESULT_4: ${{ needs['playwright-4'].result }}
         run: |
           test "$PLAN_RESULT" = success
-          if test "$HAS_JOBS" = true; then
-            test "$PLAYWRIGHT_RESULT" = success
-          else
-            test "$PLAYWRIGHT_RESULT" = skipped
-          fi
+          check_lane() {
+            if test "$1" = true; then
+              test "$2" = success
+            else
+              test "$2" = skipped
+            fi
+          }
+          check_lane "$HAS_1" "$RESULT_1"
+          check_lane "$HAS_2" "$RESULT_2"
+          check_lane "$HAS_3" "$RESULT_3"
+          check_lane "$HAS_4" "$RESULT_4"
