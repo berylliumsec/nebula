@@ -111,7 +111,7 @@ describe("NebulaControlAssistant", () => {
     expect(await screen.findByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
   });
 
-  it("routes a model-selected Host action through Core readback without another dialog", async () => {
+  it("requires operator confirmation for a model-selected Host action before Core readback", async () => {
     const user = userEvent.setup();
     const original = { executionMode: "docker", approvalPolicy: "always", networkEnabled: false, revision: 2 };
     const saved = { ...original, executionMode: "host", revision: 3 };
@@ -135,6 +135,10 @@ describe("NebulaControlAssistant", () => {
     await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "could you get this project's commands running on the host for me?{enter}");
     await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" })));
+    expect(await screen.findByRole("heading", { name: "Switch Project to Host mode?" })).toBeInTheDocument();
+    expect(screen.getByText(/Agents in new sessions can access and modify host folders/)).toBeInTheDocument();
+    expect(updateAutomationPolicy).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Switch to Host mode" }));
     await waitFor(() => expect(updateAutomationPolicy).toHaveBeenCalledWith("project", expect.objectContaining({
       executionMode: "host", hostAccessAcknowledged: true, expectedRevision: 2,
     })));
@@ -346,6 +350,9 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(composer).toBeEnabled());
     await user.type(composer, "open project policy and change from dockermode to host mode{enter}");
     await waitFor(() => expect(onOpenSetting).toHaveBeenCalledWith(expect.objectContaining({ id: "settings.network-scope" })));
+    expect(await screen.findByRole("heading", { name: "Switch Project to Host mode?" })).toBeInTheDocument();
+    expect(updateAutomationPolicy).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Switch to Host mode" }));
     await waitFor(() => expect(updateAutomationPolicy).toHaveBeenCalledWith("project", {
       executionMode: "host", hostAccessAcknowledged: true, approvalPolicy: "always",
       networkEnabled: true, runnerProfileId: "runner", vpnProfileId: "vpn",
@@ -355,6 +362,23 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(onCloseSetting).toHaveBeenCalled(), { timeout: 4000 });
     expect(getAutomationPolicy).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/Project is now in Host mode for new sessions/)).toBeInTheDocument();
+  });
+
+  it("leaves Core policy untouched when the operator cancels Host access", async () => {
+    const user = userEvent.setup();
+    const updateAutomationPolicy = vi.fn();
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null),
+        getAutomationPolicy: vi.fn().mockResolvedValue({ executionMode: "docker", revision: 3 }), updateAutomationPolicy },
+      engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} onCloseSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Nebula a question" }), "open project policy and change from dockermode to host mode{enter}");
+    expect(await screen.findByRole("heading", { name: "Switch Project to Host mode?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(updateAutomationPolicy).not.toHaveBeenCalled();
+    expect(await screen.findByText("Project remains in Docker mode. No change was saved.")).toBeInTheDocument();
   });
 
   it("does not change mode when the requested source mode differs from Core", async () => {

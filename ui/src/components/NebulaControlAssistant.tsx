@@ -14,6 +14,7 @@ import { assistantDestinations, assistantDestinationPath, destinationToOpen, typ
 import type { ChatMessage } from "../api/types";
 import { assistantTurnOptions, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
+import { useConfirmation } from "./DialogSystem";
 import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import styles from "./NebulaControlAssistant.module.css";
 
@@ -37,6 +38,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 }) {
   const { api, engagement, providers, harnesses } = useWorkspace();
   const { preference, setPreference } = useTheme();
+  const confirm = useConfirmation();
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [query, setQuery] = useState("");
@@ -208,6 +210,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         onSavedSetting?.(entry, `${projectName} is already in ${modeLabel} mode.`, mode);
         confirmation = `${projectName} is already in ${modeLabel} mode. No change was needed.`;
       } else {
+        if (mode === "host") {
+          const approved = await confirm({
+            title: `Switch ${projectName} to Host mode?`,
+            message: "Agents in new sessions can access and modify host folders, mounted devices, and network destinations allowed by the server's OS account. Docker isolation and container network controls will not apply. Existing sessions keep their current policy.",
+            confirmLabel: "Switch to Host mode",
+            tone: "danger",
+          });
+          if (!approved) return `${projectName} remains in Docker mode. No change was saved.`;
+        }
         await api.updateAutomationPolicy(projectId, {
           executionMode: mode,
           hostAccessAcknowledged: mode === "host",
