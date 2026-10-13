@@ -74,8 +74,8 @@ negative signature checks, and Debian/Kali installs are available in the optiona
 `nebula3-release-diagnostics.yml` manual workflow. The existing manually selected
 Playwright workflow retains its explicit full-suite approval guard. Focused PR
 selection remains separate; the release gate claims only this install and core
-journey. Current main branch protection does not require the PR Playwright check,
-so the exact release smoke is the independent browser check before publication.
+journey. Main branch protection requires the PR Playwright `gate` check. The exact
+release smoke is an independent browser check before publication.
 
 Any failed check before publication stops publication. An existing release tag or draft is a
 recovery case for a release manager; the daily job never moves a tag or replaces
