@@ -1,25 +1,23 @@
 {
-  "change_digest": "140f7448e363bd7d155e9fb79b349d9296d560418a324714fbef2f96fe55f659",
-  "reviewed_by": "Codex review of the October 13 release Host mode failure, Core write trace, and assistant catalog CI traces",
-  "reason": "The Nebula assistant must obtain explicit operator consent before acknowledging Host filesystem and network access. Component tests cover confirmation, cancellation, model receipts, and Core readback. The browser selection exercises the assistant command at desktop and mobile widths and the production LAN Core policy journey on desktop and 320 px WebKit. The selected catalog also includes stale assistant launcher assertions, updated to use the visible shell entry point after navigation; its iPhone WebKit link action uses a touch tap.",
-  "exclusions": "This changes assistant UI behavior and its focused tests only. Python, native, and unrelated browser journeys are excluded; release impact review remains authoritative. Mobile browsers are emulated and a physical device is unavailable. No full suite is authorized.",
+  "change_digest": "8c31df0c3a23af4a7f7caad58b191a01d3c00bbe1feb031f017309f42b1cb590",
+  "reviewed_by": "Codex review of October 13 mobile workspace audit failure and screenshot",
+  "reason": "At 320 px the Findings header's Workbench back label and redundant sidebar control consume the room needed for its New finding action, leaving half the 44 px button clipped. Quiet Lens also hides all page actions when its mobile top menu opens. The narrow viewport keeps an accessible, titled back icon, hides the sidebar control, and reveals page actions in the open Quiet Lens top menu. Seven narrow visual/navigation/accessibility cases and one mobile WebKit audit cover the mock shell. The selected production LAN Core test checks the full Finding action, failure, retry, and reload journey at 320 px WebKit, including unclipped 44 px geometry in the default theme.",
+  "exclusions": "This changes narrow mobile shell geometry and Quiet Lens page-action visibility. Python, native, frontend unit, desktop, unrelated browser areas, and a full suite are excluded. Browser viewports are emulated; no physical device is available.",
   "expected_tests": {
     "python": 0,
-    "frontend": 17,
+    "frontend": 0,
     "native": 0,
-    "playwright": 11
+    "playwright": 9
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": ["ui/src/components/NebulaControlAssistant.test.tsx"],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:nebula-theme-command/desktop",
-    "entry:nebula-theme-command/mobile-chromium",
-    "entry:nebula-theme-command/mobile-webkit",
-    "entry:nebula-settings-assistant/assistant-real-desktop",
-    "entry:nebula-settings-assistant/assistant-real-webkit-320"
+    "entry:critical-workspaces/narrow",
+    "entry:release-ui-workspace-audit/mobile-webkit-small",
+    "entry:release-ui-workspace-audit/assistant-real-webkit-320"
   ]
 }

@@ -121,7 +121,7 @@ export function TopBar({
       </button>}
       <div className="top-bar-leading">
         {/* Phones reach these pages from the Workbench More tab; this is the way back. */}
-        <button className="button quiet top-bar-back" type="button" onClick={() => navigate(engagement ? projectSurface(engagement.id, "workbench") : "/")}>
+        <button className="button quiet top-bar-back" type="button" aria-label="Workbench" title="Back to Workbench" onClick={() => navigate(engagement ? projectSurface(engagement.id, "workbench") : "/")}>
           <ChevronLeft size={20} aria-hidden="true" /><span>Workbench</span>
         </button>
         <button

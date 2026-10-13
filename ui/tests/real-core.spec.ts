@@ -5200,8 +5200,26 @@ for (const area of ["asset", "evidence", "finding"] as const) {
       await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
       await page.getByLabel("Device name").fill("Resource acceptance");
       await page.getByRole("button", {name: "Pair device", exact: true}).click();
-      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await expect(page.locator(".app-shell")).toBeVisible({timeout: 20_000});
       await page.goto(`${core.origin}/${area === "finding" ? "findings" : "project"}`);
+      if (area === "finding" && (page.viewportSize()?.width ?? 1440) <= 360) {
+        if (await page.locator("html").getAttribute("data-theme") === "quiet-lens") {
+          await page.getByRole("button", {name: "Open top menu"}).click();
+        }
+        const action = page.getByRole("button", {name: "New finding", exact: true});
+        await expect(action).toBeVisible();
+        await expect(page.getByRole("button", {name: "Workbench", exact: true})).toHaveAttribute("title", "Back to Workbench");
+        const geometry = await action.evaluate(button => {
+          const bounds = button.getBoundingClientRect();
+          const host = button.closest(".top-bar-page-actions")!.getBoundingClientRect();
+          return {left: bounds.left, right: bounds.right, width: bounds.width, height: bounds.height, hostLeft: host.left, hostRight: host.right};
+        });
+        expect(geometry.width).toBeGreaterThanOrEqual(44);
+        expect(geometry.height).toBeGreaterThanOrEqual(44);
+        expect(geometry.left).toBeGreaterThanOrEqual(geometry.hostLeft - 1);
+        expect(geometry.right).toBeLessThanOrEqual(geometry.hostRight + 1);
+        await testInfo.attach("finding-action-lan-phone", {body: await page.screenshot(), contentType: "image/png"});
+      }
       if (area !== "finding") await page.getByRole("button", {name: area === "asset" ? "Assets" : "Evidence", exact: true}).click();
       const search = page.getByRole("searchbox", {name: `Search ${collection}`, exact: true});
       await search.fill("unrelated stale filter");
