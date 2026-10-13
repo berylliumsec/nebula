@@ -74,6 +74,16 @@ def _rows() -> tuple[dict[str, object], ...]:
         )
 
 
+def packaged_product_passages() -> tuple[str, tuple[dict[str, object], ...]]:
+    """Source digest and precomputed vectors for the rebuildable Chroma mirror."""
+
+    with closing(_connection()) as connection:
+        digest = dict(connection.execute("SELECT key, value FROM metadata"))[
+            "source_digest"
+        ]
+    return digest, _rows()
+
+
 @lru_cache(maxsize=1)
 def _model():
     from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2

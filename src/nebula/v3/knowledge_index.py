@@ -13,6 +13,7 @@ from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
 import chromadb
+import numpy as np
 from chromadb.api.types import DefaultEmbeddingFunction, Documents, Embeddings
 from chromadb.config import Settings
 from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
@@ -27,6 +28,7 @@ LIBRARY_COLLECTION_NAME = "nebula-library-v1"
 # Tool documents are keyed by a content fingerprint, so an MCP server that
 # reconnects with unchanged tools re-embeds nothing.
 TOOL_COLLECTION_NAME = "nebula-tools-v1"
+PRODUCT_COLLECTION_NAME = "nebula-product-help-v1"
 INDEX_BACKEND = "chromadb"
 INDEX_VERSION = "nebula.chroma.v1"
 UPSERT_BATCH_SIZE = 500
@@ -282,6 +284,14 @@ class ChromaKnowledgeIndex:
             self._tool_collection = self._client.get_or_create_collection(
                 **tool_options
             )
+            product_options: dict[str, Any] = {
+                "name": PRODUCT_COLLECTION_NAME,
+                "metadata": {"hnsw:space": "cosine", "index_version": INDEX_VERSION},
+                "embedding_function": embedding_function,
+            }
+            self._product_collection = self._client.get_or_create_collection(
+                **product_options
+            )
         except Exception as exc:
             raise KnowledgeIndexError("could not initialize the Chroma index") from exc
 
@@ -307,6 +317,62 @@ class ChromaKnowledgeIndex:
         if self.reranker is not None:
             status = status.model_copy(update={"reranker": self.reranker.status})
         return status
+
+    def sync_product_knowledge(self) -> dict[str, str | int | bool]:
+        """Mirror current packaged product guidance without downloading a model."""
+
+        from .product_knowledge import packaged_product_passages
+
+        try:
+            digest, rows = packaged_product_passages()
+            metadata = self._product_collection.metadata or {}
+            if metadata.get(
+                "source_digest"
+            ) == digest and self._product_collection.count() == len(rows):
+                return {
+                    "source_digest": digest,
+                    "passage_count": len(rows),
+                    "updated": False,
+                }
+            existing = self._product_collection.get(include=[])["ids"]
+            for start in range(0, len(existing), UPSERT_BATCH_SIZE):
+                self._product_collection.delete(
+                    ids=existing[start : start + UPSERT_BATCH_SIZE]
+                )
+            for start in range(0, len(rows), UPSERT_BATCH_SIZE):
+                batch = rows[start : start + UPSERT_BATCH_SIZE]
+                self._product_collection.upsert(
+                    ids=[str(row["id"]) for row in batch],
+                    documents=[str(row["text"]) for row in batch],
+                    metadatas=[
+                        {
+                            "source_path": str(row["source_path"]),
+                            "heading": str(row["heading"]),
+                        }
+                        for row in batch
+                    ],
+                    embeddings=[
+                        np.frombuffer(cast(bytes, row["vector"]), dtype="<f2")
+                        .astype(np.float32)
+                        .tolist()
+                        for row in batch
+                    ],
+                )
+            self._product_collection.modify(
+                metadata={
+                    "index_version": INDEX_VERSION,
+                    "source_digest": digest,
+                }
+            )
+            return {
+                "source_digest": digest,
+                "passage_count": len(rows),
+                "updated": True,
+            }
+        except Exception as exc:
+            raise KnowledgeIndexError(
+                "could not synchronize product guidance to Chroma"
+            ) from exc
 
     def upsert_source(
         self, source: KnowledgeSource, chunks: Sequence[dict[str, Any]]
