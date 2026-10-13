@@ -1,7 +1,7 @@
 {
-  "change_digest": "ca8a466384d2ddc941eadbdf7a2db68586d3a8664cd8628b0fef091bec512692",
-  "reviewed_by": "Codex review of the October 13 release Host mode failure and its Core write trace",
-  "reason": "The Nebula assistant must obtain explicit operator consent before acknowledging Host filesystem and network access. Component tests cover confirmation, cancellation, model receipts, and Core readback. The browser selection exercises the assistant command at desktop and mobile widths and the production LAN Core policy journey on desktop and 320 px WebKit.",
+  "change_digest": "140f7448e363bd7d155e9fb79b349d9296d560418a324714fbef2f96fe55f659",
+  "reviewed_by": "Codex review of the October 13 release Host mode failure, Core write trace, and assistant catalog CI traces",
+  "reason": "The Nebula assistant must obtain explicit operator consent before acknowledging Host filesystem and network access. Component tests cover confirmation, cancellation, model receipts, and Core readback. The browser selection exercises the assistant command at desktop and mobile widths and the production LAN Core policy journey on desktop and 320 px WebKit. The selected catalog also includes stale assistant launcher assertions, updated to use the visible shell entry point after navigation; its iPhone WebKit link action uses a touch tap.",
   "exclusions": "This changes assistant UI behavior and its focused tests only. Python, native, and unrelated browser journeys are excluded; release impact review remains authoritative. Mobile browsers are emulated and a physical device is unavailable. No full suite is authorized.",
   "expected_tests": {
     "python": 0,

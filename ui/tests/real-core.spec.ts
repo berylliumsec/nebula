@@ -232,6 +232,26 @@ async function openProjectSwitcherFromShell(page: Page) {
   return page.getByRole("dialog", { name: "Project switcher" });
 }
 
+async function openNebulaAssistantFromShell(page: Page) {
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const mobileLauncher = page.getByRole("navigation", { name: "Mobile operator navigation" })
+    .getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
+  const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ }).first();
+  const topMenu = page.getByRole("button", { name: "Open top menu" });
+  await expect.poll(async () => await mobileLauncher.isVisible()
+    || await launcher.isVisible()
+    || await topMenu.isVisible()).toBe(true);
+  if (await mobileLauncher.isVisible()) {
+    await mobileLauncher.click();
+    return;
+  }
+  if (!await launcher.isVisible()) {
+    await topMenu.focus();
+    await expect(launcher).toBeVisible();
+  }
+  await launcher.click();
+}
+
 async function guideEntry(page: Page) {
   const guides = page.getByRole("button", {name: "Guides", exact: true});
   if ((page.viewportSize()?.width ?? 1440) <= 760 && !await guides.isVisible()) {
@@ -5572,9 +5592,7 @@ test("project execution mode Nebula help answers a Docker host-file question and
     expect(verified.ok(), await verified.text()).toBe(true);
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
-    const assistantLauncher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
-    if (!await assistantLauncher.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click();
-    await assistantLauncher.click();
+    await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
     const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
     await composer.fill("Why can't my assistant edit /etc/hosts in Docker mode?");
@@ -5586,7 +5604,9 @@ test("project execution mode Nebula help answers a Docker host-file question and
     const toolNames = (request!.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name);
     expect(toolNames).toContain("nebula_help_project_context");
     expect(JSON.stringify(request!.messages)).toContain("packaged product index");
-    await assistant.getByRole("link", { name: "Open Project Policy" }).click();
+    const policyLink = assistant.getByRole("link", { name: "Open Project Policy" });
+    if ((page.viewportSize()?.width ?? 1440) <= 760) await policyLink.tap();
+    else await policyLink.click();
     await expect(page.getByRole("dialog", { name: "Project policy and network scope" })).toBeVisible();
     await expect(assistant).toBeHidden();
   }, [
@@ -5711,9 +5731,7 @@ test("project execution mode assistant saves and shows Host then Docker on produ
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     const askMode = async (prompt: string) => {
-      const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
-      if (!await launcher.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click();
-      await launcher.click();
+      await openNebulaAssistantFromShell(page);
       const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
       await expect(assistant).toContainText(projectName);
       const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
@@ -5811,11 +5829,7 @@ test("project execution mode settings assistant opens every catalog setting from
     };
     expect(Object.keys(naturalPrompts)).toHaveLength(settingCatalog.length);
     expect(Object.keys(conversationalPrompts)).toHaveLength(settingCatalog.length);
-    const openAssistant = async () => {
-      const launcher = page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ });
-      if (!await launcher.isVisible()) await page.getByRole("button", { name: "Open top menu" }).click({ noWaitAfter: true });
-      await launcher.click({ noWaitAfter: true });
-    };
+    const openAssistant = async () => openNebulaAssistantFromShell(page);
     for (const entry of settingCatalog) {
       for (const prompt of [`open ${entry.label}`, naturalPrompts[entry.id], conversationalPrompts[entry.id]]) {
         await openAssistant();
@@ -5871,7 +5885,7 @@ test("project execution mode assistant navigates every app destination on produc
     await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
     const timings: {destination: string; elapsedMs: number}[] = [];
     for (const destination of assistantDestinations) {
-      await page.getByRole("button", { name: /^(Open|Show) Nebula assistant$/ }).click();
+      await openNebulaAssistantFromShell(page);
       const composer = page.getByRole("dialog", { name: "Nebula assistant" }).getByRole("textbox", { name: "Ask Nebula a question" });
       await composer.fill(destination.id === "projects" ? "show me my projects" : `open ${destination.label}`);
       const started = Date.now();
@@ -5880,7 +5894,6 @@ test("project execution mode assistant navigates every app destination on produc
       await expect.poll(() => `${new URL(page.url()).pathname}${new URL(page.url()).search}`).toBe(expected);
       await expect(page.locator("#main-content")).toBeVisible();
       await expect(page.locator(".route-loading")).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
       if (destination.id === "projects") await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
       timings.push({destination: destination.id, elapsedMs: Date.now() - started});
     }
