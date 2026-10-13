@@ -1,27 +1,37 @@
 {
-  "change_digest": "aab2f9443c58130a93e099e05c099ece9086dbe15a547f9935de067bd07eb540",
-  "reviewed_by": "Codex review of nebula-v3.0.15 assistant release gate traces",
-  "reason": "The failed production LAN queue journey exposed a URL session selection race: the composer accepted input before Core selected that conversation and restored its draft. A flaky linked-browser journey showed a navigation request replayed on reload before its session-storage marker was written. Select the exact real-Core queue and link cases plus their rendered desktop, compact, mobile Chromium, and mobile WebKit link and queue journeys. URL, Core session and tab state, and session storage are the relevant authorities; the shared assistant composer and browser companion impact was reviewed against these journeys.",
-  "exclusions": "No backend or native source changed. No standalone unit test covers these rendered lifecycle races, so Python, frontend unit, and native selections are empty. Unrelated assistant and browser journeys are excluded; a full suite was not requested.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 10
-  },
-  "python": [],
-  "frontend": [],
+  "change_digest": "39549c931044f3a98cca506c4f9bf764c2e2d92f54f607f7cafd6bd126e3cad6",
+  "reviewed_by": "Codex focused storage integration review",
+  "reason": "Public storage enrollment, sender and callback contracts, incident dispatch, settings assistant discovery, and the dashboard change Core and UI paths. Select exact storage, sender, entity classification, assistant catalog, and product-help checks; focused UI catalog checks; and the one production LAN journey across desktop and responsive mobile Chromium and WebKit widths.",
+  "exclusions": "No native code changed. Unrelated backend, frontend, and browser journeys and the full suites are excluded. The same production real-Core journey supplies UI and LAN acceptance for the changed workflow.",
+  "expected_tests": { "python": 23, "frontend": 17, "native": 0, "playwright": 8 },
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_storage_action_responder.py",
+    "tests/v3/test_storage_sender.py",
+    "tests/v3/test_generic_crud_exposure.py::test_every_entity_kind_is_classified_exactly_once",
+    "tests/v3/test_generic_crud_exposure.py::test_generic_routes_follow_the_classification",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_other_operator_destinations",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+  ],
+  "frontend": [
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/assistantDestinations.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "entry:assistant-queue-core/assistant-real-desktop",
-    "entry:assistant-links/assistant-real-desktop",
-    "entry:assistant-links/desktop",
-    "entry:assistant-links/compact",
-    "entry:assistant-links/mobile-chromium-ledger-390",
-    "entry:assistant-links/mobile-webkit",
-    "entry:assistant-queue-reconciliation/desktop",
-    "entry:assistant-queue-reconciliation/compact",
-    "entry:assistant-queue-reconciliation/mobile-chromium-ledger-390",
-    "entry:assistant-queue-reconciliation/mobile-webkit"
+    "entry:storage-integrations/assistant-real-desktop",
+    "entry:storage-integrations/assistant-real-compact",
+    "entry:storage-integrations/assistant-real-chromium-320",
+    "entry:storage-integrations/assistant-real-chromium-390",
+    "entry:storage-integrations/assistant-real-chromium-430",
+    "entry:storage-integrations/assistant-real-webkit-320",
+    "entry:storage-integrations/assistant-real-webkit-390",
+    "entry:storage-integrations/assistant-real-webkit-430"
   ]
 }

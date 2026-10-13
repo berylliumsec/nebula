@@ -429,6 +429,137 @@ function localNetworkIpv4(): string {
   throw new Error("A non-loopback IPv4 address is required for LAN acceptance.");
 }
 
+test("stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  const model = await startLocalModelStub({ responseContent: "The storage volume is low. Check recent growth and backups.", streamDelayMs: 0 });
+  const effects = [{ operation: "write_example_receipt", path: "/disposable/storage", source_disposition: "retained" }];
+  const digest = createHash("sha256").update(JSON.stringify(effects)).digest("hex");
+  const callbackRequests: string[] = [];
+  const callback = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    callbackRequests.push(request.url ?? "");
+    response.setHeader("Content-Type", "application/json");
+    if (request.headers.authorization !== "Bearer callback-secret") {
+      response.statusCode = 401; response.end(JSON.stringify({ error: "token required" })); return;
+    }
+    if (request.url === "/v1/diagnose") {
+      response.end(JSON.stringify({ diagnostics: "Read-only fixture check: capacity is low.", offers: [{ id: "copy", title: "Copy fixture artifact" }] }));
+    } else if (request.url === "/v1/actions/copy/preview") {
+      response.end(JSON.stringify({ effects, digest, expires_at: new Date(Date.now() + 300_000).toISOString() }));
+    } else if (request.url === "/v1/actions/copy/execute") {
+      response.end(JSON.stringify({ status: "complete", receipt: { operation: "write_example_receipt", verified: true } }));
+    } else if (request.url === "/v1/actions/copy/status") {
+      response.end(JSON.stringify({ status: "complete", receipt: { operation: "write_example_receipt", verified: true } }));
+    } else { response.statusCode = 404; response.end("{}"); }
+  });
+  await new Promise<void>(resolve => callback.listen(0, "127.0.0.1", resolve));
+  let core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), env: { STORAGE_CALLBACK_TOKEN: "callback-secret" } });
+  let api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  let sender = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/` });
+  try {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as { builtAt: string };
+    expect(build.builtAt).toBeTruthy();
+    const project = (await (await api.get("engagements")).json() as Array<{ id: string }>)[0];
+    expect(project?.id).toBeTruthy();
+    const provider = await api.post("providers", { data: {
+      name: "Fixture storage model", provider_type: "vllm", endpoint: `${model.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(provider.ok(), await provider.text()).toBe(true);
+    const providerProfile = await provider.json() as { id: string };
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "Storage acceptance browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Storage acceptance browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/storage`);
+    await expect(page.getByText("No storage sources", { exact: true })).toBeVisible();
+    await page.goto(`${core.origin}/settings#storage-integration-settings`);
+    const settings = page.locator(".storage-settings");
+    await expect(settings.getByRole("heading", { name: "Storage" })).toBeVisible();
+    await settings.getByLabel("Source name").fill("Fixture NAS");
+    await expect(settings.getByLabel("Source name")).toHaveValue("Fixture NAS");
+    await settings.getByLabel("Project").selectOption(project.id);
+    await settings.getByLabel("Assistant runtime").selectOption(`provider:${providerProfile.id}`);
+    await expect(settings.getByRole("combobox", { name: "Storage model" })).toHaveValue("security-model");
+    await settings.getByText("Optional diagnostic and action callbacks").click();
+    await settings.getByLabel("Callback origin").fill(`http://127.0.0.1:${(callback.address() as AddressInfo).port}`);
+    await settings.getByLabel("Credential reference").fill("env:STORAGE_CALLBACK_TOKEN");
+    await settings.getByRole("button", { name: "Add disabled source" }).click();
+    const issued = settings.locator(".storage-issued");
+    await expect(issued.getByText("Save this token now")).toBeVisible();
+    const sourceToken = await issued.getByLabel("Source token").inputValue();
+    const dashboard = await (await api.get("storage")).json() as { sources: Array<{ id: string }> };
+    const sourceId = dashboard.sources[0].id;
+    const observation = { schema_version: 1, event_id: "fixture-observation-1", observed_at: new Date().toISOString(),
+      kind: "snapshot", device: { id: "nas", label: "NAS One" }, volume: { id: "data", label: "Data", path: "/data" },
+      state: "warning", free_bytes: 20, total_bytes: 100 };
+    const testResponse = await sender.post("storage/test", { headers: { Authorization: `Bearer ${sourceToken}` }, data: observation });
+    expect(testResponse.ok(), await testResponse.text()).toBe(true);
+    expect((await (await api.get("storage")).json() as { devices: unknown[] }).devices).toHaveLength(0);
+    await page.goto(`${core.origin}/storage`);
+    await expect(page.locator(".storage-source-card").getByText("Disabled", { exact: true })).toBeVisible();
+    await page.goto(`${core.origin}/settings#storage-integration-settings`);
+    await settings.getByRole("checkbox", { name: "Enable reports and alerts" }).click();
+    await expect(settings.getByRole("checkbox", { name: "Enable reports and alerts" })).toBeChecked();
+    await expect.poll(async () => (await (await api.get("storage")).json() as { sources: Array<{ enabled: boolean }> }).sources[0].enabled).toBe(true);
+    const posted = await sender.post("storage/events", { headers: { Authorization: `Bearer ${sourceToken}` }, data: observation });
+    expect(posted.status(), await posted.text()).toBe(202);
+    await expect.poll(() => model.requests.length).toBeGreaterThan(0);
+    await page.goto(`${core.origin}/storage`);
+    await expect(page.getByRole("heading", { name: "Storage" })).toBeVisible();
+    await expect(page.getByText("NAS One")).toBeVisible();
+    await expect(page.getByText("20 B free of 100 B")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+    const action = page.locator(".storage-action");
+    await expect(action.getByText("Copy fixture artifact")).toBeVisible();
+    await action.getByRole("button", { name: "Preview effects" }).click();
+    await expect(action.getByRole("button", { name: "Approve exact plan and execute" })).toBeVisible();
+    await action.getByRole("button", { name: "Approve exact plan and execute" }).click();
+    await expect(action.getByText("complete", { exact: true })).toBeVisible();
+    await action.getByText("Execution receipt").click();
+    await expect(action.getByText(/verified/)).toBeVisible();
+    await page.locator(".storage-incident").getByRole("link", { name: "Open assistant chat" }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/workbench\\?view=chat&session=`));
+    const chatActions = page.locator(".storage-chat-actions");
+    await expect(chatActions.getByRole("heading", { name: "Source actions" })).toBeVisible();
+    await expect(chatActions.getByText("Copy fixture artifact")).toBeVisible();
+    await expect(chatActions.getByText("complete", { exact: true })).toBeVisible();
+    await expect(page.getByText("The storage volume is low. Check recent growth and backups.")).toBeVisible({ timeout: 20_000 });
+    expect(callbackRequests).toContain("/v1/diagnose");
+    expect(callbackRequests).toContain("/v1/actions/copy/preview");
+    expect(callbackRequests).toContain("/v1/actions/copy/execute");
+    await testInfo.attach("storage-lan-production", { body: JSON.stringify({ origin: core.origin, build: build.builtAt,
+      project: testInfo.project.name, viewport: page.viewportSize(), journey: "enroll-test-enable-report-chat-preview-approve-receipt" }), contentType: "application/json" });
+    await sender.dispose(); await api.dispose();
+    await stopRealCore(core, { keepData: true });
+    core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), dataDir: core.dataDir, token: core.token,
+      env: { STORAGE_CALLBACK_TOKEN: "callback-secret" } });
+    api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+    sender = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/` });
+    const recovered = await (await api.get("storage")).json() as { incidents: unknown[]; actions: Array<{ status: string }> };
+    expect(recovered.incidents).toHaveLength(1);
+    expect(recovered.actions[0].status).toBe("complete");
+    await page.goto(`${core.origin}/storage`);
+    await expect(page.getByText("NAS One")).toBeVisible();
+    await expect(page.locator(".storage-action").getByText("complete", { exact: true })).toBeVisible();
+  } finally {
+    await sender.dispose(); await api.dispose(); await stopRealCore(core);
+    await stopLocalModelStub(model);
+    await new Promise<void>(resolve => callback.close(() => resolve()));
+  }
+});
+
 interface BrowserPentestAuditFixture {
   core: RealCore;
   api: APIRequestContext;

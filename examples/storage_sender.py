@@ -19,7 +19,19 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+_HTTP = build_opener(_NoRedirect)
+
+
+def urlopen(request: Request, timeout: int):
+    return _HTTP.open(request, timeout=timeout)
 
 
 def sender_url(value: str) -> str:

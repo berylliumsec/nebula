@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import threading
 from urllib.error import HTTPError
 
 import pytest
@@ -69,3 +71,42 @@ def test_reference_sender_retries_identical_payload_and_requires_ack(monkeypatch
     assert len(requests) == 2
     assert all(request.data == payload for request in requests)
     assert all(request.get_header("Authorization") == "Bearer secret" for request in requests)
+
+
+def test_reference_sender_does_not_follow_redirect_with_source_token():
+    sender = sender_module()
+    forwarded = []
+
+    class Destination(BaseHTTPRequestHandler):
+        def do_POST(self):
+            forwarded.append(self.headers.get("Authorization"))
+            self.send_response(202); self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    destination = ThreadingHTTPServer(("127.0.0.1", 0), Destination)
+    destination_thread = threading.Thread(target=destination.serve_forever, daemon=True)
+    destination_thread.start()
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(307)
+            self.send_header("Location", f"http://127.0.0.1:{destination.server_port}/stolen")
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    redirect = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    redirect_thread = threading.Thread(target=redirect.serve_forever, daemon=True)
+    redirect_thread.start()
+    try:
+        url = f"http://127.0.0.1:{redirect.server_port}/api/v1/storage/events"
+        with pytest.raises(HTTPError) as error:
+            sender.send(url, "source-secret", b'{}', attempts=1)
+        assert error.value.code == 307
+        assert forwarded == []
+    finally:
+        redirect.shutdown(); redirect.server_close(); redirect_thread.join(timeout=5)
+        destination.shutdown(); destination.server_close(); destination_thread.join(timeout=5)

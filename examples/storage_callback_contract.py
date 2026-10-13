@@ -15,8 +15,20 @@ import os
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+_HTTP = build_opener(_NoRedirect)
+
+
+def urlopen(request: Request, timeout: int):
+    return _HTTP.open(request, timeout=timeout)
 
 
 def callback_origin(value: str) -> str:
@@ -44,6 +56,8 @@ def post(origin: str, path: str, body: dict, token: str | None) -> tuple[int, di
     except HTTPError as error:
         response = error
     with response:
+        if 300 <= response.status < 400:
+            raise ValueError("callback redirected; refusing to forward its bearer token")
         payload = response.read(65537)
         if len(payload) > 65536:
             raise ValueError("callback response exceeds 64 KiB")

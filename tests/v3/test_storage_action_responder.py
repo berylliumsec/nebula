@@ -6,7 +6,7 @@ import importlib.util
 import json
 import threading
 from datetime import datetime, timedelta, timezone
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -116,3 +116,40 @@ def test_public_contract_probe_checks_a_disposable_responder(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_callback_probe_does_not_forward_bearer_on_redirect():
+    forwarded = []
+
+    class Destination(BaseHTTPRequestHandler):
+        def do_POST(self):
+            forwarded.append(self.headers.get("Authorization"))
+            self.send_response(200); self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_):
+            pass
+
+    destination = ThreadingHTTPServer(("127.0.0.1", 0), Destination)
+    destination_thread = threading.Thread(target=destination.serve_forever, daemon=True)
+    destination_thread.start()
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(307)
+            self.send_header("Location", f"http://127.0.0.1:{destination.server_port}/stolen")
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    redirect = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    redirect_thread = threading.Thread(target=redirect.serve_forever, daemon=True)
+    redirect_thread.start()
+    try:
+        with pytest.raises(ValueError, match="redirected"):
+            contract.post(f"http://127.0.0.1:{redirect.server_port}", "/v1/diagnose", {}, "secret")
+        assert forwarded == []
+    finally:
+        redirect.shutdown(); redirect.server_close(); redirect_thread.join(timeout=5)
+        destination.shutdown(); destination.server_close(); destination_thread.join(timeout=5)
