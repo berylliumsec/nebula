@@ -1,13 +1,13 @@
 {
-  "change_digest": "cc9f40f2201a5bb5b16b6bd77ef377abb5bc3cbbf2151775f8d9b5ae068b1695",
-  "reviewed_by": "Codex visual review of October 13 narrow release screenshots and three identical CI retries",
-  "reason": "The narrow dark and light snapshots still showed the previous shell. The current production UI adds the page title and fifth Nebula navigation item on Terminal, plus revised Project and Settings headers. Update the six Linux baselines after visual review, then exercise the selected narrow visual, navigation, and accessibility cases.",
-  "exclusions": "Only six screenshot baselines change. Python, frontend component, native, real-Core, desktop and unrelated mobile browser cases are excluded. The daily release impact gate remains authoritative. Browser viewport is emulated; no physical device is available. No full suite is authorized.",
+  "change_digest": "983c0af9cc007179e04a0ba60024031797b86c34b8bfdbda1a2ae335e4b71199",
+  "reviewed_by": "Codex review of October 13 release real-Core traces and current compact navigation",
+  "reason": "The release's production Core journeys wait for a status chip hidden in the compact Workbench, try to switch projects before opening the navigation lens, or expect a Code tab before opening any file. The selected subagent fixture also races a generated title update when saving its permission, so it retries only revision conflicts against Core's latest value. Select the three affected project/Code journeys and the assistant pairing journeys on desktop and 390 px Chromium/WebKit to prove pairing, selection, file use, and reload on a production LAN Core.",
+  "exclusions": "This changes focused real-Core acceptance assertions only. Python, frontend component, native, mocked-browser and unrelated real-Core cases are excluded. Mobile browsers are emulated; no physical device is available. No full suite is authorized.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 7
+    "playwright": 9
   },
   "python_versions": ["3.12"],
   "python_browser": false,
@@ -16,6 +16,14 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:critical-workspaces/narrow"
+    "entry:file-search-real-core/real-core",
+    "entry:project-lifecycle/real-core",
+    "entry:project-switcher-search/real-core",
+    "entry:harness-delete-core/assistant-real-desktop",
+    "entry:harness-delete-core/assistant-real-chromium-390",
+    "entry:harness-delete-core/assistant-real-webkit-390",
+    "entry:conversation-progress/assistant-real-desktop",
+    "entry:conversation-progress/assistant-real-chromium-390",
+    "entry:conversation-progress/assistant-real-webkit-390"
   ]
 }
