@@ -1,5 +1,5 @@
 {
-  "change_digest": "c56269c7f262dccaf8fd2075d83bb47042e688038e574f9e92cc6b1b9d005ca3",
+  "change_digest": "d6a3e91bb32c428091742894a8244d033c0d14d5a52b6a43c30528aac1ece62a",
   "reviewed_by": "Codex focused review of the October 13 LAN headless Core rollout",
   "reason": "The operator opens the existing LAN Assistant browser, discovers the headless security MCP and dashboard, starts a scoped Core-owned headless session, observes its status, stops it, and reloads the LAN page. The selected Python API and real browser/proxy integration tests cover capability registration, isolated request capture and protected upstream access. The dashboard component and browser matrix cover presentation and controls. Production real-Core journeys cover desktop, compact, mobile Chromium and mobile WebKit over a non-loopback origin. CI stages the proxy only for the selected headless Python file.",
   "exclusions": "No Electron visible-browser cutover or native shell change is included. The current LAN browser remains available, so native tests and unrelated browser, settings, and full suites are excluded. Physical device and packaged Electron acceptance remain separate from this server-focused rollout.",

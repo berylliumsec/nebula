@@ -87,9 +87,11 @@ jobs:
         run: poetry install --no-interaction
       - name: Install Chromium for browser runtime regression tests
         if: env.RUN_SELECTED == 'true' && needs.selection.outputs.python_browser == 'true'
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
-        run: poetry run playwright install --with-deps chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+          poetry run playwright install-deps chromium
+          poetry run python -m scripts.stage_playwright_runtime "$RUNNER_TEMP/playwright-browsers" --target x86_64-unknown-linux-gnu
       - name: Install isolated proxy for selected headless integration tests
         if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/v3/test_agent_security_headless.py')
         run: |
