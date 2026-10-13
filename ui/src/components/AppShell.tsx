@@ -91,7 +91,7 @@ export function AppShell() {
   const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
     setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
   }, []);
-  const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string, mode: "docker" | "host") => {
+  const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => {
     setSettingLens((current) => current?.entry.id === entry.id
       ? { ...current, refreshKey: current.refreshKey + 1, status, statusMode: mode }
       : current);

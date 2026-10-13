@@ -5,15 +5,15 @@ import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import { logDiagnostic } from "../diagnostics";
-import { sharesToolResultsAlways, type ToolSharingRuntime } from "../api/toolSharingConsent";
-import { useConfirmation } from "./DialogSystem";
+import type { ToolSharingRuntime } from "../api/toolSharingConsent";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeContext";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import type { ChatMessage } from "../api/types";
-import { assistantTurnOptions, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
+import { assistantTurnOptions, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
+import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import styles from "./NebulaControlAssistant.module.css";
 
@@ -33,10 +33,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onOpenSetting: (entry: SettingCatalogEntry) => void;
   onNavigate: (path: string) => void;
   onCloseSetting?: () => void;
-  onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode: "docker" | "host") => void;
+  onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
   const { api, engagement, providers, harnesses } = useWorkspace();
-  const confirm = useConfirmation();
   const { preference, setPreference } = useTheme();
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
@@ -209,14 +208,6 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         onSavedSetting?.(entry, `${projectName} is already in ${modeLabel} mode.`, mode);
         confirmation = `${projectName} is already in ${modeLabel} mode. No change was needed.`;
       } else {
-        const approved = await confirm({
-          title: `Switch ${projectName} to ${modeLabel} mode?`,
-          message: mode === "host"
-            ? "Commands will run as the Nebula server's OS user. Agents can access other host folders and networks allowed by that account. Docker isolation, scope-filtered networking, and container VPN routing will not apply. Existing sessions keep their current policy."
-            : "New command sessions will run inside Docker. Existing sessions keep their current policy.",
-          confirmLabel: `Switch to ${modeLabel} mode`,
-        });
-        if (!approved) return "The project policy was not changed.";
         await api.updateAutomationPolicy(projectId, {
           executionMode: mode,
           hostAccessAcknowledged: mode === "host",
@@ -258,9 +249,46 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
   };
 
+  const applyProjectScope = async (changes: Record<string, unknown>): Promise<string> => {
+    if (!api || !engagement) throw new Error("Choose a project to change its scope.");
+    const entry = settingCatalog.find((item) => item.id === "settings.network-scope")!;
+    const projectId = engagement.id;
+    const projectName = engagement.name;
+    setHidden(true);
+    onOpenSetting(entry);
+    try {
+      const observed = await saveAssistantProjectScope(api, projectId, changes);
+      const mode = observed.bypass_permissions === true ? "Allow all"
+        : observed.allow_all_targets === true ? "All destinations" : "Bounded";
+      const status = `${projectName} saved in ${mode} mode at scope revision ${observed.revision}.`;
+      onSavedSetting?.(entry, status);
+      return `${status} New sessions use this scope; existing sessions keep their frozen policy.`;
+    } finally {
+      onCloseSetting?.();
+      setHidden(false);
+    }
+  };
+
+  const applyHeadlessSession = async (action: "start" | "stop"): Promise<string> => {
+    if (!api || !engagement) throw new Error("Choose a project to configure its headless browser.");
+    const projectId = engagement.id;
+    if (action === "start") await api.startHeadlessSecuritySession(projectId);
+    else await api.stopHeadlessSecuritySession(projectId);
+    const observed = await api.getHeadlessSecuritySession(projectId);
+    if (action === "start" && observed.state !== "active") {
+      throw new Error(`Core did not start the headless security session (${observed.state}). ${observed.last_start_error ?? "Retry after checking Core browser readiness."}`);
+    }
+    if (action === "stop" && observed.state === "active") {
+      throw new Error("Core still reports an active headless security session. Retry stopping it.");
+    }
+    return `${engagement.name} headless security browser: ${observed.state}${observed.session_id ? ` · session ${observed.session_id}` : ""}.`;
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
     if (action.kind === "project_execution_mode") return applyProjectMode(action);
+    if (action.kind === "project_scope") return applyProjectScope(action.changes);
+    if (action.kind === "headless_session") return applyHeadlessSession(action.action);
     if (action.kind === "navigate") return openDestination(action.destination);
     onOpenSetting(action.setting);
     setHidden(true);
@@ -321,6 +349,32 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       return;
     }
+    const scopeChange = projectScopeChange(prompt);
+    const headlessChange = headlessSessionChange(prompt);
+    if (scopeChange || headlessChange) {
+      if (!api || !engagement) { setError("Choose a project before changing its policy or browser session."); return; }
+      setDraft("");
+      setError("");
+      setBusy(true);
+      setMessages((current) => [...current, { role: "user", content: prompt }]);
+      try {
+        if (scopeChange) {
+          const saved = await applyProjectScope(scopeChange);
+          setMessages((current) => [...current, { role: "assistant", content: saved }]);
+        }
+        if (headlessChange) {
+          const observed = await applyHeadlessSession(headlessChange);
+          setMessages((current) => [...current, { role: "assistant", content: observed }]);
+        }
+      } catch (caught) {
+        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_change_failed", message: "The assistant could not save the requested setting.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
+        setError(caught instanceof Error ? caught.message : "Core could not save the setting. Retry after checking the selected project.");
+        setDraft(prompt);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const destination = destinationToOpen(prompt);
     if (destination) {
       setDraft("");
@@ -360,12 +414,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setError(`${toolRuntime.profile.name} is configured for text only. Permit project data in Settings to use settings tools.`);
         return;
       }
-      allowCloudToolResults = sharesToolResultsAlways(toolRuntime) || await confirm({
-        title: "Share settings tool results?",
-        message: `Allow this turn to send bounded Nebula help and settings tool inputs and results to ${toolRuntime.profile.name}? Core keeps the saved settings, and risky actions still require approval.`,
-        confirmLabel: "Allow this turn",
-      });
-      if (!allowCloudToolResults) return;
+      // The profile's saved sensitive-data permission is the standing consent
+      // for this dedicated assistant; a settings instruction needs no second dialog.
+      allowCloudToolResults = true;
     }
     const controller = new AbortController();
     abort.current = controller;
@@ -432,7 +483,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     [entry.label, entry.description, ...entry.keywords].join(" ").toLowerCase().includes(query.toLowerCase())) : settingCatalog;
   const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
     [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
-  const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up"]);
+  const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up", "settings.network-scope", "settings.automation-runtime"]);
   const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Nebula assistant" style={{ left: position.x, top: position.y }} hidden={hidden}>
     <div className={styles.header}>
       <button className="icon-button subtle" type="button" aria-label="Move Nebula assistant" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
