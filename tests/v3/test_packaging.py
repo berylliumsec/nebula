@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -31,7 +32,7 @@ from scripts.stage_playwright_runtime import (
     PlaywrightRuntimeStageError,
     stage_playwright_runtime,
 )
-from scripts.stage_notebook_runtime import prune_runtime
+from scripts.stage_notebook_runtime import prepare_appimage_rpaths, prune_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 CURRENT_VERSION = (ROOT / "NEBULA3_VERSION").read_text(encoding="utf-8").strip()
@@ -761,6 +762,32 @@ def test_notebook_runtime_stage_prunes_dependency_tests_and_bytecode(tmp_path):
     assert not caches.exists()
     assert (packages / "IPython/__init__.py").is_file()
     assert (runtime / "worker.py").is_file()
+
+
+def test_notebook_runtime_rpaths_are_linuxdeploy_stable(tmp_path):
+    runtime = tmp_path / "notebook-runtime"
+    python = runtime / "python/bin/python3"
+    python.parent.mkdir(parents=True)
+    shutil.copy2("/bin/true", python)
+    uv = runtime / "uv"
+    shutil.copy2("/bin/true", uv)
+
+    prepare_appimage_rpaths(runtime)
+
+    expected = {
+        python: "$ORIGIN/../lib:$ORIGIN",
+        uv: "$ORIGIN",
+    }
+    for executable, rpath in expected.items():
+        assert (
+            subprocess.check_output(
+                ["patchelf", "--print-rpath", str(executable)], text=True
+            ).strip()
+            == rpath
+        )
+        staged_digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+        subprocess.run(["patchelf", "--set-rpath", rpath, str(executable)], check=True)
+        assert hashlib.sha256(executable.read_bytes()).hexdigest() == staged_digest
 
 
 def test_release_restages_notebook_runtime_after_validation():

@@ -165,6 +165,14 @@ jobs:
           if grep -Fq 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core' "$RUNNER_TEMP/selected-tests.txt"; then
             echo 'security_proxy=true' >> "$GITHUB_OUTPUT"
           fi
+          if grep -Fq 'notebook real Core runs bundled Python on a LAN origin and restores output' "$RUNNER_TEMP/selected-tests.txt"; then
+            echo 'notebook_runtime=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install patchelf for the selected notebook journey
+        if: steps.selected_tests.outputs.notebook_runtime == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
       - name: Prepare verified Chromium for the selected assistant browser journeys
         if: steps.selected_tests.outputs.managed_browser == 'true'
         run: |
