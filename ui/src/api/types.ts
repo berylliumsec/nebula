@@ -145,6 +145,7 @@ export interface AssistantDefaults {
 
 export interface EngagementCreateRequest {
   name: string;
+  hostAccessAcknowledged?: boolean;
   description?: string;
   clientName?: string;
   status?: EngagementSummary["status"];

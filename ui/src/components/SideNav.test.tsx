@@ -178,5 +178,9 @@ describe("SideNav new project form", () => {
     expect(await within(switcher).findByRole("alert")).toHaveTextContent("Core rejected the project.");
     expect(within(switcher).getByRole("button", { name: "Cancel" })).toBeEnabled();
     expect(workspace.createEngagement).toHaveBeenCalledTimes(1);
+    expect(workspace.createEngagement).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Quarterly review",
+      hostAccessAcknowledged: true,
+    }));
   });
 });

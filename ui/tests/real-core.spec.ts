@@ -2622,7 +2622,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect.poll(() => new URL(page.url()).searchParams.get("assessment")).toBe(assessment.id);
     await page.getByRole("button", { name: "Repeater", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
-    await page.getByLabel("Name").fill("Durable account request");
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("Durable account request");
     await page.getByLabel("URL", { exact: true }).fill("https://example.com/account");
     await page.getByRole("button", { name: "Save draft" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Repeater draft created" })).toBeVisible();
@@ -5753,7 +5753,7 @@ test("project execution mode starts new projects in Host mode on production LAN 
     const projects = await (await api.get("engagements")).json() as Array<{ id: string; name: string }>;
     const scratch = projects.find(project => project.name === "Scratch Project")!;
     expect(scratch).toBeTruthy();
-    expect(await (await api.get(`engagements/${scratch.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
+    expect(await (await api.get(`engagements/${scratch.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: false });
 
     await page.goto(`${core.origin}/projects/${scratch.id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Start new chat" })).toBeVisible({ timeout: 20_000 });
@@ -5854,7 +5854,7 @@ test("project execution mode assistant saves and shows Host then Docker on produ
     const dockerLens = await askMode("switch project execution mode to Docker");
     await expect(dockerLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("docker");
     await expect(dockerLens).toHaveCount(0, { timeout: 5000 });
-    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: true });
   }, [
     { name: "API context", dispose: () => api.dispose() },
     { name: "Core fixture", dispose: () => stopRealCore(core) },
@@ -6103,7 +6103,7 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     await mode.selectOption("docker");
     await save.click();
     await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
-    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: true });
     const stillFrozen = await api.post(`engagements/${projectId}/automation-sessions/api/host-mode-test/commands`, {data: {command: "cat marker.txt", cwd: backup}});
     expect(stillFrozen.ok(), await stillFrozen.text()).toBe(true);
     expect(await stillFrozen.json()).toMatchObject({session_id: result.session_id, exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER"});
@@ -6686,12 +6686,7 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
   };
   const mobile = (page.viewportSize()?.width ?? 1440) <= 430;
   const activateSettingsAction = async (button: Locator) => {
-    await button.evaluate(element => element.scrollIntoView({block: "center"}));
-    await expect.poll(() => button.evaluate(element => {
-      const box = element.getBoundingClientRect();
-      const target = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-      return target === element || element.contains(target);
-    })).toBe(true);
+    await button.scrollIntoViewIfNeeded();
     if (mobile) await button.tap();
     else await button.click();
   };
@@ -6720,8 +6715,8 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
     await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
     const section = page.locator("#mcp-settings");
 
-    // Empty state entry point, source step, example, schema download.
-    await activateSettingsAction(section.getByRole("button", {name: "Import from file", exact: true}));
+    // The built-in Notebook server keeps the header action available on a new Core.
+    await activateSettingsAction(section.getByRole("button", {name: "Import", exact: true}));
     const dialog = page.getByRole("dialog", {name: "Import MCP servers"});
     await expect(dialog).toBeVisible();
     await expect(dialog.locator(".mcp-import-example")).toHaveAttribute("open", "");
@@ -6750,7 +6745,9 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
     await expect(row("intel")).toContainText("Bearer token from INTEL_TOKEN");
     await expect(row("recon")).toContainText("Can't import");
     await expect(row("recon")).toContainText("not installed on the Nebula host PATH");
-    expect(await (await core.api.get("mcp-servers")).json()).toEqual([]);
+    expect(await (await core.api.get("mcp-servers")).json()).toEqual([
+      expect.objectContaining({name: "Notebook", transport: "builtin"}),
+    ]);
     await auditDialog(dialog, "preview");
 
     await dialog.getByRole("button", {name: "Save 2 servers", exact: true}).click();

@@ -1203,6 +1203,12 @@ class ApprovalDecisionRequest(NebulaModel):
     edited_arguments: dict[str, Any] | None = None
 
 
+class EngagementCreateRequest(Engagement):
+    """Creation-only consent; this field is never persisted on the project."""
+
+    host_access_acknowledged: bool = False
+
+
 class AutomationPolicyUpdateRequest(NebulaModel):
     execution_mode: Literal["docker", "host"] | None = None
     host_access_acknowledged: bool = False
@@ -14330,6 +14336,12 @@ def _register_crud_routes(
                 raise ValueError(
                     f"cannot set server-managed fields: {sorted(protected)}"
                 )
+            host_access_acknowledged = False
+            if isinstance(entity, EngagementCreateRequest):
+                host_access_acknowledged = entity.host_access_acknowledged
+                entity = Engagement.model_validate(
+                    entity.model_dump(exclude={"host_access_acknowledged"})
+                )
             if isinstance(entity, ProviderProfile):
                 entity = entity.model_copy(
                     update={
@@ -14355,7 +14367,11 @@ def _register_crud_routes(
                 )
             entity_validator.validate_create(entity)
             created = (
-                create_engagement_with_default_scope(store, entity)
+                create_engagement_with_default_scope(
+                    store,
+                    entity,
+                    host_access_acknowledged=host_access_acknowledged,
+                )
                 if isinstance(entity, Engagement)
                 else relation_service.create_legacy_entity(entity)
                 if isinstance(entity, LEGACY_RELATION_MODELS)
@@ -14366,7 +14382,10 @@ def _register_crud_routes(
             return created
 
         create_entity.__name__ = f"create_{resource.replace('-', '_')}"
-        create_entity.__annotations__ = {"entity": model, "return": model}
+        create_entity.__annotations__ = {
+            "entity": EngagementCreateRequest if model is Engagement else model,
+            "return": model,
+        }
         return create_entity
 
     def make_list() -> Callable[..., Any]:
