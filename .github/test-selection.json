@@ -1,14 +1,9 @@
 {
-  "change_digest": "8c31df0c3a23af4a7f7caad58b191a01d3c00bbe1feb031f017309f42b1cb590",
-  "reviewed_by": "Codex review of October 13 mobile workspace audit failure and screenshot",
-  "reason": "At 320 px the Findings header's Workbench back label and redundant sidebar control consume the room needed for its New finding action, leaving half the 44 px button clipped. Quiet Lens also hides all page actions when its mobile top menu opens. The narrow viewport keeps an accessible, titled back icon, hides the sidebar control, and reveals page actions in the open Quiet Lens top menu. Seven narrow visual/navigation/accessibility cases and one mobile WebKit audit cover the mock shell. The selected production LAN Core test checks the full Finding action, failure, retry, and reload journey at 320 px WebKit, including unclipped 44 px geometry in the default theme.",
-  "exclusions": "This changes narrow mobile shell geometry and Quiet Lens page-action visibility. Python, native, frontend unit, desktop, unrelated browser areas, and a full suite are excluded. Browser viewports are emulated; no physical device is available.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 9
-  },
+  "change_digest": "8047a6890ec535f61baaab5360f16847be1255efbc1799ab904f53ef4c5cfa5e",
+  "reviewed_by": "Codex review of October 13 conversation and goal release traces",
+  "reason": "The release mock routes list saved conversations but answer the new per-session Core read with an empty array. The operator journey is opening a saved conversation, seeing its transcript and goal, switching to another conversation, then using goal controls. The session detail read is the authority for the selected conversation. A compact conversation list also changes transcript geometry, so opening it must preserve the reading position until the next session is selected or the list closes. Focused browser entries cover these states in desktop, compact, Chromium phone, and WebKit phones at 320, 390, and 430 px, with a production LAN Core 820 px switch, held refresh, retry, and reload journey.",
+  "exclusions": "Python, native, frontend unit, unrelated real-Core and other browser areas are excluded; no full suite is authorized. Phone viewports are emulated and no physical device is available. The desktop Core journey uses a compact desktop viewport, not a physical phone.",
+  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 14},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
@@ -16,8 +11,15 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:critical-workspaces/narrow",
-    "entry:release-ui-workspace-audit/mobile-webkit-small",
-    "entry:release-ui-workspace-audit/assistant-real-webkit-320"
+    "entry:structured-results/desktop",
+    "entry:structured-results/mobile-webkit",
+    "entry:goal-live-tokens/desktop",
+    "entry:goal-live-tokens/mobile-webkit",
+    "entry:conversation-switch-performance/compact",
+    "entry:conversation-switch-performance/mobile-chromium-small",
+    "entry:conversation-switch-performance/mobile-webkit",
+    "entry:conversation-switch-performance/mobile-webkit-small",
+    "entry:conversation-switch-performance/mobile-webkit-wide",
+    "entry:conversation-switch-performance/assistant-real-desktop"
   ]
 }
