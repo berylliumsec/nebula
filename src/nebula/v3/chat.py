@@ -5731,6 +5731,7 @@ class ChatService:
                     self.store,
                     request.mcp_server_ids,
                     bypass_permissions=bypass_permissions,
+                    engagement_id=engagement_id,
                 )
             except (McpProbeError, ValueError) as exc:
                 raise ChatConfigurationError(str(exc)) from exc
@@ -11001,6 +11002,7 @@ class ChatService:
             self.store,
             exclude={item.id for item in selected},
             bypass_permissions=scope.bypass_permissions,
+            engagement_id=engagement_id,
         )
 
     def _web_search_selected(self, engagement_id: str | None) -> bool:

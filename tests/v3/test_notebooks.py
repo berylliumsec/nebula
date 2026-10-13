@@ -301,7 +301,7 @@ def test_queued_interrupt_during_kernel_start_remains_interrupted(tmp_path):
         result = await notebooks.wait_run(run.id, engagement_id=project.id, timeout=5)
         assert result["run"]["status"] == "interrupted"
         assert store.get(NotebookRun, run.id).status == "interrupted"
-        assert [event["kind"] for event in result["events"]].count(
+        assert [event["event_type"] for event in result["events"]].count(
             "notebook.completed"
         ) == 1
 

@@ -47,11 +47,11 @@ export function McpServerChoices({ api, projectId, servers, selectedIds, disable
         : "On-demand tools are off for this project, so only checked servers are sent."}</small>}
       {servers.length ? servers.map((server) => {
         const selected = selectedIds.includes(server.id);
-        const state: McpServerState = selected ? "always" : onDemand ? "on-demand" : "not-sent";
+        const state: McpServerState = selected ? "always" : server.projectId ? "not-sent" : onDemand ? "on-demand" : "not-sent";
         return (
           <label className="chat-knowledge-toggle chat-mcp-choice" data-state={state} key={server.id}>
             <input type="checkbox" checked={selected} disabled={disabled} onChange={(event) => onChange(event.target.checked ? [...selectedIds, server.id] : selectedIds.filter((id) => id !== server.id))} />
-            <span>{server.name}<small>{server.tools.length} tools · <span className="chat-mcp-state">{STATE_LABELS[state]}</span></small></span>
+            <span>{server.name}<small>{server.tools.length} tools · <span className="chat-mcp-state">{server.projectId ? selected ? "Selected for this assistant" : "Select to grant this assistant" : STATE_LABELS[state]}</span></small></span>
           </label>
         );
       }) : <small>No enabled MCP profiles</small>}
