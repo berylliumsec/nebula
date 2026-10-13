@@ -101,7 +101,7 @@ def test_entries_are_deduplicated_and_stably_ordered():
     assert keys == sorted(set(keys))
 
 
-def test_sharded_core_api_and_full_shell_entries_remain_distinct():
+def test_sharded_core_api_and_shell_entries_deduplicate():
     result = select_plan(
         MANIFEST,
         "base",
@@ -113,9 +113,10 @@ def test_sharded_core_api_and_full_shell_entries_remain_distinct():
     real_core = [
         entry for entry in result["include"] if entry["project"] == "real-core"
     ]
-    assert len(real_core) == 3
+    assert len(real_core) == 4
     assert {(entry["area"], entry["shard"]) for entry in real_core} == {
-        ("core-api", "1/2"), ("core-api", "2/2"), ("desktop-shell", "1/1")
+        ("core-api+desktop-shell", f"{shard}/4")
+        for shard in range(1, 5)
     }
 
 
@@ -282,8 +283,8 @@ def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():
     # The cold Kali build is opt-in outside CI, so unfiltered Core entries do
     # not require the disposable container runtime.
     for selector, shards in (
-        ("entry:core-api/real-core", {"1/2", "2/2"}),
-        ("entry:desktop-shell/real-core", {"1/1"}),
+        ("entry:core-api/real-core", {"1/4", "2/4", "3/4", "4/4"}),
+        ("entry:desktop-shell/real-core", {"1/4", "2/4", "3/4", "4/4"}),
         ("entry:full/real-core", {"1/1"}),
     ):
         entries = selected_entries(MANIFEST, [selector])
@@ -293,3 +294,10 @@ def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():
             assert entry["test_match"] == "tests/real-core.spec.ts"
             assert not entry.get("grep")
             assert entry["runtime"] == "real-core"
+
+
+def test_assistant_real_core_uses_bounded_shards():
+    entries = selected_entries(MANIFEST, ["entry:assistant/assistant-real-desktop"])
+    assert {entry["shard"] for entry in entries} == {"1/4", "2/4", "3/4", "4/4"}
+    assert all(entry["test_match"] == "tests/real-core.spec.ts" for entry in entries)
+    assert all(entry["runtime"] == "real-core" for entry in entries)

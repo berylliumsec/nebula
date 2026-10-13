@@ -1663,7 +1663,10 @@
       {"area":"assistant","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
-      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/4"},
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"2/4"},
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"3/4"},
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"4/4"}
     ],
     "assistant-direct-request": [
       {"area":"assistant-direct-request","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade clear request reaches the model without repeat confirmation on production LAN Core","runtime":"real-core","shard":"1/1"},
@@ -1804,8 +1807,10 @@
       {"area":"terminal-assistant","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"Terminal opens Assistant beside the live shell|Assistant opens the live terminal beside the chat","runtime":"mock","shard":"1/1"}
     ],
     "core-api": [
-      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/2"},
-      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"2/2"}
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/4"},
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"2/4"},
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"3/4"},
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"4/4"}
     ],
     "quiet-lens": [
       {"area":"quiet-lens","project":"desktop","test_match":"tests/interface.spec.ts","grep":"Quiet Lens is the first-run default theme|theme picker Quiet Lens reveals real navigation and keeps multiline chat visible","runtime":"mock","shard":"1/1"},
@@ -1873,7 +1878,10 @@
     ],
     "desktop-shell": [
       {"area":"desktop-shell","project":"desktop","test_match":"tests/interface.spec.ts","grep":"desktop|window|updater|paired-device","runtime":"mock","shard":"1/1"},
-      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/4"},
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"2/4"},
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"3/4"},
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"4/4"}
     ],
     "nebula-theme-command": [
       {"area":"nebula-theme-command","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization Nebula assistant opens from every screen and changes this device theme","runtime":"mock","shard":"1/1"},
