@@ -283,7 +283,7 @@ export function AppShell() {
                 sidebarCollapsed={sidebarCollapsed && !quietLens}
                 variant={zero ? "zero" : "standard"}
                 lensOpen={quietLens && quietTopOpen}
-                onToggleLens={quietLens ? () => setQuietTopOpen((value) => !value) : undefined}
+                onToggleLens={quietLens ? () => { quietTopRevealSuppressed.current = false; setQuietTopOpen(true); } : undefined}
                 onRevealLens={quietLens ? () => { if (!quietTopRevealSuppressed.current) setQuietTopOpen(true); } : undefined}
                 onLeaveLens={quietLens ? () => { quietTopRevealSuppressed.current = false; setQuietTopOpen(false); } : undefined}
               />

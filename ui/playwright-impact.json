@@ -158,6 +158,11 @@
     "release-mobile-debugger": [
       {"area":"release-mobile-debugger","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade mobile Code keeps its controls readable and saves to authoritative real-Core state","runtime":"real-core","shard":"1/1"}
     ],
+    "release-goal-panel-race": [
+      {"area":"release-goal-panel-race","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode keeps the panel and its actions on Core's revision","runtime":"mock","shard":"1/1"},
+      {"area":"release-goal-panel-race","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode keeps the panel and its actions on Core's revision","runtime":"mock","shard":"1/1"},
+      {"area":"release-goal-panel-race","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode keeps the panel and its actions on Core's revision","runtime":"mock","shard":"1/1"}
+    ],
     "release-inert-provider-ui": [
       {
         "area": "release-inert-provider-ui",
@@ -1788,6 +1793,9 @@
     ],
     "release-core-lifecycle": [
       {"area":"release-core-lifecycle","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade focused work surfaces retain real Core project context|assistant upgrade mobile Code keeps its controls readable|assistant upgrade edits a sent message in place|assistant upgrade large side chat opens|stabilization real Core keeps the Subagents choice|assistant upgrade real Core shows the live queue position|assistant upgrade real Core keeps a subagent wait attached","runtime":"real-core","shard":"1/1"}
+    ],
+    "release-core-gate-repairs": [
+      {"area":"release-core-gate-repairs","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"persists network scope changed through universal settings search|focused work surfaces retain real Core project context|project execution mode uses production Code|project creation switches canonical project|foundation production LAN reads durable conversation|project removal archives, retries, restores|preserves note drafts and reuses saved notes|Library makes uploads visible|creation survives failure and remains discoverable|finding drafts stay bound|settings separate saving from health recovery","runtime":"real-core","shard":"1/1"}
     ],
     "project-lifecycle": [
       {"area":"project-lifecycle","project":"desktop","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
