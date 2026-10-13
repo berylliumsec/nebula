@@ -85,6 +85,11 @@ jobs:
       - name: Install project
         if: env.RUN_SELECTED == 'true'
         run: poetry install --no-interaction
+      - name: Install patchelf for selected notebook packaging regression
+        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/v3/test_packaging.py::test_notebook_runtime_rpaths_are_linuxdeploy_stable')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
       - name: Install Chromium for browser runtime regression tests
         if: env.RUN_SELECTED == 'true' && needs.selection.outputs.python_browser == 'true'
         run: |
