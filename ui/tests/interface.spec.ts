@@ -3219,6 +3219,32 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
   }
 });
 
+test("stabilization workspace bootstrap opens Workbench while evidence is still loading", async ({ page }) => {
+  let releaseEvidence = () => undefined;
+  const evidenceGate = new Promise<void>((resolve) => { releaseEvidence = resolve; });
+  let requestedEvidence = 0;
+  await page.route(/\/api\/v1\/evidence(?:\?|$)/, async (route) => {
+    requestedEvidence += 1;
+    await evidenceGate;
+    try {
+      await route.fulfill({status: 200, json: []});
+    } catch {
+      // A superseded bootstrap may cancel its own request before release.
+    }
+  });
+  try {
+    await page.goto("/");
+    await expect.poll(() => requestedEvidence).toBeGreaterThan(0);
+    await expect(page.locator(".app-shell")).toBeVisible();
+    await expect(page.locator("#main-content")).toBeVisible();
+    await expect(page.getByText("Preparing your workspace…")).toBeHidden();
+    await expect(page.locator(".workspace-state-banner.failed")).toHaveCount(0);
+  } finally {
+    releaseEvidence();
+  }
+  await expect(page.getByText("Preparing your workspace…")).toBeHidden();
+});
+
 test("stabilization project sections remain reachable without horizontal clipping", async ({ page }) => {
   await openWorkspace(page, "/projects/scratch-project", "Scratch Project");
   const sections = page.getByRole("navigation", {name: "Project sections"});
