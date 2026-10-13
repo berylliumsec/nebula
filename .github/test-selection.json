@@ -1,25 +1,14 @@
 {
-  "change_digest": "8047a6890ec535f61baaab5360f16847be1255efbc1799ab904f53ef4c5cfa5e",
-  "reviewed_by": "Codex review of October 13 conversation and goal release traces",
-  "reason": "The release mock routes list saved conversations but answer the new per-session Core read with an empty array. The operator journey is opening a saved conversation, seeing its transcript and goal, switching to another conversation, then using goal controls. The session detail read is the authority for the selected conversation. A compact conversation list also changes transcript geometry, so opening it must preserve the reading position until the next session is selected or the list closes. Focused browser entries cover these states in desktop, compact, Chromium phone, and WebKit phones at 320, 390, and 430 px, with a production LAN Core 820 px switch, held refresh, retry, and reload journey.",
-  "exclusions": "Python, native, frontend unit, unrelated real-Core and other browser areas are excluded; no full suite is authorized. Phone viewports are emulated and no physical device is available. The desktop Core journey uses a compact desktop viewport, not a physical phone.",
-  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 14},
+  "change_digest": "5fbc3f406e6ad114e7f432bc9e262c322d610aad8ccb62003c574fb217364cb2",
+  "reviewed_by": "Codex review of October 13 Workbench follow-up toolbar release screenshot",
+  "reason": "The release's desktop Workbench follow-up journey enables next-step suggestions, confirms the saved toggle, and captures the visible toolbar before entering Settings. The image baseline shows controls from an older toolbar layout; the current toolbar uses the purpose-built next-step control. Four focused desktop visual cases check that the refreshed baseline matches the current operator layout and that neighboring Workbench, project, and appearance snapshots remain stable.",
+  "exclusions": "This is a desktop Linux screenshot baseline refresh, with no behavior or API change. Python, native, frontend unit, mobile browsers, unrelated browser areas, and a full suite are excluded. The visible image will be manually reviewed before any binary commit approval request.",
+  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 4},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:structured-results/desktop",
-    "entry:structured-results/mobile-webkit",
-    "entry:goal-live-tokens/desktop",
-    "entry:goal-live-tokens/mobile-webkit",
-    "entry:conversation-switch-performance/compact",
-    "entry:conversation-switch-performance/mobile-chromium-small",
-    "entry:conversation-switch-performance/mobile-webkit",
-    "entry:conversation-switch-performance/mobile-webkit-small",
-    "entry:conversation-switch-performance/mobile-webkit-wide",
-    "entry:conversation-switch-performance/assistant-real-desktop"
-  ]
+  "playwright": ["entry:release-ui-visual-baselines/desktop"]
 }
