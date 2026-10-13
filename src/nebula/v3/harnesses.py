@@ -9544,7 +9544,10 @@ class HarnessRuntimeService:
         )
         try:
             profiles = resolve_mcp_profiles(
-                self.store, ids, bypass_permissions=scope.bypass_permissions
+                self.store,
+                ids,
+                bypass_permissions=scope.bypass_permissions,
+                engagement_id=engagement_id,
             )
         except Exception as exc:
             raise HarnessConfigurationError(_safe_error(exc)) from exc
@@ -13611,6 +13614,7 @@ class HarnessRuntimeService:
             HEADLESS_SESSION_SCHEMA,
             SETTINGS_API_SCHEMA_SCHEMA,
             SETTINGS_API_REQUEST_SCHEMA,
+            NOTEBOOK_SETTINGS_SCHEMA,
             SEARCH_SCHEMA,
             THEME_SCHEMA,
         )
@@ -13684,6 +13688,18 @@ class HarnessRuntimeService:
                     "nebula.settings.headless_session",
                     "Start or stop this project's Core-owned headless security browser, separate from the Kali command runtime. The browser reads back the resulting state.",
                     HEADLESS_SESSION_SCHEMA,
+                    False,
+                ),
+                (
+                    "nebula.settings.notebook",
+                    "Read the selected project's Notebook mode, Host consent, network policy and MCP grant.",
+                    CATALOG_SCHEMA,
+                    True,
+                ),
+                (
+                    "nebula.settings.set_notebook",
+                    "Save Notebook mode, MCP grant or network availability. First Host consent remains operator-only.",
+                    NOTEBOOK_SETTINGS_SCHEMA,
                     False,
                 ),
                 (
@@ -14189,6 +14205,8 @@ class HarnessRuntimeService:
             "nebula.settings.set_project_mode",
             "nebula.settings.set_project_scope",
             "nebula.settings.headless_session",
+            "nebula.settings.notebook",
+            "nebula.settings.set_notebook",
             "nebula.settings.set_post_tool",
             "nebula.settings.models",
             "nebula.settings.set_default_model",
@@ -14203,6 +14221,8 @@ class HarnessRuntimeService:
                 request_project_execution_mode,
                 request_project_scope,
                 request_headless_session,
+                notebook_settings,
+                set_notebook_settings,
                 set_default_model,
                 set_post_tool_preference,
             )
@@ -14250,6 +14270,17 @@ class HarnessRuntimeService:
                 value = request_project_scope(arguments)
             elif name == "nebula.settings.headless_session":
                 value = request_headless_session(arguments)
+            elif name == "nebula.settings.notebook":
+                value = notebook_settings(self.store, turn.engagement_id)
+            elif name == "nebula.settings.set_notebook":
+                value = await set_notebook_settings(
+                    self.store,
+                    self.mcp_service.notebook_tools.notebooks
+                    if self.mcp_service.notebook_tools is not None
+                    else None,
+                    turn.engagement_id,
+                    arguments,
+                )
             elif name == "nebula.settings.models":
                 value = model_choices(self.store)
             elif name == "nebula.settings.set_default_model":
