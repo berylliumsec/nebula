@@ -128,6 +128,9 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   const onSaveRef = useRef(onSave);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const completionSourceRef = useRef(completionSource);
+  // React may echo an older onChange value after CodeMirror has accepted more input.
+  const pendingLocalValuesRef = useRef<string[]>([]);
+  const applyingExternalValueRef = useRef(false);
   const languageServerRef = useRef(languageServer);
   languageServerRef.current = languageServer;
   onChangeRef.current = onChange;
@@ -192,7 +195,11 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
           lsp?.client.plugin(`file:///workspace/${filePath.split("/").map(encodeURIComponent).join("/")}`, "python") ?? [],
           keymapRef.current.of(editorKeymap(saveKey, () => onSaveRef.current())),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+            if (update.docChanged && !applyingExternalValueRef.current) {
+              const content = update.state.doc.toString();
+              pendingLocalValuesRef.current.push(content);
+              onChangeRef.current(content);
+            }
             if (update.selectionSet || update.docChanged) {
               const position = update.state.doc.lineAt(update.state.selection.main.head);
               onCursorChangeRef.current(position.number, update.state.selection.main.head - position.from + 1);
@@ -225,8 +232,24 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || view.state.doc.toString() === value) return;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    if (!view) return;
+    if (view.state.doc.toString() === value) {
+      pendingLocalValuesRef.current = [];
+      return;
+    }
+    const echoIndex = pendingLocalValuesRef.current.indexOf(value);
+    if (echoIndex !== -1) {
+      pendingLocalValuesRef.current.splice(0, echoIndex + 1);
+      return;
+    }
+    // An unrelated value is an intentional external update, such as a Core reload.
+    pendingLocalValuesRef.current = [];
+    applyingExternalValueRef.current = true;
+    try {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    } finally {
+      applyingExternalValueRef.current = false;
+    }
   }, [value]);
 
   useEffect(() => {
