@@ -11125,6 +11125,37 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
   }
 });
 
+test("browser Assistant keeps LAN page while headless security is enabled", async ({ page }) => {
+  await installTruthfulCore(page);
+  await page.route("**/api/v1/desktop-browser-mode", route => route.fulfill({
+    json: { one_browser_cutover: false, agent_security_enabled: true },
+  }));
+  await page.route("**/api/v1/engagements/scratch-project/browser-companion*", route => route.fulfill({
+    json: { session_id: "lan-browser", tabs: [{ id: "tab-1", url: "https://example.com/", title: "Example" }], active_tab_id: "tab-1" },
+  }));
+  await page.route("**/api/v1/browser-companion/lan-browser/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    const json = path.endsWith("/operations") ? { tabs: [{ id: "tab-1", url: "https://example.com/", title: "Example" }] }
+      : path.endsWith("/control") ? { paused: true, approval_policy: "on_boundary" } : [];
+    return route.fulfill({ json });
+  });
+  await page.route("**/api/v1/engagements/scratch-project/browser-automation", route => route.fulfill({
+    json: { leases: [], commands: [], rules: [] },
+  }));
+
+  await openWorkspace(page, "/?view=browser", "Workbench");
+  await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+  await expect(page.getByRole("region", { name: "Assistant browser" })).toBeVisible();
+  const disclosure = page.locator(".server-security-dashboard > summary");
+  await expect(disclosure).toBeVisible();
+  const bounds = await disclosure.boundingBox();
+  expectTouchTarget(bounds?.height, "Agent security disclosure");
+  await disclosure.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("region", { name: "Security dashboard" })).toBeVisible();
+  await expect(page.getByText("No agent security session yet.", { exact: false })).toBeVisible();
+});
+
 for (const degradedBrowserCore of [false, true]) {
 test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page, browserName }) => {
   test.setTimeout(browserName === "webkit" ? 180000 : 90000);
