@@ -5723,7 +5723,18 @@ test("project execution mode assistant saves and shows Host then Docker on produ
       await expect(lens).toBeVisible();
       return lens;
     };
+    const cancelledLens = await askMode("open project policy and change from dockermode to host mode");
+    await expect(page.getByRole("heading", { name: `Switch ${projectName} to Host mode?` })).toBeVisible();
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(cancelledLens).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("No change was saved.");
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+    await page.getByRole("button", { name: "Close Nebula assistant" }).click();
     const hostLens = await askMode("open project policy and change from dockermode to host mode");
+    await expect(page.getByRole("heading", { name: `Switch ${projectName} to Host mode?` })).toBeVisible();
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+    await page.getByRole("button", { name: "Switch to Host mode" }).click();
     await expect(hostLens.getByRole("combobox", { name: "Project execution mode" })).toHaveValue("host");
     await expect(hostLens.getByText(`${projectName} saved in Host mode for new sessions.`)).toBeVisible();
     await expect(hostLens).toHaveCount(0, { timeout: 5000 });

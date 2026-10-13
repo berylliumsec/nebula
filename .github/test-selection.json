@@ -1,29 +1,25 @@
 {
-  "change_digest": "983c0af9cc007179e04a0ba60024031797b86c34b8bfdbda1a2ae335e4b71199",
-  "reviewed_by": "Codex review of October 13 release real-Core traces and current compact navigation",
-  "reason": "The release's production Core journeys wait for a status chip hidden in the compact Workbench, try to switch projects before opening the navigation lens, or expect a Code tab before opening any file. The selected subagent fixture also races a generated title update when saving its permission, so it retries only revision conflicts against Core's latest value. Select the three affected project/Code journeys and the assistant pairing journeys on desktop and 390 px Chromium/WebKit to prove pairing, selection, file use, and reload on a production LAN Core.",
-  "exclusions": "This changes focused real-Core acceptance assertions only. Python, frontend component, native, mocked-browser and unrelated real-Core cases are excluded. Mobile browsers are emulated; no physical device is available. No full suite is authorized.",
+  "change_digest": "ca8a466384d2ddc941eadbdf7a2db68586d3a8664cd8628b0fef091bec512692",
+  "reviewed_by": "Codex review of the October 13 release Host mode failure and its Core write trace",
+  "reason": "The Nebula assistant must obtain explicit operator consent before acknowledging Host filesystem and network access. Component tests cover confirmation, cancellation, model receipts, and Core readback. The browser selection exercises the assistant command at desktop and mobile widths and the production LAN Core policy journey on desktop and 320 px WebKit.",
+  "exclusions": "This changes assistant UI behavior and its focused tests only. Python, native, and unrelated browser journeys are excluded; release impact review remains authoritative. Mobile browsers are emulated and a physical device is unavailable. No full suite is authorized.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 17,
     "native": 0,
-    "playwright": 9
+    "playwright": 11
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": [],
+  "frontend": ["ui/src/components/NebulaControlAssistant.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:file-search-real-core/real-core",
-    "entry:project-lifecycle/real-core",
-    "entry:project-switcher-search/real-core",
-    "entry:harness-delete-core/assistant-real-desktop",
-    "entry:harness-delete-core/assistant-real-chromium-390",
-    "entry:harness-delete-core/assistant-real-webkit-390",
-    "entry:conversation-progress/assistant-real-desktop",
-    "entry:conversation-progress/assistant-real-chromium-390",
-    "entry:conversation-progress/assistant-real-webkit-390"
+    "entry:nebula-theme-command/desktop",
+    "entry:nebula-theme-command/mobile-chromium",
+    "entry:nebula-theme-command/mobile-webkit",
+    "entry:nebula-settings-assistant/assistant-real-desktop",
+    "entry:nebula-settings-assistant/assistant-real-webkit-320"
   ]
 }
