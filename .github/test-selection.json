@@ -1,13 +1,13 @@
 {
-  "change_digest": "01cb3ae00c4d297a3ffb7ae7e7424c30f7761207b3645386ad9b98a83e0e9176",
-  "reviewed_by": "Codex review of the 3.0.19 Ubuntu container shell failure and the one release smoke step",
-  "reason": "The 3.0.19 Ubuntu install reached the installed Core doctor, then the single browser step failed during shell parsing because the container uses sh and the step uses a Bash array. Select the exact release workflow shape test, extended to require Bash for this step. A fresh release preparation will run the actual installed-DEB browser case.",
-  "exclusions": "No application source, frontend, native code, or browser test changed. No unrelated tests, Playwright PR entries, optional release diagnostics, or full suite are selected. The installed-DEB release smoke is the integration acceptance gate after merge.",
+  "change_digest": "9641f433c7f23d8864cb0e614a88d907ae8a5f378297472696eda852be68e8d5",
+  "reviewed_by": "Codex review of the 3.0.20 bundled-Chromium and checkout-cleanup smoke failures",
+  "reason": "The 3.0.20 Ubuntu job collected one case but Playwright requested an unbundled headless shell; checkout also removed the downloaded DEB before receipt writing. Select the workflow contract and receipt-binding tests plus the one core browser case. PR CI exercises the browser journey against source Core; the next release preparation must prove the installed DEB, bundled full Chromium, and embedded production UI.",
+  "exclusions": "No application feature or native code changed. No frontend unit tests, unrelated Playwright entries, optional release diagnostics, or full suite are selected. The release-only Chromium channel and artifact path receive their definitive integration check in the next installed-DEB Ubuntu release job.",
   "expected_tests": {
-    "python": 1,
+    "python": 2,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 1
   },
   "python_versions": [
     "3.12"
@@ -15,9 +15,12 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_packaging.py::test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke"
+    "tests/v3/test_packaging.py::test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke",
+    "tests/test_release_core_smoke_receipt.py::test_passed_receipt_binds_exact_installed_deb"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "release-core-smoke/real-core"
+  ]
 }

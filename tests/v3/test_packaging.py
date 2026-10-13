@@ -221,13 +221,32 @@ def test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke():
     assert jobs["ubuntu-core-smoke"]["needs"] == ["validate", "build"]
     assert jobs["ubuntu-core-smoke"]["container"] == "ubuntu:24.04"
     assert jobs["ubuntu-core-smoke"].get("strategy") is None
+    smoke_steps = jobs["ubuntu-core-smoke"]["steps"]
+    installer = next(
+        step
+        for step in smoke_steps
+        if step.get("name") == "Download the native Linux installer"
+    )
+    install = next(
+        step
+        for step in smoke_steps
+        if step.get("name") == "Install and diagnose the DEB before adding test tooling"
+    )
     smoke_step = next(
         step
-        for step in jobs["ubuntu-core-smoke"]["steps"]
+        for step in smoke_steps
         if step.get("name")
         == "Collect and run exactly one installed-Core Chromium case"
     )
     assert smoke_step["shell"] == "bash"
+    assert installer["with"]["path"] == "${{ runner.temp }}/release-assets"
+    deb_path = '"$RUNNER_TEMP/release-assets/Nebula-$VERSION-linux-x86_64.deb"'
+    assert deb_path in install["run"] and f"--deb {deb_path}" in smoke_step["run"]
+    playwright_config = (ROOT / "ui/playwright.config.ts").read_text(encoding="utf-8")
+    assert (
+        'process.env.NEBULA_RELEASE_CORE_SMOKE === "1" ? { channel: "chromium" } : {}'
+        in playwright_config
+    )
     assert "release-core-smoke.json" in release
     assert "--retries=0" in release and "--workers=1" in release
     assert 'NEBULA_TEST_CORE_EMBEDDED_UI: "1"' in release

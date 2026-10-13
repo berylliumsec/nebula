@@ -121,7 +121,12 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
       name: "real-core",
       testMatch: "**/real-core.spec.ts",
       dependencies: isolatedMatrixEntry ? [] : ["desktop", "compact", "narrow"],
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 900 },
+        // The release DEB bundles full Chromium and deliberately omits its headless shell.
+        ...(process.env.NEBULA_RELEASE_CORE_SMOKE === "1" ? { channel: "chromium" } : {}),
+      },
     },
   ].map(project => ({
     ...project,

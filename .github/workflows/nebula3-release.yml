@@ -286,7 +286,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nebula3-linux-x64
-          path: release-assets
+          path: ${{ runner.temp }}/release-assets
       - name: Install and diagnose the DEB before adding test tooling
         env:
           VERSION: ${{ needs.validate.outputs.version }}
@@ -299,7 +299,7 @@ jobs:
             fi
           done
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y xauth xvfb "./release-assets/Nebula-$VERSION-linux-x86_64.deb"
+          DEBIAN_FRONTEND=noninteractive apt-get install -y xauth xvfb "$RUNNER_TEMP/release-assets/Nebula-$VERSION-linux-x86_64.deb"
           xvfb-run -a /usr/bin/nebula --self-test
           browser="$(find /usr/lib/Nebula/playwright-browsers -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -perm /111 -print -quit)"
           test -n "$browser"
@@ -343,7 +343,7 @@ jobs:
           python3 scripts/release_core_smoke_receipt.py write \
             --receipt release-core-smoke.json \
             --tag "$RELEASE_TAG" --commit "$NEBULA_RELEASE_COMMIT" \
-            --deb "release-assets/Nebula-$VERSION-linux-x86_64.deb" \
+            --deb "$RUNNER_TEMP/release-assets/Nebula-$VERSION-linux-x86_64.deb" \
             --exit-code "$result" --playwright-report "$PLAYWRIGHT_JSON_OUTPUT_FILE"
           exit "$result"
       - name: Upload the exact smoke receipt
