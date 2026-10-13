@@ -322,6 +322,7 @@ jobs:
       - name: Install the locked browser test driver
         run: npm --prefix ui ci
       - name: Collect and run exactly one installed-Core Chromium case
+        shell: bash
         env:
           CI: "1"
           VERSION: ${{ needs.validate.outputs.version }}

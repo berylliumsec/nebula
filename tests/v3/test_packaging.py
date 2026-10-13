@@ -221,6 +221,13 @@ def test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke():
     assert jobs["ubuntu-core-smoke"]["needs"] == ["validate", "build"]
     assert jobs["ubuntu-core-smoke"]["container"] == "ubuntu:24.04"
     assert jobs["ubuntu-core-smoke"].get("strategy") is None
+    smoke_step = next(
+        step
+        for step in jobs["ubuntu-core-smoke"]["steps"]
+        if step.get("name")
+        == "Collect and run exactly one installed-Core Chromium case"
+    )
+    assert smoke_step["shell"] == "bash"
     assert "release-core-smoke.json" in release
     assert "--retries=0" in release and "--workers=1" in release
     assert 'NEBULA_TEST_CORE_EMBEDDED_UI: "1"' in release
