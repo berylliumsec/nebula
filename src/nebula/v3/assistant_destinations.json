@@ -17,5 +17,6 @@
   {"id":"files","label":"Files","path":"/projects/{project_id}/workbench?view=workspace","aliases":["files","workspace files","file browser"]},
   {"id":"notes","label":"Notes","path":"/projects/{project_id}/workbench?view=notes","aliases":["notes","project notes"]},
   {"id":"library","label":"Library","path":"/library","aliases":["library","shared library","documents library"]},
+  {"id":"storage","label":"Storage","path":"/storage","aliases":["storage","storage dashboard","storage devices","storage incidents","disk capacity"]},
   {"id":"settings","label":"Settings","path":"/settings","aliases":["settings","preferences","configuration"]}
 ]

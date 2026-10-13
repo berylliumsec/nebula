@@ -31,6 +31,19 @@ def test_published_event_schema_matches_versioned_sender_contract():
     assert list(validator.iter_errors({**report, "schema_version": 2}))
 
 
+def test_openapi_exposes_versioned_event_and_inventory_bodies(tmp_path):
+    client, _ = setup(tmp_path)
+    paths = client.get("/openapi.json").json()["paths"]
+    for path in ("events", "test"):
+        body = paths[f"/api/v1/storage/{path}"]["post"]["requestBody"]
+        schema = body["content"]["application/json"]["schema"]
+        assert schema["properties"]["schema_version"]["const"] == 1
+        assert {"event_id", "observed_at", "device", "volume", "state"} <= set(schema["required"])
+    inventory = paths["/api/v1/storage/inventory"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    assert inventory["properties"]["schema_version"]["const"] == 1
+    assert "devices" in inventory["required"]
+
+
 def setup(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     store.create(Engagement(id="storage-project", name="Storage project"))
@@ -74,6 +87,8 @@ def test_enrollment_test_endpoint_and_sender_authorization(tmp_path):
                            json={"expected_revision": created["source"]["revision"], "enabled": True})
     assert enabled.status_code == 200, enabled.text
     assert client.post("/api/v1/storage/events", headers=headers, json={**report, "free_bytes": 200}).status_code == 422
+    assert client.post("/api/v1/storage/events", headers=headers,
+                       content=b" " * (64 * 1024 + 1)).status_code == 413
     assert client.post("/api/v1/storage/events", headers=headers, json=report).status_code == 202
     assert store.count(StorageVolume) == 1
     rotated = client.post(f"/api/v1/storage/sources/{source_id}/rotate", headers=AUTH)
@@ -83,6 +98,26 @@ def test_enrollment_test_endpoint_and_sender_authorization(tmp_path):
     assert client.post("/api/v1/storage/events", headers=fresh, json=event("observation-2")).status_code == 202
     assert client.post(f"/api/v1/storage/sources/{source_id}/revoke", headers=AUTH).status_code == 200
     assert client.post("/api/v1/storage/events", headers=fresh, json=event("observation-3")).status_code == 401
+
+
+def test_callback_auth_is_required_and_source_can_be_disabled_after_runtime_fails(tmp_path):
+    client, store = setup(tmp_path)
+    invalid = client.post("/api/v1/storage/sources", headers=AUTH, json={
+        "name": "NAS", "engagement_id": "storage-project", "backend": "provider",
+        "profile_id": "storage-provider", "model": "test-model",
+        "callback_url": "https://storage.example.test",
+    })
+    assert invalid.status_code == 422
+    created = enroll(client)["source"]
+    enabled = client.patch(f"/api/v1/storage/sources/{created['id']}", headers=AUTH,
+                           json={"expected_revision": created["revision"], "enabled": True})
+    assert enabled.status_code == 200
+    profile = store.get(ProviderProfile, "storage-provider")
+    store.update(ProviderProfile, profile.id, {"enabled": False}, expected_revision=profile.revision)
+    disabled = client.patch(f"/api/v1/storage/sources/{created['id']}", headers=AUTH,
+                            json={"expected_revision": enabled.json()["revision"], "enabled": False})
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
 
 
 def test_duplicate_late_worsening_resolution_and_restart(tmp_path):
@@ -172,6 +207,52 @@ def test_callback_offer_preview_approval_and_uncertain_lookup(tmp_path):
     current_source = store.get_by_kind("storage_sources", source["id"])
     store.update(type(current_source), source["id"], {"enabled": False}, expected_revision=current_source.revision)
     assert client.post(f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH).status_code == 409
+
+
+def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp_path):
+    import httpx
+    from nebula.v3.storage_integrations import _digest
+
+    client, store = setup(tmp_path)
+    created = enroll(client)
+    source = store.get_by_kind("storage_sources", created["source"]["id"])
+    store.update(type(source), source.id, {"enabled": True, "callback_url": "http://127.0.0.1:8766"},
+                 expected_revision=source.revision)
+    calls = []
+    effects = [{"operation": "copy", "source": "/fixture", "disposition": "retained"}]
+
+    async def unavailable(_source, path, _body):
+        calls.append(path)
+        if path == "/v1/diagnose":
+            return {"diagnostics": "read-only check", "offers": [{"id": "copy", "title": "Copy artifact"}]}
+        if path.endswith("/preview"):
+            return {"effects": effects, "digest": _digest(effects),
+                    "expires_at": (utc_now() + timedelta(minutes=5)).isoformat()}
+        raise httpx.TimeoutException("source reply lost")
+
+    client.app.state.storage_integrations._callback = unavailable
+    sender = {"Authorization": "Bearer " + created["token"]}
+    assert client.post("/api/v1/storage/events", headers=sender, json=event()).status_code == 202
+    action = store.list_entities(StorageAction)[0]
+    digest = client.post(f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH).json()["digest"]
+    approval = client.post(f"/api/v1/storage/actions/{action.id}/approve", headers=AUTH,
+                           json={"digest": digest})
+    assert approval.status_code == 200, approval.text
+    assert approval.json()["status"] == "uncertain"
+    assert "status lookup failed" in approval.json()["error"]
+    assert sum(path.endswith("/execute") for path in calls) == 1
+    assert sum(path.endswith("/status") for path in calls) == 1
+
+    async def recovered(_source, path, _body):
+        assert path.endswith("/status")
+        return {"status": "complete", "receipt": {"copied": True}}
+
+    client.app.state.storage_integrations._callback = recovered
+    reconciled = client.post(f"/api/v1/storage/actions/{action.id}/reconcile", headers=AUTH)
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json()["status"] == "complete"
+    assert reconciled.json()["receipt"] == {"copied": True}
+    assert sum(path.endswith("/execute") for path in calls) == 1
 
 
 def test_inventory_staleness_and_callback_failure_keep_alert_visible(tmp_path):

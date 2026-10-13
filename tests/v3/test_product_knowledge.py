@@ -66,6 +66,7 @@ def test_product_search_finds_other_operator_destinations(monkeypatch):
             "Where is project policy and network scope?",
             "Project policy and network scope",
         ),
+        ("Where do I connect a storage webhook?", "Storage sources"),
     ):
         matches = search_product_knowledge(question)
         assert any(item["heading"] == destination for item in matches), question

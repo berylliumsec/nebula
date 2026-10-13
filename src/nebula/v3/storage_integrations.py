@@ -201,6 +201,8 @@ class StorageIntegrationService:
     def create_source(self, request: StorageSourceCreate) -> tuple[StorageSource, str]:
         self._validate_runtime(request.engagement_id, request.backend, request.profile_id, request.model)
         callback = _callback_url(request.callback_url)
+        if bool(callback) != bool(request.callback_credential_ref):
+            raise ValueError("callback origin and credential reference must be configured together")
         if request.callback_credential_ref:
             self.credentials.resolve(request.callback_credential_ref)
         raw = secrets.token_urlsafe(36)
@@ -223,7 +225,10 @@ class StorageIntegrationService:
             self.credentials.resolve(changes["callback_credential_ref"])
         next_values = source.model_dump()
         next_values.update(changes)
-        self._validate_runtime(next_values["engagement_id"], next_values["backend"], next_values["profile_id"], next_values["model"])
+        if bool(next_values["callback_url"]) != bool(next_values["callback_credential_ref"]):
+            raise ValueError("callback origin and credential reference must be configured together")
+        if {"engagement_id", "backend", "profile_id", "model"}.intersection(changes) or changes.get("enabled") is True:
+            self._validate_runtime(next_values["engagement_id"], next_values["backend"], next_values["profile_id"], next_values["model"])
         return self.store.update(StorageSource, source_id, changes, expected_revision=request.expected_revision)
 
     def rotate(self, source_id: str) -> tuple[StorageSource, str]:
@@ -378,17 +383,18 @@ class StorageIntegrationService:
         }
 
     async def _callback(self, source: StorageSource, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        if not source.callback_url:
-            raise ValueError("source has no callback configured")
-        headers = {"Content-Type": "application/json"}
-        if source.callback_credential_ref:
-            headers["Authorization"] = "Bearer " + self.credentials.resolve(source.callback_credential_ref).get_secret_value()
+        if not source.callback_url or not source.callback_credential_ref:
+            raise ValueError("source has no authenticated callback configured")
+        headers = {"Authorization": "Bearer " + self.credentials.resolve(source.callback_credential_ref).get_secret_value()}
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            response = await client.post(source.callback_url + path, json=body, headers=headers)
-        response.raise_for_status()
-        if len(response.content) > MAX_CALLBACK_BYTES:
-            raise ValueError("callback response exceeds 64 KiB")
-        value = response.json()
+            async with client.stream("POST", source.callback_url + path, json=body, headers=headers) as response:
+                response.raise_for_status()
+                chunks = bytearray()
+                async for chunk in response.aiter_bytes():
+                    chunks.extend(chunk)
+                    if len(chunks) > MAX_CALLBACK_BYTES:
+                        raise ValueError("callback response exceeds 64 KiB")
+        value = json.loads(chunks)
         if not isinstance(value, dict):
             raise ValueError("callback response must be an object")
         return value
@@ -505,15 +511,26 @@ class StorageIntegrationService:
             result = await self._callback(source, f"/v1/actions/{quote(action.offer_id, safe='')}/execute", {
                 "incident_id": action.incident_id, "action_id": action.id, "digest": digest, "idempotency_key": key,
             })
-            return self._record_execution(action, result)
+            recorded = self._record_execution(action, result)
+            if recorded.status == "uncertain":
+                return await self._reconcile_after_uncertainty(recorded, "source reported an unknown result")
+            return recorded
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 409:
                 return self.store.update(StorageAction, action.id, {"status": "failed", "error": "Source rejected the plan because it expired or drifted; preview again."}, expected_revision=action.revision)
-            self.store.update(StorageAction, action.id, {"status": "uncertain", "error": str(exc)[:1000]}, expected_revision=action.revision)
+            return await self._reconcile_after_uncertainty(action, str(exc))
+        except (httpx.HTTPError, ValueError) as exc:
+            return await self._reconcile_after_uncertainty(action, str(exc))
+
+    async def _reconcile_after_uncertainty(self, action: StorageAction, error: str) -> StorageAction:
+        if action.status != "uncertain":
+            action = self.store.update(StorageAction, action.id, {"status": "uncertain", "error": error[:1000]}, expected_revision=action.revision)
+        try:
             return await self.reconcile_action(action.id)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            self.store.update(StorageAction, action.id, {"status": "uncertain", "error": str(exc)[:1000]}, expected_revision=action.revision)
-            return await self.reconcile_action(action.id)
+        except (httpx.HTTPError, ValueError) as exc:
+            current = self.store.get(StorageAction, action.id)
+            return self.store.update(StorageAction, action.id,
+                {"error": f"Execution result uncertain; status lookup failed: {exc}"[:1000]}, expected_revision=current.revision)
 
     def _record_execution(self, action: StorageAction, result: dict[str, Any]) -> StorageAction:
         status = result.get("status")
@@ -555,10 +572,17 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         return service.authenticate(authorization)
 
     async def bounded_json(request: Request) -> bytes:
-        data = await request.body()
-        if len(data) > MAX_EVENT_BYTES:
-            raise HTTPException(413, "storage request exceeds 64 KiB")
-        return data
+        data = bytearray()
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > MAX_EVENT_BYTES:
+                raise HTTPException(413, "storage request exceeds 64 KiB")
+        return bytes(data)
+
+    event_body = {"requestBody": {"required": True, "content": {
+        "application/json": {"schema": StorageEvent.model_json_schema()}}}}
+    inventory_body = {"requestBody": {"required": True, "content": {
+        "application/json": {"schema": StorageInventory.model_json_schema()}}}}
 
     @router.get("")
     async def dashboard(_: str = Depends(require_auth)) -> dict[str, Any]:
@@ -590,14 +614,14 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         source = service.store.update(StorageSource, source.id, {"enabled": False, "token_sha256": hashlib.sha256(secrets.token_bytes(48)).hexdigest()}, expected_revision=source.revision)
         return _source_public(source)
 
-    @router.post("/test")
+    @router.post("/test", openapi_extra=event_body)
     async def test_event(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_sender_transport(request)
         source = service.authenticate(authorization, allow_disabled=True)
         StorageEvent.model_validate_json(await bounded_json(request))
         return {"valid": True, "source_id": source.id}
 
-    @router.post("/events", status_code=202)
+    @router.post("/events", status_code=202, openapi_extra=event_body)
     async def receive_event(request: Request, source: StorageSource = Depends(source_auth)) -> dict[str, Any]:
         event = StorageEvent.model_validate_json(await bounded_json(request))
         try:
@@ -607,7 +631,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         await service.dispatch_pending()
         return outcome
 
-    @router.post("/inventory", status_code=202)
+    @router.post("/inventory", status_code=202, openapi_extra=inventory_body)
     async def receive_inventory(request: Request, source: StorageSource = Depends(source_auth)) -> dict[str, Any]:
         return service.inventory(source, StorageInventory.model_validate_json(await bounded_json(request)))
 

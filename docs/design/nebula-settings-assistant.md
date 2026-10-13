@@ -18,6 +18,7 @@ The operator may open Settings from a catalog result without losing the draft.
 | Close | Window closes without deleting history | React presentation, Core transcript | Browser and real Core |
 | Compose | Enter submits one message; Shift+Enter inserts a newline; composition does not submit | React draft and Core turn | Component, browser and real Core |
 | Open a named setting | An unambiguous open/show request opens the existing Settings lens immediately | Shared settings catalog and shell lens | Component and browser |
+| Open storage integration | A request to connect a storage source opens Settings → Integrations → Storage; a request to view storage devices opens the global Storage dashboard | Shared settings and app destination catalogs, URL, Core storage state | Tool unit, component and real Core browser |
 | Open an app destination | A request such as “show me my projects” navigates to the All projects page immediately; every static app route is available through the assistant catalog and exact model tool | Shared packaged destination list, URL and selected Core project | Tool unit, component, desktop/mobile browser, real Core |
 | Change this device's theme | An explicit theme command opens Appearance, applies and confirms the browser preference, then closes the lens; “Zero theme” means Zero Dark | Browser theme context and storage; shell lens owns presentation | Component and desktop/mobile browser |
 | Model-selected browser action | The model calls an exact open-setting or device-theme tool; Core returns a typed pending action, and only the requesting browser applies and confirms it | Scoped tool receipt and browser theme/lens state | Tool unit, component, real-Core browser and live model |
@@ -41,6 +42,12 @@ still apply. Browser appearance remains device-owned. Uploads and local desktop
 operations remain subject to the capabilities of the active device. An explicit
 operator setting request authorizes the assistant action without a second
 confirmation dialog. A pending browser action is never reported as saved.
+Storage source enrollment stays in the visible Storage settings form because its
+webhook token is shown only once. The settings assistant can discover and open
+that form or navigate to the global Storage dashboard; it does not create or
+rotate source tokens through generic Settings API calls. Remote storage actions
+still require a source preview and an authenticated operator approval in the
+Storage interface.
 The headless security session is independent of the visible-browser desktop
 cutover. It needs the verified Chromium runtime and the mitmdump security proxy.
 The Mac desktop shell supplies the bundled addon and discovers mitmdump in its

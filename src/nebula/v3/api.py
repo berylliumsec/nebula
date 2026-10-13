@@ -600,6 +600,16 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    "work_items",
+    "work_updates",
+    "notebook_runs",
+    "storage_sources",
+    "storage_devices",
+    "storage_volumes",
+    "storage_incidents",
+    "storage_event_receipts",
+    "storage_dispatches",
+    "storage_actions",
     "browser_companion_actions",
     "chat_agent_messages",
     "chat_subagent_messages",
@@ -2078,6 +2088,11 @@ def create_app(
     )
 
     chat_queue = ChatQueueService(store, provider_chat, harness_runtime)
+    from .storage_integrations import StorageIntegrationService
+
+    storage_integrations = StorageIntegrationService(
+        store, chat_queue, harness_runtime, credentials
+    )
 
     def chat_service() -> ChatService:
         return provider_chat
@@ -2446,6 +2461,10 @@ def create_app(
             await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
+            await start_component(
+                "storage", "integrations", storage_integrations.startup,
+                storage_integrations.shutdown,
+            )
             # Event history of records deleted before their events went with
             # them. Paused batches keep live writes flowing while it runs.
             prune_stop = threading.Event()
@@ -2495,6 +2514,7 @@ def create_app(
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
     harness_runtime.bind_settings_assistant_api(settings_assistant_api)
     app.state.store = store
+    app.state.storage_integrations = storage_integrations
     app.state.application_model = application_model
     app.state.browser_companion = browser_companion
     app.state.agent_security_sessions = agent_security_sessions
@@ -11156,6 +11176,9 @@ def create_app(
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
+    from .storage_integrations import storage_router
+
+    app.include_router(storage_router(storage_integrations, require_auth))
 
     def resolve_goal_skill_snapshots(
         session_id: str,

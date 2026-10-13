@@ -82,6 +82,8 @@ In source settings, an operator may configure a callback origin and a Nebula
 credential reference (`env:`, `systemd:`, `vault:`, or `session:`). Core never
 accepts callback destinations or credentials from an event. The origin must
 be HTTPS, or loopback HTTP when the source responder runs on the Core host.
+Configure the origin and credential reference together; callbacks always use
+the referenced bearer credential.
 Core sends a bearer token from the referenced credential, follows no redirects,
 and bounds responses to 64 KiB. An event-only source needs no callbacks.
 
