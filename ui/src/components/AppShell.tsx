@@ -157,7 +157,8 @@ export function AppShell() {
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [quietLens]);
   const runContextualNew = useCallback(() => {
-    (document.querySelector<HTMLButtonElement>(".top-bar-trailing-actions .button.primary:not(:disabled)")
+    (document.querySelector<HTMLButtonElement>(".mobile-conversation-header .mobile-new-chat:not(:disabled)")
+      ?? document.querySelector<HTMLButtonElement>(".top-bar-trailing-actions .button.primary:not(:disabled)")
       ?? document.querySelector<HTMLButtonElement>(".top-bar-page-actions .button.primary:not(:disabled)"))?.click();
   }, []);
 
