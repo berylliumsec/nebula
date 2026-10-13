@@ -743,6 +743,27 @@ def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_pat
         json.dumps({"spdxVersion": "SPDX-2.3"}),
         encoding="utf-8",
     )
+    notebook_root = tmp_path / "usr/lib/nebula/notebook-runtime"
+    (notebook_root / "python/bin").mkdir(parents=True)
+    notebook_executables = {}
+    for relative in ("python/bin/python3", "uv"):
+        executable = notebook_root / relative
+        executable.write_bytes(b"portable tool")
+        executable.chmod(0o755)
+        notebook_executables[relative] = hashlib.sha256(b"portable tool").hexdigest()
+    worker = notebook_root / "worker.py"
+    worker.write_text("print('worker')\n", encoding="utf-8")
+    (notebook_root / "nebula-notebook-runtime.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "target": "x86_64-unknown-linux-gnu",
+                "executables": notebook_executables,
+                "worker_sha256": hashlib.sha256(worker.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     (
         tmp_path / "usr/lib/nebula/playwright-browsers/nebula-playwright-runtime.json"
     ).write_text(
