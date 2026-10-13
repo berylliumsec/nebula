@@ -102,9 +102,29 @@ def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
         "metadata": {},
         "cells": [
             {"cell_type": "markdown", "metadata": {}, "source": ["A title"]},
-            {"cell_type": "code", "metadata": {}, "source": "print(1)", "outputs": [], "execution_count": None},
-            {"id": "existing", "cell_type": "code", "metadata": {}, "source": "print(2)", "outputs": [], "execution_count": None},
-            {"id": "existing", "cell_type": "code", "metadata": {}, "source": "print(3)", "outputs": [], "execution_count": None},
+            {
+                "cell_type": "code",
+                "metadata": {},
+                "source": "print(1)",
+                "outputs": [],
+                "execution_count": None,
+            },
+            {
+                "id": "existing",
+                "cell_type": "code",
+                "metadata": {},
+                "source": "print(2)",
+                "outputs": [],
+                "execution_count": None,
+            },
+            {
+                "id": "existing",
+                "cell_type": "code",
+                "metadata": {},
+                "source": "print(3)",
+                "outputs": [],
+                "execution_count": None,
+            },
         ],
     }
     raw = json.dumps(original).encode()
@@ -113,7 +133,10 @@ def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
     ids = [cell["id"] for cell in first["document"]["cells"]]
     assert len(set(ids)) == len(ids)
     assert ids[2] == "existing"
-    assert [cell["id"] for cell in notebooks.read(project.id, "legacy.ipynb")["document"]["cells"]] == ids
+    assert [
+        cell["id"]
+        for cell in notebooks.read(project.id, "legacy.ipynb")["document"]["cells"]
+    ] == ids
     assert first["revision"] == hashlib.sha256(raw).hexdigest()
     assert path.read_bytes() == raw
 
@@ -133,7 +156,9 @@ def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
     assert saved["document"]["cells"][1]["source"] == "print(4)"
 
 
-def test_notebook_inventory_does_not_block_core_and_coalesces_scans(tmp_path, monkeypatch):
+def test_notebook_inventory_does_not_block_core_and_coalesces_scans(
+    tmp_path, monkeypatch
+):
     _, project, notebooks = _project(tmp_path)
     started = threading.Event()
     release = threading.Event()
@@ -157,9 +182,13 @@ def test_notebook_inventory_does_not_block_core_and_coalesces_scans(tmp_path, mo
             assert not first.done()
         finally:
             release.set()
-        assert await asyncio.gather(first, second) == [
-            [{"path": "legacy.ipynb", "size": 1, "modified_at": "now"}],
-        ] * 2
+        assert (
+            await asyncio.gather(first, second)
+            == [
+                [{"path": "legacy.ipynb", "size": 1, "modified_at": "now"}],
+            ]
+            * 2
+        )
         assert len(calls) == 1
         await notebooks.list_async(project.id)
         assert len(calls) == 1

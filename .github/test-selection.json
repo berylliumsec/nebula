@@ -1,5 +1,5 @@
 {
-  "change_digest": "edf584e8fcc39190d908a1459e3991a5fc39e51d206c80a588aa6e2d4ad9b2c3",
+  "change_digest": "2c7786a7259254d3955b828bdb55e643ce9e66a3b63a1e883d168feed4c65a3a",
   "reviewed_by": "Codex focused review of notebook inventory and legacy cell ID recovery",
   "reason": "The operator opens a linked project, selects an existing notebook while inventory is slow, edits a legacy cell without an ID, and sees the saved cell after refresh. The selected Python file covers stable IDs, read-only opening, save persistence, scan coalescing, MCP and existing notebook execution. The Notebook panel component file covers independent file loading and explicit inventory refresh. The catalogued notebook browser journeys cover desktop and mobile Chromium and WebKit, plus a production real-Core LAN workflow that opens and saves a legacy notebook.",
   "exclusions": "No native shell code or unrelated provider, browser, workspace, and release workflows changed, so native tests and unrelated suites are excluded. These cases use browser emulation; physical-device testing is not available in this environment. The shared API change is limited to the notebook list route and was reviewed with the notebook-specific coverage.",

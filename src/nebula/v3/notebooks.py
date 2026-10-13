@@ -132,7 +132,8 @@ class NotebookDocumentStore:
         used_ids = {
             cell.get("id")
             for cell in document["cells"]
-            if isinstance(cell, dict) and isinstance(cell.get("id"), str)
+            if isinstance(cell, dict)
+            and isinstance(cell.get("id"), str)
             and cell.get("id")
         }
         seen_ids: set[str] = set()
