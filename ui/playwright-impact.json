@@ -326,6 +326,14 @@
         "grep": "stabilization audit every primary workspace view",
         "runtime": "mock",
         "shard": "1/1"
+      },
+      {
+        "area": "release-ui-workspace-audit",
+        "project": "assistant-real-webkit-320",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization real Core finding creation survives failure and remains discoverable",
+        "runtime": "real-core",
+        "shard": "1/1"
       }
     ],
     "release-ui-ledger-persistence": [

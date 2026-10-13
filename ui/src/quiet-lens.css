@@ -327,7 +327,7 @@
   :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .quiet-lens-top-handle { display: none; }
   :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-leading { min-width: 0; }
   :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-leading .toolbar-button { display: none; }
-  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-page-actions { display: none; }
+  :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-page-actions { display: flex; }
   :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-actions { gap: 4px; }
   :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] .command-trigger kbd { display: none; }
   :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] .command-trigger span { display: none; }

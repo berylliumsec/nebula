@@ -196,6 +196,12 @@
   :root[data-theme] .compact-settings-empty { color: var(--muted); text-align: center; }
 }
 
+@media (max-width: 360px) {
+  :root[data-theme] .top-bar-back.button { width: 44px; min-width: 44px; padding: 0; justify-content: center; }
+  :root[data-theme] .top-bar-back span { display: none; }
+  :root[data-theme] .top-bar-leading > .toolbar-button { display: none; }
+}
+
 @media (max-width: 760px), (pointer: coarse) {
   :root[data-theme] .terminal-key-row {
     display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; scrollbar-width: none;
