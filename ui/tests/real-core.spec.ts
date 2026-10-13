@@ -219,6 +219,19 @@ function coreReady(page: Page) {
   return coreShell(page, /^Nebula Core ready$/);
 }
 
+async function showProjectNavigation(page: Page) {
+  const navigation = page.getByRole("button", { name: "Open navigation" });
+  if (await navigation.getAttribute("aria-expanded") !== "true") await navigation.click();
+  await expect(page.getByRole("button", { name: "Switch project", exact: true })).toBeVisible();
+}
+
+async function openProjectSwitcherFromShell(page: Page) {
+  const trigger = page.getByRole("button", { name: "Switch project", exact: true });
+  if (!await trigger.isVisible()) await showProjectNavigation(page);
+  await trigger.click();
+  return page.getByRole("dialog", { name: "Project switcher" });
+}
+
 async function guideEntry(page: Page) {
   const guides = page.getByRole("button", {name: "Guides", exact: true});
   if ((page.viewportSize()?.width ?? 1440) <= 760 && !await guides.isVisible()) {
@@ -3491,7 +3504,8 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
 
     await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("complementary", { name: "Editor files" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Shared workspace editor")).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
     await page.getByRole("button", { name: /lan-proof\.py/ }).click();
     await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
@@ -3540,8 +3554,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
     if (lanAddress) expect(new URL(page.url()).hostname).toBe(lanAddress);
-    await page.getByRole("button", { name: "Switch project" }).click();
-    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    const switcher = await openProjectSwitcherFromShell(page);
     await switcher.getByRole("button", { name: "New project" }).click();
     await switcher.getByLabel("Name", { exact: true }).fill("Linked Folder Acceptance");
     await switcher.getByRole("button", { name: "Browse folders" }).click();
@@ -3569,6 +3582,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     await browser.getByRole("button", { name: "Select folder" }).click();
     await expect(switcher.getByLabel("Project folder", { exact: true })).toHaveValue(paginatedFolder);
     await switcher.getByRole("button", { name: "Create in Host mode" }).click();
+    await showProjectNavigation(page);
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Linked Folder Acceptance");
 
     const response = await api.get("engagements");
@@ -3579,6 +3593,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     });
 
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    await showProjectNavigation(page);
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Linked Folder Acceptance", { timeout: 20_000 });
   }, [
     {name: "API context", dispose: () => api.dispose()},
@@ -4847,11 +4862,11 @@ test("project switcher search selects a Core project after production LAN reload
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Project search browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20_000 });
+    expect((await api.get("health")).ok()).toBe(true);
     await page.goto(`${core.origin}/settings`);
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Switch project" }).click();
-    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20_000 });
+    const switcher = await openProjectSwitcherFromShell(page);
     const search = switcher.getByRole("textbox", { name: "Search projects" });
     await search.fill("alpha");
     const projectRow = switcher.locator(".project-switcher-row > button:first-child").filter({ hasText: "Alpha Project" });
@@ -4859,8 +4874,8 @@ test("project switcher search selects a Core project after production LAN reload
     await projectRow.click();
     await expect(page).toHaveURL(`${core.origin}/projects/${target.id}`);
     await page.reload();
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Switch project" }).click();
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20_000 });
+    await openProjectSwitcherFromShell(page);
     await expect(switcher.getByRole("textbox", { name: "Search projects" })).toHaveValue("");
     await expect(switcher.getByText("Alpha Project")).toBeVisible();
     await testInfo.attach("project-search-production-lan", { body: JSON.stringify({ origin: core.origin, build: "ui/dist production", project: testInfo.project.name, viewport: page.viewportSize(), targetId: target.id }), contentType: "application/json" });
@@ -7299,7 +7314,14 @@ async function pairRealCoreBrowser(page: Page, core: RealCore, name: string, opt
     // Usage remains reachable when this disposable Core has no terminal runner.
     await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0);
   } else {
-    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    // The compact Workbench may start on Terminal with its Core chip inside
+    // the navigation lens. Pairing is complete once the shell mounts; Core's
+    // health endpoint supplies the server-readiness assertion.
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20_000 });
+    const health = await page.request.get(`${core.origin}/api/v1/health`, {
+      headers: { Authorization: `Bearer ${core.token}` },
+    });
+    expect(health.ok(), await health.text()).toBe(true);
   }
 }
 
@@ -7606,8 +7628,22 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     } });
     expect(chatResponse.ok(), await chatResponse.text()).toBe(true);
     const { session_id: sessionId } = await chatResponse.json() as { session_id: string };
-    const delegation = await api.patch(`chat-sessions/${sessionId}`, { data: { allow_subagents: true } });
-    expect(delegation.ok(), await delegation.text()).toBe(true);
+    // Completion can still save the generated title after the response returns.
+    // Configure this fixture against Core's current revision, retrying only a
+    // conflicting compare-and-swap while that title update settles.
+    let delegationStatus = 409;
+    let delegationError = "";
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await (await api.get(`chat-sessions/${sessionId}`)).json() as { revision: number };
+      const delegation = await api.patch(`chat-sessions/${sessionId}`, { data: {
+        allow_subagents: true, expected_revision: current.revision,
+      } });
+      delegationStatus = delegation.status();
+      if (delegation.ok()) break;
+      delegationError = await delegation.text();
+      if (delegationStatus !== 409) break;
+    }
+    expect(delegationStatus, delegationError).toBe(200);
 
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
     await pairRealCoreBrowser(page, core, "Subagent wait viewer");
