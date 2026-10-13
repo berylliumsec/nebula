@@ -106,6 +106,17 @@ Nebula queries status; it never sends a second execute automatically.
 these checks with a harmless demo effect. Replace its `DemoBackend` with
 guarded source-specific operations. Keep its SQLite state durable.
 
+Use [the callback contract probe](../examples/storage_callback_contract.py)
+against a disposable responder to check bearer authentication, digest
+rejection, preview expiry, status lookup, an idempotent execute, and its
+receipt over HTTP. Set `NEBULA_STORAGE_CALLBACK_TOKEN`, then run it with
+`--origin`, `--incident-id`, `--event-id`, and
+`--execute-disposable-offer`. It **executes the selected offer**, so use a
+harmless fixture and never aim it at a production action. Add
+`--pause-for-drift` to change the fixture's effects after preview and verify
+that the old plan is rejected. Without that option it checks a changed digest,
+but cannot prove source-side plan drift.
+
 Nebula treats diagnostics, labels, paths, and action effects as untrusted
 source data. The assistant sees a bounded snapshot and diagnostics, with
 remote tools disabled for the automatic incident turn. Action buttons are

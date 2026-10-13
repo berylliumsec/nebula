@@ -18,6 +18,11 @@ SPEC = importlib.util.spec_from_file_location("storage_action_responder", SCRIPT
 assert SPEC and SPEC.loader
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
+CONTRACT_SPEC = importlib.util.spec_from_file_location(
+    "storage_callback_contract", Path(__file__).parents[2] / "examples" / "storage_callback_contract.py")
+assert CONTRACT_SPEC and CONTRACT_SPEC.loader
+contract = importlib.util.module_from_spec(CONTRACT_SPEC)
+CONTRACT_SPEC.loader.exec_module(contract)
 
 
 class Backend(module.DemoBackend):
@@ -88,6 +93,25 @@ def test_http_contract_requires_bearer(tmp_path):
         with urlopen(request, timeout=5) as response:
             assert response.status == 200
             assert json.load(response)["offers"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_public_contract_probe_checks_a_disposable_responder(tmp_path):
+    backend = Backend(tmp_path)
+    responder = module.ActionResponder(tmp_path / "state.db", backend)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), module.handler_for(responder, "secret"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = contract.run_contract(f"http://127.0.0.1:{server.server_port}", "secret",
+                                       "incident", "event")
+        assert result["authenticated"] is True
+        assert result["changed_digest_rejected"] is True
+        assert result["idempotent_receipt"]["run"] == 1
+        assert backend.runs == 1
     finally:
         server.shutdown()
         server.server_close()
