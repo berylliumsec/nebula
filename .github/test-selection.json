@@ -1,22 +1,20 @@
 {
-  "change_digest": "3f0a2cf2eb3f1b5316719e817e60b8b416d5e92697d731b19088748ed0534f2c",
-  "reviewed_by": "Codex review of October 13 Code editor release failure and state synchronization",
-  "reason": "The Code editor must preserve every keystroke and caret position while React echoes earlier buffer values, then accept a deliberate workspace reload. A real CodeMirror component regression covers delayed echoes and external replacement; six focused desktop and phone browser cases cover the visible editor journey; one production LAN real-Core case checks exact saved bytes and reopening. The editor view owns immediate unsaved input, React owns the recoverable draft, and Core owns saved workspace bytes.",
-  "exclusions": "Python and native tests, unrelated Workbench/VPN failures, other browser areas, and the full suite are excluded. Desktop and 320-430 px phone profiles are emulated; no physical device is available. The selected real-Core case uses the production bundle on a non-loopback LAN origin.",
-  "expected_tests": {"python": 0, "frontend": 1, "native": 0, "playwright": 7},
+  "change_digest": "c4d32f047a04a8d5e7cc07ffcd52d59bd8057800eb5600fa23d4987cb71d3ae3",
+  "reviewed_by": "Codex review of the October 13 VPN selection mobile WebKit release failure",
+  "reason": "The operator selects a saved VPN profile from Advanced Settings and sees the project policy become In use. The v3.0.10 WebKit trace showed sticky Settings tabs intercepting Playwright's offscreen click and no policy PUT. The focused browser test now waits for the Advanced section, verifies its Automation disclosure opens, scrolls the action into a clear tap target, checks the hit target and Core request, then verifies the saved selection. Five relevant desktop and phone profiles cover mouse and touch at the affected widths. Core's project automation policy is authoritative; the test uses a bounded API fixture.",
+  "exclusions": "This test-only change excludes unrelated settings, real Core, Python, frontend unit, native, and the full suite. It does not change the VPN product flow or claim persistence beyond the existing mock fixture; the release's real-Core and package gates remain separate.",
+  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 5},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": ["ui/src/components/CodeMirrorSurface.sync.test.tsx"],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:release-editor-caret/desktop",
-    "entry:release-editor-caret/compact",
-    "entry:release-editor-caret/mobile-chromium-small",
-    "entry:release-editor-caret/mobile-chromium",
-    "entry:release-editor-caret/mobile-webkit",
-    "entry:release-editor-caret/mobile-webkit-wide",
-    "entry:release-editor-caret/real-core"
+    "entry:release-vpn-selection/desktop",
+    "entry:release-vpn-selection/mobile-chromium-small",
+    "entry:release-vpn-selection/mobile-chromium-wide",
+    "entry:release-vpn-selection/mobile-webkit",
+    "entry:release-vpn-selection/mobile-webkit-wide"
   ]
 }
