@@ -30,6 +30,9 @@
 .electron-browser-handoff { padding: 20px; color: var(--muted); }
 .electron-browser-dashboard { padding: 0 12px; border-top: 1px solid var(--border-soft); }
 .electron-browser-dashboard > summary { min-height: 40px; display: flex; align-items: center; cursor: pointer; }
+.server-security-dashboard { flex: 0 0 auto; min-width: 0; padding: 0 12px; border-bottom: 1px solid var(--border-soft); }
+.server-security-dashboard > summary { display: flex; min-height: 44px; align-items: center; gap: 7px; cursor: pointer; }
+.server-security-dashboard > summary:focus-visible { outline: 2px solid var(--blue-bright); outline-offset: -2px; }
 .security-dashboard { max-height: min(44vh, 420px); overflow: auto; padding: 8px 0 12px; }
 .security-dashboard > header, .security-dashboard-counts, .security-dashboard-intercept { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .security-dashboard > header strong { flex: 1; }

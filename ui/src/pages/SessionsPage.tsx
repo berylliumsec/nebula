@@ -116,6 +116,7 @@ import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
 import { isElectronRuntime, isTauriRuntime } from "../api/runtime";
 import { ElectronBrowser } from "../components/ElectronBrowser";
+import { SecurityDashboard } from "../components/SecurityDashboard";
 import { emptyAssistantDefaults, preferredAssistantRuntime } from "../api/assistantDefaults";
 import {
   prepareProviderCredential,
@@ -6056,14 +6057,23 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   ].filter(Boolean).join(" · ");
 
   const [oneBrowserCutover, setOneBrowserCutover] = useState(isElectronRuntime());
+  const [agentSecurityEnabled, setAgentSecurityEnabled] = useState(false);
+  const [securityDashboardOpen, setSecurityDashboardOpen] = useState(false);
   useEffect(() => {
     if (!api) return;
     let current = true;
-    void api.request<{ one_browser_cutover: boolean }>("desktop-browser-mode")
-      .then((mode) => { if (current) setOneBrowserCutover(mode.one_browser_cutover); })
+    void api.request<{ one_browser_cutover: boolean; agent_security_enabled?: boolean }>("desktop-browser-mode")
+      .then((mode) => {
+        if (!current) return;
+        setOneBrowserCutover(mode.one_browser_cutover);
+        setAgentSecurityEnabled(mode.agent_security_enabled === true);
+      })
       .catch((caught) => {
         void logCaughtDiagnostic("interface.sessions.browser_mode_failed", "The desktop browser mode could not be loaded.", caught, "sessions_page");
-        if (current) setOneBrowserCutover(isElectronRuntime());
+        if (current) {
+          setOneBrowserCutover(isElectronRuntime());
+          setAgentSecurityEnabled(false);
+        }
       });
     return () => { current = false; };
   }, [api]);
@@ -6704,6 +6714,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             <div className="integrated-browser-page">
             <header className="browser-workspace-toolbar">{browserEngine === "managed" && <button className="button quiet managed-browser-icon" type="button" aria-label={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} title={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} aria-expanded={browserControlsOpen} aria-controls="managed-browser-controls" onClick={() => setBrowserControlsOpen(open => !open)}><Settings2 size={18} aria-hidden="true" /></button>}<button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}><PanelRight size={18} aria-hidden="true" /></button>
             {!sideBrowserVisible && !oneBrowserCutover && <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Assistant browser</option><option value="native">Native browser</option></select></label>}{oneBrowserCutover && <span>Browser</span>}</header>
+            {agentSecurityEnabled && !oneBrowserCutover && <details className="server-security-dashboard" onToggle={event => setSecurityDashboardOpen(event.currentTarget.open)}>
+              <summary><ShieldCheck size={16} aria-hidden="true" /> Agent security</summary>
+              {securityDashboardOpen && <SecurityDashboard api={api} projectId={engagement.id} />}
+            </details>}
             {browserEngine === "electron" ? <ElectronBrowser api={api} projectId={engagement.id} draftId={draftEditorKey} conversationId={sessionId || undefined}
               active={view === "browser" || (chatSideVisible && sideView === "browser")}
               initialOpenUrl={searchParams.get("openUrl") ?? undefined} initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
