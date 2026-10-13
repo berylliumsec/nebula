@@ -9060,7 +9060,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await page.goto("/?view=code");
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator(".code-editor-panel")).toBeVisible();
+    await expect(page.locator(".code-editor-panel")).toBeVisible({ timeout: 15_000 });
   } else {
     await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 15_000 });
   }
@@ -9219,6 +9219,9 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await inputSurface.focus();
   await enterText("return 0;");
   await expect(page.locator(".cm-activeLine")).toHaveText("  return 0;");
+  await expect(page.locator(".cm-line")).toHaveText(["#include <stdio.h>", "", "int main(void) {", "  return 0;", "}"]);
+  // Assert the typing caret before Escape, which may change selection on mobile Chromium.
+  await expect(page.getByText(/Ln 4, Col 12/, { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByText("C", { exact: true })).toBeVisible();
 
@@ -9258,7 +9261,6 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await expect(inputSurface).toHaveCSS("outline-style", "none");
   await expect(inputSurface).toHaveCSS("box-shadow", "none");
   await expect(inputSurface).not.toHaveCSS("caret-color", "rgba(0, 0, 0, 0)");
-  await expect(page.getByText(/Ln 4, Col 12/, { exact: true })).toBeVisible();
   await expect(editor.locator(".cm-cursor-primary")).toHaveCount(0);
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
