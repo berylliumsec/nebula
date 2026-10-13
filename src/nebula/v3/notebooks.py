@@ -566,7 +566,7 @@ class NotebookService:
 
     async def list_async(
         self, engagement_id: str, *, refresh: bool = False
-    ) -> list[dict[str, Any]]:
+    ) -> builtins.list[dict[str, Any]]:
         self.store.get(Engagement, engagement_id)
         async with self._list_locks.setdefault(engagement_id, asyncio.Lock()):
             cached = self._list_cache.get(engagement_id)
