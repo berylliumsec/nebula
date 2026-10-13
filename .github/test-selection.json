@@ -1,10 +1,10 @@
 {
-  "change_digest": "25fe2aa9b57ebf983f6649c3e28caf71ec3d564dbea52787401ab1603ca943bf",
+  "change_digest": "9ad4f826a24e8ac3ade2b699c9e91c3827e14374dee52d97adf011093fd0fa81",
   "reviewed_by": "Codex focused operator-journey review",
-  "reason": "Bundled notebooks change project execution policy, a separately staged Jupyter worker resource, project notebook files, reserved MCP grants, authenticated ordered event streaming/replay, package lookup, and the Workbench/assistant UI. The selected tests exercise those boundaries and the desktop/mobile/LAN notebook journey, including managed Python identity, a fresh project package lookup/install/import, Host consent before package install, queued interrupt during kernel startup, stale agent edits, source-output invalidation, explicit interruption of active runs before a mode change, persistent Host consent, Host package-download controls, worker-only bundle upgrades, and live MCP tool revocation. Notebook browser checks cover desktop 1440/1024 and emulated 320/390/430 mobile widths across Chromium and WebKit. Earlier selected failures identified and corrected the migration head, icon availability, installer fixture, legacy Docker test fixture, paginated profile registration, and notebook startup diagnostics; these remain within the same reviewed boundaries.",
+  "reason": "Bundled notebooks change project execution policy, a separately staged Jupyter worker resource, project notebook files, reserved MCP grants, authenticated ordered event streaming/replay, package lookup, and the Workbench/assistant UI. The selected tests exercise those boundaries and the desktop/mobile/LAN notebook journey, including managed Python identity, a fresh project package lookup/install/import, Host consent before package install, queued interrupt during kernel startup, stale agent edits, source-output invalidation, explicit interruption of active runs before a mode change, persistent Host consent, Host package-download controls, worker-only bundle upgrades, and live MCP tool revocation. Focused settings-assistant provider and harness catalog tests cover integration with the current main branch's full-control settings tools. Notebook browser checks cover desktop 1440/1024 and emulated 320/390/430 mobile widths across Chromium and WebKit. Earlier selected failures identified and corrected the migration head, icon availability, installer fixture, legacy Docker test fixture, paginated profile registration, and notebook startup diagnostics; these remain within the same reviewed boundaries.",
   "exclusions": "No native Rust test is selected because the Tauri change only passes the staged resource path; the focused package audit and real-Core UI cover its integration. Unrelated project, provider, browser, mission, and full suites are excluded. Docker image execution is deferred at the operator's explicit request; this selection does not claim Docker runtime acceptance or a clean installer smoke test.",
   "expected_tests": {
-    "python": 13,
+    "python": 17,
     "frontend": 19,
     "playwright": 10,
     "native": 0
@@ -13,7 +13,11 @@
     "tests/v3/test_notebooks.py",
     "tests/v3/test_automation_runtime.py::test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker",
     "tests/v3/test_automation_runtime.py::test_host_mode_requires_consent_and_reads_external_folder_without_docker",
-    "tests/v3/test_packaging.py::test_installer_tree_gate_requires_legal_files_and_rejects_toolchains"
+    "tests/v3/test_packaging.py::test_installer_tree_gate_requires_legal_files_and_rejects_toolchains",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_settings_assistant_tools.py::test_provider_tools_are_bounded_to_catalog_and_project",
+    "tests/v3/test_settings_assistant_tools.py::test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant",
+    "tests/v3/test_harnesses.py::test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session"
   ],
   "frontend": [
     "ui/src/components/NotebookPanel.test.tsx",
