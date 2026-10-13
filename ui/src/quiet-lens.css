@@ -350,7 +350,8 @@
     border-radius: 0 24px 24px 0;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-side-handle {
-    top: 8px;
+    /* Share the top row with the menu lens; the Workbench header owns the row below. */
+    top: calc(-74px + env(safe-area-inset-top, 0px));
     left: 4px;
     height: 44px;
     opacity: .72;

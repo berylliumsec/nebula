@@ -2499,7 +2499,11 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
   expectTouchTarget((await sideHandle.boundingBox())?.width, "Side lens target width");
   const topBounds = await topHandle.boundingBox();
   const sideBounds = await sideHandle.boundingBox();
-  expect(topBounds && sideBounds && topBounds.y + topBounds.height < sideBounds.y).toBe(true);
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    expect(topBounds && sideBounds && sideBounds.x + sideBounds.width < topBounds.x).toBe(true);
+  } else {
+    expect(topBounds && sideBounds && topBounds.y + topBounds.height < sideBounds.y).toBe(true);
+  }
   await expect(side.locator(".nav-list")).toBeHidden();
 
   if ((page.viewportSize()?.width ?? 1440) > 760) {
@@ -2537,6 +2541,15 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
   await page.keyboard.press("Escape");
   await expect(side.locator(".nav-list")).toBeHidden();
   await page.getByRole("button", { name: "Start new chat", exact: true }).click();
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    const conversations = page.getByRole("button", { name: "Open conversations", exact: true });
+    const conversationsBounds = await conversations.boundingBox();
+    const navigationBounds = await sideHandle.boundingBox();
+    expect(conversationsBounds && navigationBounds && navigationBounds.y + navigationBounds.height < conversationsBounds.y).toBe(true);
+    await conversations.tap();
+    await expect(page.getByRole("complementary", { name: "Conversations" })).toBeVisible();
+    await page.getByRole("button", { name: "Close conversations" }).tap();
+  }
   const composerFrame = page.locator(".chat-studio > .chat-panel > .chat-composer");
   const composerInput = composerFrame.locator(".chat-composer-input");
   const composer = composerFrame.getByRole("textbox", { name: "Message the analyst assistant" });
