@@ -240,6 +240,12 @@ def test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke():
         "-name chrome -o -name headless_shell -o -name chrome-headless-shell" in release
     )
     assert "--dump-dom about:blank" in release
+    product_name = json.loads(
+        (ROOT / "ui/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+    )["productName"]
+    browser_root = f"/usr/lib/{product_name}/playwright-browsers"
+    assert f"find {browser_root} -type f" in release
+    assert f"PLAYWRIGHT_BROWSERS_PATH: {browser_root}" in release
 
 
 def test_wider_release_diagnostics_require_manual_dispatch():

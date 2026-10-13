@@ -1,13 +1,13 @@
 {
-  "change_digest": "09d102ecd17098b7a5555724485756688ac26aa6b68fff400b9aa6d7c80d9cec",
-  "reviewed_by": "Codex review of the notebook AppImage packaging failure and selected operator journey",
-  "reason": "The 3.0.17 AppImage build failed because linuxdeploy rewrote the bundled notebook Python and uv RPATHs after the runtime manifest hashed them. A real-ELF packaging regression checks the final paths and stable hashes. Three focused real-Core notebook browser cases exercise run and reload on the production UI, including desktop and mobile browser coverage for this journey.",
-  "exclusions": "No frontend or native source changed, so their unit layers are omitted. No unrelated Python tests, Playwright catalog entries, release diagnostics, or full suite are selected. The release's existing artifact audit and single installed-DEB core smoke will validate the final installers after this fix is merged.",
+  "change_digest": "41be1cf7f9b3a7f16aeb948ae041f6f8747b32d1652fb2199398b86a5d0102e5",
+  "reviewed_by": "Codex review of 3.0.18 installed-DEB smoke failure and DEB contents",
+  "reason": "The 3.0.18 clean-install smoke failed before Core doctor or Playwright because its browser path used lowercase nebula, while the built DEB installs resources under uppercase Nebula. Select the exact release workflow shape test, extended to bind both browser-path references to the Tauri product name. A fresh release preparation will exercise the actual installed DEB and one core browser case.",
+  "exclusions": "No application source, frontend, native code, or browser test changed. No unrelated tests, Playwright PR entries, optional release diagnostics, or full suite are selected. The existing installed-DEB release smoke is the integration acceptance gate after merge.",
   "expected_tests": {
     "python": 1,
     "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,13 +15,9 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_packaging.py::test_notebook_runtime_rpaths_are_linuxdeploy_stable"
+    "tests/v3/test_packaging.py::test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:notebooks/assistant-real-desktop",
-    "entry:notebooks/assistant-real-chromium-390",
-    "entry:notebooks/assistant-real-webkit-390"
-  ]
+  "playwright": []
 }

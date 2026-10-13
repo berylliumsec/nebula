@@ -301,7 +301,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y xauth xvfb "./release-assets/Nebula-$VERSION-linux-x86_64.deb"
           xvfb-run -a /usr/bin/nebula --self-test
-          browser="$(find /usr/lib/nebula/playwright-browsers -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -perm /111 -print -quit)"
+          browser="$(find /usr/lib/Nebula/playwright-browsers -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -perm /111 -print -quit)"
           test -n "$browser"
           "$browser" --headless --no-sandbox --disable-gpu --dump-dom about:blank | grep -F '<html'
           /usr/bin/nebula-core doctor --data-dir /tmp/nebula-clean-doctor --json > /tmp/doctor.json
@@ -330,7 +330,7 @@ jobs:
           NEBULA_TEST_CORE_BIN: /usr/bin/nebula-core
           NEBULA_TEST_CORE_EMBEDDED_UI: "1"
           NEBULA_RELEASE_CORE_SMOKE: "1"
-          PLAYWRIGHT_BROWSERS_PATH: /usr/lib/nebula/playwright-browsers
+          PLAYWRIGHT_BROWSERS_PATH: /usr/lib/Nebula/playwright-browsers
         run: |
           case_name='release core smoke pairs, creates a project, and retains one answer'
           args=(tests/real-core.spec.ts --project=real-core --grep "$case_name" --workers=1 --retries=0)
