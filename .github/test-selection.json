@@ -1,26 +1,36 @@
 {
-  "change_digest": "0b039fd5447f2dc0d5d2d004bd6d0014f2846af4315b855bb48fe8bfd0500565",
-  "reviewed_by": "Codex review of v3.0.10 MCP failure and PR #750 main merge",
-  "reason": "The affected real Core, production-bundle, non-loopback LAN MCP import journey at 430 px WebKit reproduced the release failure: the Edit icon began outside the viewport, Playwright completed its click, and no dialog appeared. CI then showed the same sticky Settings tab intercepting the empty-state Import action at 320 px WebKit. The focused test centers Settings actions, checks that each button owns its hit point, uses touch input on phones, and requires import and edit dialogs to appear before proceeding through trust, probe, enable, refresh, and update. Desktop, 320 px Chromium, 320 px WebKit, and 430 px WebKit cover mouse and phone touch behavior.",
-  "exclusions": "This test-only change excludes other device profiles, backend and frontend unit files, native tests, unrelated journeys, and the full suite. The product MCP flow is unchanged; release package and other real-Core gates remain separate.",
+  "change_digest": "25fe2aa9b57ebf983f6649c3e28caf71ec3d564dbea52787401ab1603ca943bf",
+  "reviewed_by": "Codex focused operator-journey review",
+  "reason": "Bundled notebooks change project execution policy, a separately staged Jupyter worker resource, project notebook files, reserved MCP grants, authenticated ordered event streaming/replay, package lookup, and the Workbench/assistant UI. The selected tests exercise those boundaries and the desktop/mobile/LAN notebook journey, including managed Python identity, a fresh project package lookup/install/import, Host consent before package install, queued interrupt during kernel startup, stale agent edits, source-output invalidation, explicit interruption of active runs before a mode change, persistent Host consent, Host package-download controls, worker-only bundle upgrades, and live MCP tool revocation. Notebook browser checks cover desktop 1440/1024 and emulated 320/390/430 mobile widths across Chromium and WebKit. Earlier selected failures identified and corrected the migration head, icon availability, installer fixture, legacy Docker test fixture, paginated profile registration, and notebook startup diagnostics; these remain within the same reviewed boundaries.",
+  "exclusions": "No native Rust test is selected because the Tauri change only passes the staged resource path; the focused package audit and real-Core UI cover its integration. Unrelated project, provider, browser, mission, and full suites are excluded. Docker image execution is deferred at the operator's explicit request; this selection does not claim Docker runtime acceptance or a clean installer smoke test.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 4
+    "python": 13,
+    "frontend": 19,
+    "playwright": 10,
+    "native": 0
   },
-  "python_versions": [
-    "3.12"
+  "python": [
+    "tests/v3/test_notebooks.py",
+    "tests/v3/test_automation_runtime.py::test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker",
+    "tests/v3/test_automation_runtime.py::test_host_mode_requires_consent_and_reads_external_folder_without_docker",
+    "tests/v3/test_packaging.py::test_installer_tree_gate_requires_legal_files_and_rejects_toolchains"
   ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/NotebookPanel.test.tsx",
+    "ui/src/components/McpServerChoices.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:mcp-import/assistant-real-desktop",
-    "entry:mcp-import/assistant-real-chromium-320",
-    "entry:mcp-import/assistant-real-webkit-320",
-    "entry:mcp-import/assistant-real-webkit-430"
+    "notebooks/desktop",
+    "notebooks/compact",
+    "notebooks/mobile-chromium-small",
+    "notebooks/mobile-chromium-wide",
+    "notebooks/mobile-webkit-small",
+    "notebooks/mobile-webkit",
+    "notebooks/mobile-webkit-wide",
+    "notebooks/assistant-real-desktop",
+    "notebooks/assistant-real-chromium-390",
+    "notebooks/assistant-real-webkit-390"
   ]
 }
