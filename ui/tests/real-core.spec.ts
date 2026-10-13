@@ -6041,8 +6041,15 @@ reliabilityTest("assistant upgrade new chat reuses saved Assistant settings afte
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat`);
+    const openSettings = async () => {
+      if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) {
+        await page.locator(".chat-composer").hover();
+      }
+      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    };
+    await expect(page.getByRole("button", {name: "New chat", exact: true})).toHaveCount(1);
     await page.getByRole("button", {name: "New chat", exact: true}).click();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await openSettings();
     const settings = page.getByRole("dialog", {name: "Assistant settings"});
     await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("harness");
     await settings.getByRole("combobox", {name: "Chat harness model"}).selectOption("fixture-next");
@@ -6055,7 +6062,7 @@ reliabilityTest("assistant upgrade new chat reuses saved Assistant settings afte
     await settings.getByRole("button", {name: "Close assistant settings"}).click();
 
     await page.getByRole("button", {name: "New chat", exact: true}).click();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await openSettings();
     await expect(settings.getByRole("combobox", {name: "Chat harness model"})).toHaveValue("fixture-next");
     await expect(settings.getByRole("combobox", {name: "Harness reasoning effort"})).toHaveValue("high");
     await expect(settings.getByRole("checkbox", {name: /Agent messaging/})).toBeChecked();
@@ -6064,7 +6071,7 @@ reliabilityTest("assistant upgrade new chat reuses saved Assistant settings afte
     await page.reload();
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.getByRole("button", {name: "New chat", exact: true}).click();
-    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await openSettings();
     await expect(settings.getByRole("combobox", {name: "Chat harness model"})).toHaveValue("fixture-next");
     await expect(settings.getByRole("combobox", {name: "Harness reasoning effort"})).toHaveValue("high");
     await expect(settings.getByRole("checkbox", {name: /Agent messaging/})).toBeChecked();
