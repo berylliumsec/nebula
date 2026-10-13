@@ -954,6 +954,17 @@ def _harness_turn_prompt(turn: HarnessTurn) -> str:
     return "BEGIN OPERATOR REQUEST\n" + turn.prompt + "\nEND OPERATOR REQUEST"
 
 
+def _chat_harness_command(turn: HarnessTurn) -> tuple[str, str] | None:
+    if turn.origin != HarnessTurnOrigin.CHAT:
+        return None
+    # The full prompt also contains Core context and instructions. Only the
+    # operator's saved input may supply a native command or its arguments.
+    user_prompt = turn.metadata.get("user_prompt")
+    return parse_harness_command(
+        user_prompt if isinstance(user_prompt, str) else turn.prompt
+    )
+
+
 def _gateway_oci_input_schema(spec: ToolSpec) -> dict[str, Any]:
     schema = deepcopy(spec.input_schema)
     properties = schema.get("properties")
@@ -11581,9 +11592,8 @@ class HarnessRuntimeService:
                         part for part in resolved_content if part["type"] == "image"
                     ]
                 command = (
-                    parse_harness_command(turn.prompt)
-                    if turn.origin == HarnessTurnOrigin.CHAT
-                    and isinstance(
+                    _chat_harness_command(turn)
+                    if isinstance(
                         connection, (CodexAppServerConnection, GrokAcpConnection)
                     )
                     else None

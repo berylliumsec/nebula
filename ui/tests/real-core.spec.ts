@@ -297,11 +297,39 @@ async function openNebulaAssistantFromShell(page: Page) {
 
 async function guideEntry(page: Page) {
   const guides = page.getByRole("button", {name: "Guides", exact: true});
+  // Quiet Lens keeps secondary top-bar actions behind its visible menu.
+  const topMenu = page.getByRole("button", {name: "Open top menu"});
+  if (!await guides.isVisible() && await topMenu.isVisible()) {
+    await topMenu.click();
+  }
   if ((page.viewportSize()?.width ?? 1440) <= 760 && !await guides.isVisible()) {
     await page.getByRole("button", {name: "More workbench views", exact: true}).click();
   }
   await expect(guides).toBeVisible();
+  // Move keyboard focus into the opened menu so its lens handle stops
+  // intercepting pointer activation of the Guides button.
+  await guides.focus();
   return guides;
+}
+
+async function clickTopBarAction(page: Page, name: string) {
+  const action = page.getByRole("button", {name, exact: true});
+  if (!await action.isVisible()) {
+    await page.getByRole("button", {name: "Open top menu", exact: true}).click();
+  }
+  await expect(action).toBeVisible();
+  await action.focus();
+  await action.click();
+}
+
+async function clickWorkbenchTab(page: Page, name: string) {
+  const tab = page.getByRole("tab", {name, exact: true});
+  if (!await tab.isVisible()) {
+    await page.getByRole("button", {name: "Open top menu", exact: true}).click();
+  }
+  await expect(tab).toBeVisible();
+  await tab.focus();
+  await tab.click();
 }
 
 /** Fixture Cores often report limited availability; their shell is still usable. */
@@ -919,7 +947,10 @@ test("assistant upgrade real Core retains editable goal skills through source lo
         (await goalRail.isVisible() && await railObjective.textContent() === goalObjective)
         || (await panelObjective.isVisible() && (await panelObjective.textContent())?.trim() === goalObjective),
       { timeout: 20_000 }).toBe(true);
-      if (await reveal.isVisible()) await reveal.click();
+      if (await reveal.isVisible()) {
+        await reveal.focus();
+        await reveal.click();
+      }
       await expect(goalPanel).toBeVisible({ timeout: 20_000 });
       if (await expand.isVisible()) await expand.click();
       await expect(goalPanel.getByRole("button", { name: "Edit skills" })).toBeVisible();
@@ -1048,7 +1079,10 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
         (await railGoal.isVisible() && (await railObjective.textContent()) === goalObjective)
         || (await panelObjective.isVisible() && (await panelObjective.textContent())?.trim() === goalObjective),
       { timeout: 20_000 }).toBe(true);
-      if (await reveal.isVisible()) await reveal.click();
+      if (await reveal.isVisible()) {
+        await reveal.focus();
+        await reveal.click();
+      }
       await expect(goalPanel).toBeVisible();
     };
     await openFullGoal();
@@ -2989,7 +3023,7 @@ test("assistant upgrade real Core persists network scope changed through univers
   await withOwnedCleanup(async () => {
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
+    await clickTopBarAction(page, "Search pages, actions, and settings");
     await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
     await page.getByRole("option", { name: /Project policy and network scope/ }).click();
     const lens = page.getByRole("dialog", { name: "Project policy and network scope" });
@@ -3019,7 +3053,7 @@ test("assistant upgrade real Core persists network scope changed through univers
     await page.goto("about:blank");
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
+    await clickTopBarAction(page, "Search pages, actions, and settings");
     await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
     const reloadedScope = page.waitForResponse((response) => response.url().endsWith("/scope") && response.request().method() === "GET");
     await page.getByRole("option", { name: /Project policy and network scope/ }).click();
@@ -3245,14 +3279,14 @@ test("assistant upgrade focused work surfaces retain real Core project context",
     const projects = await response.json() as Array<{ id: string }>;
     expect(projects[0]?.id).toBeTruthy();
     await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), projects[0].id);
-    await page.goto(`${core.origin}/#token=${encodeURIComponent(core.token)}`);
+    await page.goto(`${core.origin}/projects/${projects[0].id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     await expect(coreConnected(page)).toBeVisible({ timeout: 20_000 });
     for (const { tab, view, content } of [
       { tab: "Workspace code editor", view: "code", content: ".persistent-code-editor" },
       { tab: "Project browser", view: "browser", content: ".persistent-browser" },
       { tab: "Workspace files", view: "workspace", content: ".workspace-browser" },
     ]) {
-      await page.getByRole("tab", { name: tab, exact: true }).click();
+      await clickWorkbenchTab(page, tab);
       await expect(page.locator(content)).toBeVisible();
       await page.getByRole("button", { name: "Enter focus mode" }).click();
       await expect(page.locator(`.sessions-page.workbench-focus.full-screen > .session-layout.${view}`)).toBeVisible();
@@ -3547,7 +3581,7 @@ test("project execution mode uses production Code, real Git changes, and reviewe
     const project = await create.json() as { id: string };
     await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), project.id);
     await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("tab", { name: "Changes", exact: true })).toBeVisible({ timeout: 20_000 });
 
     await page.getByRole("tab", { name: "Changes" }).click();
     await expect(page.getByText("research", { exact: true })).toBeVisible();
@@ -3775,8 +3809,7 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await expect(page.getByText("Connected", { exact: true })).toBeVisible({ timeout: 30_000 });
 
     const projectName = "Real Core Project";
-    await page.getByRole("button", { name: "Switch project" }).click();
-    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    const switcher = await openProjectSwitcherFromShell(page);
     await switcher.getByRole("button", { name: "New project" }).click();
     await switcher.getByLabel("Name", { exact: true }).fill(projectName);
     await switcher.getByRole("button", { name: "Create in Host mode" }).click();
@@ -3945,10 +3978,7 @@ test("assistant upgrade project creation switches canonical project and isolates
     await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/projects/${projects[0].id}/workbench?view=chat&session=${oldChat.session_id}`);
     await expect(page.locator(".chat-message.operator")).toContainText("Old project conversation");
-    const sidebar = page.getByRole("button", { name: "Show sidebar" });
-    if (await sidebar.isVisible()) await sidebar.click();
-    await page.getByRole("button", { name: "Switch project" }).click();
-    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    const switcher = await openProjectSwitcherFromShell(page);
     await switcher.getByRole("button", { name: "New project" }).click();
     await switcher.getByLabel("Name", { exact: true }).fill("New isolated project");
     await switcher.getByRole("button", { name: "Create in Host mode", exact: true }).click();
@@ -4152,7 +4182,9 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(page.locator(".assistant-search ol li")).toHaveCount(1);
     await page.getByRole("button", {name: "Close transcript search", exact: true}).click();
     await expect(page.locator(".assistant-search")).toHaveCount(0);
-    await page.getByRole("button", {name: "Attach files", exact: true}).click();
+    const attachFiles = page.getByRole("button", {name: "Attach files", exact: true});
+    await attachFiles.focus();
+    await attachFiles.click();
     await page.locator(".assistant-attachment-dialog input[type=file]").setInputFiles({name: "review.txt", mimeType: "text/plain", buffer: Buffer.from("Exact attachment preview\n")});
     await expect(page.locator(".assistant-attachment-dialog pre")).toContainText("Exact attachment preview");
     await page.getByRole("button", {name: "Attach this excerpt"}).click();
@@ -4994,7 +5026,6 @@ test("project removal archives, retries, restores and clears the last selection 
   // Hosted WebKit spends 2–4s on many successful clicks in this full lifecycle;
   // traces reached the final restored state at 90s before the last assertions.
   test.setTimeout(120_000);
-  const startedAt = Date.now();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const stub = await startLocalModelStub();
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
@@ -5025,21 +5056,7 @@ test("project removal archives, retries, restores and clears the last selection 
     const switcher = page.getByRole("dialog", { name: "Project switcher" });
     const removalConfirmation = page.getByRole("dialog", {name: `Remove ${linked.name}?`, exact: true});
     const openSwitcher = async () => test.step("Open project switcher", async () => {
-      const sidebar = page.getByRole("button", { name: "Show sidebar" });
-      const switchProject = page.getByRole("button", { name: "Switch project" });
-      const more = page.getByRole("button", { name: "More workbench views" });
-      // Reload returns before the responsive shell has necessarily mounted.
-      // Wait for its visible entry point before deciding whether to open it.
-      await expect(sidebar.or(switchProject).or(more).filter({ visible: true }).first()).toBeVisible();
-      if (await sidebar.isVisible()) await sidebar.click();
-      else if (await more.isVisible() && !await switchProject.isVisible()) await more.click();
-      console.info("project-removal switcher readiness", {
-        elapsedMs: Date.now() - startedAt,
-        sidebarCollapsed: await page.locator(".app-shell").evaluate(element => element.classList.contains("sidebar-collapsed")),
-        switcherBounds: await switchProject.boundingBox(),
-        coreReady: await coreReady(page).isVisible(),
-      });
-      if (!await switcher.isVisible()) await switchProject.click({ timeout: 10_000 });
+      await openProjectSwitcherFromShell(page);
     });
     const remove = async (name: string) => {
       await switcher.getByRole("button", { name: `Remove project ${name}`, exact: true }).click();
@@ -5127,7 +5144,7 @@ test("stabilization real Core preserves note drafts and reuses saved notes in re
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Output acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
     await page.getByRole("button", {name: "New note", exact: true}).click();
     let failSave = true;
@@ -5212,12 +5229,12 @@ test("stabilization real Core Library makes uploads visible and retains original
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Library acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/library`);
     await expect(page.getByText("Your Library is empty", {exact: true})).toBeVisible();
     await page.getByRole("searchbox", {name: "Search Library", exact: true}).fill("a-stale-filter");
     const chooser = page.waitForEvent("filechooser");
-    await page.getByRole("button", {name: "Add document or script", exact: true}).click();
+    await clickTopBarAction(page, "Add document or script");
     await (await chooser).setFiles({name: filename, mimeType: "text/markdown", buffer: content});
     await expect(page.getByText(`${filename} is available to every project.`, {exact: true})).toBeVisible({timeout: 60_000});
     const row = page.locator(".source-list > article").filter({hasText: filename});
@@ -5315,7 +5332,7 @@ for (const area of ["asset", "evidence", "finding"] as const) {
         await page.getByLabel("Filter findings by severity").selectOption("critical");
         await page.getByLabel("Filter findings by status").selectOption("remediated");
       }
-      await page.getByRole("button", {name: area === "finding" ? "New finding" : `Add ${area}`, exact: true}).click();
+      await clickTopBarAction(page, area === "finding" ? "New finding" : `Add ${area}`);
       const dialog = page.getByRole("dialog", {name: area === "finding" ? "Create candidate finding" : `Add ${area}`, exact: true});
       const title = dialog.getByRole("textbox", {name: area === "asset" ? "Name" : "Title", exact: true});
       await title.fill(name);
@@ -5425,7 +5442,7 @@ test("stabilization real Core finding drafts stay bound to their record through 
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Finding draft acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/findings`);
     const inspector = page.locator(".finding-dialog");
     const input = inspector.getByRole("textbox", {name: "Title", exact: true});
@@ -5514,7 +5531,7 @@ for (const runtime of ["provider", "harness"] as const) {
         return;
       }
       const link = page.getByRole("link", {name, exact: true});
-      if (!await link.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click({timeout: 10_000});
+      if (!await link.isVisible()) await showProjectNavigation(page);
       await link.click({timeout: 10_000});
     };
     await withOwnedCleanup(async () => {
@@ -5619,8 +5636,7 @@ for (const runtime of ["provider", "harness"] as const) {
       await testInfo.attach("runtime-settings-durable", {body: JSON.stringify({origin: core.origin, runtime, model, durable}), contentType: "application/json"});
       await testInfo.attach("runtime-settings-saved", {body: await page.screenshot(), contentType: "image/png"});
       await navigate("Workbench");
-      const chatTab = page.getByRole("tab", {name: "Analyst chat", exact: true});
-      if ((page.viewportSize()?.width ?? 1440) > 760) await chatTab.click();
+      if ((page.viewportSize()?.width ?? 1440) > 760) await clickWorkbenchTab(page, "Analyst chat");
       else await page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Chat", exact: true}).click();
       await page.getByRole("button", {name: "New chat", exact: true}).click();
       await clickAssistantSettings(page);
@@ -6886,8 +6902,13 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Input tokens: 12", {timeout: 20_000});
       // Reload follows the latest turn; older virtualized rows must be reached
       // through the transcript scroll owner before inspecting their saved work.
-      await page.locator(".chat-scroll").hover();
-      await page.mouse.wheel(0, -10_000);
+      const scrollToTranscriptStart = async () => {
+        await page.locator(".chat-scroll").evaluate(element => {
+          element.scrollTop = 0;
+          element.dispatchEvent(new Event("scroll"));
+        });
+      };
+      await scrollToTranscriptStart();
       const retainedGoal = page.locator(".chat-message.assistant").filter({hasText: "Goal work completed."}).last();
       await expect(retainedGoal).toBeVisible();
       await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity|View work/}).click();
@@ -6898,8 +6919,7 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Goal: Clock", {timeout: 20_000});
       const entries = (await readFile(path.join(core.dataDir, "command-requests.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
       expect(entries.some(row => row.method === (id === codex.id ? "account/usage/read" : "_x.ai/session/usage"))).toBe(true);
-      await page.locator(".chat-scroll").hover();
-      await page.mouse.wheel(0, -10_000);
+      await scrollToTranscriptStart();
       await expect(retainedGoal).toBeVisible();
       // Moving to the new turn can unmount this older virtual row. Reopen its
       // transient disclosure when reading it again, then verify the saved text.

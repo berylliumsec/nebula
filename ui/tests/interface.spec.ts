@@ -27,7 +27,12 @@ async function openConversationGoal(page: Page) {
   const opener = page.getByRole("button", {name: "View full goal and evidence gates", exact: true});
   await expect.poll(async () => await panel.isVisible() || await opener.isVisible()).toBe(true);
   if (!await panel.isVisible()) {
-    await opener.click();
+    try {
+      await opener.click({timeout: 3_000});
+    } catch (error) {
+      // A responsive rerender can replace the opener with the already-open panel.
+      if (!await panel.isVisible()) throw error;
+    }
   }
   await expect(panel).toBeVisible();
   return panel;
