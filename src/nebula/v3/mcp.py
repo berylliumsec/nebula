@@ -420,14 +420,30 @@ class McpProbeService:
         self.credential_store = credential_store
         self.workspace_resolver = workspace_resolver
         self.security_tools: Any | None = None
+        self.notebook_tools: Any | None = None
 
     def bind_security_tools(self, service: Any) -> None:
         self.security_tools = service
+
+    def bind_notebooks(self, service: Any) -> None:
+        from .notebook_mcp import NotebookMcpTools
+
+        self.notebook_tools = NotebookMcpTools(self.store, service)
 
     async def probe(
         self, profile_id: str, *, engagement_id: str | None = None
     ) -> McpProbeReport:
         profile = self.store.get(McpServerProfile, profile_id)
+        if profile.metadata.get("built_in") == "notebook_v1":
+            if self.notebook_tools is None or engagement_id != profile.metadata.get(
+                "engagement_id"
+            ):
+                raise McpProbeError("Notebook profile belongs to another project")
+            return McpProbeReport(
+                profile_id=profile.id,
+                compatible=True,
+                capabilities=profile.capabilities,
+            )
         if profile.transport == McpTransport.BUILTIN:
             if self.security_tools is None:
                 raise McpProbeError("Security Tools are unavailable in this Core")
@@ -624,6 +640,22 @@ class McpProbeService:
         if errors:
             raise McpProbeError(f"MCP tool arguments are invalid: {errors[0].message}")
         if profile.transport == McpTransport.BUILTIN:
+            if profile.metadata.get("built_in") == "notebook_v1":
+                if self.notebook_tools is None or engagement_id != profile.metadata.get(
+                    "engagement_id"
+                ):
+                    raise McpProbeError("Notebook profile belongs to another project")
+                current = self.store.get(McpServerProfile, profile.id)
+                if (
+                    not current.enabled
+                    or current.metadata.get("engagement_id") != engagement_id
+                ):
+                    raise McpProbeError("Notebook MCP grant was revoked")
+                if tool_name not in {tool.name for tool in usable_mcp_tools(current)}:
+                    raise McpProbeError("Notebook MCP tool grant was revoked")
+                return await self.notebook_tools.call_tool(
+                    engagement_id, tool_name, arguments
+                )
             if self.security_tools is None:
                 raise McpProbeError("Security Tools are unavailable in this Core")
             current = self.store.get(McpServerProfile, profile.id)
@@ -813,6 +845,8 @@ def mcp_tool_runtime_name(profile_id: str, tool_name: str) -> str:
 
 
 def _mcp_tool_risk(tool: McpToolSnapshot, profile: McpServerProfile) -> RiskClass:
+    if profile.metadata.get("built_in") == "notebook_v1":
+        return RiskClass.LOCAL_READ if tool.read_only else RiskClass.WORKSPACE_WRITE
     if profile.transport == McpTransport.BUILTIN:
         return RiskClass.LOCAL_READ if tool.read_only else RiskClass.ACTIVE_SCAN
     if tool.credentialed:
@@ -886,7 +920,7 @@ def build_mcp_tool_plugins(
                 requires_approval=(
                     False
                     if allow_all
-                    and profile.transport == McpTransport.BUILTIN
+                    and profile.metadata.get("built_in") == "agent_security_v1"
                     and profile.tool_overrides.get(snapshot.name)
                     != McpApprovalMode.DENY
                     else _mcp_requires_approval(profile, snapshot)
@@ -972,12 +1006,18 @@ def resolve_mcp_profiles(
     server_ids: list[str] | tuple[str, ...],
     *,
     bypass_permissions: bool = False,
+    engagement_id: str | None = None,
 ) -> tuple[McpServerProfile, ...]:
     """Resolve a validated, ordered MCP selection for a durable runtime snapshot."""
 
     ids = tuple(dict.fromkeys(server_ids))
     profiles = tuple(store.get(McpServerProfile, item) for item in ids)
     for profile in profiles:
+        if (
+            profile.metadata.get("built_in") == "notebook_v1"
+            and profile.metadata.get("engagement_id") != engagement_id
+        ):
+            raise McpProbeError("selected Notebook profile belongs to another project")
         if not profile.enabled:
             raise McpProbeError(f"selected MCP server {profile.id!r} is disabled")
         if profile.capabilities.checked_at is None:
@@ -1013,6 +1053,7 @@ def catalog_mcp_profiles(
     *,
     exclude: Collection[str] = (),
     bypass_permissions: bool = False,
+    engagement_id: str | None = None,
 ) -> tuple[McpServerProfile, ...]:
     """Every other usable server, offered on demand next to the selected ones.
 
@@ -1029,6 +1070,7 @@ def catalog_mcp_profiles(
                 profile
                 for profile in store.list_entities(McpServerProfile, limit=1000)
                 if profile.id not in skip
+                and profile.metadata.get("built_in") != "notebook_v1"
                 and profile.enabled
                 and profile.capabilities.checked_at is not None
                 and usable_mcp_tools(profile, bypass_permissions=bypass_permissions)

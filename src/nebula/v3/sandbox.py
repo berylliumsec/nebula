@@ -279,6 +279,9 @@ class SandboxRequest(BaseModel):
     workspace: Path
     workspace_access: SandboxWorkspaceAccess = SandboxWorkspaceAccess.NONE
     output_directory: Path | None = None
+    # Core creates this private, project-scoped directory only for a notebook
+    # runtime. It is never accepted from an API request body.
+    notebook_data_directory: Path | None = Field(default=None, exclude=True)
     # Artifact-first callers stream directly to durable capture files and do
     # not need a second in-memory copy of stdout/stderr. Interactive and legacy
     # callers retain the previous behavior by default.
@@ -1713,6 +1716,12 @@ class ContainerSandboxRunner(SandboxRunner):
                 for root in self.workspace_roots
             ):
                 raise SandboxError("tool output directory is outside workspace roots")
+        if request.notebook_data_directory is not None:
+            notebook_data = request.notebook_data_directory.expanduser()
+            if notebook_data.is_symlink() or not notebook_data.is_dir():
+                raise SandboxError("notebook data must be a regular directory")
+            if _unsafe_for_mount(notebook_data.resolve(strict=True)):
+                raise SandboxError("notebook data path cannot be mounted safely")
         if request.resolv_conf is not None:
             resolver = request.resolv_conf.expanduser().resolve(strict=True)
             if not resolver.is_file() or request.resolv_conf.is_symlink():
@@ -1822,6 +1831,13 @@ class ContainerSandboxRunner(SandboxRunner):
                 strict=True
             )
             argv.append(f"--mount=type=bind,src={output_directory},dst=/nebula-output")
+        if request.notebook_data_directory is not None:
+            notebook_data = request.notebook_data_directory.expanduser().resolve(
+                strict=True
+            )
+            argv.append(
+                f"--mount=type=bind,src={notebook_data},dst=/nebula-notebook-env"
+            )
         if request.resolv_conf is not None:
             resolver = request.resolv_conf.expanduser().resolve(strict=True)
             argv.append(
@@ -2300,12 +2316,16 @@ class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v10"
+    _recipe_version = "v11"
     _installed_packages = (
         "kali-linux-headless",
         "iputils-ping",
         "python3",
         "python3-debugpy",
+        "python3-venv",
+        "python3-pip",
+        "python3-ipykernel",
+        "python3-jupyter-client",
         "ripgrep",
         "git",
         "curl",
@@ -2926,12 +2946,15 @@ COPY egress_helper.py /usr/local/bin/nebula-egress
 COPY public_ip_update.py /usr/local/lib/nebula-public-ip-update
 COPY terminal_entrypoint.sh /usr/local/bin/nebula-terminal-entrypoint
 COPY public_ip.cron /etc/cron.d/nebula-public-ip
+COPY notebook-worker.py /usr/local/lib/nebula-notebook-worker.py
+COPY uv /usr/local/bin/uv
 RUN apt-get update \\
  && apt-get install -y {" ".join(self._installed_packages)} \\
  && if getcap /usr/lib/nmap/nmap | grep -q .; then setcap -r /usr/lib/nmap/nmap; fi \\
  && test -z "$(getcap /usr/lib/nmap/nmap)" \\
  && python3 /usr/local/lib/nebula-kali-tool-inventory.py --output {self._security_tool_manifest_path} \\
  && chmod 0500 /usr/local/bin/nebula-egress \\
+ && chmod 0555 /usr/local/bin/uv /usr/local/lib/nebula-notebook-worker.py \\
  && chmod 0500 /usr/local/lib/nebula-public-ip-update /usr/local/bin/nebula-terminal-entrypoint \\
  && chmod 0600 /etc/cron.d/nebula-public-ip \\
  && rm -f /usr/local/lib/nebula-kali-tool-inventory.py \\
@@ -2947,6 +2970,19 @@ CMD ["/bin/bash"]
         with tempfile.TemporaryDirectory(prefix="nebula-kali-") as directory:
             context = Path(directory)
             (context / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+            notebook_runtime = Path(
+                os.environ.get("NEBULA_NOTEBOOK_RUNTIME_DIR")
+                or Path(__file__).resolve().parents[3]
+                / "ui/src-tauri/resources/notebook-runtime"
+            )
+            uv_binary = notebook_runtime / "uv"
+            worker_script = notebook_runtime / "worker.py"
+            if not uv_binary.is_file() or not worker_script.is_file():
+                raise SandboxUnavailable(
+                    "bundled notebook worker is missing; repair the Nebula installation"
+                )
+            (context / "uv").write_bytes(uv_binary.read_bytes())
+            (context / "notebook-worker.py").write_bytes(worker_script.read_bytes())
             (context / "kali_tool_inventory.py").write_bytes(
                 Path(__file__).with_name("kali_tool_inventory.py").read_bytes()
             )

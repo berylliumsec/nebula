@@ -396,6 +396,10 @@ class RuntimePlatform:
                 self.artifact_store,
                 engagement_id,
                 settings_api=self.settings_assistant_api,
+                notebooks=self.mcp_service.notebook_tools.notebooks
+                if self.mcp_service is not None
+                and self.mcp_service.notebook_tools is not None
+                else None,
             ):
                 registry.register(plugin)
         if search_enabled:

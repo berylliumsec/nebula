@@ -2,6 +2,7 @@ import asyncio
 import itertools
 import json
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from fastapi.testclient import TestClient
@@ -196,6 +197,15 @@ def runtime(tmp_path: Path):
         engagement.id,
         {"scope_policy_id": scope.id},
         expected_revision=engagement.revision,
+    )
+    # This fixture represents projects created before Host became the default.
+    # Keep its Docker policy explicit so existing runtime tests retain that mode.
+    store.create(
+        AutomationProjectPolicy(
+            id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement.id}")),
+            engagement_id=engagement.id,
+            execution_mode="docker",
+        )
     )
     store.create(
         RunnerProfile(
@@ -1696,7 +1706,9 @@ def test_host_mode_requires_consent_and_reads_external_folder_without_docker(tmp
     asyncio.run(scenario())
 
 
-def test_new_project_uses_host_without_docker_and_legacy_project_keeps_docker(tmp_path):
+def test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker(
+    tmp_path,
+):
     async def scenario():
         manager, store, _, legacy_project, containers = runtime(tmp_path)
         assert manager.project_policy(legacy_project.id).execution_mode == "docker"
@@ -1706,7 +1718,19 @@ def test_new_project_uses_host_without_docker_and_legacy_project_keeps_docker(tm
         )
         policy = manager.project_policy(created.id)
         assert policy.execution_mode == "host"
-        assert policy.host_access_acknowledged is True
+        assert policy.host_access_acknowledged is False
+        assert not (await manager.runtime_info(engagement_id=created.id)).ready
+        manager.update_project_policy(
+            created.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            approval_policy=policy.approval_policy,
+            network_enabled=policy.network_enabled,
+            runner_profile_id=policy.runner_profile_id,
+            vpn_profile_id=policy.vpn_profile_id,
+            max_timeout_ms=policy.max_timeout_ms,
+            expected_revision=policy.revision,
+        )
         manager.runtime_image = ""
         manager.runtime_digest = ""
         assert (await manager.runtime_info(engagement_id=created.id)).ready

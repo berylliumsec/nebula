@@ -989,13 +989,25 @@ class AutomationProjectPolicy(Entity):
     max_timeout_ms: int = Field(default=300_000, ge=1_000, le=86_400_000)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode="after")
-    def host_mode_requires_acknowledgement(self) -> "AutomationProjectPolicy":
-        if self.execution_mode == "host" and not self.host_access_acknowledged:
-            raise ValueError(
-                "Host mode requires acknowledgement of host filesystem and network access"
-            )
-        return self
+    # Project creation explicitly saves Host with pending consent. A missing
+    # policy on a legacy project retains the historical Docker fallback.
+
+
+class NotebookRun(Entity):
+    """Durable cell execution; output is stored in the run event ledger."""
+
+    entity_kind: ClassVar[str] = "notebook_runs"
+    engagement_id: str
+    notebook_path: str = Field(min_length=1, max_length=4096)
+    cell_id: str = Field(min_length=1, max_length=200)
+    source_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_mode: Literal["docker", "host"]
+    status: Literal["queued", "running", "succeeded", "failed", "interrupted"] = (
+        "queued"
+    )
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    detail: str = Field(default="", max_length=2000)
 
 
 class ToolSuggestionTest(NebulaModel):
@@ -1113,7 +1125,7 @@ class AutomationSession(Entity):
     entity_kind: ClassVar[str] = "automation_sessions"
     execution_mode: Literal["docker", "host"] = "docker"
     engagement_id: str
-    owner_kind: str = Field(pattern=r"^(chat|mission|harness|api)$")
+    owner_kind: str = Field(pattern=r"^(chat|mission|harness|api|notebook)$")
     owner_id: str = Field(min_length=1, max_length=200)
     runtime_image: str = Field(min_length=1, max_length=1_000)
     runtime_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -3299,15 +3311,30 @@ class McpServerProfile(Entity):
 
     @model_validator(mode="after")
     def transport_is_coherent(self) -> "McpServerProfile":
+        notebook_builtin = (
+            self.id.startswith("nebula-notebook-")
+            and self.metadata.get("built_in") == "notebook_v1"
+            and self.metadata.get("engagement_id")
+            == self.id.removeprefix("nebula-notebook-")
+        )
         if self.id == "nebula-security-tools-v1" and (
             self.transport != McpTransport.BUILTIN
             or self.metadata.get("built_in") != "agent_security_v1"
         ):
             raise ValueError("the built-in Security Tools identity cannot be replaced")
+        if self.id.startswith("nebula-notebook-") and (
+            self.transport != McpTransport.BUILTIN or not notebook_builtin
+        ):
+            raise ValueError("the built-in Notebook identity cannot be replaced")
         if self.transport == McpTransport.BUILTIN:
             if (
-                self.id != "nebula-security-tools-v1"
-                or self.metadata.get("built_in") != "agent_security_v1"
+                not (
+                    (
+                        self.id == "nebula-security-tools-v1"
+                        and self.metadata.get("built_in") == "agent_security_v1"
+                    )
+                    or notebook_builtin
+                )
                 or self.command is not None
                 or self.arguments
                 or self.url is not None
@@ -3881,6 +3908,7 @@ class ChatSession(Entity):
     parent_session_id: str | None = Field(default=None, max_length=200)
     forked_from_message_id: str | None = Field(default=None, max_length=200)
     model: str
+    notebook_path: str | None = Field(default=None, max_length=4096)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -5045,6 +5073,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     WorkUpdate,
     ScopePolicy,
     AutomationProjectPolicy,
+    NotebookRun,
     VpnProfile,
     ToolSuggestionSettings,
     WebSearchSettings,

@@ -278,15 +278,15 @@ def default_scope_policy(engagement_id: str) -> ScopePolicy:
 
 
 def default_host_policy(engagement_id: str) -> AutomationProjectPolicy:
-    """Give newly created projects the requested host command runtime."""
+    """Select Host for new projects without granting execution implicitly."""
 
     return AutomationProjectPolicy(
         id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")),
         engagement_id=engagement_id,
         execution_mode="host",
-        host_access_acknowledged=True,
+        host_access_acknowledged=False,
         network_enabled=False,
-        metadata={"host_access_source": "project_creation_default"},
+        metadata={"host_access_source": "pending_operator_acknowledgement"},
     )
 
 
