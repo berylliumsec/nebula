@@ -6184,6 +6184,11 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
+    const group = page.locator(".chat-subagent-transcript-group");
+    await expect(group).toHaveCount(1);
+    await expect(group.locator("summary")).toContainText("2 results · 1 stopped");
+    await expect(page.locator("#chat-message-restart-recovery-false-terminal-message")).toHaveCount(0);
+    await group.locator("summary").click();
     const olderResult = page.locator("#chat-message-restart-recovery-false-terminal-message");
     const olderDisclosure = olderResult.locator(".chat-subagent-posted");
     await expect(olderDisclosure.locator("summary")).toContainText("Subagent interrupted: Restart investigator");
@@ -6194,8 +6199,8 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
     await olderDisclosure.locator("summary").click();
     await expect(olderDisclosure.locator("p")).toContainText("Core shut down while this subagent was running.");
     await page.reload();
-    await expect(olderDisclosure.locator("summary")).toBeVisible();
-    await expect(olderDisclosure.locator("p")).not.toBeVisible();
+    await expect(group.locator("summary")).toBeVisible();
+    await expect(olderResult).toHaveCount(0);
     await testInfo.attach("subagent-restart-recovery", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: parent.session_id, modelRequests: modelStub.requests.length}), contentType: "application/json"});
     await testInfo.attach("subagent-restart-recovery-screen", {body: await page.screenshot(), contentType: "image/png"});
   }, [

@@ -44,6 +44,7 @@ import { sideChatForConversation } from "./sideChatSelection";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
+import { groupSubagentTranscriptMessages } from "./subagentTranscriptGroups";
 import { declinedToolSharingMessage, notSentMessage, providerTurnToolFamilies, runWithToolResultConsent, textOnlyToolSharingMessage, ToolResultSharingDeclinedError, type ToolResultFamily } from "./chatToolResultConsent";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { CallbackWaitingStatus } from "../components/CallbackWaitingStatus";
@@ -709,6 +710,36 @@ const NO_TOOL_CARDS: ToolLifecycleCard[] = [];
 const NO_INTERACTIONS: HarnessInteraction[] = [];
 const NO_ANSWERS: Record<string, string> = {};
 const NO_RUNNABLE_LANGUAGES = new Set<ExecutionLanguage>();
+
+function ChatSubagentTranscriptGroup({groupKey, messages, results, selectedMessageId, initiallyOpen, onOpenChange, renderMessage}: {
+  groupKey: string;
+  messages: ConversationMessage[];
+  results: ReadonlyMap<string, ChatSubagentView>;
+  selectedMessageId: string | null;
+  initiallyOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  renderMessage: (message: ConversationMessage) => ReactNode;
+}) {
+  const [open, setOpen] = useState(initiallyOpen);
+  const selected = messages.some(message => message.id === selectedMessageId);
+  useLayoutEffect(() => {
+    if (selected) { setOpen(true); onOpenChange(true); }
+  }, [selected]);
+  let failed = 0;
+  let stopped = 0;
+  for (const message of messages) {
+    const status = results.get(message.id)?.status;
+    if (status === "failed" || (!status && /^Subagent failed:/i.test(message.content))) failed++;
+    else if (status === "stopped" || status === "interrupted" || (!status && /^Subagent (?:stopped|interrupted):/i.test(message.content))) stopped++;
+  }
+  return <details className="chat-subagent-transcript-group" id={`chat-subagent-group-${groupKey}`} open={open} onToggle={event => {
+    setOpen(event.currentTarget.open);
+    onOpenChange(event.currentTarget.open);
+  }}>
+    <summary><strong>Subagents</strong><span>{messages.length} {messages.length === 1 ? "result" : "results"}{failed ? ` · ${failed} failed` : ""}{stopped ? ` · ${stopped} stopped` : ""}</span></summary>
+    {open && <div className="chat-subagent-transcript-group-results" aria-live="off">{messages.map(renderMessage)}</div>}
+  </details>;
+}
 
 /**
  * One transcript message. It is memoized on explicit props, so a page render
@@ -1635,25 +1666,29 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const imageInputRef = useRef<HTMLInputElement>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const chatNavigation = useChatNavigation(api ?? undefined, engagement?.id, sessionId);
+  const subagentResultMessageIds = [...subagentResultsByMessage.keys()].sort().join("\u0000");
   useEffect(() => {
     const messageId = searchParams.get("message");
     if (!messageId || loadingHistory) return;
-    const index = visibleMessages.findIndex(message => message.id === messageId);
-    if (index >= 0) {
+    const index = transcriptItemIndexByMessageId.get(messageId);
+    if (index !== undefined) {
       chatFollowBottomRef.current = false;
       transcriptVirtualizer.scrollToIndex(index + virtualMessageOffset, {align: "center"});
       const frame = requestAnimationFrame(() => document.getElementById(`chat-message-${messageId}`)?.focus({preventScroll: true}));
       return () => cancelAnimationFrame(frame);
     }
     if (hasOlderHistory && !olderHistoryReadRef.current) void loadOlderHistory(messageId);
-  }, [searchParams, loadingHistory, messages.length, hasOlderHistory]);
+  }, [searchParams, loadingHistory, messages.length, hasOlderHistory, subagentResultMessageIds]);
   const chatFollowBottomRef = useRef(true);
   const chatScrollJumpRef = useRef<"turn" | "bottom" | "reading" | null>(null);
   const chatTurnJumpMessageIdRef = useRef<string | undefined>(undefined);
   const alignCurrentTurn = () => {
     const viewport = chatViewportRef.current;
     const messageId = chatTurnJumpMessageIdRef.current;
-    const row = messageId && document.getElementById(`chat-message-${messageId}`);
+    const itemIndex = messageId ? transcriptItemIndexByMessageId.get(messageId) : undefined;
+    const item = itemIndex !== undefined ? transcriptItems[itemIndex] : undefined;
+    const row = messageId && (document.getElementById(`chat-message-${messageId}`)
+      ?? (item?.kind === "subagent_results" ? document.getElementById(`chat-subagent-group-${item.key}`) : null));
     if (!viewport || !row) return false;
     const top = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top
       - parseFloat(getComputedStyle(viewport).paddingTop);
@@ -1763,6 +1798,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const visibleMessages = useMemo(() => embeddedSideChat && !showInheritedHistory
     ? messages.filter(message => !message.sourceMessageId)
     : messages, [embeddedSideChat, messages, showInheritedHistory]);
+  const {items: transcriptItems, indexByMessageId: transcriptItemIndexByMessageId} = useMemo(
+    () => groupSubagentTranscriptMessages(visibleMessages, new Set(subagentResultsByMessage.keys())),
+    [visibleMessages, subagentResultMessageIds],
+  );
   useLayoutEffect(() => {
     chatScrollGeometryRef.current = undefined;
     chatScrollJumpRef.current = null;
@@ -4250,12 +4289,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const showHistoryHeader = (hasOlderHistory && (!embeddedSideChat || showInheritedHistory)) || leadingReplacements.length > 0;
   const virtualMessageOffset = showHistoryHeader ? 1 : 0;
   const transcriptVirtualizer = useVirtualizer({
-    count: visibleMessages.length + virtualMessageOffset,
+    count: transcriptItems.length + virtualMessageOffset,
     getScrollElement: () => chatViewportRef.current,
     estimateSize: () => 240,
-    getItemKey: (index) => index === 0 && showHistoryHeader
-      ? "history-header"
-      : visibleMessages[index - virtualMessageOffset]?.runtimeId ?? visibleMessages[index - virtualMessageOffset]?.id ?? index,
+    getItemKey: (index) => {
+      if (index === 0 && showHistoryHeader) return "history-header";
+      const item = transcriptItems[index - virtualMessageOffset];
+      return item?.kind === "message" ? item.message.runtimeId ?? item.key : item?.key ?? index;
+    },
     overscan: 4,
     anchorTo: (loadingHistory && restoredScrollRef.current?.followBottom === false) || !chatFollowBottomRef.current ? "start" : "end",
     followOnAppend: !((loadingHistory && restoredScrollRef.current?.followBottom === false) || !chatFollowBottomRef.current),
@@ -4291,7 +4332,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const tops = reveal.image.messageTops;
     let index = 0;
     while (index + 1 < tops.length && tops[index + 1] <= reveal.scrollTop) index += 1;
-    transcriptVirtualizer.scrollToIndex(index + virtualMessageOffset, {align: "start"});
+    const targetMessage = visibleMessages[index];
+    transcriptVirtualizer.scrollToIndex(((targetMessage ? transcriptItemIndexByMessageId.get(targetMessage.id) : undefined) ?? index) + virtualMessageOffset, {align: "start"});
   }, [activeImagePreview, sessionId]);
   const transcriptHeight = transcriptVirtualizer.getTotalSize();
   useLayoutEffect(() => {
@@ -6128,6 +6170,39 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     () => new Set(chatNavigation.bookmarks.filter(item => item.active).map(item => item.message_id)),
     [chatNavigation.bookmarks],
   );
+  const openSubagentGroupsRef = useRef(new Set<string>());
+  const renderTranscriptMessage = (message: ConversationMessage) => {
+    const editing = messageEdit?.messageId === message.id ? messageEdit : undefined;
+    const historicalTurnId = historicalHarnessTurnId(message);
+    const interactions = pendingInteractionsByTurn.get(message.harnessTurnId) ?? NO_INTERACTIONS;
+    const approvalHere = pendingResponse?.assistantId === message.id && pendingResponseActive ? transcriptApproval : undefined;
+    return <ChatTranscriptRow
+      key={message.runtimeId ?? message.id}
+      message={message}
+      shared={transcriptShared}
+      actions={transcriptActions}
+      editing={editing}
+      replacedByEdit={editing
+        ? messages.filter((item) => item.durable && (item.sequence ?? 0) > (editing.sequence ?? 0)).length
+        : 0}
+      pendingReplacement={Boolean(messageEdit && !editing && message.durable && (message.sequence ?? 0) > (messageEdit.sequence ?? 0))}
+      replacements={anchoredReplacements.get(message.id) ?? NO_REPLACEMENTS}
+      activityItems={activityItemsByAssistantId.get(message.id) ?? NO_ACTIVITY}
+      toolCards={toolCardsByAssistantId.get(message.id) ?? NO_TOOL_CARDS}
+      historicalState={historicalTurnId ? historicalActivityState[historicalTurnId] : undefined}
+      historicalError={historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined}
+      subagentResult={subagentResultsByMessage.get(message.id)}
+      bookmarked={bookmarkedMessageIds.has(message.id)}
+      interactions={interactions}
+      answers={interactions.length ? interactionAnswers : NO_ANSWERS}
+      waitingLabel={waitingCallback?.assistantId === message.id
+        ? waitingCallback.kind === "subagents" || waitingCallback.kind === "reply" ? waitingCallback.summary : "Waiting for command results"
+        : undefined}
+      harnessProgressDetail={message.state === "streaming" && !message.content ? visibleHarnessProgress?.detail : undefined}
+      approval={approvalHere}
+      focusPendingAction={approvalHere || interactions.length ? focusPendingAction : undefined}
+    />;
+  };
   const panelIdSuffix = embeddedSideChat ? "-side-chat" : "";
   const assistantPanel = (
             <div className="chat-panel">
@@ -6227,6 +6302,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   const turnIndex = currentAgentTurnIndex(visibleMessages);
                   if (turnIndex < 0) return;
                   const turnMessageId = visibleMessages[turnIndex].id;
+                  const turnItemIndex = transcriptItemIndexByMessageId.get(turnMessageId) ?? turnIndex;
                   chatScrollJumpRef.current = "turn";
                   chatTurnJumpMessageIdRef.current = turnMessageId;
                   chatFollowBottomRef.current = false;
@@ -6237,7 +6313,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   };
                   requestAnimationFrame(() => {
                     if (scrollToTurn()) return;
-                    transcriptVirtualizer.scrollToIndex(turnIndex + virtualMessageOffset, {align: "start"});
+                    transcriptVirtualizer.scrollToIndex(turnItemIndex + virtualMessageOffset, {align: "start"});
                     requestAnimationFrame(scrollToTurn);
                   });
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
@@ -6254,37 +6330,23 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     </div>}
                     {leadingReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
                   </div>;
-                  const message = visibleMessages[virtualItem.index - virtualMessageOffset];
-                  if (!message) return null;
-                  const editing = messageEdit?.messageId === message.id ? messageEdit : undefined;
-                  const historicalTurnId = historicalHarnessTurnId(message);
-                  const interactions = pendingInteractionsByTurn.get(message.harnessTurnId) ?? NO_INTERACTIONS;
-                  const approvalHere = pendingResponse?.assistantId === message.id && pendingResponseActive ? transcriptApproval : undefined;
-                  return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}><ChatTranscriptRow
-                    message={message}
-                    shared={transcriptShared}
-                    actions={transcriptActions}
-                    editing={editing}
-                    replacedByEdit={editing
-                      ? messages.filter((item) => item.durable && (item.sequence ?? 0) > (editing.sequence ?? 0)).length
-                      : 0}
-                    pendingReplacement={Boolean(messageEdit && !editing && message.durable && (message.sequence ?? 0) > (messageEdit.sequence ?? 0))}
-                    replacements={anchoredReplacements.get(message.id) ?? NO_REPLACEMENTS}
-                    activityItems={activityItemsByAssistantId.get(message.id) ?? NO_ACTIVITY}
-                    toolCards={toolCardsByAssistantId.get(message.id) ?? NO_TOOL_CARDS}
-                    historicalState={historicalTurnId ? historicalActivityState[historicalTurnId] : undefined}
-                    historicalError={historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined}
-                    subagentResult={subagentResultsByMessage.get(message.id)}
-                    bookmarked={bookmarkedMessageIds.has(message.id)}
-                    interactions={interactions}
-                    answers={interactions.length ? interactionAnswers : NO_ANSWERS}
-                    waitingLabel={waitingCallback?.assistantId === message.id
-                      ? waitingCallback.kind === "subagents" || waitingCallback.kind === "reply" ? waitingCallback.summary : "Waiting for command results"
-                      : undefined}
-                    harnessProgressDetail={message.state === "streaming" && !message.content ? visibleHarnessProgress?.detail : undefined}
-                    approval={approvalHere}
-                    focusPendingAction={approvalHere || interactions.length ? focusPendingAction : undefined}
-                  /></div>;
+                  const item = transcriptItems[virtualItem.index - virtualMessageOffset];
+                  if (!item) return null;
+                  return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
+                    {item.kind === "message" ? renderTranscriptMessage(item.message) : <ChatSubagentTranscriptGroup
+                      groupKey={item.key}
+                      messages={item.messages}
+                      results={subagentResultsByMessage}
+                      selectedMessageId={searchParams.get("message")}
+                      initiallyOpen={openSubagentGroupsRef.current.has(`${sessionId}:${item.key}`)}
+                      onOpenChange={open => {
+                        const key = `${sessionId}:${item.key}`;
+                        if (open) openSubagentGroupsRef.current.add(key);
+                        else openSubagentGroupsRef.current.delete(key);
+                      }}
+                      renderMessage={renderTranscriptMessage}
+                    />}
+                  </div>;
                 })}</div> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
                     {pendingSubagentApproval && <ChatSubagentAttention
                       subagents={subagentState.subagents}

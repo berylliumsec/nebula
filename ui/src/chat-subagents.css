@@ -75,6 +75,14 @@
 .chat-subagent-note { margin: 0; color: var(--muted); font-size: 11px; }
 
 /* Report card, in the transcript where Core posted it. */
+.chat-subagent-transcript-group { width: 100%; max-width: var(--chat-reading-track); margin: 0 auto 28px; color: var(--text-secondary); }
+.chat-subagent-transcript-group > summary { min-height: 44px; padding: 11px 12px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); cursor: pointer; overflow-wrap: anywhere; }
+.chat-subagent-transcript-group > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chat-subagent-transcript-group > summary strong { margin-right: 8px; color: var(--text); font-size: 12px; }
+.chat-subagent-transcript-group > summary span { color: var(--muted); font-size: 12px; }
+.chat-subagent-transcript-group[open] > summary { margin-bottom: 8px; }
+.chat-subagent-transcript-group-results { display: grid; gap: 8px; }
+.chat-subagent-transcript-group-results > .chat-message { margin-bottom: 0; }
 .chat-subagent-result { display: grid; gap: 6px; margin: 8px 0; padding: 10px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); }
 .chat-subagent-result > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .chat-subagent-result strong { font-size: 12px; }
