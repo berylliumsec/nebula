@@ -43,6 +43,7 @@
     {"name": "core-api", "patterns": ["src/nebula/v3/api.py", "src/nebula/v3/core.py", "src/nebula/v3/domain.py", "src/nebula/v3/storage.py", "src/nebula/v3/server.py"], "areas": ["core-api"]},
     {"name": "themes", "patterns": ["ui/src/components/Theme*", "ui/src/pages/Appearance*", "ui/src/theme/**"], "areas": ["themes"]},
     {"name": "nebula-theme-command", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/nebulaAssistantActions.ts"], "areas": ["nebula-theme-command"]},
+    {"name": "settings-assistant-full-control", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/assistantSettingsMutations.ts", "src/nebula/v3/settings_assistant_api.py", "src/nebula/v3/settings_assistant_tools.py", "src/nebula/v3/agent_security_tools.py"], "areas": ["settings-assistant-full-control"]},
     {"name": "quiet-lens", "patterns": ["ui/src/quiet-lens.css"], "areas": ["quiet-lens"]},
     {"name": "studio-dark-vision", "patterns": ["ui/src/studio-dark.css", "ui/src/pages/OverviewPage*", "ui/src/state/ThemeContext*", "ui/src/pages/SettingsPage*"], "areas": ["studio-dark-vision"]},
     {"name": "notes-screen-fit", "patterns": ["ui/src/components-workbench.css", "ui/src/pages/SessionsPage.tsx"], "areas": ["notes-screen-fit"]},
@@ -55,6 +56,13 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "settings-assistant-full-control": [
+      {"area":"settings-assistant-full-control","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"settings-assistant-full-control","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"settings-assistant-full-control","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"settings-assistant-full-control","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"settings-assistant-full-control","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "harness-delete-core": [
       {"area":"harness-delete-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core Grok harness deletion survives conflict, retry, and reload on LAN","runtime":"real-core","shard":"1/1"},
       {"area":"harness-delete-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core Grok harness deletion survives conflict, retry, and reload on LAN","runtime":"real-core","shard":"1/1"},

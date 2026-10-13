@@ -139,12 +139,17 @@ jobs:
           poetry install --with dev --no-interaction
       - name: Build production UI
         run: npm --prefix ui run build
-      - name: Prepare verified Chromium for the selected assistant link journey
-        if: matrix.grep == 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core'
+      - name: Prepare verified Chromium for the selected assistant browser journeys
+        if: matrix.grep == 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' || matrix.grep == 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'
         run: |
           sudo apt-get update
           sudo apt-get install -y patchelf xvfb
           poetry run python -m scripts.stage_playwright_runtime "$RUNNER_TEMP/playwright-browsers" --target x86_64-unknown-linux-gnu
+      - name: Prepare isolated security proxy for the selected headless browser journey
+        if: matrix.grep == 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'
+        run: |
+          python -m venv "$RUNNER_TEMP/nebula-security-proxy"
+          "$RUNNER_TEMP/nebula-security-proxy/bin/pip" install 'mitmproxy==12.2.3'
       - name: Run selected entry serially
         env:
           PROJECT: ${{ matrix.project }}
@@ -163,7 +168,11 @@ jobs:
           fi
           # Listing is cheap and records the actual selected tests/count before running.
           npm --prefix ui run test:e2e -- "${args[@]}" --list
-          if test "$TEST_GREP" = 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core'; then
+          if test "$TEST_GREP" = 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' ||
+             test "$TEST_GREP" = 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'; then
+            if test "$TEST_GREP" = 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core'; then
+              export NEBULA_TEST_SECURITY_PROXY_EXECUTABLE="$RUNNER_TEMP/nebula-security-proxy/bin/mitmdump"
+            fi
             NEBULA_TEST_MANAGED_BROWSER_RUNTIME="$RUNNER_TEMP/playwright-browsers" xvfb-run -a npm --prefix ui run test:e2e -- "${args[@]}"
           else
             npm --prefix ui run test:e2e -- "${args[@]}"
