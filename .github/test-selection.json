@@ -1,27 +1,23 @@
 {
-  "change_digest": "aab2f9443c58130a93e099e05c099ece9086dbe15a547f9935de067bd07eb540",
-  "reviewed_by": "Codex review of nebula-v3.0.15 assistant release gate traces",
-  "reason": "The failed production LAN queue journey exposed a URL session selection race: the composer accepted input before Core selected that conversation and restored its draft. A flaky linked-browser journey showed a navigation request replayed on reload before its session-storage marker was written. Select the exact real-Core queue and link cases plus their rendered desktop, compact, mobile Chromium, and mobile WebKit link and queue journeys. URL, Core session and tab state, and session storage are the relevant authorities; the shared assistant composer and browser companion impact was reviewed against these journeys.",
-  "exclusions": "No backend or native source changed. No standalone unit test covers these rendered lifecycle races, so Python, frontend unit, and native selections are empty. Unrelated assistant and browser journeys are excluded; a full suite was not requested.",
+  "change_digest": "c247671d1a33fc447cc94a129da40387e593c9d69a1091a1d40172d840c3aa51",
+  "reviewed_by": "Codex review of slim release preparation and the one installed-Core smoke",
+  "reason": "Release preparation now has three jobs and one packaged-Core Chromium journey. Select the exact driver, receipt, and workflow-shape contracts plus the single real-Core pairing, project, chat, and reload case. The Python contracts verify a failed or absent smoke receipt blocks finalization and that diagnostics are manual only. The browser case proves the operator journey against disposable LAN Core; the release job repeats it against the installed DEB and embedded UI.",
+  "exclusions": "No product UI, API, or Rust behavior changed. Frontend unit and native tests are empty. Broad Playwright, sandbox, packaging, crash cleanup, tampered-signature, and Debian/Kali checks are intentionally moved to optional manual diagnostics. The local browser run uses source Core and a candidate production bundle; an installed artifact, signature, and provenance are verified by a later authorized release candidate, not this branch run.",
   "expected_tests": {
-    "python": 0,
+    "python": 55,
     "frontend": 0,
     "native": 0,
-    "playwright": 10
+    "playwright": 1
   },
-  "python": [],
+  "python": [
+    "tests/test_daily_stable_release.py",
+    "tests/test_release_core_smoke_receipt.py",
+    "tests/v3/test_packaging.py::test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke",
+    "tests/v3/test_packaging.py::test_wider_release_diagnostics_require_manual_dispatch"
+  ],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:assistant-queue-core/assistant-real-desktop",
-    "entry:assistant-links/assistant-real-desktop",
-    "entry:assistant-links/desktop",
-    "entry:assistant-links/compact",
-    "entry:assistant-links/mobile-chromium-ledger-390",
-    "entry:assistant-links/mobile-webkit",
-    "entry:assistant-queue-reconciliation/desktop",
-    "entry:assistant-queue-reconciliation/compact",
-    "entry:assistant-queue-reconciliation/mobile-chromium-ledger-390",
-    "entry:assistant-queue-reconciliation/mobile-webkit"
+    "entry:release-core-smoke/real-core"
   ]
 }

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import shutil
-import subprocess
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -98,252 +96,49 @@ def test_nonretryable_github_read_error_stops_immediately() -> None:
     sleep.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "relative_path",
-    ["playwright-impact-plan.json", "nebula/nebula/playwright-impact-plan.json"],
-)
-def test_impact_receipt_rejects_missing_baseline(relative_path) -> None:
-    def fake_download(*args: str, **_kwargs: object) -> str:
+@pytest.mark.parametrize("result", ["failed", "missing", "wrong-hash"])
+def test_core_smoke_receipt_blocks_failed_or_missing_result(result):
+    def download(*args, **_kwargs):
         directory = Path(args[args.index("--dir") + 1])
-        receipt = directory / relative_path
-        receipt.parent.mkdir(parents=True, exist_ok=True)
-        receipt.write_text(
-            json.dumps(
-                {
-                    "coverage_review_required": False,
-                    "baseline_sha": None,
-                    "candidate_sha": "b" * 40,
-                }
-            )
-        )
+        if result == "missing":
+            return ""
+        payload = {
+            "schema_version": 1,
+            "tag": "nebula-v3.0.0",
+            "commit": "c" * 40,
+            "case": "release core smoke pairs, creates a project, and retains one answer",
+            "selected_test_count": 1,
+            "retries": 0,
+            "installed_deb_sha256": "e" * 64 if result == "wrong-hash" else "d" * 64,
+            "result": "failed" if result == "failed" else "passed",
+        }
+        (directory / "release-core-smoke.json").write_text(json.dumps(payload))
         return ""
 
     with (
-        patch.object(daily, "run", side_effect=fake_download),
-        pytest.raises(RuntimeError, match="accepted baseline"),
+        patch.object(daily, "run", side_effect=download),
+        pytest.raises(RuntimeError, match="core smoke receipt"),
     ):
-        daily.verify_impact_receipt(123, "nebula-v3.0.0", "a" * 40, "b" * 40)
+        daily.verify_core_smoke_receipt(123, "nebula-v3.0.0", "c" * 40, "d" * 64)
 
 
-@pytest.mark.parametrize(
-    "relative_path",
-    ["playwright-impact-plan.json", "nebula/nebula/playwright-impact-plan.json"],
-)
-def test_impact_receipt_accepts_one_valid_root_or_nested_plan(relative_path, capsys):
+def test_core_smoke_receipt_accepts_exact_installed_artifact():
     def download(*args, **_kwargs):
         directory = Path(args[args.index("--dir") + 1])
-        receipt = directory / relative_path
-        receipt.parent.mkdir(parents=True, exist_ok=True)
-        receipt.write_text(
-            json.dumps(
-                {
-                    "coverage_review_required": False,
-                    "baseline_sha": "a" * 40,
-                    "candidate_sha": "b" * 40,
-                    "requested_selection": ["area:core-api"],
-                    "include": [{"project": "real-core"}],
-                }
-            )
-        )
+        (directory / "release-core-smoke.json").write_text(json.dumps({
+            "schema_version": 1,
+            "tag": "nebula-v3.0.0",
+            "commit": "c" * 40,
+            "case": "release core smoke pairs, creates a project, and retains one answer",
+            "selected_test_count": 1,
+            "retries": 0,
+            "installed_deb_sha256": "d" * 64,
+            "result": "passed",
+        }))
         return ""
 
     with patch.object(daily, "run", side_effect=download):
-        daily.verify_impact_receipt(
-            123, "nebula-v3.0.0", "a" * 40, "b" * 40, "area:core-api"
-        )
-    assert "1 selected matrix entries" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("count", [0, 2])
-def test_impact_receipt_rejects_missing_or_ambiguous_plans(count):
-    def download(*args, **_kwargs):
-        directory = Path(args[args.index("--dir") + 1])
-        for index in range(count):
-            receipt = directory / str(index) / "playwright-impact-plan.json"
-            receipt.parent.mkdir()
-            receipt.write_text("{}")
-        return ""
-
-    with (
-        patch.object(daily, "run", side_effect=download),
-        pytest.raises(RuntimeError, match="exactly one coverage receipt"),
-    ):
-        daily.verify_impact_receipt(123, "nebula-v3.0.0", "a" * 40, "b" * 40)
-
-
-@pytest.mark.parametrize(
-    ("returncode", "blockers", "baseline"),
-    [
-        (1, [], "a" * 40),
-        (2, ["no_valid_baseline"], None),
-        (2, ["selection_expands_to_full_suite"], "a" * 40),
-        (2, ["global:ui/src/ui.css"], None),
-    ],
-)
-def test_preflight_rejects_invalid_baseline_or_selector(
-    returncode: int, blockers: list[str], baseline: str | None
-) -> None:
-    def fake_select(args: list[str], **_kwargs: object) -> object:
-        output = Path(args[args.index("--output") + 1])
-        output.write_text(
-            json.dumps(
-                {
-                    "fallbacks": blockers,
-                    "baseline_sha": baseline,
-                    "candidate_sha": "b" * 40,
-                    "coverage_review_required": True,
-                }
-            )
-        )
-        return SimpleNamespace(returncode=returncode, stderr="selector failure")
-
-    with (
-        patch.object(daily.subprocess, "run", side_effect=fake_select),
-        pytest.raises(RuntimeError, match="Cannot resolve daily coverage"),
-    ):
-        daily.preflight_impact("a" * 40, "b" * 40)
-
-
-@pytest.fixture
-def impact_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Exercise the actual selector in a disposable git repo; never run the product."""
-    root = Path(__file__).resolve().parents[1]
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "ui").mkdir()
-    for source in ("scripts/playwright_impact.py", "ui/playwright-impact.json"):
-        shutil.copyfile(root / source, tmp_path / source)
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    monkeypatch.chdir(tmp_path)
-
-    def commit() -> str:
-        subprocess.run(["git", "add", "."], check=True)
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=Release tests",
-                "-c",
-                "user.email=tests@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-qm",
-                "test fixture",
-            ],
-            check=True,
-        )
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-
-    baseline = commit()
-    return baseline, commit
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["ui/src/ui.css", "ui/src/unknown.ts", ".github/workflows/nebula3-release.yml"],
-)
-def test_preflight_automatically_resolves_shared_and_unmapped_changes(
-    impact_repo, path
-):
-    baseline, commit = impact_repo
-    changed = Path(path)
-    changed.parent.mkdir(parents=True, exist_ok=True)
-    changed.write_text("shared change")
-    selection, reason = daily.preflight_impact(baseline, commit())
-    assert set(selection.split(",")) == {
-        "area:desktop-interface",
-        "area:mobile-layout",
-        "area:core-api",
-    }
-    assert path in reason
-    assert "Other full-matrix profiles are excluded" in reason
-    # The real selector validates the bounded union; no full approval is supplied.
-
-
-def test_conservative_selection_preserves_matched_feature_journeys(impact_repo):
-    baseline, commit = impact_repo
-    changed = Path("ui/src/state/ThemeContext.tsx")
-    changed.parent.mkdir(parents=True)
-    changed.write_text("theme change")
-    selection, _ = daily.preflight_impact(baseline, commit())
-    assert "area:studio-dark-vision" in selection.split(",")
-    assert "area:mobile-layout" in selection.split(",")
-
-
-def test_known_changes_remain_focused(impact_repo):
-    baseline, commit = impact_repo
-    changed = Path("ui/src/components/ThemePicker.tsx")
-    changed.parent.mkdir(parents=True)
-    changed.write_text("focused change")
-    assert daily.preflight_impact(baseline, commit()) == (
-        "",
-        "Daily stable release: automatic impacted selection.",
-    )
-
-
-@pytest.mark.parametrize("path", ["ui/src/components/ThemePicker.tsx", "ui/src/ui.css"])
-def test_preflight_rejects_matrix_overflow_before_tag(impact_repo, path):
-    baseline, commit = impact_repo
-    changed = Path(path)
-    changed.parent.mkdir(parents=True, exist_ok=True)
-    changed.write_text("selected change")
-    with (
-        patch.object(daily, "matrix_lanes", side_effect=ValueError("over capacity")),
-        pytest.raises(ValueError, match="over capacity"),
-    ):
-        daily.preflight_impact(baseline, commit())
-
-
-def test_documentation_changes_keep_no_browser_jobs(impact_repo):
-    baseline, commit = impact_repo
-    Path("README.md").write_text("documentation only")
-    assert daily.preflight_impact(baseline, commit())[0] == ""
-
-
-def test_preflight_rejects_failed_conservative_validation():
-    plan = {
-        "coverage_review_required": True,
-        "baseline_sha": "a" * 40,
-        "candidate_sha": "b" * 40,
-        "changed_files": ["ui/src/ui.css"],
-        "fallbacks": ["global:ui/src/ui.css"],
-    }
-
-    def fake_select(args, **_kwargs):
-        Path(args[args.index("--output") + 1]).write_text(json.dumps(plan))
-        return SimpleNamespace(returncode=2, stderr="rejected catalog")
-
-    with (
-        patch.object(daily.subprocess, "run", side_effect=fake_select),
-        pytest.raises(RuntimeError, match="failed validation before tagging"),
-    ):
-        daily.preflight_impact("a" * 40, "b" * 40)
-
-
-@pytest.mark.parametrize("selection", [[], ["area:themes"]])
-def test_receipt_requires_the_dispatched_conservative_selection(selection):
-    def download(*args, **_kwargs):
-        directory = Path(args[args.index("--dir") + 1])
-        (directory / "playwright-impact-plan.json").write_text(
-            json.dumps(
-                {
-                    "coverage_review_required": False,
-                    "baseline_sha": "a" * 40,
-                    "candidate_sha": "b" * 40,
-                    "requested_selection": selection,
-                    "include": [{"project": "desktop"}],
-                }
-            )
-        )
-        return ""
-
-    with (
-        patch.object(daily, "run", side_effect=download),
-        pytest.raises(RuntimeError, match="accepted baseline or coverage"),
-    ):
-        daily.verify_impact_receipt(
-            123, "nebula-v3.0.0", "a" * 40, "b" * 40, "area:core-api"
-        )
+        daily.verify_core_smoke_receipt(123, "nebula-v3.0.0", "c" * 40, "d" * 64)
 
 
 def test_workflow_wait_ignores_older_run() -> None:
@@ -484,17 +279,9 @@ def release_driver(tmp_path, monkeypatch):
     monkeypatch.setattr(daily, "gh_json", api)
     monkeypatch.setattr(daily, "published_release", lambda: previous)
     with (
-        patch.object(
-            daily,
-            "preflight_impact",
-            return_value=(
-                "area:core-api,area:desktop-interface,area:mobile-layout",
-                "Automatic conservative coverage",
-            ),
-        ) as preflight,
         patch.object(daily, "wait_for_workflow", side_effect=[101, 102, 103]) as wait,
-        patch.object(daily, "verify_impact_receipt") as receipt,
-        patch.object(daily, "verify_assets") as assets,
+        patch.object(daily, "verify_core_smoke_receipt") as receipt,
+        patch.object(daily, "verify_assets", return_value="d" * 64) as assets,
         patch.object(
             daily.subprocess, "run", return_value=SimpleNamespace(returncode=0)
         ),
@@ -502,7 +289,6 @@ def release_driver(tmp_path, monkeypatch):
         yield SimpleNamespace(
             commands=commands,
             state=state,
-            preflight=preflight,
             wait=wait,
             receipt=receipt,
             assets=assets,
@@ -533,16 +319,14 @@ def assert_no_release_mutations(driver):
 def test_no_new_source_commits_skip_without_tests_or_tags(release_driver):
     release_driver.state["source"] = "b" * 40
     daily.main()
-    release_driver.preflight.assert_not_called()
     assert_no_release_mutations(release_driver)
 
 
 @pytest.mark.parametrize("ci", ["failure", "cancelled", None])
-def test_failed_or_incomplete_ci_stops_before_coverage_and_tagging(release_driver, ci):
+def test_failed_or_incomplete_ci_stops_before_tagging(release_driver, ci):
     release_driver.state["ci"] = ci
     with pytest.raises(RuntimeError, match="CI has not passed"):
         daily.main()
-    release_driver.preflight.assert_not_called()
     assert_no_release_mutations(release_driver)
 
 
@@ -550,35 +334,25 @@ def test_advancing_main_stops_before_tagging(release_driver):
     release_driver.state["advanced"] = True
     with pytest.raises(RuntimeError, match="Main advanced"):
         daily.main()
-    release_driver.preflight.assert_not_called()
     assert_no_release_mutations(release_driver)
 
 
-def test_coverage_validation_failure_stops_before_tagging(release_driver):
-    release_driver.preflight.side_effect = RuntimeError("Cannot resolve daily coverage")
-    with pytest.raises(RuntimeError, match="Cannot resolve daily coverage"):
-        daily.main()
-    assert_no_release_mutations(release_driver)
-
-
-def test_missing_publication_credential_stops_before_coverage_and_tagging(
+def test_missing_publication_credential_stops_before_tagging(
     release_driver, monkeypatch
 ):
     monkeypatch.delenv("GH_TOKEN")
     with pytest.raises(RuntimeError, match="publication credential is required"):
         daily.main()
-    release_driver.preflight.assert_not_called()
     assert_no_release_mutations(release_driver)
 
 
 @pytest.mark.parametrize(
     "error", ["missing configuration", "wrong App", "wrong scope", "HTTP 403"]
 )
-def test_invalid_app_identity_stops_before_coverage_and_tagging(release_driver, error):
+def test_invalid_app_identity_stops_before_tagging(release_driver, error):
     release_driver.state["app_error"] = error
     with pytest.raises(RuntimeError, match=error):
         daily.main()
-    release_driver.preflight.assert_not_called()
     assert_no_release_mutations(release_driver)
 
 
@@ -793,30 +567,18 @@ def test_release_only_workflow_changes_stop_before_tag_creation(release_driver):
     )
 
 
-def test_daily_dispatch_carries_conservative_selection_and_checks_artifacts(
-    release_driver,
-):
+def test_daily_dispatch_uses_one_smoke_and_checks_exact_artifact(release_driver):
     daily.main()
     preparation = next(
-        command
-        for command in release_driver.commands
+        command for command in release_driver.commands
         if command[:4] == ("gh", "workflow", "run", "nebula3-release.yml")
     )
-    assert "scope=impacted" in preparation
-    assert (
-        "selection=area:core-api,area:desktop-interface,area:mobile-layout"
-        in preparation
-    )
-    assert "review_reason=Automatic conservative coverage" in preparation
-    assert not any("full_approval" in arg for arg in preparation)
-    release_driver.receipt.assert_called_once_with(
-        101,
-        "nebula-v3.0.0",
-        "a" * 40,
-        "b" * 40,
-        "area:core-api,area:desktop-interface,area:mobile-layout",
-    )
+    assert "release_tag=nebula-v3.0.0" in preparation
+    assert not any("scope=" in arg or "selection=" in arg or "review_reason=" in arg for arg in preparation)
     release_driver.assets.assert_called_once_with(101, "3.0.0")
+    release_driver.receipt.assert_called_once_with(
+        101, "nebula-v3.0.0", "c" * 40, "d" * 64
+    )
 
 
 @pytest.mark.parametrize("gate", ["receipt", "assets"])

@@ -108,11 +108,20 @@ jobs:
           esac
           artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREPARATION_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')"
           grep -Fx nebula3-linux-x64 <<<"$artifacts" >/dev/null
+          grep -Fx "release-core-smoke-$RELEASE_TAG" <<<"$artifacts" >/dev/null
           provenance="$RUNNER_TEMP/preparation-provenance"
           gh run download "$PREPARATION_RUN_ID" \
             --repo "$GITHUB_REPOSITORY" \
             --name nebula3-linux-x64 \
             --dir "$provenance"
+          gh run download "$PREPARATION_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "release-core-smoke-$RELEASE_TAG" \
+            --dir "$RUNNER_TEMP/preparation-smoke"
+          python scripts/release_core_smoke_receipt.py verify \
+            --receipt "$RUNNER_TEMP/preparation-smoke/release-core-smoke.json" \
+            --tag "$RELEASE_TAG" --commit "$commit" \
+            --deb "$provenance/Nebula-$version-linux-x86_64.deb"
           appimage="$(find "$provenance" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
           test -n "$appimage"
           extract="$RUNNER_TEMP/preparation-appimage"
