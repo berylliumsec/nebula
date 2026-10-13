@@ -66,6 +66,38 @@ def test_main_requires_successful_push_ci() -> None:
         daily.green_main()
 
 
+def test_transient_github_read_error_retries_without_repeating_mutations() -> None:
+    with (
+        patch.object(
+            daily,
+            "run",
+            side_effect=[
+                RuntimeError("gh: Server Error (HTTP 502)"),
+                RuntimeError("gh: rate limit (HTTP 429)"),
+                '{"workflow_runs": []}',
+            ],
+        ) as command,
+        patch.object(daily.time, "sleep") as sleep,
+    ):
+        assert daily.gh_json("repos/example/nebula/actions/workflows/ci.yml/runs") == {
+            "workflow_runs": []
+        }
+    assert command.call_count == 3
+    assert all(call.args[0:2] == ("gh", "api") for call in command.call_args_list)
+    assert [call.args[0] for call in sleep.call_args_list] == [1, 2]
+
+
+def test_nonretryable_github_read_error_stops_immediately() -> None:
+    with (
+        patch.object(daily, "run", side_effect=RuntimeError("gh: Forbidden (HTTP 403)")) as command,
+        patch.object(daily.time, "sleep") as sleep,
+        pytest.raises(RuntimeError, match="HTTP 403"),
+    ):
+        daily.gh_json("repos/example/nebula/releases")
+    command.assert_called_once()
+    sleep.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "relative_path",
     ["playwright-impact-plan.json", "nebula/nebula/playwright-impact-plan.json"],
