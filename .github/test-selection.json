@@ -1,46 +1,25 @@
 {
-  "change_digest": "e68d30529ce724885e7befb1cd58ca27af5cacc395333ff3fec7e21dcb284167",
-  "reviewed_by": "Codex review of nebula-v3.0.11 failure artifacts and PR #778/#780 current main",
-  "reason": "The release matrix failed in Work import desktop/compact, two 320 px project picker journeys, two 320 px phone navigation journeys, and WebKit conversation switching at both 320 and 430 px. Work import now gates on completed pairing and visible durable state instead of obsolete ready-chip, chat-tab, and parent-link assumptions. Phone project switching starts in Workbench More. At 320 px the shell deliberately hides its sidebar toggle and keeps a Workbench return above resource inspectors; wider phones retain the drawer. The conversation test waits for preview preparation before simulating rich-content growth and atomically reveals a transient image preview before asserting the selected session's text. Exact WebKit and Chromium cases at 320 and 430 px test saved state, scroll-follow, and recovery. Catalogued cases cover those routes, desktop/compact behavior, and the production real-Core LAN boundary.",
-  "exclusions": "The branch diff from current main changes only browser tests and their exact impact catalog entries. PR #778 notebook and PR #780 headless browser code are already in the baseline and passed their selected checks separately; their shared chat and mobile shell boundaries are rechecked by this plan's exact journeys. Backend, frontend unit, native, unrelated browser journeys, and the full suite are excluded. Work import uses a production UI bundle and real Core on a non-loopback LAN origin; interface journeys use the browser fixture.",
+  "change_digest": "87b097e65457cd0011b09d467c29294d5af4fad279995e57c82bb7a07d6aeca6",
+  "reviewed_by": "Codex review of nebula-v3.0.11 runner disk exhaustion and real-Core impact catalog",
+  "reason": "The desktop-shell real-Core job crashed when its GitHub runner ran out of disk. Three broad real-Core catalog entries are partitioned into four bounded Playwright shards each without changing the selected journeys. Three exact selector tests verify shard identities, shared Core/shell deduplication, and that the real-Core runtime remains required. Browser collection confirms real-core has 27 tests per shard and assistant-real-desktop has 22-23; the next daily release executes those catalogued shards in its selected matrix.",
+  "exclusions": "This change edits only the impact catalog and its focused selector assertions. The Python selector tests and browser collection verify that no cases are omitted or duplicated. Backend, frontend, native, unrelated browser journeys, actual browser execution, and the full suite are excluded from this PR; the next release preparation exercises the changed runner partitioning.",
   "expected_tests": {
-    "python": 0,
+    "python": 3,
     "frontend": 0,
     "native": 0,
-    "playwright": 24
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/test_playwright_impact.py::test_sharded_core_api_and_shell_entries_deduplicate",
+    "tests/test_playwright_impact.py::test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build",
+    "tests/test_playwright_impact.py::test_assistant_real_core_uses_bounded_shards"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:work-import/assistant-real-desktop",
-    "entry:work-import/assistant-real-compact",
-    "entry:work-import/assistant-real-chromium-320",
-    "entry:work-import/assistant-real-webkit-320",
-    "entry:project-lifecycle/desktop",
-    "entry:project-lifecycle/compact",
-    "entry:project-lifecycle/mobile-chromium-small",
-    "entry:project-lifecycle/mobile-webkit-small",
-    "entry:project-switcher-search/desktop",
-    "entry:project-switcher-search/compact",
-    "entry:project-switcher-search/mobile-chromium-small",
-    "entry:project-switcher-search/mobile-webkit-small",
-    "entry:phone-route-ownership/mobile-chromium-small",
-    "entry:phone-route-ownership/mobile-webkit-small",
-    "entry:phone-route-ownership/mobile-chromium",
-    "entry:phone-route-ownership/mobile-webkit",
-    "entry:phone-inspector-return/mobile-chromium-small",
-    "entry:phone-inspector-return/mobile-webkit-small",
-    "entry:phone-inspector-return/mobile-chromium",
-    "entry:phone-inspector-return/mobile-webkit",
-    "entry:chat-switching-scroll/mobile-chromium-wide",
-    "entry:chat-switching-scroll/mobile-webkit-wide",
-    "entry:chat-switching-scroll/mobile-chromium-small",
-    "entry:chat-switching-scroll/mobile-webkit-small"
-  ]
+  "playwright": []
 }
