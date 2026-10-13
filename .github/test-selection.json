@@ -1,26 +1,40 @@
 {
-  "change_digest": "66590156a86b3ed879101914aebfde05038a6a85c624706f5060715d0b18fe6b",
-  "reviewed_by": "Codex review of October 12 daily release and child workflow logs",
-  "reason": "A transient HTTP 502 ended parent polling while the immutable preparation workflow was still running. The selected Python cases verify read-only HTTP 502/429 retry, fail-fast HTTP 403 handling, failed child-run reporting, and that the driver preserves release gates and publication order.",
-  "exclusions": "No product UI, Core, native code, or Playwright catalog changes are in this diff, so those layers are excluded from this driver regression selection. The existing 175-entry October 12 browser receipt and its failures are being investigated separately; no full suite is authorized.",
+  "change_digest": "c0b817ee817be36811406789e0e8363dc143b194b829d1d3d9f96d943367df32",
+  "reviewed_by": "Codex review of October 12 failed release browser journeys",
+  "reason": "Workbench Chat showed two visible New chat actions on phone widths. The Quiet Lens theme also requires a pointer hover before clicking composer settings on desktop. The compact header geometry check must account for horizontally scrollable tabs. Select the production real-Core Assistant defaults create and reload journey at desktop 1440/1024 and mobile Chromium/WebKit 320/390/430; select the matching mocked header geometry and keyboard-action journey. The focused App component case verifies responsive action ownership and the Ctrl+N route.",
+  "exclusions": "Python and native layers do not own this UI action. Other release browser areas, packaging, and the broader October 12 failures are excluded from this focused change; they remain independent release gates. Mobile browsers are emulated, with no physical device available. No full suite is authorized.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 1,
     "native": 0,
-    "playwright": 0
+    "playwright": 16
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/test_daily_stable_release.py::test_transient_github_read_error_retries_without_repeating_mutations",
-    "tests/test_daily_stable_release.py::test_nonretryable_github_read_error_stops_immediately",
-    "tests/test_daily_stable_release.py::test_workflow_wait_stops_on_failed_run",
-    "tests/test_daily_stable_release.py::test_single_explicit_release_path_preserves_every_gate"
+  "python": [],
+  "frontend": [
+    "ui/src/AppMobileNewChat.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant-defaults/assistant-real-desktop",
+    "entry:assistant-defaults/assistant-real-compact",
+    "entry:assistant-defaults/assistant-real-chromium-320",
+    "entry:assistant-defaults/assistant-real-chromium-390",
+    "entry:assistant-defaults/assistant-real-chromium-430",
+    "entry:assistant-defaults/assistant-real-webkit-320",
+    "entry:assistant-defaults/assistant-real-webkit-390",
+    "entry:assistant-defaults/assistant-real-webkit-430",
+    "entry:compact-header/desktop",
+    "entry:compact-header/compact",
+    "entry:compact-header/mobile-chromium-small",
+    "entry:compact-header/mobile-chromium-ledger-390",
+    "entry:compact-header/mobile-chromium-wide",
+    "entry:compact-header/mobile-webkit-small",
+    "entry:compact-header/mobile-webkit",
+    "entry:compact-header/mobile-webkit-wide"
+  ]
 }

@@ -6445,7 +6445,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         <div className="session-toolbar-actions">{compact && <NebulaAssistantLauncherButton />}{focusAction}</div>
       </Toolbar>
   ) : (
-      <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls" primaryAction={fullScreen ? newChatAction : undefined}>
+      <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls" primaryAction={fullScreen && !compact ? newChatAction : undefined}>
         <TabBar className="session-tabs workbench-view-tabs" label="Workbench views" value={view} onChange={setView} items={[
           { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", className: "workbench-primary-tab", icon: <MessageSquare size={18} /> },
           { id: "terminal", label: "Terminal", className: "workbench-primary-tab", icon: <SquareTerminal size={18} /> },
@@ -6492,7 +6492,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
         showIntroduction={false}
         actions={fullScreen ? undefined : workbenchToolbar}
-        trailingActions={fullScreen ? undefined : newChatAction}
+        trailingActions={fullScreen || compact ? undefined : newChatAction}
       />
       {fullScreen && workbenchToolbar}
       {compact && !fullScreen && view !== "chat" && <div className="mobile-workbench-focus"><strong>{({ terminal: "Terminal", code: "Code editor", browser: "Browser", workspace: "Files", notes: "Notes", missions: "Missions", activity: "Activity" } as const)[view]}</strong>{focusAction}</div>}
