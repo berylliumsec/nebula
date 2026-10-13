@@ -3236,6 +3236,7 @@ test("stabilization project sections remain reachable without horizontal clippin
 test("phone shell and critical workspace navigation mark the section that owns detail and tab routes", async ({ page }) => {
   test.setTimeout(120_000);
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const narrowPhone = (page.viewportSize()?.width ?? 1440) <= 360;
   const finding = {
     ...entity,
     id: "finding-current",
@@ -3292,6 +3293,10 @@ test("phone shell and critical workspace navigation mark the section that owns d
   };
   const expectCurrentSection = async (pathname: string, label: string) => {
     await expect.poll(() => page.evaluate(() => location.pathname)).toBe(pathname);
+    if (narrowPhone) {
+      await expect(page.getByRole("button", { name: "Workbench", exact: true })).toBeVisible();
+      return;
+    }
     await openNavigation();
     const current = navigation.getByRole("link", { name: label, exact: true });
     await expect(current).toBeVisible();
@@ -3303,6 +3308,12 @@ test("phone shell and critical workspace navigation mark the section that owns d
     await closeNavigation();
   };
   const followNavigation = async (label: string) => {
+    if (narrowPhone) {
+      await page.getByRole("button", { name: "Workbench", exact: true }).click();
+      await page.getByRole("button", { name: "More workbench views" }).click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: label, exact: true }).click();
+      return;
+    }
     await openNavigation();
     await navigation.getByRole("link", { name: label, exact: true }).click();
     if (mobile) await expect(page.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
@@ -10588,6 +10599,32 @@ test("phone shell opens the sidebar drawer above resource inspectors", async ({ 
   const scrim = page.getByRole("button", { name: "Close sidebar" });
 
   await openWorkspace(page, "/findings", "Findings");
+  if (viewport.width <= 360) {
+    for (const theme of ["zero-dark", "dark"] as const) {
+      if (theme === "dark") await setTheme(page, theme);
+      for (const inspector of inspectors) {
+        await visit(inspector.surface);
+        await page.getByRole("button", { name: inspector.open, exact: true }).click();
+        const detail = `${inspector.surface}/${inspector.id}`;
+        await expect.poll(() => page.evaluate(() => location.pathname)).toBe(detail);
+        const panel = page.getByRole("complementary", { name: inspector.title });
+        await expect(panel).toBeVisible();
+        const back = page.getByRole("button", { name: "Workbench", exact: true });
+        const bounds = await back.boundingBox();
+        expect(bounds).not.toBeNull();
+        await expect.poll(() => page.evaluate(({ x, y }) =>
+          document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label"),
+        { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 })).toBe("Workbench");
+        await press(back);
+        await expect(page).toHaveURL(new RegExp(`/projects/${project}/workbench`));
+        await expect(panel).toHaveCount(0);
+      }
+    }
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Findings" }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${project}/findings$`));
+    return;
+  }
   for (const theme of ["zero-dark", "dark"] as const) {
     if (theme === "dark") await setTheme(page, theme);
     await expect(page.locator(".zero-anchor-dock")).toHaveCount(theme === "dark" ? 0 : 1);

@@ -1,13 +1,13 @@
 {
-  "change_digest": "90362dba5b690d2623f7a34ad66eab7ef1cf0d4a370f53c2330a6ef9071ebe47",
+  "change_digest": "2dc1130fd9437d20ce37a44e6b361145072e420356912eb6e153a94eaf4cd98e",
   "reviewed_by": "Codex review of nebula-v3.0.11 release failure artifacts",
-  "reason": "The release matrix failed in three exact journeys. The real-Core Work import test required a ready chip that is absent when its disposable Core has no terminal runner; pairing completion and the durable Projects view are the correct gates. The focused rerun exposed a stale desktop Analyst chat tab assertion after the saved conversation opened and a missing parent breadcrumb on the child project page; the test now checks the visible conversation title and composer, then returns through the project list to open the parent and inspect its subproject board. Two 320 px interface tests opened Settings and tried to use a desktop sidebar button that the phone shell does not show; phone project switching starts in Workbench More. Run those three catalogued journeys on the failed profiles plus desktop and mobile controls to cover pairing, touch entry, search, host-folder selection, refresh, and the production LAN boundary.",
-  "exclusions": "The changes are limited to two browser test fixtures. Backend, frontend unit, native, unrelated browser journeys, and the full suite are excluded. The Work import selections use a production UI bundle and real Core on a non-loopback LAN origin; the project picker selections use the browser fixture on desktop and 320 px phone profiles.",
+  "reason": "The release matrix failed in Work import desktop/compact, two 320 px project picker journeys, and two 320 px phone navigation journeys. Work import now gates on completed pairing and visible durable state instead of obsolete ready-chip, chat-tab, and parent-link assumptions. Phone project switching starts in Workbench More. At 320 px the shell deliberately hides its sidebar toggle and keeps a Workbench return above resource inspectors; wider phones retain the drawer. Exact catalogued cases cover these routes, their 390 px controls, desktop/compact behavior, and the production real-Core LAN boundary.",
+  "exclusions": "Changes are limited to browser tests and their exact impact catalog entries. Backend, frontend unit, native, unrelated browser journeys, and the full suite are excluded. Work import uses a production UI bundle and real Core on a non-loopback LAN origin; interface journeys use the browser fixture.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 20
   },
   "python_versions": [
     "3.12"
@@ -29,6 +29,14 @@
     "entry:project-switcher-search/desktop",
     "entry:project-switcher-search/compact",
     "entry:project-switcher-search/mobile-chromium-small",
-    "entry:project-switcher-search/mobile-webkit-small"
+    "entry:project-switcher-search/mobile-webkit-small",
+    "entry:phone-route-ownership/mobile-chromium-small",
+    "entry:phone-route-ownership/mobile-webkit-small",
+    "entry:phone-route-ownership/mobile-chromium",
+    "entry:phone-route-ownership/mobile-webkit",
+    "entry:phone-inspector-return/mobile-chromium-small",
+    "entry:phone-inspector-return/mobile-webkit-small",
+    "entry:phone-inspector-return/mobile-chromium",
+    "entry:phone-inspector-return/mobile-webkit"
   ]
 }
