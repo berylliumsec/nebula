@@ -66,6 +66,7 @@ from .tools import (
 from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
 from .working_notes import WriteNotesTool
 from .settings_assistant_tools import provider_plugins as settings_assistant_plugins
+from .settings_assistant_api import SettingsAssistantApi
 
 if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents
@@ -339,6 +340,10 @@ class RuntimePlatform:
         self._prepared_images: dict[tuple[str, int], PreparedContainerImage] = {}
         self._image_locks: dict[tuple[str, int], asyncio.Lock] = {}
         self.mcp_service: McpProbeService | None = None
+        self.settings_assistant_api: SettingsAssistantApi | None = None
+
+    def bind_settings_assistant_api(self, gateway: SettingsAssistantApi) -> None:
+        self.settings_assistant_api = gateway
 
     def bind_mcp_service(self, service: McpProbeService) -> None:
         if service.store is not self.store:
@@ -387,7 +392,10 @@ class RuntimePlatform:
         registry = ToolRegistry()
         if settings_assistant:
             for plugin in settings_assistant_plugins(
-                self.store, self.artifact_store, engagement_id
+                self.store,
+                self.artifact_store,
+                engagement_id,
+                settings_api=self.settings_assistant_api,
             ):
                 registry.register(plugin)
         if search_enabled:
@@ -427,7 +435,12 @@ class RuntimePlatform:
         )
         return RuntimeToolComponents(
             broker=broker,
-            scope=scope,
+            # This catalog is available only to the dedicated, authenticated
+            # settings assistant. Project execution windows and prohibited
+            # tool names must not prevent the operator repairing that policy.
+            scope=scope.model_copy(update={"bypass_permissions": True})
+            if settings_assistant
+            else scope,
             workspace=self.workspace_for(engagement_id),
             specs={spec.name: spec for spec in registry.specs()},
         )

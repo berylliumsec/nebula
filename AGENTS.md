@@ -15,3 +15,12 @@ harness, workspace, or API-to-UI change, read and follow the
 The skill and its quality-gates reference define the acceptance evidence. If a
 required gate is unavailable, report the work as incomplete or partially verified
 and name the missing evidence. Never claim an untested workflow is complete.
+
+When adding an operator feature or changing a setting, update the dedicated
+Nebula settings assistant's destinations, action discovery, and product guidance
+in the same change. Update `ui/src/settingsCatalog.ts` and
+`docs/design/nebula-settings-assistant.md` where applicable, regenerate and verify
+the bundled product knowledge index, and verify that Core synchronizes its current
+source digest into the Chroma product-help collection. Add a focused regression
+check so the assistant can discover and use the feature or setting. Do not call a
+browser action saved until Core or the device reports the observed result.

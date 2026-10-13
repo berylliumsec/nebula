@@ -6,6 +6,8 @@ import json
 from importlib import resources
 from typing import Any
 
+from .settings_assistant_api import SettingsAssistantApi
+
 from .domain import (
     AutomationProjectPolicy,
     Engagement,
@@ -20,6 +22,7 @@ from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 # These are settings destinations, not grants to mutate the underlying records.
 # A new direct mutation must be implemented through the owning service below.
 SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
+    ("usage", "Usage and credits", "usage-settings"),
     ("appearance", "Appearance and theme", "appearance-settings"),
     ("providers", "Model providers", "provider-settings"),
     ("skills", "Shared skills", "native-skill-settings"),
@@ -110,6 +113,37 @@ PROJECT_MODE_SCHEMA = {
     },
     "required": ["mode"],
 }
+PROJECT_SCOPE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "mode": {
+            "type": "string",
+            "enum": ["bounded", "all_destinations", "allow_all"],
+        },
+        "allowed_cidrs": {"type": "array", "items": {"type": "string"}},
+        "allowed_domains": {"type": "array", "items": {"type": "string"}},
+        "allowed_urls": {"type": "array", "items": {"type": "string"}},
+        "allowed_ports": {"type": "array", "items": {"type": "integer"}},
+        "not_before": {"type": ["string", "null"]},
+        "not_after": {"type": ["string", "null"]},
+        "prohibited_actions": {"type": "array", "items": {"type": "string"}},
+        "local_only": {"type": "boolean"},
+        "tool_suggestions": {"type": "boolean"},
+        "on_demand_tools": {"type": "boolean"},
+        "web_search": {"type": "boolean"},
+        "web_search_discloses_scope": {"type": "boolean"},
+        "always_loaded_tools": {"type": "array", "items": {"type": "string"}},
+        "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 256},
+    },
+    "minProperties": 1,
+}
+HEADLESS_SESSION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"action": {"type": "string", "enum": ["start", "stop"]}},
+    "required": ["action"],
+}
 POST_TOOL_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -128,6 +162,24 @@ DEFAULT_MODEL_SCHEMA = {
         "model": {"type": "string", "minLength": 1, "maxLength": 500},
     },
     "required": ["kind", "profile_id", "model"],
+}
+SETTINGS_API_SCHEMA_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "path": {"type": "string", "maxLength": 600},
+        "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+    },
+}
+SETTINGS_API_REQUEST_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 600},
+        "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+        "body": {"type": ["object", "array", "null"]},
+    },
+    "required": ["path", "method"],
 }
 
 
@@ -156,7 +208,28 @@ def catalog() -> dict[str, Any]:
                 "name": "nebula.settings.set_project_mode",
                 "argument": "mode",
                 "values": ["docker", "host"],
-                "effect": "show the selected project's policy, confirm Host access if needed, and save for new sessions",
+                "effect": "save the selected project's command mode for new sessions and read it back",
+            },
+            {
+                "name": "nebula.settings.set_project_scope",
+                "arguments": list(PROJECT_SCOPE_SCHEMA["properties"]),
+                "effect": "save the selected project's scope and network settings and read them back",
+            },
+            {
+                "name": "nebula.settings.headless_session",
+                "argument": "action",
+                "values": ["start", "stop"],
+                "effect": "start or stop the selected project's Core-owned headless security browser",
+            },
+            {
+                "name": "nebula.settings.api_schema",
+                "arguments": ["path", "method"],
+                "effect": "discover the current Core build's supported Settings routes and request schemas",
+            },
+            {
+                "name": "nebula.settings.api_request",
+                "arguments": ["path", "method", "body"],
+                "effect": "call an existing authenticated Settings route for the selected project and read back when available",
             },
             {
                 "name": "nebula.settings.set_post_tool",
@@ -184,8 +257,10 @@ def catalog() -> dict[str, Any]:
                 "assistant_ui_actions": (
                     ["device_theme"]
                     if identifier == "appearance"
-                    else ["project_execution_mode"]
+                    else ["project_execution_mode", "project_scope"]
                     if identifier == "network-scope"
+                    else ["headless_session"]
+                    if identifier == "automation-runtime"
                     else []
                 ),
             }
@@ -247,6 +322,54 @@ def request_project_execution_mode(arguments: dict[str, Any]) -> dict[str, Any]:
             "mode": mode,
             **({"from": source} if source else {}),
         },
+    }
+
+
+def request_project_scope(arguments: dict[str, Any]) -> dict[str, Any]:
+    if not arguments or set(arguments) - set(PROJECT_SCOPE_SCHEMA["properties"]):
+        raise ValueError("choose project scope fields from nebula.settings.catalog")
+    mode = arguments.get("mode")
+    if mode is not None and mode not in {"bounded", "all_destinations", "allow_all"}:
+        raise ValueError("choose bounded, all_destinations, or allow_all")
+    for name, value in arguments.items():
+        expected = PROJECT_SCOPE_SCHEMA["properties"][name]
+        if name == "mode":
+            continue
+        field_type = expected["type"]
+        if field_type == "boolean" and type(value) is not bool:
+            raise ValueError(f"{name} must be a boolean")
+        if field_type == "integer" and (
+            type(value) is not int or not 1 <= value <= 256
+        ):
+            raise ValueError(f"{name} must be an integer from 1 to 256")
+        if field_type == "array" and (
+            not isinstance(value, list)
+            or any(
+                type(item)
+                is not (int if expected["items"]["type"] == "integer" else str)
+                for item in value
+            )
+        ):
+            raise ValueError(f"{name} has invalid entries")
+        if (
+            field_type == ["string", "null"]
+            and value is not None
+            and not isinstance(value, str)
+        ):
+            raise ValueError(f"{name} must be a date string or null")
+    return {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "project_scope", "changes": arguments},
+    }
+
+
+def request_headless_session(arguments: dict[str, Any]) -> dict[str, Any]:
+    action = arguments.get("action")
+    if set(arguments) != {"action"} or action not in {"start", "stop"}:
+        raise ValueError("choose start or stop for the headless session")
+    return {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "headless_session", "action": action},
     }
 
 
@@ -398,7 +521,11 @@ def set_default_model(store: NebulaStore, arguments: dict[str, Any]) -> dict[str
 
 
 def provider_plugins(
-    store: NebulaStore, artifact_store: Any, engagement_id: str
+    store: NebulaStore,
+    artifact_store: Any,
+    engagement_id: str,
+    *,
+    settings_api: SettingsAssistantApi | None = None,
 ) -> list[AnalysisTool]:
     async def list_settings(_arguments: dict[str, Any]) -> dict[str, Any]:
         return catalog()
@@ -416,6 +543,12 @@ def provider_plugins(
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
         return request_project_execution_mode(arguments)
+
+    async def select_project_scope(arguments: dict[str, Any]) -> dict[str, Any]:
+        return request_project_scope(arguments)
+
+    async def select_headless_session(arguments: dict[str, Any]) -> dict[str, Any]:
+        return request_headless_session(arguments)
 
     async def set_post_tool(arguments: dict[str, Any]) -> dict[str, Any]:
         return set_post_tool_preference(store, artifact_store, engagement_id, arguments)
@@ -439,6 +572,23 @@ def provider_plugins(
 
     async def save_default_model(arguments: dict[str, Any]) -> dict[str, Any]:
         return set_default_model(store, arguments)
+
+    async def settings_schema(arguments: dict[str, Any]) -> dict[str, Any]:
+        if settings_api is None:
+            raise ValueError("Core Settings API is unavailable")
+        return settings_api.schema(
+            path=arguments.get("path"), method=arguments.get("method")
+        )
+
+    async def settings_request(arguments: dict[str, Any]) -> dict[str, Any]:
+        if settings_api is None:
+            raise ValueError("Core Settings API is unavailable")
+        return await settings_api.request(
+            engagement_id,
+            path=arguments.get("path"),
+            method=arguments.get("method"),
+            body=arguments.get("body"),
+        )
 
     return [
         AnalysisTool(
@@ -476,6 +626,28 @@ def provider_plugins(
         ),
         AnalysisTool(
             ToolSpec(
+                name="nebula.settings.api_schema",
+                description="Discover authenticated Core Settings routes in this build, or inspect the exact request schema for one listed path and method. Use before changing settings without a dedicated tool.",
+                input_schema=SETTINGS_API_SCHEMA_SCHEMA,
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.LOCAL_READ,
+                idempotency=IdempotencyBehavior.SAFE,
+            ),
+            settings_schema,
+        ),
+        AnalysisTool(
+            ToolSpec(
+                name="nebula.settings.api_request",
+                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Core validates and saves. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
+                input_schema=SETTINGS_API_REQUEST_SCHEMA,
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                idempotency=IdempotencyBehavior.NON_IDEMPOTENT,
+            ),
+            settings_request,
+        ),
+        AnalysisTool(
+            ToolSpec(
                 name="nebula.settings.open",
                 description="Open one listed Nebula setting on the requesting browser. Call with its setting_id for any request to show or navigate to a setting; call nebula.settings.catalog first only when the destination is unclear. Returns a pending browser action, not proof that a lens opened.",
                 input_schema=OPEN_SCHEMA,
@@ -510,13 +682,35 @@ def provider_plugins(
         AnalysisTool(
             ToolSpec(
                 name="nebula.settings.set_project_mode",
-                description="Request Docker or Host mode for the selected project's future command sessions. The requesting browser opens Project Policy, asks for Host access approval if needed, saves through Core, and reads back the result. This tool only returns a pending action, not a saved change.",
+                description="Set Docker or Host mode for the selected project's future command sessions. The requesting browser saves through Core and reads back the result without another confirmation. This tool only returns a pending action, not a saved change.",
                 input_schema=PROJECT_MODE_SCHEMA,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.LOCAL_READ,
                 idempotency=IdempotencyBehavior.SAFE,
             ),
             select_project_execution_mode,
+        ),
+        AnalysisTool(
+            ToolSpec(
+                name="nebula.settings.set_project_scope",
+                description="Set the selected project's scope. Use mode=all_destinations for all URLs, network destinations and ports while keeping other permissions; mode=allow_all also bypasses Nebula permission checks. Preserve unrelated fields, save through Core, and read back. A direct operator instruction needs no extra confirmation. This tool returns a pending browser action, not a saved change.",
+                input_schema=PROJECT_SCOPE_SCHEMA,
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                idempotency=IdempotencyBehavior.SAFE,
+            ),
+            select_project_scope,
+        ),
+        AnalysisTool(
+            ToolSpec(
+                name="nebula.settings.headless_session",
+                description="Start or stop the selected project's Core-owned headless security browser. This is separate from the Kali command runtime. The requesting browser applies the action and reads back the session state; this tool returns only a pending action.",
+                input_schema=HEADLESS_SESSION_SCHEMA,
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                idempotency=IdempotencyBehavior.SAFE,
+            ),
+            select_headless_session,
         ),
         AnalysisTool(
             ToolSpec(

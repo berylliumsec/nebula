@@ -37,6 +37,8 @@ from nebula.v3.settings_assistant_tools import (
     open_destination,
     request_device_theme,
     request_project_execution_mode,
+    request_project_scope,
+    request_headless_session,
 )
 
 
@@ -52,7 +54,7 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 17
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 18
     assert {item["id"] for item in result["settings"]} == {
         item[0] for item in SETTING_DESTINATIONS
     }
@@ -64,7 +66,10 @@ def test_catalog_covers_settings_destinations_without_secrets():
     project_policy = next(
         item for item in result["settings"] if item["id"] == "network-scope"
     )
-    assert project_policy["assistant_ui_actions"] == ["project_execution_mode"]
+    assert project_policy["assistant_ui_actions"] == [
+        "project_execution_mode",
+        "project_scope",
+    ]
     assert next(item for item in result["settings"] if item["id"] == "appearance")[
         "assistant_ui_actions"
     ] == ["device_theme"]
@@ -74,6 +79,10 @@ def test_catalog_covers_settings_destinations_without_secrets():
         "nebula.settings.open",
         "nebula.settings.set_device_theme",
         "nebula.settings.set_project_mode",
+        "nebula.settings.set_project_scope",
+        "nebula.settings.headless_session",
+        "nebula.settings.api_schema",
+        "nebula.settings.api_request",
         "nebula.settings.set_post_tool",
         "nebula.settings.set_default_model",
     }
@@ -107,6 +116,17 @@ def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies
             "mode": "host",
             "from": "docker",
         },
+    }
+    assert request_project_scope({"mode": "all_destinations"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {
+            "kind": "project_scope",
+            "changes": {"mode": "all_destinations"},
+        },
+    }
+    assert request_headless_session({"action": "start"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "headless_session", "action": "start"},
     }
     with pytest.raises(ValueError):
         open_setting({"setting_id": "hidden-secret"})
@@ -214,6 +234,10 @@ def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
         "nebula.settings.open",
         "nebula.settings.set_device_theme",
         "nebula.settings.set_project_mode",
+        "nebula.settings.set_project_scope",
+        "nebula.settings.headless_session",
+        "nebula.settings.api_schema",
+        "nebula.settings.api_request",
         "nebula.settings.set_post_tool",
         "nebula.settings.models",
         "nebula.settings.set_default_model",
@@ -250,6 +274,10 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(
         "nebula.settings.open",
         "nebula.settings.set_device_theme",
         "nebula.settings.set_project_mode",
+        "nebula.settings.set_project_scope",
+        "nebula.settings.headless_session",
+        "nebula.settings.api_schema",
+        "nebula.settings.api_request",
         "nebula.settings.set_post_tool",
         "nebula.settings.models",
         "nebula.settings.set_default_model",
