@@ -91,15 +91,23 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const openLinkedPage = useCallback(async (url: string, requestId: string) => {
     if (!session || !tabId) return;
     setBusy(true); setError(""); setFailedLink(undefined); setCapture(undefined);
+    const handledKey = `nebula.assistant-browser-link.${session.session_id}`;
+    // Record the operator's request before navigation can outlive this page.
+    // A reload while the tab list is refreshing must not issue it a second time.
+    try { sessionStorage.setItem(handledKey, requestId); } catch { /* diagnostic-expected: blocked storage only affects reload deduplication. */ }
+    let navigationCompleted = false;
     try {
       const opened = await request<Capture>(`browser-companion/${session.session_id}/linked-navigation`, { tab_id: tabId, url });
+      navigationCompleted = true;
       if (!mounted.current) return;
       const currentTabs = await request<{ tabs: Tab[] }>(`browser-companion/${session.session_id}/operations`, { operation: "tabs" });
       if (!mounted.current) return;
       setTabs(currentTabs.tabs);
       if (currentTabRef.current === tabId) setAddress(opened.url);
-      try { sessionStorage.setItem(`nebula.assistant-browser-link.${session.session_id}`, requestId); } catch { /* diagnostic-expected: blocked storage only affects reload deduplication. */ }
     } catch (caught) {
+      if (!navigationCompleted) {
+        try { if (sessionStorage.getItem(handledKey) === requestId) sessionStorage.removeItem(handledKey); } catch { /* diagnostic-expected: storage is optional. */ }
+      }
       if (!mounted.current) return;
       void logCaughtDiagnostic("interface.browser_companion.link_navigation_failed", "A linked page could not open in the Assistant browser.", caught, "browser_companion");
       setError(caught instanceof Error ? caught.message : String(caught));

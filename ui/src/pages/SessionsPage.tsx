@@ -1369,6 +1369,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
   const [sessionId, setSessionId] = useState("");
+  // A deep link can render the composer before its Core session is selected.
+  // Keep it unavailable until the URL and active draft owner agree.
+  const requestedSessionPending = Boolean(requestedSessionId && requestedSessionId !== sessionId);
   // A side chat may be rendered only beside the conversation that owns it.
   // Core is authoritative for that ownership; an unverified URL is never enough.
   const sideChatId = !embeddedSideChat && requestedSessionId === sessionId
@@ -5002,7 +5005,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp, queueOptions?: { paused?: boolean; first?: boolean; key?: string; uncertain?: boolean }, resent?: { text: string; contentBlocks?: ConversationMessage["contentBlocks"] }) => {
     event?.preventDefault();
-    if (sessionId && !sessionReadReady) return;
+    if (requestedSessionPending || (sessionId && !sessionReadReady)) return;
     const activeTurn = composerBusy;
     if (activeTurn && !queuedFollowUp && !queueOptions) {
       const text = draft.trim();
@@ -5979,7 +5982,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [assistantSettingsOpen]);
   const authoritativeProviderBusy = runtimeKind === "provider" && Boolean(authoritativeState?.busy);
   const composerBusy = sending || authoritativeProviderBusy || pendingResponseActive || Boolean(interruptedRecovery) || Boolean(waitingCallback);
-  const canSend = Boolean((!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
+  const canSend = Boolean(!requestedSessionPending && (!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     !isHarnessCommand(draft)
     && sending
@@ -6505,7 +6508,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 {sessionId && <ChatQueuePanel key={sessionId} queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
                 <label className="sr-only" htmlFor={`analyst-message${panelIdSuffix}`}>Message the analyst assistant</label>
                 <div className="chat-composer-input" role="combobox" aria-label="Skill suggestions" aria-autocomplete="list" aria-expanded={Boolean(skillToken)} aria-controls={skillToken ? "harness-skill-menu" : undefined} aria-activedescendant={skillToken && matchingHarnessSkills.length ? `harness-skill-option-${skillMenuIndex}` : undefined}>
-                  <textarea ref={composerRef} id={`analyst-message${panelIdSuffix}`} data-guide="composer" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || (loadingHistory && !sessionReadReady)} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canStopAndSend ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
+                  <textarea ref={composerRef} id={`analyst-message${panelIdSuffix}`} data-guide="composer" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || requestedSessionPending || (loadingHistory && !sessionReadReady)} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canStopAndSend ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>

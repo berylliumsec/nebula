@@ -1,38 +1,27 @@
 {
-  "change_digest": "1d525c9ec85a346d0e45d7d31395f5f5d4018012485f512fe3868de2b4bf2e80",
-  "reviewed_by": "Codex review of nebula-v3.0.14 native command release failure",
-  "reason": "The v3.0.14 real-Core gates exposed native command parsing of appended Core instructions, stale Guides and top-bar action entry under Quiet Lens, fourteen Core journeys that assumed an older shell, and goal controls covered by the collapsed conversation rail. A separate goal-panel release failure used an opener that a responsive rerender had already replaced with the open panel. Select the focused command unit file, production LAN real-Core commands and Guides on desktop and 390 px Chromium/WebKit, Quiet Lens mock journeys on desktop and mobile Chromium/WebKit, the fourteen exact failing Core desktop journeys, four additional assistant desktop goal/Guide journeys, and three goal-panel revision cases. The shared AppShell and TopBar impact was reviewed against their rendered menu workflow.",
-  "exclusions": "No focused component test covers the shell menu interaction and no native source changed, so frontend unit and native selections are empty; the real-Core and mock browser journeys exercise the rendered state. Unrelated browser and backend journeys are excluded. The selected browser entries collect thirty-four cases; a full suite was not requested.",
+  "change_digest": "aab2f9443c58130a93e099e05c099ece9086dbe15a547f9935de067bd07eb540",
+  "reviewed_by": "Codex review of nebula-v3.0.15 assistant release gate traces",
+  "reason": "The failed production LAN queue journey exposed a URL session selection race: the composer accepted input before Core selected that conversation and restored its draft. A flaky linked-browser journey showed a navigation request replayed on reload before its session-storage marker was written. Select the exact real-Core queue and link cases plus their rendered desktop, compact, mobile Chromium, and mobile WebKit link and queue journeys. URL, Core session and tab state, and session storage are the relevant authorities; the shared assistant composer and browser companion impact was reviewed against these journeys.",
+  "exclusions": "No backend or native source changed. No standalone unit test covers these rendered lifecycle races, so Python, frontend unit, and native selections are empty. Unrelated assistant and browser journeys are excluded; a full suite was not requested.",
   "expected_tests": {
-    "python": 42,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 34
+    "playwright": 10
   },
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_harness_commands.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:harness-commands-real/assistant-real-desktop",
-    "entry:harness-commands-real/assistant-real-chromium-390",
-    "entry:harness-commands-real/assistant-real-webkit-390",
-    "entry:interactive-guides/assistant-real-desktop",
-    "entry:interactive-guides/assistant-real-chromium-390",
-    "entry:interactive-guides/assistant-real-webkit-390",
-    "entry:quiet-lens/desktop",
-    "entry:quiet-lens/mobile-chromium",
-    "entry:quiet-lens/mobile-webkit",
-    "entry:release-core-gate-repairs/real-core",
-    "entry:release-assistant-gate-repairs/assistant-real-desktop",
-    "entry:release-goal-panel-race/desktop",
-    "entry:release-goal-panel-race/mobile-chromium",
-    "entry:release-goal-panel-race/mobile-webkit-wide"
+    "entry:assistant-queue-core/assistant-real-desktop",
+    "entry:assistant-links/assistant-real-desktop",
+    "entry:assistant-links/desktop",
+    "entry:assistant-links/compact",
+    "entry:assistant-links/mobile-chromium-ledger-390",
+    "entry:assistant-links/mobile-webkit",
+    "entry:assistant-queue-reconciliation/desktop",
+    "entry:assistant-queue-reconciliation/compact",
+    "entry:assistant-queue-reconciliation/mobile-chromium-ledger-390",
+    "entry:assistant-queue-reconciliation/mobile-webkit"
   ]
 }
