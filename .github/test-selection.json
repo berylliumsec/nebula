@@ -1,20 +1,27 @@
 {
-  "change_digest": "c4d32f047a04a8d5e7cc07ffcd52d59bd8057800eb5600fa23d4987cb71d3ae3",
-  "reviewed_by": "Codex review of the October 13 VPN selection mobile WebKit release failure",
-  "reason": "The operator selects a saved VPN profile from Advanced Settings and sees the project policy become In use. The v3.0.10 WebKit trace showed sticky Settings tabs intercepting Playwright's offscreen click and no policy PUT. The focused browser test now waits for the Advanced section, verifies its Automation disclosure opens, scrolls the action into a clear tap target, checks the hit target and Core request, then verifies the saved selection. Five relevant desktop and phone profiles cover mouse and touch at the affected widths. Core's project automation policy is authoritative; the test uses a bounded API fixture.",
-  "exclusions": "This test-only change excludes unrelated settings, real Core, Python, frontend unit, native, and the full suite. It does not change the VPN product flow or claim persistence beyond the existing mock fixture; the release's real-Core and package gates remain separate.",
-  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 5},
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false,
+  "change_digest": "2af7468d3dccdd44c9492aac207ea4846f9822b3ec0477ab9857c7306c690d02",
+  "reviewed_by": "Codex PR #750 conflict review against main, 2026-10-13",
+  "reason": "The changed journey opens a parent project's Work page, sees its board and selected item before the searchable subproject list, then searches a child project and saves and reloads a Work update. The URL identifies the project and selected item; Core owns Work records and the subproject relationship; React owns only the transient search text. The board must precede subproject search at desktop and mobile widths, including when an item is selected, while existing navigation and check-ins remain usable. Select the 14 WorkPage component cases and the single catalogued real-Core Work journey in each of the 8 permanent desktop Chromium and emulated mobile Chromium/WebKit profiles. The real-Core journey uses a production UI bundle on a non-loopback LAN origin, creates a subproject and item, and checks order, update, refresh, reconnect, and accessibility. The main branch changed the shared real-core.spec.ts file after this PR opened; its merged Work hunk and pairing helper were reviewed against current main. The previous post-pairing readiness assertion landed on an unconfigured terminal, so the focused journey uses the established pairing helper, opens Projects, then selects the project row and Work tab. A 12 px layout margin keeps the selected-item panel and following subproject section separated after reordering.",
+  "exclusions": "No Python or Rust source changed; backend and native tests are excluded. Streaming, interrupt, and deletion are outside this presentation-order change. No browser security or device-only API changed; the production LAN run checks layout and existing persistence behavior. Physical devices are unavailable. Other Playwright areas and full suites are excluded.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 14,
+    "native": 0,
+    "playwright": 8
+  },
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/WorkPage.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:release-vpn-selection/desktop",
-    "entry:release-vpn-selection/mobile-chromium-small",
-    "entry:release-vpn-selection/mobile-chromium-wide",
-    "entry:release-vpn-selection/mobile-webkit",
-    "entry:release-vpn-selection/mobile-webkit-wide"
+    "entry:work-hub/assistant-real-desktop",
+    "entry:work-hub/assistant-real-compact",
+    "entry:work-hub/assistant-real-chromium-320",
+    "entry:work-hub/assistant-real-chromium-390",
+    "entry:work-hub/assistant-real-chromium-430",
+    "entry:work-hub/assistant-real-webkit-320",
+    "entry:work-hub/assistant-real-webkit-390",
+    "entry:work-hub/assistant-real-webkit-430"
   ]
 }
