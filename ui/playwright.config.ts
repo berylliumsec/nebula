@@ -22,7 +22,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
   testIgnore: "**/usage/**",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.NEBULA_RELEASE_CORE_SMOKE === "1" ? 0 : process.env.CI ? 2 : 0,
   reporter: process.env.CI ? "github" : "list",
   expect: {
     toHaveScreenshot: {
@@ -129,7 +129,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
     // filters. File/project boundaries still apply, including isolated real Core.
     ...("grep" in project ? {grep: new RegExp(`stabilization|automation callback|${project.name.startsWith("mobile-") ? "provider and harness usage|" : ""}${project.grep.source}`)} : {}),
   })),
-  webServer: {
+  webServer: process.env.NEBULA_RELEASE_CORE_SMOKE === "1" ? undefined : {
     command: testCommand,
     url: `http://${testHost}:${testPort}`,
     reuseExistingServer: !process.env.CI,

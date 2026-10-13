@@ -58,6 +58,9 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "release-core-smoke": [
+      {"area":"release-core-smoke","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"release core smoke pairs, creates a project, and retains one answer","runtime":"real-core","shard":"1/1"}
+    ],
     "workspace-bootstrap": [
       {"area":"workspace-bootstrap","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization workspace bootstrap opens Workbench while evidence is still loading","runtime":"mock","shard":"1/1"},
       {"area":"workspace-bootstrap","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization workspace bootstrap opens Workbench while evidence is still loading","runtime":"mock","shard":"1/1"},

@@ -7,7 +7,6 @@ gate leaves its immutable tag or draft for a release manager to inspect.
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
 import re
@@ -19,13 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import release_app
-from playwright_impact import matrix_lanes
+from release_core_smoke_receipt import deb_sha256, verify_payload
 
 REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 MAIN_SHA = os.environ.get("GITHUB_SHA", "")
 SOURCE_MARKER = re.compile(r"<!-- nebula-source-sha: ([0-9a-f]{40}) -->")
 WAIT_SECONDS = 3 * 60 * 60
-CONSERVATIVE_AREAS = ("desktop-interface", "mobile-layout", "core-api")
 GH_READ_ATTEMPTS = 5
 RETRYABLE_GH_READ_ERROR = re.compile(r"\bHTTP (?:429|5\d\d)\b")
 
@@ -158,95 +156,6 @@ def green_main() -> None:
         raise RuntimeError(f"CI has not passed for main {MAIN_SHA}")
 
 
-def conservative_coverage(plan: dict) -> tuple[str, str]:
-    """Retain matched journeys and add bounded cross-interface/Core coverage."""
-    manifest = json.loads(Path("ui/playwright-impact.json").read_text())
-    areas = set(CONSERVATIVE_AREAS)
-    for rule in manifest["rules"]:
-        if any(
-            fnmatch.fnmatchcase(path, pattern)
-            for path in plan["changed_files"]
-            for pattern in rule["patterns"]
-        ):
-            areas.update(rule["areas"])
-    selection = ",".join(f"area:{area}" for area in sorted(areas))
-    reason = (
-        "Daily stable release: automatic conservative catalog coverage for "
-        + ", ".join(plan["fallbacks"])
-        + ". Includes desktop/compact interface, small/wide mobile Chromium and "
-        "WebKit, real-Core contracts, and every matched feature area. Other "
-        "full-matrix profiles are excluded; CI, packaging and smoke checks remain required."
-    )
-    return selection, reason
-
-
-def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
-    """Resolve and validate daily coverage before consuming an immutable tag."""
-    with tempfile.TemporaryDirectory() as directory:
-        output = Path(directory, "plan.json")
-        args = [
-            sys.executable,
-            "scripts/playwright_impact.py",
-            "select",
-            "--manifest",
-            "ui/playwright-impact.json",
-            "--baseline",
-            baseline,
-            "--candidate",
-            candidate,
-            "--scope",
-            "impacted",
-            "--output",
-            str(output),
-            "--receipt",
-            str(Path(directory, "receipt.md")),
-        ]
-        result = subprocess.run(
-            args,
-            text=True,
-            capture_output=True,
-            check=False,
-            env=child_env(),
-        )
-        if result.returncode == 0:
-            matrix_lanes(json.loads(output.read_text())["include"])
-            return "", "Daily stable release: automatic impacted selection."
-        plan = json.loads(output.read_text()) if output.exists() else {}
-        blockers = plan.get("fallbacks", [])
-        if (
-            result.returncode != 2
-            or not plan.get("coverage_review_required")
-            or plan.get("baseline_sha") != baseline
-            or plan.get("candidate_sha") != candidate
-            or not blockers
-            or any(not item.startswith(("global:", "unmapped:")) for item in blockers)
-        ):
-            raise RuntimeError(
-                "Cannot resolve daily coverage before tagging: "
-                + (", ".join(blockers) or result.stderr.strip())
-            )
-        selection, review_reason = conservative_coverage(plan)
-        args.extend(("--selection", selection, "--review-reason", review_reason))
-        result = subprocess.run(
-            args, text=True, capture_output=True, check=False, env=child_env()
-        )
-        accepted = json.loads(output.read_text())
-        if (
-            result.returncode
-            or accepted.get("coverage_review_required", True)
-            or accepted.get("baseline_sha") != baseline
-            or accepted.get("candidate_sha") != candidate
-            or not accepted.get("include")
-        ):
-            raise RuntimeError(
-                "Conservative daily coverage failed validation before tagging: "
-                + result.stderr.strip()
-            )
-        matrix_lanes(accepted["include"])
-        print(Path(directory, "receipt.md").read_text(), flush=True)
-        return selection, review_reason
-
-
 def wait_for_workflow(name: str, ref: str, commit: str, since: datetime) -> int:
     deadline = time.monotonic() + WAIT_SECONDS
     while time.monotonic() < deadline:
@@ -275,50 +184,7 @@ def wait_for_workflow(name: str, ref: str, commit: str, since: datetime) -> int:
     raise RuntimeError(f"Timed out waiting for {name} on {ref}")
 
 
-def verify_impact_receipt(
-    run_id: int, tag: str, baseline: str, candidate: str, selection: str = ""
-) -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        run(
-            "gh",
-            "run",
-            "download",
-            str(run_id),
-            "--repo",
-            REPOSITORY,
-            "--name",
-            f"release-playwright-impact-{tag}",
-            "--dir",
-            directory,
-        )
-        receipts = list(Path(directory).rglob("playwright-impact-plan.json"))
-        if len(receipts) != 1 or not receipts[0].is_file() or receipts[0].is_symlink():
-            raise RuntimeError(
-                "Release impact artifact must contain exactly one coverage receipt"
-            )
-        plan = json.loads(receipts[0].read_text())
-        if (
-            plan["coverage_review_required"]
-            or plan["baseline_sha"] != baseline
-            or plan["candidate_sha"] != candidate
-            or (
-                selection
-                and (
-                    plan.get("requested_selection") != selection.split(",")
-                    or not plan.get("include")
-                )
-            )
-        ):
-            raise RuntimeError(
-                "Release impact receipt lacks an accepted baseline or coverage"
-            )
-        print(
-            f"Impact receipt: {len(plan['include'])} selected matrix entries",
-            flush=True,
-        )
-
-
-def verify_assets(run_id: int, version: str) -> None:
+def verify_assets(run_id: int, version: str) -> str:
     with tempfile.TemporaryDirectory() as directory:
         run(
             "gh",
@@ -345,6 +211,29 @@ def verify_assets(run_id: int, version: str) -> None:
         )
         for path in required:
             run("gh", "attestation", "verify", str(path), "--repo", REPOSITORY)
+        return deb_sha256(required[0])
+
+
+def verify_core_smoke_receipt(run_id: int, tag: str, commit: str, deb_sha: str) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run(
+            "gh", "run", "download", str(run_id), "--repo", REPOSITORY,
+            "--name", f"release-core-smoke-{tag}", "--dir", directory,
+        )
+        receipts = list(Path(directory).rglob("release-core-smoke.json"))
+        if (
+            len(receipts) != 1 or not receipts[0].is_file()
+            or receipts[0].is_symlink() or receipts[0].stat().st_size > 4096
+        ):
+            raise RuntimeError("Release preparation must provide exactly one core smoke receipt")
+        # The full DEB is verified by verify_assets. Reuse its digest here.
+        try:
+            verify_payload(
+                json.loads(receipts[0].read_text()),
+                tag=tag, commit=commit, deb_sha=deb_sha,
+            )
+        except ValueError as error:
+            raise RuntimeError("Release core smoke receipt does not match the passed installed DEB") from error
 
 
 def main() -> None:
@@ -378,7 +267,6 @@ def main() -> None:
     run("git", "merge-base", "--is-ancestor", previous_source, MAIN_SHA)
     green_main()
     require_release_app()
-    selection, review_reason = preflight_impact(previous_source, MAIN_SHA)
     run("gh", "attestation", "verify", "--help")
 
     version = available_stable_version(previous_tag)
@@ -439,7 +327,7 @@ def main() -> None:
         str(notes),
     )
     # This release-only commit never changes main. Its admin-authenticated push
-    # must not launch a second preparation without the validated selection.
+    # must not launch a second preparation beside the explicit dispatch.
     # workflow_dispatch is unaffected; all release gates still run below.
     run("git", "commit", "-m", f"Prepare Nebula {version} stable release [skip ci]")
     release_commit = run("git", "rev-parse", "HEAD")
@@ -461,29 +349,15 @@ def main() -> None:
 
     preparation_started = datetime.now(timezone.utc).replace(microsecond=0)
     dispatch = [
-        "gh",
-        "workflow",
-        "run",
-        "nebula3-release.yml",
-        "--repo",
-        REPOSITORY,
-        "--ref",
-        tag,
-        "-f",
-        f"release_tag={tag}",
-        "-f",
-        "scope=impacted",
-        "-f",
-        f"review_reason={review_reason}",
+        "gh", "workflow", "run", "nebula3-release.yml", "--repo", REPOSITORY,
+        "--ref", tag, "-f", f"release_tag={tag}",
     ]
-    if selection:
-        dispatch.extend(("-f", f"selection={selection}"))
     run(*dispatch, release_permission="actions")
     preparation_id = wait_for_workflow(
         "nebula3-release.yml", tag, release_commit, preparation_started
     )
-    verify_impact_receipt(preparation_id, tag, previous_source, MAIN_SHA, selection)
-    verify_assets(preparation_id, version)
+    deb_sha = verify_assets(preparation_id, version)
+    verify_core_smoke_receipt(preparation_id, tag, release_commit, deb_sha)
     finalize_started = datetime.now(timezone.utc).replace(microsecond=0)
     run(
         "gh",
