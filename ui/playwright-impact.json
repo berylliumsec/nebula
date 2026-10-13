@@ -31,6 +31,7 @@
     {"name": "studio-conversation", "patterns": ["ui/src/chat-studio.css", "ui/src/components/ChatStudioRail.tsx", "ui/src/components/HarnessThinking.tsx"], "areas": ["studio-conversation"]},
     {"name": "interactive-guides", "patterns": ["ui/src/guides/**", "ui/src/guides.css", "src/nebula/v3/guides.py"], "areas": ["interactive-guides"]},
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
+    {"name": "headless-lan", "patterns": ["ui/src/components/SecurityDashboard*", "ui/src/electron-browser.css", "src/nebula/v3/agent_security_tools.py"], "areas": ["headless-lan"]},
     {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
     {"name": "phone-shell", "patterns": ["ui/src/mobile-shell.css", "ui/src/hooks/useCompactLayout*", "ui/src/components/Mobile*", "ui/src/components/CompactSettingsList*", "ui/src/components/terminalKeys*"], "areas": ["phone-shell", "mobile-layout"]},
     {"name": "icon-pack", "patterns": ["ui/src/icons/**", "scripts/import_icon_pack.mjs", "ui/package.json", "ui/package-lock.json", "ui/tsconfig.app.json", "ui/vite.config.ts"], "areas": ["icon-pack"]},
@@ -1605,6 +1606,20 @@
       {"area":"assistant-viewer","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
       {"area":"assistant-viewer","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
       {"area":"assistant-viewer","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"}
+    ],
+    "headless-lan": [
+      {"area":"headless-lan","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"compact","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"browser Assistant keeps LAN page while headless security is enabled","runtime":"mock","shard":"1/1"},
+      {"area":"headless-lan","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"headless-lan","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"headless-lan","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"headless-lan","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "stabilization": [
       {"area":"stabilization","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},

@@ -35,3 +35,29 @@ Focused verification will select exact component, Python integration, Electron,
 desktop/mobile browser, real-Core, production-bundle, and LAN journeys. No full
 suite is authorized. Physical Mac overlap and packaged macOS, Windows, and Linux
 smoke evidence remain mandatory before an unqualified cutover claim.
+
+## Live Core headless rollout
+
+The LAN server can enable the Core-owned headless security browser without
+enabling the Electron-only visible-browser cutover. With
+`NEBULA_AGENT_SECURITY_ENABLED=1`, Chat offers the optional
+`browser-security-testing-tools` MCP profile and the Browser page exposes its
+security dashboard. The current LAN Assistant browser remains usable; the
+Electron visible browser remains confined to its desktop shell. Full Electron
+cutover still uses `NEBULA_ONE_BROWSER_CUTOVER=1` and its separate acceptance
+gates.
+
+| Journey | Operator-visible invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover | Chat lists the headless MCP and Browser exposes status and emergency stop while retaining the current LAN browser | Core capability response and MCP catalog; React presents them | API, component, desktop/mobile browser |
+| Start and use | A selected Project starts one isolated headless identity; scoped traffic and research results appear in the dashboard | Core session, scope policy, proxy, and research store | real Core/Chromium/proxy |
+| Refresh and reconnect | The dashboard reloads the durable Project state without losing the LAN browser or duplicating a headless run | Core database and Project URL; React display state | real Core and production LAN browser |
+| Failure and retry | Missing proxy/browser dependencies produce a visible actionable error; retry follows repaired readiness | Core error and sidecar supervisor | API, component, real Core |
+| Stop and revoke | Emergency stop closes the headless identity and its queued work; visible LAN browsing stays usable | Core session and tool ledger | real Core and browser |
+
+The server's `desktop-browser-mode` response owns capability discovery. Browser
+storage holds only presentation state, and a Project's URL continues to select
+the visible workspace. The headless runtime requires a verified Chromium
+installation and the locked `mitmproxy` sidecar and addon. Deployment evidence
+must include the served production bundle, authenticated local and LAN Core
+checks, one real scoped headless request and stop, and the Browser entry point.

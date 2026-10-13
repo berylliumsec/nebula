@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.browser_companion import BrowserCompanion
 from nebula.v3.agent_security import AgentSecuritySessions
+from nebula.v3.agent_security_tools import PROFILE_ID
 from nebula.v3.browser_security import (
     BrowserSecurityService,
     BrowserTrafficRecordRequest,
@@ -18,6 +19,7 @@ from nebula.v3.domain import (
     BrowserSession,
     ChatSession,
     Engagement,
+    McpServerProfile,
     ScopePolicy,
 )
 from nebula.v3.storage import NebulaStore
@@ -25,6 +27,37 @@ from nebula.v3.storage import NebulaStore
 
 def _auth():
     return {"Authorization": "Bearer test-token"}
+
+
+def test_live_headless_enablement_preserves_lan_browser_mode(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEBULA_ONE_BROWSER_CUTOVER", raising=False)
+    monkeypatch.setenv("NEBULA_AGENT_SECURITY_ENABLED", "1")
+    store = NebulaStore(tmp_path / "nebula.db")
+    project = store.create(Engagement(name="LAN browser and headless security"))
+    app = create_app(store, auth_token="test-token")
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/desktop-browser-mode", headers=_auth())
+        assert response.status_code == 200
+        assert response.json() == {
+            "one_browser_cutover": False,
+            "agent_security_enabled": True,
+        }
+        profile = store.get(McpServerProfile, PROFILE_ID)
+        assert profile.enabled is True
+        assert profile.name == "browser-security-testing-tools"
+        assert (
+            app.state.mcp_probe_service.security_tools is app.state.agent_security_tools
+        )
+        assert (
+            app.state.harness_runtime_service.mcp_service.security_tools
+            is app.state.agent_security_tools
+        )
+        workspace = BrowserSecurityService(store).workspace(project.id)
+        assert workspace.sessions
+        assert all(
+            session.runtime_kind != "agent_security" for session in workspace.sessions
+        )
 
 
 def test_project_approval_is_durable_and_separate_from_command_approvals(

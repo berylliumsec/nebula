@@ -1835,7 +1835,11 @@ def create_app(
 
     agent_security_sessions = AgentSecuritySessions(store, agent_security_host)
     agent_security_tools = SecurityToolsRuntime(store, agent_security_sessions)
-    if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+    agent_security_enabled = (
+        os.environ.get("NEBULA_AGENT_SECURITY_ENABLED") == "1"
+        or os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+    )
+    if agent_security_enabled:
         agent_security_tools.register_profile()
     browser_companion = BrowserCompanion(
         store,
@@ -1949,7 +1953,7 @@ def create_app(
     )
     mcp_probes.bind_notebooks(notebook_service)
     harness_runtime.mcp_service.bind_notebooks(notebook_service)
-    if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+    if agent_security_enabled:
         mcp_probes.bind_security_tools(agent_security_tools)
         harness_runtime.mcp_service.bind_security_tools(agent_security_tools)
     if tool_platform is not None:
@@ -8569,7 +8573,8 @@ def create_app(
     )
     async def desktop_browser_mode() -> dict[str, bool]:
         return {
-            "one_browser_cutover": os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+            "one_browser_cutover": os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1",
+            "agent_security_enabled": agent_security_enabled,
         }
 
     @app.post(
