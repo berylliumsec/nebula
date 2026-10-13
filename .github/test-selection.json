@@ -1,13 +1,13 @@
 {
-  "change_digest": "ea801c6c0b93629992a77d86f2dc780acc2c3c1ef64ea9bfb65c51b879cb007d",
+  "change_digest": "0597410df73e87120136fc639083a7fcc81a007da2c31d84a16a152f03a62bcc",
   "reviewed_by": "Codex review of remaining nebula-v3.0.13 broad real-Core release failures",
-  "reason": "The failed release's broad real-Core shard reached an authenticated Terminal landing screen without a visible Workbench Core chip, looked for project switching outside the current navigation control, and included managed-browser journeys without staging their prerequisites. Quiet Lens also hid composer settings until hover and covered a provider context button in the desktop journey. The mobile navigation handle intercepted Open conversations after a project switch. Select exact production LAN journeys for pairing, context actions, project switching, settings after reload, managed browser runtime and security proxy, plus the Quiet Lens desktop and 320/390 px Chromium/WebKit navigation journey.",
-  "exclusions": "Python, frontend unit, and native behavior are unchanged, so those layers have no selected cases. The browser selection is sixteen named cases; unrelated real-Core, provider, and interface suites are excluded. The full suite was not requested.",
+  "reason": "The failed release's broad real-Core shard reached an authenticated Terminal landing screen without a visible Workbench Core chip, looked for project switching outside the current navigation control, and included managed-browser journeys without staging their prerequisites. Quiet Lens also hid composer settings until hover and covered a provider context button in the desktop journey. On mobile its navigation handle intercepted Open conversations, and its top bar covered the debugger Close button. Select exact production LAN journeys for pairing, context actions, project switching, settings after reload, mobile Code debugging, managed browser runtime and security proxy, plus the Quiet Lens desktop and 320/390 px Chromium/WebKit navigation journey.",
+  "exclusions": "Python, frontend unit, and native behavior are unchanged, so those layers have no selected cases. The browser selection collects eighteen tests in sixteen matrix entries; unrelated real-Core, provider, and interface suites are excluded. The full suite was not requested.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 16
+    "playwright": 18
   },
   "python_versions": ["3.12"],
   "python_browser": false,
@@ -30,6 +30,7 @@
     "entry:quiet-lens/mobile-chromium",
     "entry:quiet-lens/mobile-webkit-small",
     "entry:quiet-lens/mobile-webkit",
-    "entry:release-core-quiet-settings/real-core"
+    "entry:release-core-quiet-settings/real-core",
+    "entry:release-mobile-debugger/real-core"
   ]
 }
