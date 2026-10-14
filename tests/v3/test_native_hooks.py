@@ -76,14 +76,14 @@ def test_native_hook_catalog_uses_agents_root_and_freezes_source_digests(tmp_pat
 
 
 def test_native_hook_exact_git_root_does_not_require_inheritance_opt_in(tmp_path):
-    workspace = tmp_path / "rnd-root"
+    workspace = tmp_path / "workspace-root"
     workspace.mkdir()
     (workspace / ".git").mkdir()
-    _hook(workspace, name="rnd-exact", inherit_to_descendants=False)
+    _hook(workspace, name="workspace-exact", inherit_to_descendants=False)
 
     [descriptor] = discover_native_hooks(workspace)
 
-    assert descriptor.id == "rnd-exact"
+    assert descriptor.id == "workspace-exact"
     assert descriptor.manifest.inherit_to_descendants is False
 
 
