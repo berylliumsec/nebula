@@ -1859,9 +1859,7 @@ class AutomationRuntimeManager:
         """Return a same-owner process summary for a native tool hook."""
 
         try:
-            execution = self.store.get(
-                CommandExecution, self._execution_id(process_id)
-            )
+            execution = self.store.get(CommandExecution, self._execution_id(process_id))
         except NotFoundError:
             # diagnostic-expected: the normal process_io path reports this missing process.
             return None

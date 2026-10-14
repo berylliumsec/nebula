@@ -111,12 +111,7 @@ def test_native_hooks_inherit_opted_in_ancestor_across_nested_git_marker(tmp_pat
         "workspace-local",
     ]
     assert catalog[0].path == str(
-        (
-            repository
-            / ".agents"
-            / "hooks"
-            / "shared-repo-search-routing"
-        ).resolve()
+        (repository / ".agents" / "hooks" / "shared-repo-search-routing").resolve()
     )
 
 

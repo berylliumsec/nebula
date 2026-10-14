@@ -545,7 +545,9 @@ def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file(
     asyncio.run(scenario())
 
 
-def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write(tmp_path):
+def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write(
+    tmp_path,
+):
     async def scenario():
         repository = tmp_path / "repository"
         repository.mkdir()
@@ -624,7 +626,9 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
     asyncio.run(scenario())
 
 
-def test_inherited_shared_search_hook_blocks_process_write_without_parent_context(tmp_path):
+def test_inherited_shared_search_hook_blocks_process_write_without_parent_context(
+    tmp_path,
+):
     async def scenario():
         repository = tmp_path / "repository"
         repository.mkdir()
@@ -662,7 +666,6 @@ def test_inherited_shared_search_hook_blocks_process_write_without_parent_contex
         assert store.list_entities(CommandExecution) == []
 
     asyncio.run(scenario())
-
 
 
 def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io(
@@ -792,6 +795,7 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             await manager.close_session(process_session_id)
 
     asyncio.run(scenario())
+
 
 def test_general_command_reuses_session_and_persists_artifacts(tmp_path):
     async def scenario():
