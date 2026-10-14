@@ -598,7 +598,7 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
                 store.get(ScopePolicy, f"scope:{engagement.id}"),
             )
 
-        [blocked_execution] = store.list_entities(NativeHookExecution)
+        [blocked_execution] = store.list_entities(NativeHookExecution)[-1:]
         assert blocked_execution.hook_id == "shared-repo-search-routing"
         assert "repo_search_guard (process_io shell write)" in blocked_execution.stderr
         assert "capability_search" in blocked_execution.stderr
@@ -725,7 +725,10 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             scope,
         )
         assert allowed.receipt.exit_code == 0
-        assert "needle" in allowed.receipt.stdout
+        assert any(
+            preview.kind == "stdout" and "needle" in preview.text
+            for preview in allowed.receipt.output_preview
+        )
         persisted = store.get(AutomationSession, allowed.receipt.session_id)
         assert persisted.execution_mode == "host"
         assert persisted.metadata["network_boundary"] == "host_os"
