@@ -2386,6 +2386,7 @@ export interface ChatSessionSummary {
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
   isControlAssistant?: boolean;
+  assistantConfig?: ChatAssistantConfig;
   inheritedMessageCount?: number;
   forkedFromMessageId?: Identifier;
   model?: string;
@@ -2409,6 +2410,30 @@ export interface ChatSessionSummary {
   createdAt: string;
   updatedAt: string;
   revision: number;
+}
+
+/** Core's saved choices for this conversation's next message. */
+export interface ChatAssistantConfig {
+  backend: "provider" | "harness";
+  profileId: Identifier;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  harnessReasoningEffort?: string;
+  harnessServiceTier?: string;
+  harnessMode?: string;
+  harnessCyberAccessProgram?: "automatic" | "standard" | "daybreakBlue" | "daybreakRed";
+  mcpServerIds: Identifier[];
+  hookIds: Identifier[];
+  includeKnowledge: boolean;
+  allowCloudKnowledge: boolean;
+  toolsEnabled: boolean;
+  allowSubagents: boolean;
+  allowAgentMessaging: boolean;
+  maxActiveSubagents?: number;
+  subagentProviderId?: Identifier;
+  subagentHarnessProfileId?: Identifier;
+  subagentModel?: string;
+  subagentReasoningEffort?: ReasoningEffort;
 }
 
 export interface ChatSessionActivity {

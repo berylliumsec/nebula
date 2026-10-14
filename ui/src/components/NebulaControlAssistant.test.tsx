@@ -47,6 +47,40 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("textbox", { name: "Ask Nebula a question" })).toHaveValue("Start an assistant to ");
   });
 
+  it("uses Core-saved own settings and opens the full Assistant settings for its chat", async () => {
+    const user = userEvent.setup();
+    const saved = {
+      id: "control", engagementId: "project", backend: "harness", harnessProfileId: "local", model: "model",
+      assistantConfig: {
+        backend: "harness", profileId: "local", model: "model", harnessReasoningEffort: "high",
+        harnessMode: "plan", mcpServerIds: ["notebook"], hookIds: [],
+        includeKnowledge: false, allowCloudKnowledge: false, toolsEnabled: true,
+        allowSubagents: false, allowAgentMessaging: true,
+      },
+    };
+    const streamChat = vi.fn().mockResolvedValue({
+      sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+      message: {id: "answer", role: "assistant", content: "Ready."},
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getControlAssistantSession: vi.fn().mockResolvedValue(saved), listChatMessages: vi.fn().mockResolvedValue([]), streamChat},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    const onNavigate = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Nebula assistant"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Nebula assistant settings"})).toBeEnabled());
+    await user.type(screen.getByRole("textbox", {name: "Ask Nebula a question"}), "Summarize the work{enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      controlAssistant: true, sessionId: "control", harnessReasoningEffort: "high", harnessMode: "plan",
+      mcpServerIds: ["notebook"], includeKnowledge: false, allowAgentMessaging: true,
+    }), expect.any(Function), expect.any(AbortSignal)));
+    await user.click(screen.getByRole("button", {name: "Nebula assistant settings"}));
+    expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
+  });
+
   it("shows a durable chat link from a successful work receipt when the model omits it", async () => {
     const user = userEvent.setup();
     const sessionId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
