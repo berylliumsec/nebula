@@ -311,6 +311,7 @@ from .domain import (
     ContextSnapshotStatus,
     DeviceCapabilitySnapshot,
     Engagement,
+    EngagementStatus,
     WorkItem,
     WorkUpdate,
     Entity,
