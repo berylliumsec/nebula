@@ -36,6 +36,7 @@ export function removeSideToolTab(params: URLSearchParams, id: string): void {
   params.delete(`panelFile.${id}`);
   params.delete(`panelLine.${id}`);
   params.delete(`panelUrl.${id}`);
+  params.delete(`panelBrowserEngine.${id}`);
   if (params.get("panelTab") === id) {
     if (remaining.length) params.set("panelTab", remaining.at(-1)!.id);
     else params.delete("panelTab");
@@ -47,6 +48,7 @@ export function clearSideToolTabs(params: URLSearchParams): void {
     params.delete(`panelFile.${tab.id}`);
     params.delete(`panelLine.${tab.id}`);
     params.delete(`panelUrl.${tab.id}`);
+    params.delete(`panelBrowserEngine.${tab.id}`);
   }
   params.delete("panel");
   params.delete("panelTab");

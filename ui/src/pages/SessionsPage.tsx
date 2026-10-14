@@ -4308,7 +4308,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     updateSearchParams(params => {
       if (params.get("session") !== sessionId) return;
-      if (!appendSideToolTab(params, kind, id)) setChatError("Close a side tab before opening another.");
+      if (appendSideToolTab(params, kind, id)) {
+        if (kind === "browser") params.set(`panelBrowserEngine.${id}`, "native");
+      } else setChatError("Close a side tab before opening another.");
     });
     setChatTerminalOpen(false);
     setSessionInspectorOpen(false);
@@ -6703,8 +6705,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (tab.kind === "assistance") return <div className="side-tool-assistance"><PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="panel" /></div>;
     const initialOpenUrl = searchParams.get(`panelUrl.${tab.id}`) ?? undefined;
     const initialOpenRequest = tab.id;
-    if (browserEngine === "electron") return <ElectronBrowser api={api} projectId={engagement.id} draftId={tab.id} conversationId={sessionId || undefined} active={active} initialOpenUrl={initialOpenUrl} initialOpenRequest={initialOpenRequest} onContext={request => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }} onControlChange={setBrowserControlEnabled} />;
-    if (browserEngine === "managed") return <ManagedAssistantBrowser api={api} projectId={engagement.id} draftId={tab.id} active={active} controlsOpen={browserControlsOpen} initialOpenUrl={initialOpenUrl} initialOpenRequest={initialOpenRequest} conversationId={sessionId || undefined} onConversation={id => void openAttachedChat(id)} onContext={request => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }} onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={file => { setBrowserAssistantOpen(true); void attachImageFiles([file]); }} />;
+    const requestedEngine = searchParams.get(`panelBrowserEngine.${tab.id}`);
+    const sideBrowserEngine = browserEngine === "electron" ? "electron"
+      : requestedEngine === "native" || requestedEngine === "managed" ? requestedEngine
+      : initialOpenUrl ? browserEngine : "native";
+    if (sideBrowserEngine === "electron") return <ElectronBrowser api={api} projectId={engagement.id} draftId={tab.id} conversationId={sessionId || undefined} active={active} initialOpenUrl={initialOpenUrl} initialOpenRequest={initialOpenRequest} onContext={request => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }} onControlChange={setBrowserControlEnabled} />;
+    if (sideBrowserEngine === "managed") return <ManagedAssistantBrowser api={api} projectId={engagement.id} draftId={tab.id} active={active} controlsOpen={browserControlsOpen} initialOpenUrl={initialOpenUrl} initialOpenRequest={initialOpenRequest} conversationId={sessionId || undefined} onConversation={id => void openAttachedChat(id)} onContext={request => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }} onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={file => { setBrowserAssistantOpen(true); void attachImageFiles([file]); }} />;
     return <WorkbenchBrowser active={active} initialOpenUrl={initialOpenUrl} initialOpenRequest={initialOpenRequest} api={api} operatorId={activeOperator?.id} projectId={engagement.id} scope={browserScope} scopeLoading={browserScopeLoading} onAddKnowledgeUrl={url => ingestKnowledgeUrlSource({engagementId: engagement.id, url})} onAskNebula={requestNebulaDraft} onAttachContext={attachBrowserContext} assistantRuntimeLabel={runtimeReady && model.trim() ? `${assistantSource} · ${runtimeConfiguration}` : undefined} onContinueConversation={id => void openAttachedChat(id)} onOpenFiles={() => setView("workspace")} onScopeUpdated={setBrowserScope} onUploadEvidence={uploadEvidence} />;
   };
 
