@@ -1,32 +1,39 @@
 {
-  "change_digest": "d136753f0e34db3f208e81ed35bf0a5da4b40c78be0a35b66d76dd20227fac27",
-  "reviewed_by": "Codex focused Work roster review",
-  "reason": "The selected Core tests exercise shared dashboard and agent roster activity, project isolation, Work assignment links and refresh, default provider and harness availability when Work posting or peer messaging is off, and existing peer-message consent boundaries. The eight catalogued Work hub browser entries exercise the operator view and the corrected pairing-readiness wait against a real Core production bundle on LAN origins at desktop and mobile Chromium and WebKit sizes.",
-  "exclusions": "No frontend or native source changed, so those test layers are empty. Work import, unrelated Python and browser journeys, and full suites are excluded. Physical-device testing is not automated by this selection and is reported separately.",
+  "change_digest": "be49a2f31e152e17941818fc32217960531cac1366f7dda95ceba10669af1a9b",
+  "reviewed_by": "Codex Nebula shared native hook discovery review",
+  "reason": "Select exact native-hook discovery cases and AutomationBroker tool.before workflows for exact-workspace hooks, inherited opt-in, nested Git markers, unrelated workspaces, duplicate IDs, symlink safety, payload context, blocking broad searches, known-file searches, and process_io fail-closed behavior. A temp SQLite/workspace HostRuntimeSession test exercises the broker against the actual host process backend.",
+  "exclusions": "No frontend, browser, native, or production UI workflow changed. Direct authenticated /automation command endpoints bypass AutomationBroker and remain outside this change. The HostRuntimeSession regression uses only a temporary database and workspace; no live Core deployment or project workspace is touched.",
   "expected_tests": {
-    "python": 27,
+    "python": 17,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_work.py",
-    "tests/v3/test_work_gateway.py",
-    "tests/v3/test_chat_agent_messages.py"
+    "tests/v3/test_native_hooks.py::test_native_hook_catalog_uses_agents_root_and_freezes_source_digests",
+    "tests/v3/test_native_hooks.py::test_native_hook_exact_git_root_does_not_require_inheritance_opt_in",
+    "tests/v3/test_native_hooks.py::test_native_hooks_inherit_opted_in_ancestor_across_nested_git_marker",
+    "tests/v3/test_native_hooks.py::test_native_hooks_ignore_non_opted_in_ancestors_and_unrelated_workspaces",
+    "tests/v3/test_native_hooks.py::test_native_hook_discovery_stops_at_the_ancestor_bound",
+    "tests/v3/test_native_hooks.py::test_native_hook_duplicate_ids_fail_closed_between_ancestor_and_workspace",
+    "tests/v3/test_native_hooks.py::test_native_hook_discovery_rejects_symlinked_shared_agents_root",
+    "tests/v3/test_native_hooks.py::test_native_hook_discovery_rejects_symlinked_inherited_hook_directory",
+    "tests/v3/test_native_hooks.py::test_native_hook_discovery_rejects_workspace_symlink_escape",
+    "tests/v3/test_native_hooks.py::test_native_hook_discovery_preserves_symlinked_workspace_inside_shared_root",
+    "tests/v3/test_automation_runtime.py::test_command_tools_run_automatic_project_hooks_before_and_after",
+    "tests/v3/test_automation_runtime.py::test_blocking_before_hook_denies_command_before_runtime_execution",
+    "tests/v3/test_automation_runtime.py::test_inherited_blocking_before_hook_denies_nested_workspace_command",
+    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file",
+    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write",
+    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_process_write_without_parent_context",
+    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:work-hub/assistant-real-desktop",
-    "entry:work-hub/assistant-real-compact",
-    "entry:work-hub/assistant-real-chromium-320",
-    "entry:work-hub/assistant-real-chromium-390",
-    "entry:work-hub/assistant-real-chromium-430",
-    "entry:work-hub/assistant-real-webkit-320",
-    "entry:work-hub/assistant-real-webkit-390",
-    "entry:work-hub/assistant-real-webkit-430"
-  ]
+  "playwright": []
 }
