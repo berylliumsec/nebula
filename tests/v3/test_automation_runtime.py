@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import json
+import shutil
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -180,7 +181,7 @@ class FakeSession(RuntimeBackendSession):
             await process.terminate()
 
 
-def runtime(tmp_path: Path):
+def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     engagement = store.create(Engagement(name="Runtime test"))
@@ -218,7 +219,11 @@ def runtime(tmp_path: Path):
             healthy=True,
         )
     )
-    workspace = tmp_path / "workspaces" / engagement.id
+    workspace = (
+        workspace_parent / engagement.id
+        if workspace_parent is not None
+        else tmp_path / "workspaces" / engagement.id
+    )
     workspace.mkdir(parents=True)
     sessions: list[FakeSession] = []
 
@@ -241,8 +246,15 @@ def runtime(tmp_path: Path):
     return manager, store, artifacts, engagement, sessions
 
 
-def command_hook(workspace: Path, log: Path, *, block: bool = False) -> None:
-    directory = workspace / ".agents" / "hooks" / "command-policy"
+def command_hook(
+    workspace: Path,
+    log: Path,
+    *,
+    name: str = "command-policy",
+    block: bool = False,
+    inherit_to_descendants: bool = False,
+) -> None:
+    directory = workspace / ".agents" / "hooks" / name
     directory.mkdir(parents=True)
     script = directory / "run.py"
     script.write_text(
@@ -263,16 +275,31 @@ def command_hook(workspace: Path, log: Path, *, block: bool = False) -> None:
         json.dumps(
             {
                 "version": 1,
-                "name": "Command policy",
+                "name": name,
                 "events": ["tool.before", "tool.after"],
                 "command": ["run.py"],
                 "timeout_seconds": 5,
                 "side_effects": "none",
                 "failure_policy": "block",
+                "inherit_to_descendants": inherit_to_descendants,
             }
         ),
         encoding="utf-8",
     )
+
+
+def shared_ancestor_search_hook(workspace: Path) -> None:
+    """Install the small native-hook policy fixture under a shared ancestor."""
+
+    fixture_root = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "shared_ancestor_search_policy"
+        / "hooks"
+    )
+    hook_root = workspace / ".agents" / "hooks"
+    hook_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(fixture_root, hook_root)
 
 
 def tool_invocation(engagement, workspace: Path, name: str, arguments: dict, step: int):
@@ -355,6 +382,10 @@ def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
             "process_io",
             "process_io",
         ]
+        assert all(
+            item["payload"]["workspace_path"] == str(workspace.resolve())
+            for item in events
+        )
         assert events[1]["payload"]["status"] == "completed"
         assert all(
             item["workspace_provenance"]["schema"] == "nebula.workspace-provenance/v1"
@@ -396,6 +427,372 @@ def test_blocking_before_hook_denies_command_before_runtime_execution(tmp_path):
         assert store.list_entities(CommandExecution) == []
         [observation] = store.list_entities(WorkspaceProvenanceObservation)
         assert observation.status == "complete"
+
+    asyncio.run(scenario())
+
+
+def test_inherited_blocking_before_hook_denies_nested_workspace_command(tmp_path):
+    async def scenario():
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        (repository / ".git").mkdir()
+        manager, store, artifacts, engagement, sessions = runtime(
+            tmp_path, workspace_parent=repository / "projects"
+        )
+        create_tool_chat(store, engagement)
+        workspace = repository / "projects" / engagement.id
+        log = tmp_path / "inherited-blocked-hooks.jsonl"
+        command_hook(
+            repository,
+            log,
+            name="shared-repo-search-routing",
+            block=True,
+            inherit_to_descendants=True,
+        )
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+
+        with pytest.raises(PolicyDenied, match="required project hook"):
+            await broker.execute(
+                tool_invocation(
+                    engagement,
+                    workspace,
+                    "run_command",
+                    {"command": "echo must-not-run"},
+                    1,
+                ),
+                store.get(ScopePolicy, f"scope:{engagement.id}"),
+            )
+
+        [event] = [
+            json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()
+        ]
+        assert event["payload"]["workspace_path"] == str(workspace.resolve())
+        assert sessions == []
+        [call] = store.list_entities(ToolCall)
+        assert call.status == ToolCallStatus.DENIED
+        [execution] = store.list_entities(NativeHookExecution)
+        assert execution.hook_id == "shared-repo-search-routing"
+        assert store.list_entities(CommandExecution) == []
+
+    asyncio.run(scenario())
+
+
+def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file(
+    tmp_path,
+):
+    async def scenario():
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        (repository / ".git").mkdir()
+        manager, store, artifacts, engagement, sessions = runtime(
+            tmp_path, workspace_parent=repository / "projects"
+        )
+        create_tool_chat(store, engagement)
+        workspace = repository / "projects" / engagement.id
+        (workspace / "AGENTS.md").write_text("fixture input\n", encoding="utf-8")
+        shared_ancestor_search_hook(repository)
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+
+        projects_root = repository / "projects"
+        broad_searches = (
+            f"rg needle {projects_root}",
+            f"grep -R needle {projects_root}",
+        )
+        for step, command in enumerate(broad_searches, start=1):
+            with pytest.raises(PolicyDenied, match="required project hook"):
+                await broker.execute(
+                    tool_invocation(
+                        engagement,
+                        workspace,
+                        "run_command",
+                        {"command": command},
+                        step,
+                    ),
+                    store.get(ScopePolicy, f"scope:{engagement.id}"),
+                )
+
+            execution = store.list_entities(NativeHookExecution)[-1]
+            assert execution.hook_id == "shared-repo-search-routing"
+            assert execution.status != "complete"
+            assert "repo_search_guard (run_command)" in execution.stderr
+            assert "capability_search" in execution.stderr
+            assert sessions == []
+            assert store.list_entities(CommandExecution) == []
+
+        allowed = await broker.execute(
+            tool_invocation(
+                engagement,
+                workspace,
+                "run_command",
+                {"command": "rg needle AGENTS.md"},
+                3,
+            ),
+            store.get(ScopePolicy, f"scope:{engagement.id}"),
+        )
+
+        assert allowed.receipt.status == CommandExecutionStatus.COMPLETED
+        assert len(sessions) == 1
+        assert store.list_entities(NativeHookExecution)[-1].status == "complete"
+
+    asyncio.run(scenario())
+
+
+def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write(
+    tmp_path,
+):
+    async def scenario():
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        (repository / ".git").mkdir()
+        manager, store, artifacts, engagement, sessions = runtime(
+            tmp_path, workspace_parent=repository / "projects"
+        )
+        create_tool_chat(store, engagement)
+        workspace = repository / "projects" / engagement.id
+        (workspace / "subdir").mkdir()
+        (workspace / "AGENTS.md").write_text("fixture input\n", encoding="utf-8")
+        shared_ancestor_search_hook(repository)
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        command = await broker.execute(
+            tool_invocation(
+                engagement,
+                workspace,
+                "run_command",
+                {"command": "bash", "cwd": "subdir", "background": True},
+                1,
+            ),
+            store.get(ScopePolicy, f"scope:{engagement.id}"),
+        )
+
+        with pytest.raises(PolicyDenied, match="required project hook"):
+            invocation = tool_invocation(
+                engagement,
+                workspace,
+                PROCESS_IO_NAME,
+                {
+                    "process_id": command.receipt.process_id,
+                    "action": "write",
+                    "input": f"rg needle {repository / 'projects'}\n",
+                },
+                2,
+            )
+            payload = broker._hook_payload(invocation, "payload-contract-probe")
+            assert payload["workspace_path"] == str(workspace.resolve())
+            assert payload["process_context"] == {
+                "command": "bash",
+                "cwd": "subdir",
+                "status": "running",
+            }
+            await broker.execute(
+                invocation,
+                store.get(ScopePolicy, f"scope:{engagement.id}"),
+            )
+
+        [blocked_execution] = store.list_entities(NativeHookExecution)[-1:]
+        assert blocked_execution.hook_id == "shared-repo-search-routing"
+        assert "repo_search_guard (process_io shell write)" in blocked_execution.stderr
+        assert "capability_search" in blocked_execution.stderr
+        assert sessions[0].processes[0].writes == []
+
+        allowed = await broker.execute(
+            tool_invocation(
+                engagement,
+                workspace,
+                PROCESS_IO_NAME,
+                {
+                    "process_id": command.receipt.process_id,
+                    "action": "write",
+                    "input": "rg needle AGENTS.md\n",
+                },
+                3,
+            ),
+            store.get(ScopePolicy, f"scope:{engagement.id}"),
+        )
+        assert allowed.receipt.process_id == command.receipt.process_id
+        assert sessions[0].processes[0].writes == [b"rg needle AGENTS.md\n"]
+
+    asyncio.run(scenario())
+
+
+def test_inherited_shared_search_hook_blocks_process_write_without_parent_context(
+    tmp_path,
+):
+    async def scenario():
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        manager, store, artifacts, engagement, sessions = runtime(
+            tmp_path, workspace_parent=repository / "projects"
+        )
+        create_tool_chat(store, engagement)
+        workspace = repository / "projects" / engagement.id
+        shared_ancestor_search_hook(repository)
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+
+        with pytest.raises(PolicyDenied, match="required project hook"):
+            await broker.execute(
+                tool_invocation(
+                    engagement,
+                    workspace,
+                    PROCESS_IO_NAME,
+                    {
+                        "process_id": "missing-parent-process",
+                        "action": "write",
+                        "input": "rg needle .\n",
+                    },
+                    1,
+                ),
+                store.get(ScopePolicy, f"scope:{engagement.id}"),
+            )
+
+        [execution] = store.list_entities(NativeHookExecution)
+        assert "parent process context is unavailable" in execution.stderr
+        assert sessions == []
+        assert store.list_entities(CommandExecution) == []
+
+    asyncio.run(scenario())
+
+
+def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io(
+    tmp_path,
+):
+    async def scenario():
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        (repository / ".git").mkdir()
+        manager, store, artifacts, engagement, _fake_sessions = runtime(
+            tmp_path, workspace_parent=repository / "projects"
+        )
+        create_tool_chat(store, engagement)
+        workspace = repository / "projects" / engagement.id
+        (workspace / "AGENTS.md").write_text("needle\n", encoding="utf-8")
+        shared_ancestor_search_hook(repository)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=5_000,
+            execution_mode="host",
+            host_access_acknowledged=True,
+        )
+        manager.runtime_image = ""
+        manager.runtime_digest = ""
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+            execution_mode="host",
+        )
+        scope = store.get(ScopePolicy, f"scope:{engagement.id}")
+
+        with pytest.raises(PolicyDenied, match="required project hook"):
+            await broker.execute(
+                tool_invocation(
+                    engagement,
+                    workspace,
+                    "run_command",
+                    {"command": f"grep -R needle {repository / 'projects'}"},
+                    1,
+                ),
+                scope,
+            )
+        [blocked_hook] = store.list_entities(NativeHookExecution)
+        assert blocked_hook.hook_id == "shared-repo-search-routing"
+        assert "capability_search" in blocked_hook.stderr
+        assert store.list_entities(CommandExecution) == []
+
+        allowed = await broker.execute(
+            tool_invocation(
+                engagement,
+                workspace,
+                "run_command",
+                {"command": "grep -n needle AGENTS.md"},
+                2,
+            ),
+            scope,
+        )
+        assert allowed.receipt.exit_code == 0
+        assert any(
+            preview.kind == "stdout" and "needle" in preview.text
+            for preview in allowed.receipt.output_preview
+        )
+        allowed_execution = store.list_entities(CommandExecution)[-1]
+        persisted = store.get(AutomationSession, allowed_execution.session_id)
+        assert persisted.execution_mode == "host"
+        assert persisted.metadata["network_boundary"] == "host_os"
+
+        shell = await broker.execute(
+            tool_invocation(
+                engagement,
+                workspace,
+                "run_command",
+                {"command": "bash", "cwd": ".", "background": True},
+                3,
+            ),
+            scope,
+        )
+        process_id = shell.receipt.process_id
+        shell_execution = store.list_entities(CommandExecution)[-1]
+        process_session_id = shell_execution.session_id
+        try:
+            denied_write = tool_invocation(
+                engagement,
+                workspace,
+                PROCESS_IO_NAME,
+                {
+                    "process_id": process_id,
+                    "action": "write",
+                    "input": f"rg needle {repository / 'projects'}\n",
+                },
+                4,
+            )
+            payload = broker._hook_payload(denied_write, "host-process-context")
+            assert payload["workspace_path"] == str(workspace.resolve())
+            assert payload["process_context"] == {
+                "command": "bash",
+                "cwd": ".",
+                "status": "running",
+            }
+            with pytest.raises(PolicyDenied, match="required project hook"):
+                await broker.execute(denied_write, scope)
+            [blocked_write] = store.list_entities(NativeHookExecution)[-1:]
+            assert blocked_write.hook_id == "shared-repo-search-routing"
+            assert "process_io shell write" in blocked_write.stderr
+            assert "capability_search" in blocked_write.stderr
+
+            allowed_write = await broker.execute(
+                tool_invocation(
+                    engagement,
+                    workspace,
+                    PROCESS_IO_NAME,
+                    {
+                        "process_id": process_id,
+                        "action": "write",
+                        "input": "grep -n needle AGENTS.md\n",
+                    },
+                    5,
+                ),
+                scope,
+            )
+            assert allowed_write.receipt.process_id == process_id
+        finally:
+            await manager.close_session(process_session_id)
 
     asyncio.run(scenario())
 

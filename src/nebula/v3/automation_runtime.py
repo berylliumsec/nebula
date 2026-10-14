@@ -1849,6 +1849,31 @@ class AutomationRuntimeManager:
             engagement_id=session.engagement_id,
         )
 
+    def native_hook_process_context(
+        self,
+        process_id: str,
+        *,
+        engagement_id: str,
+        owner_id: str,
+    ) -> dict[str, str] | None:
+        """Return a same-owner process summary for a native tool hook."""
+
+        try:
+            execution = self.store.get(CommandExecution, self._execution_id(process_id))
+        except NotFoundError:
+            # diagnostic-expected: the normal process_io path reports this missing process.
+            return None
+        if (
+            execution.engagement_id != engagement_id
+            or execution.metadata.get("owner_id") != owner_id
+        ):
+            return None
+        return {
+            "command": execution.command,
+            "cwd": execution.cwd,
+            "status": execution.status.value,
+        }
+
     async def close_session(self, session_id: str) -> AutomationSession:
         managed = self._sessions.get(session_id)
         if managed is None:

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "shared-repo-search-routing",
+  "description": "Small test fixture for inherited tool.before routing and payload context.",
+  "events": ["tool.before"],
+  "command": ["run.py"],
+  "timeout_seconds": 5,
+  "side_effects": "none",
+  "failure_policy": "block",
+  "inherit_to_descendants": true
+}
