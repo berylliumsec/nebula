@@ -2468,6 +2468,7 @@ export interface HarnessModelOptions {
 }
 
 export interface HarnessCapabilities {
+  mcp?: boolean;
   activityReplay: boolean;
   reasoningSummaries: boolean;
   plans: boolean;

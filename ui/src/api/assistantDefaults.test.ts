@@ -12,6 +12,9 @@ const harness = {
 } as HarnessProfile;
 
 describe("preferredAssistantRuntime", () => {
+  it("starts new eligible conversations with messaging enabled", () => {
+    expect(emptyAssistantDefaults().allowAgentMessaging).toBe(true);
+  });
   it("restores the selected provider and model ahead of runtime discovery", () => {
     const defaults = { ...emptyAssistantDefaults(), backend: "provider" as const, providerId: provider.id, model: "chosen" };
     expect(preferredAssistantRuntime(defaults, [provider], [harness]))

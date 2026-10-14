@@ -19,7 +19,7 @@ export function emptyAssistantDefaults(): AssistantDefaults {
     subagentModel: null,
     maxActiveSubagents: null,
     subagentReasoningEffort: null,
-    allowAgentMessaging: false,
+    allowAgentMessaging: true,
   };
 }
 
