@@ -2248,32 +2248,34 @@ test("assistant upgrade linked reply opens a durable file and scoped website in 
     const reply = page.locator(".chat-message.assistant .assistant-markdown");
     await expect(reply.getByRole("link", { name: "Open file" })).toBeVisible();
     await reply.getByRole("link", { name: "Open file" }).click();
-    await expect(page).toHaveURL(/view=chat.*side=code/);
-    await expect(page.getByRole("region", { name: "Code beside chat" })).toBeVisible();
-    await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
-    await expect(page.locator(".code-editor-panel")).toContainText("second line");
+    const code = page.getByRole("region", { name: "Code 1 beside chat" });
+    await expect(code).toBeVisible();
+    await expect(code.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+    await expect(code.locator(".code-editor-panel")).toContainText("second line");
     await page.reload();
-    await expect(page.locator(".code-editor-panel")).toContainText("second line");
+    await expect(code.locator(".code-editor-panel")).toContainText("second line");
     await reply.getByRole("link", { name: "Open site" }).click();
-    await expect(page).toHaveURL(/view=chat.*side=browser/);
-    await expect(page.getByRole("region", { name: "Browser beside chat" })).toBeVisible();
-    await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl, { timeout: 30_000 });
+    const browser = page.getByRole("region", { name: "Browser 1 beside chat" });
+    await expect(browser).toBeVisible();
+    await expect(browser.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl, { timeout: 30_000 });
     await expect.poll(() => targetHits.filter(hit => hit === "GET /start").length).toBe(1);
     await page.reload();
-    await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl, { timeout: 30_000 });
+    await expect(browser.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl, { timeout: 30_000 });
     expect(targetHits.filter(hit => hit === "GET /start")).toHaveLength(1);
     const refuse = await api.patch(`scope-policies/${scopePolicyId}`, {data: {changes: {allowed_cidrs: ["192.0.2.0/24"]}}});
     expect(refuse.ok(), await refuse.text()).toBe(true);
     const siteLink = reply.getByRole("link", { name: "Open site" });
     await siteLink.focus();
     await siteLink.press("Enter");
+    const retryBrowser = page.getByRole("region", { name: "Browser 2 beside chat" });
+    await expect(retryBrowser).toBeVisible();
     await expect(page.getByRole("alert")).toContainText("scope");
     expect(targetHits.filter(hit => hit === "GET /start")).toHaveLength(1);
     const restore = await api.patch(`scope-policies/${scopePolicyId}`, {data: {changes: {allowed_cidrs: ["127.0.0.1/32"]}}});
     expect(restore.ok(), await restore.text()).toBe(true);
     await page.getByRole("button", {name: "Retry link"}).click();
     await expect.poll(() => targetHits.filter(hit => hit === "GET /start").length).toBe(2);
-    await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl);
+    await expect(retryBrowser.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl);
     await testInfo.attach("assistant-links-lan", { body: await page.screenshot(), contentType: "image/png" });
   }, [
     {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
@@ -4701,6 +4703,96 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     expect((await api.get(`chat-sessions/${sideId}`)).status()).toBe(404);
     await expect(page.locator(`.session-select[data-session-id="${sideId}"]`)).toHaveCount(0);
     await testInfo.attach("side-chat-real-core", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), parentId: parent.session_id, sideId}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
+});
+
+test("assistant upgrade multiple side chats and linked code survive production LAN reload", async ({page}, testInfo) => {
+  test.setTimeout(150_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({responseContent: "See [review.md](/workspace/notes/review.md#L2).", streamDelayMs: 20});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0].id;
+    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId).digest("hex"));
+    await mkdir(path.join(workspaceRoot, "notes"), {recursive: true});
+    await writeFile(path.join(workspaceRoot, "notes/review.md"), "first line\nsecond line\n");
+    const providerResponse = await api.post("providers", {data: {name: "Multiple side chat fixture", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const completionResponse = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+      messages: [{role: "user", content: "Review this file"}], include_knowledge: false, stream: false}});
+    expect(completionResponse.ok(), await completionResponse.text()).toBe(true);
+    const parent = await completionResponse.json() as {session_id: string};
+    const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const pairing = await (await pairingApi.post("auth/pairings", {data: {name: "Multiple side chat browser"}})).json() as {secret: string; confirmation_code: string};
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Multiple side chat browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    if (testInfo.project.name === "assistant-real-desktop") await page.setViewportSize({width: 1920, height: 900});
+    await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "Conversation actions"}).click();
+      await page.getByRole("menuitem", {name: /Open side chat/}).click();
+    } else {
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Side chats/}).click();
+    }
+    const pane = page.getByRole("region", {name: "Side chat", exact: true});
+    await expect(pane.getByRole("tab", {name: "Side 1"})).toBeVisible();
+    const firstId = new URL(page.url()).searchParams.get("sideChat");
+    expect(firstId).toBeTruthy();
+    await pane.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Independent review");
+    await pane.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(pane.getByRole("link", {name: "review.md"})).toBeVisible({timeout: 30_000});
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await pane.getByRole("button", {name: "Back to main chat"}).click();
+      await page.getByRole("button", {name: "Conversation actions"}).click();
+      await page.getByRole("menuitem", {name: /New side chat/}).click();
+    } else {
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /New side chat/}).click();
+    }
+    await expect(pane.getByRole("tab", {name: "Side 2"})).toHaveAttribute("aria-selected", "true");
+    const secondId = new URL(page.url()).searchParams.get("sideChat");
+    expect(secondId).toBeTruthy();
+    expect(secondId).not.toBe(firstId);
+    const listed = await (await api.get(`chat/sessions/${parent.session_id}/side-chats`)).json() as Array<{id: string}>;
+    expect(listed.map(item => item.id).sort()).toEqual([firstId, secondId].sort());
+    await pane.getByRole("tab", {name: "Side 1"}).click();
+    await expect(pane.getByRole("link", {name: "review.md"})).toBeVisible();
+    await pane.getByRole("link", {name: "review.md"}).click();
+    const code = page.getByRole("region", {name: "Code 1 beside chat"});
+    await expect(code).toBeVisible();
+    await expect(pane).toBeHidden();
+    await expect(code.getByRole("tab", {name: "Code 1"})).toHaveAttribute("aria-selected", "true");
+    await expect(code.getByRole("textbox", {name: "File path"})).toHaveValue("notes/review.md");
+    await expect(code.locator(".code-editor-panel")).toContainText("second line");
+    await expect(page.locator(".session-workspace.side-tool-active")).toBeVisible();
+    await code.getByRole("tab", {name: "Side 2"}).click();
+    await expect(pane.getByRole("tab", {name: "Side 2"})).toHaveAttribute("aria-selected", "true");
+    await pane.getByRole("tab", {name: "Code 1"}).click();
+    await expect(code.locator(".code-editor-panel")).toContainText("second line");
+    await code.getByRole("tab", {name: "Side 1"}).click();
+    await pane.getByRole("tab", {name: "Code 1"}).click();
+    await page.reload();
+    await expect(code.locator(".code-editor-panel")).toContainText("second line", {timeout: 30_000});
+    await code.getByRole("button", {name: "Close Code 1 tab"}).click();
+    await expect(pane.getByRole("tab", {name: "Side 1"})).toHaveAttribute("aria-selected", "true");
+    await pane.getByRole("button", {name: "Close side chat"}).click();
+    await expect(pane.getByRole("tab", {name: "Side 2"})).toHaveAttribute("aria-selected", "true");
+    expect((await api.get(`chat-sessions/${firstId}`)).status()).toBe(404);
+    expect((await api.get(`chat-sessions/${secondId}`)).ok()).toBe(true);
+    await pane.getByRole("button", {name: "Close side chat"}).click();
+    await expect(pane).toHaveCount(0);
+    await testInfo.attach("multiple-side-chats-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, parentId: parent.session_id, firstId, secondId}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core fixture", dispose: () => stopRealCore(core)},

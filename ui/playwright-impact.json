@@ -639,6 +639,22 @@
       {"area":"side-chat","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat inherits Core history and replies independently after reload","runtime":"real-core","shard":"1/1"},
       {"area":"side-chat","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat inherits Core history and replies independently after reload","runtime":"real-core","shard":"1/1"}
     ],
+    "side-chat-panels": [
+      {"area":"side-chat-panels","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade multiple side chats switch and a linked file opens code in the side pane","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade multiple side chats and linked code survive production LAN reload","runtime":"real-core","shard":"1/1"},
+      {"area":"side-chat-panels","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade multiple side chats and linked code survive production LAN reload","runtime":"real-core","shard":"1/1"},
+      {"area":"side-chat-panels","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade multiple side chats and linked code survive production LAN reload","runtime":"real-core","shard":"1/1"},
+      {"area":"side-chat-panels","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Chat tools menu creates a tab for every companion","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Chat tools menu creates a tab for every companion","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat-panels","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Chat tools menu creates a tab for every companion","runtime":"mock","shard":"1/1"}
+    ],
     "chat-guidance-toolbar": [
       {"area":"chat-guidance-toolbar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"},
       {"area":"chat-guidance-toolbar","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"},
