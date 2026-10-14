@@ -1,19 +1,19 @@
 {
-  "change_digest": "5d5585c166f775c054f0dc97ca28e53c7f40bbe31a05c36b0cc08b3c05604e5c",
-  "reviewed_by": "Codex storage preview refusal review",
-  "reason": "The storage callback now preserves a bounded source refusal and maps preview HTTP 409 to an actionable Core conflict. Select the storage integration Python contract tests and the existing production LAN storage journey, extended to exercise refusal, retry, approval, receipt, and refresh in desktop and mobile profiles.",
-  "exclusions": "No component or native implementation changed. The selected real-Core Playwright journey covers the existing storage action UI and API-to-UI error presentation. Unrelated backend and browser journeys and full suites are excluded.",
+  "change_digest": "f7601976c5c12920d6cb08426c45215c3f661d1ae56485ebbe17095cafb826e3",
+  "reviewed_by": "Codex storage chat layout review",
+  "reason": "The chat now keeps routine storage actions in a compact disclosure, bounds expanded details so the transcript and composer remain usable, and presents action failures concisely. Select the two focused component cases and the existing production LAN storage journey, extended to exercise collapse, long titles, error, retry, approval, receipt, accessibility, and restart recovery in desktop and mobile profiles.",
+  "exclusions": "No Core, native, or Python behavior changed. The selected real-Core browser journey covers the UI-to-Core action integration. Unrelated backend and browser journeys and full suites are excluded.",
   "expected_tests": {
-    "python": 10,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 2,
     "native": 0,
     "playwright": 8
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_storage_integrations.py"],
-  "frontend": [],
+  "python": [],
+  "frontend": ["ui/src/components/StorageActions.test.tsx"],
   "native": [],
   "playwright": [
     "entry:storage-integrations/assistant-real-desktop",
