@@ -310,6 +310,18 @@ def test_cloud_provider_messaging_needs_consent_and_explicit_off_recovers(tmp_pa
         )
         assert plain.tools_enabled is False
         await service.complete(plain)
+        consented = await service.prepare_async(
+            request.model_copy(
+                update={
+                    "allow_agent_messaging": False,
+                    "allow_cloud_tool_results": True,
+                }
+            )
+        )
+        assert consented.tool_components is not None
+        assert "work_agents" in consented.tool_components.specs
+        assert "list_agents" not in consented.tool_components.specs
+        await service.complete(consented)
         await service.shutdown()
 
     asyncio.run(scenario())
