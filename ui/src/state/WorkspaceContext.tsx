@@ -218,7 +218,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   }, [health, resourceStatus, setupStatus, workspaceState]);
 
   const reconnect = useCallback(() => {
-    connectionLost.current = false;
+    // Keep outage polling armed if this attempt fails while Core is still down.
     setWorkspaceState("starting");
     setCoreError(undefined);
     setResourceStatus((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, value.state === "failed" ? { state: "loading" } : value])) as Record<WorkspaceResource, ResourceStatus>);
@@ -365,6 +365,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         // each collection's own loading, failure, and retry state visible.
         setEngagement(nextEngagement);
         if (!switching) bootstrappedAttempt.current = attempt;
+        connectionLost.current = false;
         setWorkspaceState(nextHealth?.status === "degraded" || loadErrors.length > 0 ? "degraded" : "ready");
         setCoreError(loadErrors.length
           ? undefined

@@ -2417,6 +2417,16 @@ export interface ChatSessionActivity {
   turnId?: Identifier;
 }
 
+export interface ChatAttentionItem {
+  kind: "approval" | "question";
+  actionId: Identifier;
+  engagementId: Identifier;
+  engagementName: string;
+  sessionId: Identifier;
+  sessionTitle: string;
+  requestedAt: string;
+}
+
 export interface HarnessProfile {
   id: Identifier;
   name: string;

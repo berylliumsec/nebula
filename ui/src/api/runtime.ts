@@ -32,7 +32,7 @@ export function browserAuthorizationRecovery(hostname: string): "pair" | "relaun
     : "pair";
 }
 
-export async function browserSessionIsAuthorized(normalizedBase: string): Promise<boolean> {
+export async function browserSessionAuthorizationStatus(normalizedBase: string): Promise<"authorized" | "unauthorized" | "unreachable"> {
   const healthUrl = normalizedBase.endsWith("/api/v1")
     ? `${normalizedBase}/health`
     : `${normalizedBase}/api/v1/health`;
@@ -41,10 +41,11 @@ export async function browserSessionIsAuthorized(normalizedBase: string): Promis
       credentials: "include",
       headers: { Accept: "application/json" },
     });
-    return response.ok;
+    if (response.ok) return "authorized";
+    return response.status === 401 || response.status === 403 ? "unauthorized" : "unreachable";
   } catch {
-    // diagnostic-expected: authorization probing is best-effort and the caller presents recovery.
-    return false;
+    // A stopped Core cannot answer an authorization question. Keep pairing intact.
+    return "unreachable";
   }
 }
 
@@ -152,13 +153,16 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
   const normalizedBase = (baseUrl?.trim() || globalThis.location?.origin || "http://127.0.0.1")
     .replace(/\/+$/, "");
   if (browserSessionRequiresRelaunch(token, import.meta.env.DEV)) {
-    if (!await browserSessionIsAuthorized(normalizedBase)) {
+    const authorization = await browserSessionAuthorizationStatus(normalizedBase);
+    if (authorization !== "authorized") {
       return {
         baseUrl,
         mode: "browser",
         state: "unavailable",
-        reason: "browser_session_token_missing",
-        message: "This browser session no longer has access to Core.",
+        reason: authorization === "unauthorized" ? "browser_session_token_missing" : undefined,
+        message: authorization === "unauthorized"
+          ? "This browser session no longer has access to Core."
+          : "Nebula Core could not be reached. Check the server connection and retry.",
       };
     }
   }

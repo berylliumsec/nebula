@@ -31,6 +31,7 @@ function Probe() {
     <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}
   <button onClick={() => value.selectEngagement("project-b")}>Select project B</button>
   <button onClick={() => value.selectEngagement("project")}>Select project A</button>
+  <button onClick={value.reconnect}>Retry Core</button>
   <button onClick={() => void value.resolveApproval(value.approvals[0]?.id ?? "", { decision: "approve" }).catch((error: Error) => fixture.errors.push(error.message))}>Approve first</button></>;
 }
 const state = () => JSON.parse(screen.getByTestId("state").textContent!);
@@ -162,6 +163,19 @@ describe("workspace resource recovery", () => {
     expect(state().run.id).toBe("run-1");
     expect(new URLSearchParams(location.search).get("mission")).toBe("run-1");
     expect(fixture.methods.health).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps health polling armed after an offline retry fails", async () => {
+    await mount();
+    act(() => window.dispatchEvent(new Event("offline")));
+    await waitFor(() => expect(state().workspace).toBe("failed"));
+    fixture.methods.health.mockRejectedValueOnce(new Error("Core remains offline"));
+    fireEvent.click(screen.getByText("Retry Core"));
+    await waitFor(() => expect(state().workspace).toBe("failed"));
+    act(() => window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+    expect(state().engagement).toBe("project");
+    expect(fixture.methods.health).toHaveBeenCalledTimes(4);
   });
 
   it("retries the global Library even without a selected project", async () => {
