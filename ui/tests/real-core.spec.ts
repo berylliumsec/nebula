@@ -6505,6 +6505,70 @@ reliabilityTest("assistant upgrade new chat reuses saved Assistant settings afte
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
+reliabilityTest("assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "agent_messaging");
+  await withOwnedCleanup(async () => {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const projects = await (await core.api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Peer messaging acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Peer messaging acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    const newHarnessChat = async () => {
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      await clickAssistantSettings(page);
+      const settings = page.getByRole("dialog", {name: "Assistant settings"});
+      await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("harness");
+      await settings.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption("inert-fixture");
+      await expect(settings.getByRole("checkbox", {name: /Agent messaging/})).toBeChecked();
+      await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    };
+    await newHarnessChat();
+    await composer.fill("Prepare coordinator");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Coordinator ready", {timeout: 20_000});
+    const coordinatorId = new URL(page.url()).searchParams.get("session");
+    expect(coordinatorId).toBeTruthy();
+    await newHarnessChat();
+    await composer.fill("Send a note to peer");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Peer note sent", {timeout: 20_000});
+    const peerId = new URL(page.url()).searchParams.get("session");
+    expect(peerId).toBeTruthy();
+    expect(peerId).not.toBe(coordinatorId);
+    await page.goto(`${core.origin}/?view=chat&session=${coordinatorId}`);
+    await expect(page.locator(".chat-message.agent-message")).toContainText("Review the retry boundary.", {timeout: 20_000});
+    await page.reload();
+    await expect(page.locator(".chat-message.agent-message")).toContainText("Review the retry boundary.");
+    await composer.fill("Reply to peer");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Peer reply sent", {timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=${peerId}`);
+    await expect(page.locator(".chat-message.agent-message")).toContainText("The retry boundary is idempotent.", {timeout: 20_000});
+    await clickAssistantSettings(page);
+    await page.getByRole("dialog", {name: "Assistant settings"}).getByRole("checkbox", {name: /Agent messaging/}).uncheck();
+    await expect.poll(async () => (await (await core.api.get(`chat-sessions/${peerId}`)).json()).metadata.allow_agent_messaging).toBe(false);
+    await page.reload();
+    await expect(page.locator(".chat-message.agent-message")).toContainText("The retry boundary is idempotent.", {timeout: 20_000});
+    await clickAssistantSettings(page);
+    await expect(page.getByRole("dialog", {name: "Assistant settings"}).getByRole("checkbox", {name: /Agent messaging/})).not.toBeChecked();
+    expect((await (await core.api.get(`chat-sessions/${coordinatorId}`)).json()).metadata.allow_agent_messaging).toBe(true);
+    expect((await (await core.api.get(`engagements/${projectId}/assistant-defaults`)).json()).allow_agent_messaging).toBe(true);
+    await core.disconnect();
+    await core.restart();
+    await page.reload();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await expect(page.locator(".chat-message.agent-message")).toContainText("The retry boundary is idempotent.");
+    await testInfo.attach("peer-messaging-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), projectId, coordinatorId, peerId, reconnect: true}), contentType: "application/json"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
 reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat refresh", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "daybreak");
