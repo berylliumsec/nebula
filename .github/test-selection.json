@@ -1,13 +1,13 @@
 {
-  "change_digest": "31f74f0c072babaeecfae96134ec752d90cecff68d93f4b635a277b8efdc16a3",
-  "reviewed_by": "Codex focused iPhone assistant coverage review, 2026-10-14",
-  "reason": "The changed journey is the paired installed iPhone shell opening Core-backed chats, showing and resolving chat-origin attention, and surviving reload and reconnect. The selected API test checks authentication, cross-project pending action filtering, ordering, and resolution. Product-knowledge checks cover the changed guidance source digest and Core index sync. Component tests check Core-authoritative badge refresh, failed retry polling, and separation of unreachable Core from revoked pairing. One exact shell journey is run across permanent desktop at 1440/1024, phone Chromium/WebKit widths, and landscape profiles; one existing mobile WebKit Workbench journey checks ordinary mobile browser access remains intact. The paired production-LAN real-Core case also checks an unpaired page opening a same-document pairing link, streaming, approval, persistence, and outage recovery with an inert harness. Landscape checks guard the focused composer and Send button after keyboard zoom. The native connection choice now persists when Connect is tapped, while successful-load history and last-connected time remain separate; the signed physical iPhone check exercises immediate relaunch over Wi-Fi.",
-  "exclusions": "Rust is unchanged, so the native Rust selection is empty. Unrelated Python, frontend, browser, and full suites are excluded. Separate signed iPhone 11 XCUITests over localNetwork passed immediate live-server selection/relaunch and one-time live-Core pairing on 2026-10-14; the Swift device tests are outside the Rust selection schema. Local Python collection uses the available 3.11 environment; CI selects supported 3.12.",
+  "change_digest": "2cd0ff83c94a11a0be25cd8880ccc008ba2d49a44333f3a2256a8ee8dbdf77dd",
+  "reviewed_by": "Codex focused side-panel coverage review",
+  "reason": "The Chat tools menu now creates a new selectable side tab for each tool, and both main and side chat file and website links create Code and Browser tabs. Core owns the side chats and workspace files; the URL owns tool tabs, active selection, and linked targets. Select existing side-chat navigation, resize, failure and close coverage, the new multi-tab, file-link and menu journeys, and existing assistant-link journeys across desktop and mobile Chromium/WebKit. Production LAN real-Core cases verify side-chat survival, linked workspace files, browser scope, and reload. One Core API case proves sibling branches survive selective discard; frontend unit cases cover ownership, ordering, numbering, and URL tab records.",
+  "exclusions": "No unrelated chat, provider, workspace, native, or full-suite tests are selected. Browser journeys use disposable project/Core data and a local model stub; they do not exercise external providers. Physical-device keyboard and Safari checks are unavailable in automation and remain a reported limitation.",
   "expected_tests": {
-    "python": 3,
-    "frontend": 23,
+    "python": 1,
+    "frontend": 9,
     "native": 0,
-    "playwright": 14
+    "playwright": 33
   },
   "python_versions": [
     "3.12"
@@ -15,30 +15,43 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_api.py::test_chat_attention_lists_pending_operator_actions_across_projects_only",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_temporary_chat.py::test_multiple_side_chats_for_one_parent_survive_selective_close"
   ],
   "frontend": [
-    "ui/src/components/MobileAttentionInbox.test.tsx",
-    "ui/src/api/runtime.test.ts",
-    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+    "ui/src/pages/sideChatSelection.test.ts",
+    "ui/src/pages/sidePanelTabs.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:ios-assistant-only/desktop",
-    "entry:ios-assistant-only/compact",
-    "entry:ios-assistant-only/mobile-chromium-small",
-    "entry:ios-assistant-only/mobile-chromium",
-    "entry:ios-assistant-only/mobile-chromium-wide",
-    "entry:ios-assistant-only/mobile-webkit-small",
-    "entry:ios-assistant-only/mobile-webkit",
-    "entry:ios-assistant-only/mobile-webkit-wide",
-    "entry:ios-assistant-only/browser-chromium-landscape",
-    "entry:ios-assistant-only/browser-webkit-landscape",
-    "entry:ios-mobile-web-regression/mobile-webkit",
-    "entry:ios-assistant-only/assistant-real-desktop",
-    "entry:ios-assistant-only/assistant-real-chromium-390",
-    "entry:ios-assistant-only/assistant-real-webkit-390"
+    "entry:side-chat/desktop",
+    "entry:side-chat/compact",
+    "entry:side-chat/mobile-chromium-small",
+    "entry:side-chat/mobile-chromium-ledger-390",
+    "entry:side-chat/mobile-chromium-wide",
+    "entry:side-chat/mobile-webkit-small",
+    "entry:side-chat/mobile-webkit",
+    "entry:side-chat/mobile-webkit-wide",
+    "entry:side-chat/assistant-real-desktop",
+    "entry:side-chat/assistant-real-compact",
+    "entry:side-chat-panels/desktop",
+    "entry:side-chat-panels/compact",
+    "entry:side-chat-panels/mobile-chromium-small",
+    "entry:side-chat-panels/mobile-chromium-ledger-390",
+    "entry:side-chat-panels/mobile-chromium-wide",
+    "entry:side-chat-panels/mobile-webkit-small",
+    "entry:side-chat-panels/mobile-webkit",
+    "entry:side-chat-panels/mobile-webkit-wide",
+    "entry:side-chat-panels/assistant-real-desktop",
+    "entry:side-chat-panels/assistant-real-chromium-390",
+    "entry:side-chat-panels/assistant-real-webkit-390",
+    "entry:assistant-links/desktop",
+    "entry:assistant-links/compact",
+    "entry:assistant-links/mobile-chromium-small",
+    "entry:assistant-links/mobile-chromium-ledger-390",
+    "entry:assistant-links/mobile-chromium-wide",
+    "entry:assistant-links/mobile-webkit-small",
+    "entry:assistant-links/mobile-webkit",
+    "entry:assistant-links/mobile-webkit-wide",
+    "entry:assistant-links/assistant-real-desktop"
   ]
 }
