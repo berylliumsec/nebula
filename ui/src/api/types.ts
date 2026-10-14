@@ -1688,6 +1688,27 @@ export interface ProviderUpdateRequest {
 
 export type ChatRole = "user" | "assistant" | "system";
 
+export interface VoiceWorkRoster {
+  project: { id: string; name: string };
+  chats: { id: string; title: string; backend: string; model: string; state: string; url: string }[];
+  missions: { id: string; name: string; status: string; backend: string; updated_at: string; url: string }[];
+  more_chats: boolean;
+  more_missions: boolean;
+}
+
+export interface VoiceWorkDetail {
+  id: string;
+  title?: string;
+  name?: string;
+  status?: string;
+  model?: string;
+  objective?: string;
+  recent_messages?: { role: string; content: string }[];
+  tasks?: { id: string; title: string; status: string }[];
+  pending_turn?: { id: string; status: string } | null;
+  url: string;
+}
+
 export interface ChatMessage {
   id?: Identifier;
   role: ChatRole;

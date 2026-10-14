@@ -1,0 +1,63 @@
+.screen { --voice-accent: var(--blue); position: fixed; z-index: 220; inset: 0; box-sizing: border-box; display: flex; flex-direction: column; overflow: auto; min-width: 0; min-height: 100dvh; padding: max(16px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left)); color: var(--text); background: radial-gradient(ellipse at 50% 43%, color-mix(in srgb, var(--voice-accent) 9%, transparent), transparent 48%), var(--canvas); }
+.screen button { min-width: 44px; min-height: 44px; color: inherit; cursor: pointer; }
+.screen button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.screen button:disabled { cursor: default; opacity: .55; }
+.audio { display: none; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.identity { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; min-width: 0; }
+.identity strong { font-size: 1.1rem; letter-spacing: -.02em; white-space: nowrap; }
+.identity strong span { color: var(--muted); font-weight: 400; }
+.identity small { display: block; min-width: 0; max-width: 32vw; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.exit, .controls button, .workHeader button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-overlay); }
+.exit { padding: 0 14px; flex-shrink: 0; }
+.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-height: 0; margin: auto; align-items: center; }
+.center { grid-area: 1 / 1; justify-self: center; display: flex; flex-direction: column; align-items: center; justify-content: center; width: min(680px, 100%); min-width: 0; min-height: 500px; padding: 24px 0; text-align: center; }
+.orb { position: relative; width: clamp(150px, 25vw, 260px); aspect-ratio: 1 / 1.18; border-radius: 49% 51% 46% 54% / 43% 45% 55% 57%; background: radial-gradient(ellipse at 70% 28%, color-mix(in srgb, var(--voice-accent) 54%, white), transparent 52%), radial-gradient(ellipse at 23% 72%, var(--voice-accent), transparent 60%), radial-gradient(ellipse at 55% 55%, color-mix(in srgb, var(--voice-accent) 20%, var(--surface-overlay)), var(--surface-overlay) 76%); box-shadow: inset -12px -20px 40px color-mix(in srgb, var(--voice-accent) 15%, transparent), inset 12px 12px 26px color-mix(in srgb, white 12%, transparent), 0 0 20px color-mix(in srgb, var(--voice-accent) 30%, transparent), 0 0 100px color-mix(in srgb, var(--voice-accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--voice-accent) 54%, white); animation: breathe 4s ease-in-out infinite; }
+.orb > div { position: absolute; inset: 15%; border-radius: 44% 56% 62% 38% / 49% 57% 43% 51%; border: 1px solid color-mix(in srgb, var(--voice-accent) 38%, transparent); transform: rotate(-18deg); }
+.speaking { animation-duration: 1.4s; }
+.phase { margin: 28px 0 10px; color: var(--muted); font-size: 1.1rem; }
+.controls { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; min-height: 44px; }
+.controls button { padding: 0 14px; }
+.error { max-width: 52ch; margin: 14px 0; color: var(--red); overflow-wrap: anywhere; }
+.captions { display: grid; width: min(600px, 100%); gap: 8px; margin-top: 22px; text-align: left; }
+.captions p { min-width: 0; min-height: 3em; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-overlay); overflow-wrap: anywhere; }
+.captions small { display: block; margin-bottom: 4px; color: var(--muted); }
+.delegated { max-width: 100%; color: var(--muted); overflow-wrap: anywhere; }
+.work { grid-area: 1 / 1; justify-self: end; align-self: center; width: clamp(280px, 24vw, 360px); max-height: min(680px, 76dvh); margin-right: clamp(0px, 2vw, 40px); overflow: auto; padding: 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-overlay); }
+.workHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px 8px; }
+.workHeader h2 { margin: 0; font-size: 1rem; }
+.workHeader button { min-width: 44px; }
+.workCard { display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 7px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--surface-overlay) 85%, var(--voice-accent)); text-align: left; }
+.workCard > svg:first-child { flex: 0 0 auto; color: var(--voice-accent); }
+.workCard > span { flex: 1; min-width: 0; }
+.workCard strong, .workCard small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workCard strong { font-size: .9rem; }
+.workCard small { margin-top: 3px; color: var(--text); font-size: .78rem; text-transform: capitalize; }
+.workCard[aria-expanded="true"] { border-color: var(--voice-accent); }
+.empty { margin: 12px 2px; color: var(--muted); }
+.detail { margin-top: 10px; padding: 12px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.detail > strong, .detail > small { display: block; }
+.detail > small { color: var(--muted); }
+.detail p { max-height: 110px; overflow: auto; margin: 10px 0 0; font-size: .85rem; }
+.footer { display: flex; justify-content: center; align-items: center; gap: 9px; padding-top: 12px; color: var(--muted); font-size: .8rem; text-align: center; }
+@keyframes breathe { 50% { transform: scale(1.035) rotate(2deg); } }
+@media (prefers-reduced-motion: reduce) { .orb { animation: none; } }
+@media (max-width: 1500px) {
+  .layout { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; margin: 0; }
+  .center { min-height: 0; }
+  .work { width: min(600px, 100%); max-height: 320px; margin-right: 0; }
+}
+@media (max-width: 760px) {
+  .screen { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  .exit { width: 44px; padding: 0; }
+  .exit span { display: none; }
+  .layout { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 0; }
+  .center { min-height: 0; padding: 12px 0 8px; }
+  .orb { width: clamp(118px, 36vw, 180px); }
+  .phase { margin-top: 15px; }
+  .captions { margin-top: 14px; }
+  .work { max-height: none; overflow: visible; }
+  .identity small { max-width: 38vw; }
+  .footer { padding: 12px 0; }
+}
+@media (max-width: 360px) { .identity { gap: 2px 8px; } .identity strong { font-size: 1rem; } .identity small { max-width: 55vw; } }

@@ -21,6 +21,8 @@ import type {
   ChatSessionAssistantSettingsRequest,
   ChatStreamEvent,
   ChatTurn,
+  VoiceWorkRoster,
+  VoiceWorkDetail,
   PendingChatTurnStatus,
   ContainerTerminalCapacity,
   ContainerTerminalCapabilities,
@@ -9347,6 +9349,21 @@ export class ApiClient {
       `chat/control-assistant/session?engagement_id=${encodeURIComponent(engagementId)}`,
       { signal },
     ).then((value) => value ? mapChatSession(value) : undefined);
+  }
+
+  startVoiceSession(engagementId: string, sdp: string, signal?: AbortSignal): Promise<{ session_id: string; sdp: string }> {
+    return this.request("voice/session", {
+      method: "POST", signal,
+      body: JSON.stringify({ engagement_id: engagementId, sdp }),
+    });
+  }
+
+  getVoiceWorkRoster(engagementId: string, signal?: AbortSignal): Promise<VoiceWorkRoster> {
+    return this.request(`voice/work?engagement_id=${encodeURIComponent(engagementId)}`, { signal });
+  }
+
+  getVoiceWorkDetail(engagementId: string, kind: "chats" | "missions", id: string, signal?: AbortSignal): Promise<VoiceWorkDetail> {
+    return this.request(`voice/work/${kind}/${encodeURIComponent(id)}?engagement_id=${encodeURIComponent(engagementId)}`, { signal });
   }
 
   getChatSession(sessionId: string, signal?: AbortSignal): Promise<ChatSessionSummary> {

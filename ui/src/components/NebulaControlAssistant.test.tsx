@@ -18,6 +18,26 @@ describe("NebulaControlAssistant", () => {
     vi.mocked(useWorkspace).mockReturnValue({ api: undefined, engagement: undefined, providers: [], harnesses: [] } as unknown as ReturnType<typeof useWorkspace>);
   });
 
+  it("opens the full-screen voice mode from its assistant button and keeps an HTTPS recovery action visible", async () => {
+    const user = userEvent.setup();
+    const secure = window.isSecureContext;
+    Object.defineProperty(window, "isSecureContext", { configurable: true, value: false });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), getVoiceWorkRoster: vi.fn().mockResolvedValue({ project: { id: "project", name: "Project" }, chats: [], missions: [], more_chats: false, more_missions: false }) },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Nebula assistant" }));
+    await user.click(screen.getByRole("button", { name: "Start Nebula Voice" }));
+    expect(await screen.findByRole("dialog", { name: "Nebula Voice" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("trusted HTTPS address");
+    await user.click(screen.getByRole("button", { name: "Exit voice mode" }));
+    expect(screen.queryByRole("dialog", { name: "Nebula Voice" })).not.toBeInTheDocument();
+    Object.defineProperty(window, "isSecureContext", { configurable: true, value: secure });
+  });
+
   it("offers project work prompts and sends a status request through the control conversation", async () => {
     const user = userEvent.setup();
     const streamChat = vi.fn().mockResolvedValue({
