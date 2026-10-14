@@ -618,7 +618,7 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
             ),
             store.get(ScopePolicy, f"scope:{engagement.id}"),
         )
-        assert allowed.output["action"] == "write"
+        assert allowed.receipt.process_id == command.receipt.process_id
         assert sessions[0].processes[0].writes == [b"rg needle AGENTS.md\n"]
 
     asyncio.run(scenario())
@@ -787,7 +787,7 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
                 ),
                 scope,
             )
-            assert allowed_write.output["action"] == "write"
+            assert allowed_write.receipt.process_id == process_id
         finally:
             await manager.close_session(process_session_id)
 
