@@ -18,6 +18,7 @@ from .chat_queue import ChatQueueService, QueueWrite
 from .domain import (
     AgentRun,
     ChatBackend,
+    ChatRole,
     ChatSession,
     Engagement,
     HarnessProfile,
@@ -291,19 +292,21 @@ class ControlAssistantWork:
                 )
             profile_id = options[0]["id"]
         if backend == "provider":
-            profile = self.store.get(ProviderProfile, profile_id)
-            choices = profile.model_allowlist
-            default = profile.metadata.get("default_model")
+            provider_profile = self.store.get(ProviderProfile, profile_id)
+            choices = provider_profile.model_allowlist
+            default = provider_profile.metadata.get("default_model")
+            enabled = provider_profile.enabled
         else:
-            profile = self.store.get(HarnessProfile, profile_id)
-            choices = profile.capabilities.models
-            default = profile.default_model
+            harness_profile = self.store.get(HarnessProfile, profile_id)
+            choices = harness_profile.capabilities.models
+            default = harness_profile.default_model
+            enabled = harness_profile.enabled
         model = (
             requested_model
             or (default if default in choices else None)
             or (choices[0] if choices else None)
         )
-        if not profile.enabled or not isinstance(model, str) or model not in choices:
+        if not enabled or not isinstance(model, str) or model not in choices:
             raise ValueError(
                 "choose an enabled runtime and one of its listed models from nebula.work.catalog"
             )
@@ -324,7 +327,7 @@ class ControlAssistantWork:
                 engagement_id=project_id,
                 provider_id=profile_id,
                 model=model,
-                messages=[ChatRequestMessage(role="user", content=prompt)],
+                messages=[ChatRequestMessage(role=ChatRole.USER, content=prompt)],
                 tools_enabled=tools_enabled,
                 stream=True,
             )
@@ -397,7 +400,7 @@ class ControlAssistantWork:
             provider_id=session.provider_profile_id,
             harness_profile_id=session.harness_profile_id,
             model=session.model,
-            messages=[ChatRequestMessage(role="user", content=text)],
+            messages=[ChatRequestMessage(role=ChatRole.USER, content=text)],
             tools_enabled=bool(session.metadata.get("tools_enabled")),
             stream=True,
         )
@@ -476,7 +479,7 @@ class ControlAssistantWork:
             type(max_tool_calls) is not int or not 0 <= max_tool_calls <= 100
         ):
             raise ValueError("max_tool_calls must be from 0 to 100")
-        body = {
+        body: dict[str, Any] = {
             "engagement_id": project_id,
             "name": name,
             "objective": objective,
