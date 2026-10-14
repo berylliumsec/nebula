@@ -18,8 +18,15 @@ from nebula.v3.domain import (
     WorkUpdate,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
-from nebula.v3.tools import ToolInvocation
-from nebula.v3.work import WorkCheckIn, WorkCreate, WorkService, work_components
+from nebula.v3.tools import ToolInvocation, ToolNotPermitted
+from nebula.v3.work import (
+    WorkCheckIn,
+    WorkCreate,
+    WorkPatch,
+    WorkService,
+    work_components,
+    work_roster_components,
+)
 from tests.v3.test_chat import FakeProvider
 
 
@@ -366,6 +373,183 @@ def test_new_project_advertises_work_on_provider_turn_without_timed_prompt(
     assert {"work_list", "work_create", "work_check_in"} <= set(
         prepared.tool_components.specs
     )
+    assert "work_agents" in prepared.tool_components.specs
+
+
+def test_provider_roster_is_default_even_when_work_and_peer_messages_are_off(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Project", work_enabled=False))
+    profile = store.create(
+        ProviderProfile(
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            capabilities={"tool_calling": True},
+            capability_verifications={
+                "model-a": {"model": "model-a", "status": "verified"}
+            },
+        )
+    )
+    provider = FakeProvider(profile.id, local=True)
+    provider.config.capabilities.tools = True
+    provider.config.capabilities.strict_tools = True
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    chat = ChatService(store, workspace_resolver=lambda _: tmp_path)
+    prepared = chat.prepare(
+        ChatCompletionRequest(
+            engagement_id=project.id,
+            provider_id=profile.id,
+            model="model-a",
+            messages=[{"role": "user", "content": "Who is working on this project?"}],
+            allow_agent_messaging=False,
+            include_knowledge=False,
+        )
+    )
+    assert prepared.tool_components is not None
+    assert "work_agents" in prepared.tool_components.specs
+    assert "work_list" not in prepared.tool_components.specs
+    assert "list_agents" not in prepared.tool_components.specs
+    assert prepared.turn.request_snapshot["work_roster_enabled"] is True
+    assert "work_agents" in prepared.model_request.instructions
+
+
+def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Active project", work_enabled=False))
+    foreign = store.create(Engagement(name="Foreign project"))
+
+    def session(engagement_id, title, **metadata):
+        return store.create(
+            ChatSession(
+                engagement_id=engagement_id,
+                title=title,
+                provider_profile_id="provider-1",
+                model="model-a",
+                metadata=metadata,
+            )
+        )
+
+    worker = session(project.id, "Parser review", allow_agent_messaging=False)
+    waiting = session(project.id, "Release review")
+    child = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Decoder subagent",
+            provider_profile_id="provider-1",
+            model="model-a",
+            parent_session_id=worker.id,
+            metadata={"subagent_id": "decoder-child"},
+        )
+    )
+    hidden = session(project.id, "Side chat", side_chat=True)
+    other = session(foreign.id, "Foreign work")
+
+    def turn(chat, status):
+        return store.create(
+            ChatTurn(
+                engagement_id=chat.engagement_id,
+                session_id=chat.id,
+                provider_profile_id="provider-1",
+                model="model-a",
+                status=status,
+            )
+        )
+
+    worker_turn = turn(worker, ChatTurnStatus.ROUTING)
+    waiting_turn = turn(waiting, ChatTurnStatus.WAITING_APPROVAL)
+    child_turn = turn(child, ChatTurnStatus.ROUTING)
+    turn(hidden, ChatTurnStatus.ROUTING)
+    turn(other, ChatTurnStatus.ROUTING)
+    store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=other.id,
+            provider_profile_id="provider-1",
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    service = WorkService(store)
+    item = service.create(
+        project.id,
+        WorkCreate(
+            title="Inspect decoder",
+            status="in_progress",
+            assignee_session_id=worker.id,
+        ),
+        actor_id="operator",
+    )
+    service.create(
+        project.id,
+        WorkCreate(title="Old task", status="done", assignee_session_id=waiting.id),
+        actor_id="operator",
+    )
+
+    components = work_roster_components(service, project.id, tmp_path)
+
+    async def roster():
+        result = await components.broker.execute(
+            ToolInvocation(
+                engagement_id=project.id,
+                run_id=worker_turn.id,
+                chat_session_id=worker.id,
+                tool_name="work_agents",
+                arguments={},
+                workspace=tmp_path,
+            ),
+            components.scope,
+        )
+        return result.output["agents"]
+
+    entries = {row["session_id"]: row for row in asyncio.run(roster())}
+    assert set(entries) == {worker.id, waiting.id, child.id}
+    assert entries[worker.id]["state"] == "working"
+    assert entries[worker.id]["work_item"] == {
+        "id": item.id,
+        "title": item.title,
+        "status": "in_progress",
+        "last_update_at": None,
+    }
+    assert entries[waiting.id]["state"] == "waiting"
+    assert entries[waiting.id]["work_item"] is None
+    assert entries[child.id]["state"] == "working"
+    assert entries[child.id]["work_item"] is None
+    with pytest.raises(ToolNotPermitted, match="limited to this project"):
+        asyncio.run(
+            components.broker.execute(
+                ToolInvocation(
+                    engagement_id=foreign.id,
+                    run_id=worker_turn.id,
+                    chat_session_id=other.id,
+                    tool_name="work_agents",
+                    arguments={},
+                    workspace=tmp_path,
+                ),
+                components.scope,
+            )
+        )
+    client = TestClient(create_app(store, auth_token="test-token"))
+    dashboard = client.get(
+        "/api/v1/work/agents", headers={"Authorization": "Bearer test-token"}
+    )
+    assert dashboard.status_code == 200
+    assert {
+        row["session_id"]: row["state"]
+        for row in dashboard.json()
+        if row["engagement_id"] == project.id
+    } == {session_id: row["state"] for session_id, row in entries.items()}
+
+    service.patch(project.id, item.id, WorkPatch(assignee_session_id=waiting.id))
+    store.update(ChatTurn, worker_turn.id, {"status": ChatTurnStatus.COMPLETE})
+    refreshed = {row["session_id"]: row for row in asyncio.run(roster())}
+    assert set(refreshed) == {waiting.id, child.id}
+    assert refreshed[waiting.id]["work_item"]["id"] == item.id
+    store.update(ChatTurn, waiting_turn.id, {"status": ChatTurnStatus.COMPLETE})
+    store.update(ChatTurn, child_turn.id, {"status": ChatTurnStatus.COMPLETE})
+    assert asyncio.run(roster()) == []
 
 
 def test_work_agents_api_lists_active_sessions_across_projects(tmp_path):

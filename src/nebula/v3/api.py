@@ -311,7 +311,6 @@ from .domain import (
     ContextSnapshotStatus,
     DeviceCapabilitySnapshot,
     Engagement,
-    EngagementStatus,
     WorkItem,
     WorkUpdate,
     Entity,
@@ -7665,43 +7664,7 @@ def create_app(
     )
     def active_work_agents() -> list[WorkAgentActivity]:
         """One response for the overview, independent of project count."""
-
-        active_statuses = [
-            ChatTurnStatus.QUEUED.value,
-            ChatTurnStatus.ROUTING.value,
-            ChatTurnStatus.WAITING_APPROVAL.value,
-            ChatTurnStatus.WAITING_CALLBACK.value,
-            ChatTurnStatus.FINALIZING.value,
-            ChatTurnStatus.INTERRUPTED.value,
-        ]
-        turns = store.find_entities(ChatTurn, {"status": active_statuses}, limit=None)
-        activity: list[WorkAgentActivity] = []
-        for turn in turns:
-            if not chat_service()._turn_is_pending(turn):
-                continue
-            session = store.get(ChatSession, turn.session_id)
-            if session.metadata.get("temporary_assistant") or session.metadata.get(
-                "side_chat"
-            ):
-                continue
-            project = store.get(Engagement, session.engagement_id)
-            if project.status == EngagementStatus.ARCHIVED:
-                continue
-            waiting = not is_subagent_session(session) and (
-                turn.status == ChatTurnStatus.WAITING_APPROVAL
-                or turn.status == ChatTurnStatus.INTERRUPTED
-                and not core_resumes_interrupted_turn(turn)
-            )
-            activity.append(
-                WorkAgentActivity(
-                    session_id=session.id,
-                    engagement_id=session.engagement_id,
-                    title=session.title,
-                    state="waiting" if waiting else "working",
-                    turn_id=turn.id,
-                )
-            )
-        return activity
+        return work_service.active_agents()
 
     @app.get(
         f"{API_PREFIX}/work/events",
