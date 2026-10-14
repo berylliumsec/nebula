@@ -36,6 +36,7 @@
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
     {"name": "headless-lan", "patterns": ["ui/src/components/SecurityDashboard*", "ui/src/electron-browser.css", "src/nebula/v3/agent_security_tools.py"], "areas": ["headless-lan"]},
     {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
+    {"name": "ios-assistant-only", "patterns": ["ui/src/App.tsx", "ui/src/components/AppShell.tsx", "ui/src/components/MobileAttentionInbox.tsx", "ui/src/components/MobileDrawerChrome.tsx", "ui/src/pages/SessionsPage.tsx", "ui/src/mobile-shell.css", "ui/src/api/client.ts", "ui/src/api/runtime.ts", "ui/src/state/WorkspaceContext.tsx", "src/nebula/v3/api.py"], "areas": ["ios-assistant-only"]},
     {"name": "phone-shell", "patterns": ["ui/src/mobile-shell.css", "ui/src/hooks/useCompactLayout*", "ui/src/components/Mobile*", "ui/src/components/CompactSettingsList*", "ui/src/components/terminalKeys*"], "areas": ["phone-shell", "mobile-layout", "phone-route-ownership", "phone-inspector-return"]},
     {"name": "icon-pack", "patterns": ["ui/src/icons/**", "scripts/import_icon_pack.mjs", "ui/package.json", "ui/package-lock.json", "ui/tsconfig.app.json", "ui/vite.config.ts"], "areas": ["icon-pack"]},
     {"name": "settings-catalog", "patterns": ["ui/src/settingsCatalog.ts"], "areas": ["settings-search", "critical-workspaces"]},
@@ -62,6 +63,24 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "ios-assistant-only": [
+      {"area":"ios-assistant-only","project":"desktop","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"compact","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects","runtime":"real-core","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects","runtime":"real-core","shard":"1/1"},
+      {"area":"ios-assistant-only","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects","runtime":"real-core","shard":"1/1"}
+    ],
+    "ios-mobile-web-regression": [
+      {"area":"ios-mobile-web-regression","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"mobile Workbench navigation has one authority and no duplicate tab strip","runtime":"mock","shard":"1/1"}
+    ],
     "release-core-smoke": [
       {"area":"release-core-smoke","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"release core smoke pairs, creates a project, and retains one answer","runtime":"real-core","shard":"1/1"}
     ],

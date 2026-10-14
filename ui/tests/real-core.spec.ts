@@ -8627,3 +8627,53 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     await testInfo.attach("harness-goal-lan", {body: JSON.stringify({origin: core.origin, build: "production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), newSessionId, existingSessionId, outcome: "create, continue, native status, failure, resume, refresh, restart"}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
+
+test("iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "single");
+  await withOwnedCleanup(async () => {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
+    expect(Object.keys(build.assets).some(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"))).toBe(true);
+    await testInfo.attach("iphone-assistant-lan-build", {body: JSON.stringify({origin: core.origin, build, fixture: "inert harness; no commands"}), contentType: "application/json"});
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
+    });
+    const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "iPhone assistant acceptance"}})).json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("iPhone assistant acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.locator(".assistant-only-shell")).toBeVisible({timeout: 20_000});
+    await expect(page.getByRole("button", {name: "New chat", exact: true})).toBeVisible();
+    await expect(page.getByRole("navigation", {name: "Mobile operator navigation"})).toHaveCount(0);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    await composer.fill("Review the inert fixture request. No commands execute.");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session"), {timeout: 20_000}).not.toBeNull();
+    await page.getByRole("button", {name: /^Needs you/}).click();
+    const inbox = page.getByRole("dialog", {name: "Needs you"});
+    await expect(inbox.getByRole("button", {name: /Approval needed/})).toBeVisible({timeout: 30_000});
+    await inbox.getByRole("button", {name: /Approval needed/}).click();
+    await page.getByRole("button", {name: "Review pending actions", exact: true}).click();
+    const approval = page.getByRole("region", {name: "Approval required", exact: true});
+    await expect(approval).toBeVisible();
+    await approval.getByRole("button", {name: "Approve", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("APPROVAL_ACCEPTED_ONCE", {timeout: 30_000});
+    await expect(page.getByRole("button", {name: "Needs you", exact: true})).toBeVisible();
+    const savedUrl = page.url();
+    await page.reload();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("APPROVAL_ACCEPTED_ONCE");
+    expect(page.url()).toBe(savedUrl);
+    await core.disconnect();
+    const retryConnection = page.getByRole("button", {name: "Retry connection"});
+    await expect(retryConnection).toBeVisible({timeout: 20_000});
+    await retryConnection.click();
+    await expect(retryConnection).toBeVisible({timeout: 20_000});
+    await expect(page.getByText("Pair this phone to continue.")).toHaveCount(0);
+    await core.restart();
+    await expect(page.locator(".workspace-state-banner.failed")).toHaveCount(0, {timeout: 20_000});
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("APPROVAL_ACCEPTED_ONCE", {timeout: 20_000});
+    await testInfo.attach("iphone-assistant-chat", {body: await page.screenshot(), contentType: "image/png"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});

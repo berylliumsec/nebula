@@ -5,8 +5,9 @@
 The installed iPhone app uses its existing Core connection, pairing cookie, and
 `NebulaShell/1.0` user-agent token. The Core-served production UI selects an
 assistant-only route for that token. Regular mobile browsers keep the full
-Workbench. No native app release or data migration is needed for the UI change,
-but the serving Core must include the updated UI bundle.
+Workbench. Phones already running native build 4 need only the updated Core UI
+bundle. Older installed builds, including build 3, need the current signed app;
+no data migration is needed.
 
 Journey: launch the paired app, choose a project and conversation, message a
 configured agent, read streaming and saved output, handle inline approval or

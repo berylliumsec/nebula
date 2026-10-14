@@ -24,8 +24,8 @@ complete Nebula's web pairing. HTTP is unencrypted; use it only on your trusted 
 or VPN. The app keeps normal TLS validation. External HTTP(S) links require
 confirmation and open in a Safari sheet.
 
-After connecting, the web view runs edge to edge with no native bar. The installed
-app opens the Core-backed assistant: project conversations, the composer, saved
+With native build 4 or later, the web view runs edge to edge with no native bar.
+The installed app opens the Core-backed assistant: project conversations, the composer, saved
 results, and pending chat approvals or agent questions. Terminal, Missions,
 Activity, and other Workbench tools stay in full Nebula on desktop or mobile web.
 The page's `theme-color` controls the status bar. Native UI appears only for:
