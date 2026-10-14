@@ -14,6 +14,22 @@ export type SettingClientAction =
   | { kind: "project_scope"; changes: Record<string, unknown> }
   | { kind: "headless_session"; action: "start" | "stop" };
 
+export interface AssistantWorkReceipt { url: string; content: string }
+
+/** Derive a project-local destination from a successful Core tool receipt. */
+export function assistantWorkReceipt(event: ChatStreamEvent, projectId: string): AssistantWorkReceipt | undefined {
+  if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
+  const chat = event.capability === "nebula.work.start_chat" || event.capability === "nebula_work_start_chat"
+    || /^nebula_work_start_chat_[0-9a-f]{10,}$/.test(event.capability);
+  const mission = event.capability === "nebula.work.start_mission" || event.capability === "nebula_work_start_mission"
+    || /^nebula_work_start_mission_[0-9a-f]{10,}$/.test(event.capability);
+  if (!chat && !mission) return undefined;
+  const id = event.receipt?.[chat ? "session_id" : "run_id"];
+  if (typeof id !== "string" || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(id)) return undefined;
+  const url = `/projects/${encodeURIComponent(projectId)}/workbench?view=${chat ? "chat&session" : "missions&mission"}=${encodeURIComponent(id)}`;
+  return { url, content: chat ? `Chat started. [Open chat](${url})` : `Mission saved. [Open mission](${url})` };
+}
+
 const scopeFields = new Set([
   "mode", "allowed_cidrs", "allowed_domains", "allowed_urls", "allowed_ports",
   "not_before", "not_after", "prohibited_actions", "local_only", "tool_suggestions",

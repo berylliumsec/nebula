@@ -12,7 +12,7 @@ import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import type { ChatMessage } from "../api/types";
-import { assistantTurnOptions, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
+import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
 import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
@@ -438,6 +438,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setDraft("");
     const appliedCallIds = new Set<string>();
     const confirmations: string[] = [];
+    const workReceipts: { url: string; content: string }[] = [];
     let actionQueue = Promise.resolve();
     try {
       const result = await api.streamChat({
@@ -464,6 +465,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
             if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
           });
         }
+        const workReceipt = assistantWorkReceipt(event, engagement.id);
+        if (workReceipt && event.type === "tool_completed" && !appliedCallIds.has(event.toolCallId)) {
+          appliedCallIds.add(event.toolCallId);
+          workReceipts.push(workReceipt);
+        }
       }, controller.signal);
       await actionQueue;
       if (result?.sessionId && storageKey) {
@@ -473,6 +479,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         if (runtimeId) setSessionRuntime({ kind: result.backend === "harness" ? "harness" : "provider", id: runtimeId, model: result.model });
       }
       if (result?.message) {
+        confirmations.push(...workReceipts.filter(({ url }) => !result.message.content.includes(url)).map(({ content }) => content));
         if (result.message.id && confirmations.length && actionOutcomesKey) {
           const outcomes = readActionOutcomes(actionOutcomesKey);
           outcomes[result.message.id] = confirmations.join("\n\n");
@@ -506,9 +513,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <div ref={transcript} className={styles.transcript} role="log" aria-label="Nebula assistant conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children, ...props }) => {
         const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
         const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, engagement?.id));
+        const workLink = engagement && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
+          && href.startsWith(`/projects/${encodeURIComponent(engagement.id)}/workbench?`) ? href : undefined;
         return setting
           ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); setHidden(true); }}>{children}</a>
           : destination ? <a href={href} onClick={(event) => { event.preventDefault(); openDestination(destination); }}>{children}</a>
+          : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); setHidden(true); }}>{children}</a>
           : <a href={href} {...props}>{children}</a>;
       } }}>{message.content}</ReactMarkdown></div>)}</div>
       {engagement && runtime && !loadingHistory && <details className={styles.catalog} open={messages.length === 0}>
