@@ -14192,3 +14192,42 @@ reloadTest("notebook Workbench tab and chat companion keep the same Python file:
   await expect(panel.getByText("File index connected")).toHaveCount(0);
   await expect(panel.getByRole("combobox", {name: "Notebook"})).toHaveValue("indexed.ipynb");
 });
+
+reloadTest("iPhone assistant shell keeps chat and pending actions reachable without work tools", async ({page}, testInfo) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
+  });
+  await installTruthfulCore(page);
+  let attentionFail = false;
+  await page.route("**/api/v1/chat/attention", async route => {
+    if (attentionFail) await route.fulfill({status: 503, json: {detail: "Synthetic connection failure"}});
+    else await route.fulfill({json: [{
+      kind: "approval", action_id: "pending-approval", engagement_id: "scratch-project",
+      engagement_name: "Scratch Project", session_id: "chat-pending", session_title: "Review request",
+      requested_at: "2026-07-14T12:00:00Z",
+    }]});
+  });
+  await page.goto("/?view=terminal");
+  await expect(page).toHaveURL(/\/projects\/scratch-project\/workbench\?view=chat/);
+  await expect(page.getByRole("button", {name: "Open conversations"})).toBeVisible({timeout: 30_000});
+  await expect(page.getByRole("button", {name: "Start new chat"})).toBeVisible();
+  await page.getByRole("button", {name: "Start new chat"}).click();
+  await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeVisible();
+  await expect(page.getByRole("navigation", {name: "Mobile operator navigation"})).toHaveCount(0);
+  await expect(page.locator(".persistent-terminal, .persistent-code-editor, .persistent-browser")).toHaveCount(0);
+  await expect(page.getByRole("button", {name: /Needs you, 1 pending/})).toBeVisible();
+  await page.getByRole("button", {name: /Needs you, 1 pending/}).click();
+  const inbox = page.getByRole("dialog", {name: "Needs you"});
+  await expect(inbox.getByRole("button", {name: /Approval needed.*Review request.*Scratch Project/})).toBeVisible();
+  attentionFail = true;
+  await inbox.getByRole("button", {name: "Close Needs you"}).click();
+  await page.getByRole("button", {name: /Needs you/}).click();
+  await expect(inbox.getByRole("alert")).toContainText("Could not load pending actions");
+  attentionFail = false;
+  await inbox.getByRole("button", {name: "Retry"}).click();
+  await expect(inbox.getByRole("button", {name: /Approval needed/})).toBeVisible();
+  await page.screenshot({path: testInfo.outputPath("iphone-assistant-shell.png")});
+  const size = await page.locator(".assistant-only-page").evaluate(element => ({scroll: element.scrollWidth, width: element.clientWidth}));
+  expect(size.scroll).toBeLessThanOrEqual(size.width + 1);
+  expect((await new AxeBuilder({page}).include(".mobile-attention-inbox").analyze()).violations).toEqual([]);
+});
