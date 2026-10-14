@@ -1,39 +1,20 @@
 {
-  "change_digest": "be49a2f31e152e17941818fc32217960531cac1366f7dda95ceba10669af1a9b",
-  "reviewed_by": "Codex Nebula shared native hook discovery review",
-  "reason": "Select exact native-hook discovery cases and AutomationBroker tool.before workflows for exact-workspace hooks, inherited opt-in, nested Git markers, unrelated workspaces, duplicate IDs, symlink safety, payload context, blocking broad searches, known-file searches, and process_io fail-closed behavior. A temp SQLite/workspace HostRuntimeSession test exercises the broker against the actual host process backend.",
-  "exclusions": "No frontend, browser, native, or production UI workflow changed. Direct authenticated /automation command endpoints bypass AutomationBroker and remain outside this change. The HostRuntimeSession regression uses only a temporary database and workspace; no live Core deployment or project workspace is touched.",
+  "change_digest": "65bdd629dd2515c1e8a82d6111e3a37fa6fa439384196bf76b9a64d54f70c3f6",
+  "reviewed_by": "Codex focused note destination review",
+  "reason": "The selected-text Take note journey now chooses an existing saved note or explicitly creates a new one. Run the NotesPanel component file, including lost-response retry, and the exact real-Core production LAN journey across desktop and mobile Chromium and WebKit widths. The real-Core journey verifies note identity, append content, durable reload, accessible dialog, and unchanged note count. The touched App integration case was also run locally by exact test name and passed.",
+  "exclusions": "No Python or native code changed; those test layers are omitted. The App test file has 14 failures in unrelated workspace and storage flows; its selected-text case passed locally, and the real-Core browser journey covers that integration in CI. Unrelated provider, chat, editor, browser, and release journeys are omitted. Existing notes typing and readiness browser journeys are outside the destination change; the selected NotesPanel component file covers their local save behavior. No physical mobile device is available for automated execution.",
   "expected_tests": {
-    "python": 17,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 20,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": [
-    "3.12"
+  "python": [],
+  "frontend": [
+    "ui/src/components/NotesPanel.test.tsx"
   ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_native_hooks.py::test_native_hook_catalog_uses_agents_root_and_freezes_source_digests",
-    "tests/v3/test_native_hooks.py::test_native_hook_exact_git_root_does_not_require_inheritance_opt_in",
-    "tests/v3/test_native_hooks.py::test_native_hooks_inherit_opted_in_ancestor_across_nested_git_marker",
-    "tests/v3/test_native_hooks.py::test_native_hooks_ignore_non_opted_in_ancestors_and_unrelated_workspaces",
-    "tests/v3/test_native_hooks.py::test_native_hook_discovery_stops_at_the_ancestor_bound",
-    "tests/v3/test_native_hooks.py::test_native_hook_duplicate_ids_fail_closed_between_ancestor_and_workspace",
-    "tests/v3/test_native_hooks.py::test_native_hook_discovery_rejects_symlinked_shared_agents_root",
-    "tests/v3/test_native_hooks.py::test_native_hook_discovery_rejects_symlinked_inherited_hook_directory",
-    "tests/v3/test_native_hooks.py::test_native_hook_discovery_rejects_workspace_symlink_escape",
-    "tests/v3/test_native_hooks.py::test_native_hook_discovery_preserves_symlinked_workspace_inside_shared_root",
-    "tests/v3/test_automation_runtime.py::test_command_tools_run_automatic_project_hooks_before_and_after",
-    "tests/v3/test_automation_runtime.py::test_blocking_before_hook_denies_command_before_runtime_execution",
-    "tests/v3/test_automation_runtime.py::test_inherited_blocking_before_hook_denies_nested_workspace_command",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_process_write_without_parent_context",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io"
-  ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:notes-selection-target"
+  ]
 }

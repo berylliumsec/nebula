@@ -54,6 +54,7 @@
     {"name": "notes-screen-fit", "patterns": ["ui/src/components-workbench.css", "ui/src/pages/SessionsPage.tsx"], "areas": ["notes-screen-fit"]},
     {"name": "notes-typing", "patterns": ["ui/src/components/NotesPanel.tsx"], "areas": ["notes-typing"]},
     {"name": "notes-readiness", "patterns": ["ui/src/state/WorkspaceContext.tsx", "ui/src/components/NotesPanel.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["notes-readiness"]},
+    {"name": "notes-selection-target", "patterns": ["ui/src/components/NotesPanel.tsx"], "areas": ["notes-selection-target"]},
     {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
     {"name": "file-navigation-search", "patterns": ["src/nebula/v3/workspace.py", "ui/src/components/WorkspacePanel*", "ui/src/components/EditorWorkspaceSearch*", "ui/src/components/CodeEditorPanel*", "ui/src/api/types.ts"], "areas": ["editor-files-scroll", "file-search-real-core"]},
     {"name": "code-editor", "patterns": ["ui/src/components/CodeEditorPanel*", "ui/src/components/CodeMirrorSurface*", "ui/src/components/Editor*", "ui/src/components/editor*", "ui/src/components/fileIcons*", "ui/src/components/useEditorSidebarWidth*"], "areas": ["coding-makeover", "editor-files-scroll"]},
@@ -1940,6 +1941,16 @@
       {"area":"notes-readiness","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization notes open before unrelated evidence finishes loading","runtime":"real-core","shard":"1/1"},
       {"area":"notes-readiness","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"stabilization notes open before unrelated evidence finishes loading","runtime":"real-core","shard":"1/1"},
       {"area":"notes-readiness","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"stabilization notes open before unrelated evidence finishes loading","runtime":"real-core","shard":"1/1"}
+    ],
+    "notes-selection-target": [
+      {"area":"notes-selection-target","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-selection-target","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-selection-target","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-selection-target","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-selection-target","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-selection-target","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-selection-target","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notes-selection-target","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"stabilization selected text adds to a chosen existing note on production LAN","runtime":"real-core","shard":"1/1"}
     ],
     "desktop-shell": [
       {"area":"desktop-shell","project":"desktop","test_match":"tests/interface.spec.ts","grep":"desktop|window|updater|paired-device","runtime":"mock","shard":"1/1"},

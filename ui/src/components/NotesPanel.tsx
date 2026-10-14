@@ -10,12 +10,13 @@ import type {
   ProviderHealth,
   ObservationDependencies,
 } from "../api/types";
-import { useConfirmation } from "./DialogSystem";
+import { ModalSurface, useConfirmation } from "./DialogSystem";
 import { AIWritingDialog } from "./AIWritingDialog";
 import type { SelectionActionDraft } from "./selection";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { aiRuntimeOptions } from "./aiRuntimes";
 import { LoadingSurface, StandardEmptyState } from "./SurfacePrimitives";
+import { randomId } from "../randomId";
 
 interface LinkOption {
   id: string;
@@ -56,6 +57,17 @@ const blank = {
   metadata: {} as Record<string, unknown>,
 };
 const LINK_RESULT_LIMIT = 40;
+const CAPTURE_RESULT_LIMIT = 40;
+const CAPTURE_HISTORY_LIMIT = 16;
+
+function appendedNoteBody(body: string, selection: string) {
+  return body.trim() ? `${body.trimEnd()}\n\n${selection}` : selection;
+}
+
+function captureIds(note: ObservationSummary) {
+  const ids = note.metadata.selection_capture_ids;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string").slice(-CAPTURE_HISTORY_LIMIT) : [];
+}
 
 function matchingLinkOptions(options: LinkOption[], query: string, selectedIds: string[]) {
   const selected = new Set(selectedIds);
@@ -160,6 +172,14 @@ export function NotesPanel({
   const [linkQuery, setLinkQuery] = useState("");
   const [deleteBlocker, setDeleteBlocker] = useState<ObservationDependencies>();
   const consumedInitialDraftRef = useRef<SelectionActionDraft | undefined>(undefined);
+  const [captureDraft, setCaptureDraft] = useState<SelectionActionDraft>();
+  const [captureTargetId, setCaptureTargetId] = useState("");
+  const [captureTitle, setCaptureTitle] = useState("");
+  const [captureQuery, setCaptureQuery] = useState("");
+  const [captureSaving, setCaptureSaving] = useState(false);
+  const captureSavingRef = useRef(false);
+  const captureIdRef = useRef("");
+  const [captureError, setCaptureError] = useState<string>();
   const capturedNoteRef = useRef<ObservationSummary | undefined>(undefined);
   const creatingRef = useRef(false);
   creatingRef.current = creating;
@@ -245,7 +265,7 @@ export function NotesPanel({
   }, [cachedNotesReady, initialNotes, engagementId]);
 
   useEffect(() => {
-    if (creating || initialDraft) {
+    if (creating) {
       syncedNoteRef.current = undefined;
       return;
     }
@@ -272,52 +292,83 @@ export function NotesPanel({
       assetIds: selected.assetIds,
       metadata: selected.metadata,
     });
-  }, [creating, initialDraft, selected]);
+  }, [creating, selected]);
 
   useEffect(() => {
     if (!initialDraft || consumedInitialDraftRef.current === initialDraft) return;
     consumedInitialDraftRef.current = initialDraft;
+    captureIdRef.current = randomId();
     const label = initialDraft.source.label.trim() || "selected text";
-    setCreating(true);
-    setSelectedId(undefined);
-    const nextDraft = {
-      title: `Note from ${label}`.slice(0, 500),
-      body: initialDraft.text,
-      evidenceIds: [],
-      assetIds: [],
-      metadata: {
-        selection_source: {
-          kind: initialDraft.source.kind,
-          id: initialDraft.source.id,
-          label: initialDraft.source.label,
-          truncated: initialDraft.truncated,
-          original_length: initialDraft.originalLength,
-        },
-      },
-    };
-    setDraft(nextDraft);
-    draftBodyRef.current = nextDraft.body;
-    setHasBody(Boolean(nextDraft.body.trim()));
-    setError(undefined);
+    setCaptureDraft(initialDraft);
+    setCaptureTargetId("");
+    setCaptureTitle(`Note from ${label}`.slice(0, 500));
+    setCaptureQuery("");
+    setCaptureError(undefined);
+  }, [initialDraft]);
+
+  const closeCapture = () => {
+    if (captureSavingRef.current) return;
+    setCaptureDraft(undefined);
+    setCaptureError(undefined);
     onInitialDraftConsumed?.();
-    setSaving(true);
-    void createNote({
-      engagementId,
-      observationType: "note",
-      title: nextDraft.title,
-      body: nextDraft.body,
-      source: "selection-note",
-      metadata: nextDraft.metadata,
-    }).then((created) => {
-      capturedNoteRef.current = created;
-      setNotes((current) => [created, ...current.filter((item) => item.id !== created.id)]);
-      setSelectedId(created.id);
+  };
+
+  const saveCapture = async () => {
+    if (!captureDraft || !captureTargetId || captureSavingRef.current || (captureTargetId === "new" && !captureTitle.trim())) return;
+    captureSavingRef.current = true;
+    setCaptureSaving(true);
+    setCaptureError(undefined);
+    try {
+      if (saveStatus === "unsaved" || saveStatus === "failed" || savingRef.current) {
+        if (savingRef.current || !(await saveRef.current())) throw new Error("Save the current note before adding selected text. Retry after its save completes.");
+      }
+      let saved: ObservationSummary;
+      const currentNotes = (await api.listObservations(engagementId)).items;
+      const alreadySaved = currentNotes.find((item) => captureIds(item).includes(captureIdRef.current));
+      if (alreadySaved) {
+        saved = alreadySaved;
+      } else if (captureTargetId === "new") {
+        saved = await createNote({
+          engagementId,
+          observationType: "note",
+          title: captureTitle,
+          body: captureDraft.text,
+          source: "selection-note",
+          metadata: { selection_source: {
+            kind: captureDraft.source.kind,
+            id: captureDraft.source.id,
+            label: captureDraft.source.label,
+            truncated: captureDraft.truncated,
+            original_length: captureDraft.originalLength,
+          }, selection_capture_ids: [captureIdRef.current] },
+        });
+      } else {
+        // Read the current revision and body before appending. The list visible
+        // in this panel can be older than edits from another device.
+        const current = currentNotes.find((item) => item.id === captureTargetId);
+        if (!current || (current.observationType !== "note" && current.observationType !== "ai_tool_note")) {
+          throw new Error("This note is no longer available. Refresh the list and choose another note.");
+        }
+        saved = await updateNote(current.id, {
+          body: appendedNoteBody(current.body, captureDraft.text),
+          metadata: { ...current.metadata, selection_capture_ids: [...captureIds(current).slice(-(CAPTURE_HISTORY_LIMIT - 1)), captureIdRef.current] },
+          expectedRevision: current.revision,
+        });
+      }
+      capturedNoteRef.current = saved;
+      setNotes((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setCreating(false);
-    }).catch((saveError: unknown) => {
-      void logCaughtDiagnostic("interface.notes_panel.selection_capture_failed", "A selected-text note could not be saved.", saveError, "notes_panel");
-      setError(saveError instanceof Error ? saveError.message : "Could not save the selected text as a note.");
-    }).finally(() => setSaving(false));
-  }, [createNote, engagementId, initialDraft, onInitialDraftConsumed]);
+      setSelectedId(saved.id);
+      setCaptureDraft(undefined);
+      onInitialDraftConsumed?.();
+    } catch (saveError) {
+      void logCaughtDiagnostic("interface.notes_panel.selection_capture_failed", "Selected text could not be added to a note.", saveError, "notes_panel");
+      setCaptureError(saveError instanceof Error ? saveError.message : "Could not add the selected text. Retry or choose another note.");
+    } finally {
+      captureSavingRef.current = false;
+      setCaptureSaving(false);
+    }
+  };
 
   const startNote = async () => {
     if (savingRef.current || ((saveStatus === "unsaved" || saveStatus === "failed") && !(await saveRef.current()))) return;
@@ -445,6 +496,8 @@ export function NotesPanel({
     queueAutosave();
   };
 
+  const captureMatches = captureDraft ? notes.filter((note) => note.title.toLowerCase().includes(captureQuery.trim().toLowerCase())) : [];
+
   return (
     <div className="notes-panel">
       <aside className="notes-list" aria-label="Project notes">
@@ -492,6 +545,23 @@ export function NotesPanel({
           <button className="button primary" type="button" onClick={() => void startNote()}><Plus size={14} /> New note</button>
         </div>}
       </section>
+      {captureDraft && <ModalSurface className="provider-dialog note-capture-dialog" labelledBy="note-capture-title" onClose={closeCapture}>
+        <header><div><small>Selected text</small><h2 id="note-capture-title">Add to a note</h2></div></header>
+        <p className="provider-dialog-note">From {captureDraft.source.label}. Choose where to save it.</p>
+        <pre className="note-capture-preview">{captureDraft.text}</pre>
+        <label>Find a note<input type="search" data-autofocus value={captureQuery} onChange={(event) => setCaptureQuery(event.target.value)} placeholder="Search note titles" /></label>
+        <div className="note-capture-targets" role="radiogroup" aria-label="Destination note">
+          {captureMatches.slice(0, CAPTURE_RESULT_LIMIT).map((note) => <label key={note.id}><input type="radio" name="capture-target" value={note.id} checked={captureTargetId === note.id} onChange={() => setCaptureTargetId(note.id)} /><span>{note.title}</span></label>)}
+          {loading && <p role="status">Loading saved notes…</p>}
+          {!loading && captureMatches.length === 0 && <p>{notes.length ? "No notes match that title." : "No saved notes yet."}</p>}
+          {captureMatches.length > CAPTURE_RESULT_LIMIT && <p>Showing {CAPTURE_RESULT_LIMIT} of {captureMatches.length} notes. Search to narrow.</p>}
+          <label><input type="radio" name="capture-target" value="new" checked={captureTargetId === "new"} onChange={() => setCaptureTargetId("new")} /><span>New note</span></label>
+        </div>
+        {captureTargetId === "new" && <label>Note title<input required maxLength={500} value={captureTitle} onChange={(event) => setCaptureTitle(event.target.value)} /></label>}
+        {captureError && <DiagnosticErrorNotice error={captureError} fallback="The selected text could not be saved." compact />}
+        {error && !loading && <button className="button quiet" type="button" onClick={() => void load()}>Retry loading notes</button>}
+        <footer><button className="button secondary" type="button" disabled={captureSaving} onClick={closeCapture}>Cancel</button><button className="button primary" type="button" disabled={captureSaving || saving || !captureTargetId || (captureTargetId === "new" && !captureTitle.trim())} onClick={() => void saveCapture()}>{captureSaving ? "Saving…" : captureTargetId === "new" ? "Create note" : "Add to note"}</button></footer>
+      </ModalSurface>}
       {writingOpen && <AIWritingDialog
         api={api}
         engagementId={engagementId}

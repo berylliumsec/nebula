@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -21,6 +21,13 @@ const note: ObservationSummary = {
   createdAt: "2026-07-13T12:00:00Z",
   updatedAt: "2026-07-13T12:00:00Z",
   revision: 1,
+};
+const selectionDraft = {
+  text: "whoami\n",
+  originalLength: 7,
+  truncated: false,
+  source: { kind: "terminal", id: "terminal-1", label: "Terminal selection" },
+  anchor: { left: 0, top: 0, right: 0, bottom: 0 },
 };
 
 function renderPanel(api: Partial<ApiClient>, onAskNebula = vi.fn()) {
@@ -280,7 +287,8 @@ describe("NotesPanel", () => {
     await waitFor(() => expect(createObservation).toHaveBeenCalledWith(expect.objectContaining({ engagementId: "eng-1", observationType: "note", title: "New", body: "# Body" })));
   });
 
-  it("saves selected text immediately as an editable project note", async () => {
+  it("creates a selected-text note only after the operator chooses New note", async () => {
+    const user = userEvent.setup();
     const createObservation = vi.fn().mockResolvedValue({
       ...note,
       id: "selection-note",
@@ -295,19 +303,16 @@ describe("NotesPanel", () => {
         createObservation,
       } as unknown as ApiClient}
       engagementId="eng-1"
-      initialDraft={{
-        text: "whoami\n",
-        originalLength: 7,
-        truncated: false,
-        source: { kind: "terminal", id: "terminal-1", label: "Terminal selection" },
-        anchor: { left: 0, top: 0, right: 0, bottom: 0 },
-      }}
+      initialDraft={selectionDraft}
       onInitialDraftConsumed={consumed}
     /></DialogProvider></StrictMode>);
 
-    expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue("Note from Terminal selection");
-    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("whoami\n");
-    expect(consumed).toHaveBeenCalledOnce();
+    const dialog = await screen.findByRole("dialog", { name: "Add to a note" });
+    expect(dialog).toHaveTextContent("whoami");
+    expect(createObservation).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("radio", { name: "New note" }));
+    expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue("Note from Terminal selection");
+    await user.click(within(dialog).getByRole("button", { name: "Create note" }));
     await waitFor(() => expect(createObservation).toHaveBeenCalledWith(expect.objectContaining({
       engagementId: "eng-1",
       observationType: "note",
@@ -317,5 +322,79 @@ describe("NotesPanel", () => {
       metadata: expect.objectContaining({ selection_source: expect.objectContaining({ kind: "terminal", id: "terminal-1" }) }),
     })));
     expect(createObservation).toHaveBeenCalledOnce();
+    expect(consumed).toHaveBeenCalledOnce();
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("whoami\n");
+  });
+
+  it("adds selected text to the chosen existing note using its latest revision", async () => {
+    const user = userEvent.setup();
+    const other = { ...note, id: "note-2", title: "Chosen note", body: "Fresh original", revision: 2 };
+    const listObservations = vi.fn()
+      .mockResolvedValueOnce({ items: [note, { ...other, body: "Older original", revision: 1 }], total: 2 })
+      .mockResolvedValue({ items: [note, other], total: 2 });
+    const createObservation = vi.fn();
+    const updateObservation = vi.fn().mockImplementation(async (id, request) => ({ ...other, id, body: request.body, revision: 3 }));
+    render(<DialogProvider><NotesPanel api={{ listObservations, createObservation, updateObservation } as unknown as ApiClient}
+      engagementId="eng-1" initialDraft={selectionDraft} /></DialogProvider>);
+
+    const dialog = await screen.findByRole("dialog", { name: "Add to a note" });
+    await user.type(screen.getByRole("searchbox", { name: "Find a note" }), "Chosen");
+    await user.click(await screen.findByRole("radio", { name: "Chosen note" }));
+    await user.click(screen.getByRole("button", { name: "Add to note" }));
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledWith("note-2", expect.objectContaining({ body: "Fresh original\n\nwhoami\n", expectedRevision: 2 })));
+    expect(createObservation).not.toHaveBeenCalled();
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Fresh original\n\nwhoami\n");
+    expect(screen.getByRole("button", { name: /Chosen note/ })).toHaveClass("active");
+  });
+
+  it("keeps a failed selected-text append available for retry", async () => {
+    const user = userEvent.setup();
+    const listObservations = vi.fn().mockResolvedValue({ items: [note], total: 1 });
+    const updateObservation = vi.fn()
+      .mockRejectedValueOnce(new Error("Save unavailable"))
+      .mockImplementation(async (_id, request) => ({ ...note, body: request.body, revision: 2 }));
+    render(<DialogProvider><NotesPanel api={{ listObservations, updateObservation } as unknown as ApiClient}
+      engagementId="eng-1" initialDraft={selectionDraft} /></DialogProvider>);
+    await user.click(await screen.findByRole("radio", { name: "Initial note" }));
+    await user.click(screen.getByRole("button", { name: "Add to note" }));
+    expect(await screen.findByText("Save unavailable")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Add to a note" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add to note" }));
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledTimes(2));
+    expect(updateObservation).toHaveBeenNthCalledWith(2, "note-1", expect.objectContaining({ body: "**Useful** context\n\nwhoami\n", expectedRevision: 1 }));
+  });
+
+  it("recognizes a saved append after its response is lost and does not add it twice", async () => {
+    const user = userEvent.setup();
+    let durable = note;
+    const listObservations = vi.fn().mockImplementation(async () => ({ items: [durable], total: 1 }));
+    const updateObservation = vi.fn().mockImplementationOnce(async (_id, request) => {
+      durable = { ...note, body: request.body, metadata: request.metadata, revision: 2 };
+      throw new Error("Response lost");
+    });
+    render(<DialogProvider><NotesPanel api={{ listObservations, updateObservation } as unknown as ApiClient}
+      engagementId="eng-1" initialDraft={selectionDraft} /></DialogProvider>);
+    await user.click(await screen.findByRole("radio", { name: "Initial note" }));
+    await user.click(screen.getByRole("button", { name: "Add to note" }));
+    expect(await screen.findByText("Response lost")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add to note" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add to a note" })).not.toBeInTheDocument());
+    expect(updateObservation).toHaveBeenCalledOnce();
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("**Useful** context\n\nwhoami\n");
+  });
+
+  it("cancels selected-text capture without writing a note", async () => {
+    const user = userEvent.setup();
+    const createObservation = vi.fn();
+    const updateObservation = vi.fn();
+    const consumed = vi.fn();
+    render(<DialogProvider><NotesPanel api={{ listObservations: vi.fn().mockResolvedValue({ items: [note], total: 1 }), createObservation, updateObservation } as unknown as ApiClient}
+      engagementId="eng-1" initialDraft={selectionDraft} onInitialDraftConsumed={consumed} /></DialogProvider>);
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(consumed).toHaveBeenCalledOnce();
+    expect(createObservation).not.toHaveBeenCalled();
+    expect(updateObservation).not.toHaveBeenCalled();
   });
 });

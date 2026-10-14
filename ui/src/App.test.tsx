@@ -900,8 +900,13 @@ describe("Nebula workspace", () => {
     await user.click(await screen.findByRole("button", { name: "Take note" }));
 
     expect(await screen.findByRole("tab", { name: "Project notes" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("textbox", { name: "Note title" })).toHaveValue("Note from Project selection");
-    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Notes review");
+    const dialog = await screen.findByRole("dialog", { name: "Add to a note" });
+    expect(dialog).toBeVisible();
+    expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/observations") && init?.method === "POST")).toBe(false);
+    await user.click(screen.getByRole("radio", { name: "New note" }));
+    expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue("Note from Project selection");
+    await user.click(within(dialog).getByRole("button", { name: "Create note" }));
+    expect(await screen.findByRole("textbox", { name: "Note body" })).toHaveValue("Notes review");
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/observations") && init?.method === "POST")).toBe(true));
   });
 
