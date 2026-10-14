@@ -2528,10 +2528,18 @@ def create_app(
     from .settings_assistant_api import SettingsAssistantApi
 
     settings_assistant_api = SettingsAssistantApi(app, token)
+    from .control_assistant_work import ControlAssistantWork
+
+    control_assistant_work = ControlAssistantWork(
+        store, provider_chat, chat_queue, harness_runtime, app, token
+    )
     if tool_platform is not None:
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
+        tool_platform.bind_control_assistant_work(control_assistant_work)
     harness_runtime.bind_settings_assistant_api(settings_assistant_api)
+    harness_runtime.bind_control_assistant_work(control_assistant_work)
     app.state.store = store
+    app.state.control_assistant_work = control_assistant_work
     app.state.storage_integrations = storage_integrations
     app.state.application_model = application_model
     app.state.browser_companion = browser_companion

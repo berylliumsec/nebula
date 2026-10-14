@@ -191,9 +191,10 @@ def test_project_context_reads_mode_and_linked_workspace_without_creating_policy
         )
     )
     default = project_context(store, project.id)
-    assert default["execution_mode"] == "docker"
+    assert default["execution_mode"] == "host"
     assert default["policy_source"] == "default"
     assert "No execution policy is stored" in default["policy_description"]
+    assert "pending acknowledgment" in default["policy_description"]
     assert default["linked_workspace_path"] is None
     assert not store.find_entities(
         AutomationProjectPolicy, {"engagement_id": project.id}

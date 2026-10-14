@@ -341,9 +341,13 @@ class RuntimePlatform:
         self._image_locks: dict[tuple[str, int], asyncio.Lock] = {}
         self.mcp_service: McpProbeService | None = None
         self.settings_assistant_api: SettingsAssistantApi | None = None
+        self.control_assistant_work: Any = None
 
     def bind_settings_assistant_api(self, gateway: SettingsAssistantApi) -> None:
         self.settings_assistant_api = gateway
+
+    def bind_control_assistant_work(self, work: Any) -> None:
+        self.control_assistant_work = work
 
     def bind_mcp_service(self, service: McpProbeService) -> None:
         if service.store is not self.store:
@@ -396,6 +400,7 @@ class RuntimePlatform:
                 self.artifact_store,
                 engagement_id,
                 settings_api=self.settings_assistant_api,
+                work=self.control_assistant_work,
                 notebooks=self.mcp_service.notebook_tools.notebooks
                 if self.mcp_service is not None
                 and self.mcp_service.notebook_tools is not None
