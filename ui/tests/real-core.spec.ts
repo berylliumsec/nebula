@@ -983,7 +983,14 @@ test("work hub project board keeps check-ins after refresh and agent access revo
     const child = await childResponse.json() as { id: string };
     const groupResponse = await api.patch("work/projects", { data: { project_ids: [child.id], parent_engagement_id: project.id } });
     expect(groupResponse.ok(), await groupResponse.text()).toBe(true);
+    // Pairing reloads the app; navigating before its authenticated health read
+    // can abort that reload and leave mobile browsers on the pairing notice.
+    const pairedHealth = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/v1/health" && response.status() === 200,
+      { timeout: 20_000 },
+    );
     await pairRealCoreBrowser(page, core, "Work browser", { requireReady: false });
+    await pairedHealth;
     await page.goto(`${core.origin}/projects`);
     await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     await page.locator(".work-project-list").getByRole("link", { name: /Documentation portal/ }).click();
