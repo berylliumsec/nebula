@@ -54,6 +54,7 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
         assert {
             tool["name"] for tool in runtime._gateway_catalog(session)["tools"]
         } >= {
+            "work.agents",
             "work.list",
             "work.create",
             "work.check_in",
@@ -65,6 +66,7 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
             gateway_tools=tuple(runtime._gateway_catalog(session)["tools"]),
         )
         assert "Project Work is available" in instructions
+        assert "work.agents" in instructions
         assert "minutes" not in instructions
         runtime._active[session.id] = SimpleNamespace(
             turn_id=turn.id, connection=None, task=None
@@ -98,10 +100,30 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
             == turn.chat_session_id
         )
         runtime.work.set_enabled(engagement.id, False)
-        assert not any(
-            tool["name"].startswith("work.")
+        assert {
+            tool["name"]
             for tool in runtime._gateway_catalog(session)["tools"]
-        )
+            if tool["name"].startswith("work.")
+        } == {"work.agents"}
+        roster = await runtime._gateway_call(session, "work.agents", {})
+        assert roster["isError"] is False, roster
+        assert roster["structuredContent"]["agents"] == [
+            {
+                "session_id": turn.chat_session_id,
+                "engagement_id": engagement.id,
+                "title": "Prepare release notes",
+                "state": "working",
+                "turn_id": turn.chat_turn_id,
+                "work_item": {
+                    "id": item_id,
+                    "title": "Prepare release notes",
+                    "status": "in_progress",
+                    "last_update_at": updated["structuredContent"]["update"][
+                        "created_at"
+                    ],
+                },
+            }
+        ]
         denied = await runtime._gateway_call(
             session,
             "work.check_in",
