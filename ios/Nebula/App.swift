@@ -118,7 +118,8 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
                 self?.applyTheme(web.themeColor)
             },
         ]
-        if let saved = history.first.flatMap(ServerAddress.parse) { connect(saved) }
+        let selected = defaults.string(forKey: "nebula.server").flatMap(ServerAddress.parse)
+        if let saved = selected ?? history.first.flatMap(ServerAddress.parse) { connect(saved) }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -180,6 +181,10 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private func connect(_ url: URL) {
         webView.stopLoading()
         server = url
+        // Keep the operator's choice through a relaunch, even while the page is
+        // still loading or the server is temporarily unreachable. The history
+        // and last-connected time below only record completed loads.
+        defaults.set(url.absoluteString, forKey: "nebula.server")
         offline.isHidden = true
         webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20))
     }

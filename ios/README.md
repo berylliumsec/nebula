@@ -24,6 +24,10 @@ complete Nebula's web pairing. HTTP is unencrypted; use it only on your trusted 
 or VPN. The app keeps normal TLS validation. External HTTP(S) links require
 confirmation and open in a Safari sheet.
 
+The selected server address is saved as soon as Connect is tapped, so an app restart
+or temporary network failure returns to that address. The recent-server chips and
+last-connected time update only after a page loads successfully.
+
 With native build 4 or later, the web view runs edge to edge with no native bar.
 The installed app opens the Core-backed assistant: project conversations, the composer, saved
 results, and pending chat approvals or agent questions. Terminal, Missions,

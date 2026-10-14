@@ -1,5 +1,14 @@
 # iOS shell acceptance contract
 
+## Live iPhone connection evidence (2026-10-14)
+
+On David's iPhone 11, the signed build 4 XCUITest selected the live Core at
+`http://192.168.1.155:8000` and immediately reopened native Settings over Wi-Fi;
+the address remained selected. The logo app then opened a one-time live pairing
+link, the physical Pair device control submitted it, and Core's authenticated
+device list gained one entry at the test time. The native selected address is
+device-local; successful-load history is recorded separately.
+
 ## Assistant-only app contract (2026-10-14)
 
 The installed iPhone app uses its existing Core connection, pairing cookie, and
