@@ -458,12 +458,9 @@ class ControlAssistantWork:
                 headers={"Authorization": f"Bearer {self.token}"},
             )
         if response.is_error:
-            try:
-                detail = response.json().get("detail", response.reason_phrase)
-            except (ValueError, AttributeError):
-                detail = response.reason_phrase
+            detail = response.text or response.reason_phrase
             raise ValueError(
-                f"Core rejected the work action ({response.status_code}): {str(detail)[:500]}"
+                f"Core rejected the work action ({response.status_code}): {detail[:500]}"
             )
         return response.json()
 
