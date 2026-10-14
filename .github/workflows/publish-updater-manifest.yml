@@ -89,7 +89,9 @@ jobs:
         run: |
           target="$(rustc -vV | sed -n 's/^host: //p')"
           install -d -m 0755 ui/src-tauri/binaries
+          install -d -m 0755 ui/src-tauri/resources/notebook-runtime
           install -d -m 0755 build/nebula-core-metadata
+          printf 'Compile-time resource fixture for updater signature verification.\n' > ui/src-tauri/resources/notebook-runtime/VERIFY_ONLY.txt
           printf 'Generated CI fixture for updater signature verification.\n' > build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
           touch "ui/src-tauri/binaries/nebula-core-$target"
           chmod +x "ui/src-tauri/binaries/nebula-core-$target"

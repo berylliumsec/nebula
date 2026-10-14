@@ -1,13 +1,13 @@
 {
-  "change_digest": "49da2e8e6408c0a95e39d348d4a24abebc50461464f61d174680e66edffc34b7",
-  "reviewed_by": "Codex focused notebook file index review",
-  "reason": "Optional per-project SQLite notebook inventory changes Core listing, including partial-index and empty-result behavior, the notebook selector, and host file browsing. Select exact index and inventory Python tests, touched component tests, the notebook browser journeys at desktop and mobile widths, and the production real-Core index connection journey on LAN.",
-  "exclusions": "No native code changed. Unrelated backend, frontend, and browser journeys and full suites are excluded. The selected real-Core journey exercises configuration through the visible host file browser on LAN.",
+  "change_digest": "20961964bc8fc1ee036c73543c26ddf347d9158c4528e1c22b35a1df754747f1",
+  "reviewed_by": "Codex review of the 3.0.22 updater manifest compile fixture failure",
+  "reason": "The 3.0.22 published release updater workflow verified asset checksums, then its Cargo signature verifier failed before execution because the Tauri config requires resources/notebook-runtime. Select the one workflow contract test that executes the fixture step and checks the declared resource is present. The recovered updater dispatch against the published tag is the definitive integration check.",
+  "exclusions": "Only the updater workflow fixture and its focused Python contract test changed. No application code or release artifact changed. No frontend, native, Playwright, unrelated packaging, optional diagnostics, or full-suite tests are selected.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 14,
+    "python": 1,
+    "frontend": 0,
     "native": 0,
-    "playwright": 17
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,33 +15,9 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_notebook_file_index.py",
-    "tests/v3/test_notebooks.py::test_notebook_inventory_does_not_block_core_and_coalesces_scans",
-    "tests/v3/test_notebooks.py::test_notebook_inventory_route_keeps_core_health_responsive"
+    "tests/v3/test_packaging.py::test_updater_manifest_supports_validated_recovery_with_native_libraries"
   ],
-  "frontend": [
-    "ui/src/components/NotebookPanel.test.tsx",
-    "ui/src/components/NotebookFileIndexSettings.test.tsx",
-    "ui/src/components/HostFolderPicker.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:notebook-file-index/desktop",
-    "entry:notebook-file-index/compact",
-    "entry:notebook-file-index/mobile-chromium-small",
-    "entry:notebook-file-index/mobile-chromium-wide",
-    "entry:notebook-file-index/mobile-webkit-small",
-    "entry:notebook-file-index/mobile-webkit",
-    "entry:notebook-file-index/mobile-webkit-wide",
-    "entry:notebooks/desktop",
-    "entry:notebooks/compact",
-    "entry:notebooks/mobile-chromium-small",
-    "entry:notebooks/mobile-chromium-wide",
-    "entry:notebooks/mobile-webkit-small",
-    "entry:notebooks/mobile-webkit",
-    "entry:notebooks/mobile-webkit-wide",
-    "entry:notebook-file-index/assistant-real-desktop",
-    "entry:notebook-file-index/assistant-real-chromium-390",
-    "entry:notebook-file-index/assistant-real-webkit-390"
-  ]
+  "playwright": []
 }
