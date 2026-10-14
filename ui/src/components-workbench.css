@@ -1741,6 +1741,16 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .note-editor > header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }.note-editor > header > input { min-width: 0; flex: 1; min-height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface-raised); font-weight: var(--weight-semibold); }.note-editor > header > div { display: flex; gap: 5px; }
 .note-editor-body { display: grid; gap: 5px; }.note-editor-caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 18px; color: var(--muted); font-size: 11px; }.note-save-status { white-space: nowrap; }.note-editor-body textarea { width: 100%; min-height: 510px; resize: vertical; padding: 12px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); background: var(--canvas); font: 12px/1.55 var(--font-mono); }
 .note-editor > details { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--muted); font-size: 11px; }.note-editor > details summary { cursor: pointer; }.note-link-picker { display: grid; gap: 8px; margin-top: 10px; }.note-link-picker > input { width: 100%; min-height: 36px; padding: 0 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); color: var(--text); background: var(--surface-raised); }.note-link-picker > p { margin: 0; color: var(--muted); }.note-link-results { display: grid; gap: 2px; max-height: 210px; overflow-y: auto; }.note-link-results > label { display: flex; align-items: center; gap: 7px; min-height: 32px; color: var(--text); }.note-link-results input { min-width: 18px; min-height: 18px; }
+.note-capture-dialog { min-width: 0; }
+.note-capture-dialog .provider-dialog-note { overflow-wrap: anywhere; }
+.note-capture-preview { max-height: 128px; margin: 0; padding: 10px; overflow: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--canvas); color: var(--text); font: 12px/1.5 var(--font-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
+.note-capture-targets { display: grid; max-height: min(280px, 32dvh); overflow-y: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-control); }
+.note-capture-dialog .note-capture-targets label { display: flex; min-height: 44px; flex-direction: row; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--border-soft); color: var(--text); cursor: pointer; }
+.note-capture-dialog .note-capture-targets label:last-child { border-bottom: 0; }
+.note-capture-dialog .note-capture-targets label:hover, .note-capture-dialog .note-capture-targets label:has(input:checked) { background: var(--blue-muted); }
+.note-capture-dialog .note-capture-targets input { width: 18px; min-height: 18px; flex: 0 0 18px; margin: 0; padding: 0; }
+.note-capture-targets span { min-width: 0; overflow-wrap: anywhere; }
+.note-capture-targets p { margin: 0; padding: 10px; color: var(--muted); font-size: 11px; }
 
 .tool-progress, .provider-card, .artifact-card, .runtime-resource-card { border-color: var(--border-soft); border-radius: var(--radius); box-shadow: none; }
 .data-toolbar { min-height: 48px; padding: 7px 0; }

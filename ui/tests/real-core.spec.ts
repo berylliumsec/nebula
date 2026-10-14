@@ -142,6 +142,66 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
   ]);
 });
 
+test("stabilization selected text adds to a chosen existing note on production LAN", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as { commit: string; builtAt: string; assets: Record<string, string> };
+    const entry = Object.keys(build.assets).find((asset) => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0].id;
+    const create = async (title: string, body: string) => {
+      const response = await api.post("observations", { data: { engagement_id: projectId, observation_type: "note", title, body, source: "operator-note", confidence: 1 } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return await response.json() as { id: string };
+    };
+    await create("Source marker 2026", "Selected text source");
+    const target = await create(`Target working note ${"A".repeat(100)}`, "Existing line");
+    const pairing = await api.post(`http://127.0.0.1:${new URL(core.origin).port}/api/v1/auth/pairings`, { data: { name: "Note destination acceptance" } });
+    expect(pairing.ok(), await pairing.text()).toBe(true);
+    const pair = await pairing.json() as { secret: string; confirmation_code: string };
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Note destination acceptance");
+    await page.getByRole("button", { name: "Pair device", exact: true }).click();
+    await expect(coreConnected(page)).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notes`);
+    const source = page.getByRole("button", { name: /Source marker 2026/ }).locator("strong");
+    await expect(source).toBeVisible();
+    await source.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    });
+    await page.getByRole("button", { name: "Take note", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Add to a note" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("searchbox", { name: "Find a note" })).toBeFocused();
+    await dialog.getByRole("searchbox", { name: "Find a note" }).fill("Target working");
+    await dialog.getByRole("radio", { name: /Target working note/ }).check();
+    expect((await new AxeBuilder({ page }).include(".note-capture-dialog").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await dialog.getByRole("button", { name: "Add to note" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("textbox", { name: "Note body" })).toHaveValue("Existing line\n\nSource marker 2026");
+    const saved = await (await api.get(`observations?engagement_id=${projectId}`)).json() as Array<{ id: string; body: string }>;
+    expect(saved).toHaveLength(2);
+    expect(saved.find((item) => item.id === target.id)?.body).toBe("Existing line\n\nSource marker 2026");
+    await page.reload();
+    await page.getByRole("button", { name: /Target working note/ }).click();
+    await expect(page.getByRole("textbox", { name: "Note body" })).toHaveValue("Existing line\n\nSource marker 2026");
+    await testInfo.attach("note-target-production-lan", { body: JSON.stringify({ origin: core.origin, buildCommit: build.commit, builtAt: build.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), targetId: target.id, savedCount: saved.length }), contentType: "application/json" });
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("editor typing production LAN preserves the latest buffer and saved bytes", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
