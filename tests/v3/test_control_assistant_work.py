@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.control_assistant_work import WORK_TOOLS, dispatch_work_tool
@@ -14,11 +15,14 @@ from nebula.v3.domain import (
     Engagement,
     HarnessCapabilities,
     HarnessKind,
+    HarnessModelOptions,
     HarnessProfile,
+    HarnessRuntimeOption,
     HarnessSession,
     ProviderProfile,
+    ScopePolicy,
 )
-from nebula.v3.runtime_platform import RuntimePlatform
+from nebula.v3.runtime_platform import RuntimePlatform, _ControlAssistantScopeBroker
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.providers import (
     ModelCapabilities,
@@ -454,3 +458,217 @@ def test_mission_interrupt_uses_core_route_and_rejects_foreign_target(tmp_path):
         assert work.mission_detail(selected.id, run.id)["status"] == "cancelled"
 
     asyncio.run(scenario())
+
+
+def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message(
+    tmp_path,
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    work = app.state.control_assistant_work
+    before = work.chat_settings(project.id, chat.id)
+    assert before["revision"] == chat.revision
+    assert before["settings"]["model"] == "model-a"
+    with pytest.raises(ValueError, match="work roster"):
+        work.chat_settings(other.id, chat.id)
+    with pytest.raises(ValueError, match="conversation changed"):
+        work.set_chat_settings(
+            project.id,
+            {
+                "session_id": chat.id,
+                "expected_revision": chat.revision + 1,
+                "settings": {"reasoning_effort": "high"},
+            },
+        )
+    changed = work.set_chat_settings(
+        project.id,
+        {
+            "session_id": chat.id,
+            "expected_revision": chat.revision,
+            "settings": {
+                "reasoning_effort": "high",
+                "include_knowledge": False,
+                "allow_agent_messaging": True,
+            },
+        },
+    )
+    assert changed["revision"] > chat.revision
+    assert changed["settings"]["reasoning_effort"] == "high"
+    assert (
+        store.get(ChatSession, chat.id).metadata["assistant_config"][
+            "include_knowledge"
+        ]
+        is False
+    )
+
+    async def queue_next():
+        await work.message_chat(
+            project.id,
+            {"session_id": chat.id, "text": "Continue with the new settings"},
+        )
+
+    asyncio.run(queue_next())
+    request = work.queue.get(chat.id).items[0]["request"]
+    assert request["reasoning_effort"] == "high"
+    assert request["include_knowledge"] is False
+    assert request["allow_agent_messaging"] is True
+
+
+def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="model-a",
+            capabilities=HarnessCapabilities(
+                models=["model-a"],
+                modes=["plan"],
+                model_options=[
+                    HarnessModelOptions(
+                        model="model-a",
+                        reasoning_efforts=[
+                            HarnessRuntimeOption(id="high", label="High")
+                        ],
+                        service_tiers=[HarnessRuntimeOption(id="fast", label="Fast")],
+                        cyber_access_programs=["standard"],
+                    )
+                ],
+            ),
+        )
+    )
+    harness = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    control = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Nebula assistant",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness.id,
+            model="model-a",
+            metadata={"control_assistant": True},
+        )
+    )
+    work = app.state.control_assistant_work
+    before = work.chat_settings(project.id, "self")
+    assert before["session_id"] == control.id
+    assert before["available"]["harness_service_tiers"][0]["id"] == "fast"
+    changed = work.set_chat_settings(
+        project.id,
+        {
+            "session_id": "self",
+            "expected_revision": before["revision"],
+            "settings": {
+                "harness_reasoning_effort": "high",
+                "harness_service_tier": "fast",
+                "harness_mode": "plan",
+                "harness_cyber_access_program": "standard",
+            },
+        },
+    )
+    assert changed["settings"]["harness_service_tier"] == "fast"
+    assert changed["settings"]["harness_cyber_access_program"] == "standard"
+    with pytest.raises(ValueError, match="does not advertise that speed"):
+        work.set_chat_settings(
+            project.id,
+            {
+                "session_id": "self",
+                "expected_revision": changed["revision"],
+                "settings": {"harness_service_tier": "imaginary"},
+            },
+        )
+
+
+def test_control_tool_scope_bypass_is_limited_to_product_control_names(tmp_path):
+    project = Engagement(name="Selected")
+    scope = ScopePolicy(engagement_id=project.id, bypass_permissions=False)
+    observed = []
+
+    class Recorder:
+        async def execute(self, invocation, effective_scope, *, approval=None):
+            observed.append((invocation.tool_name, effective_scope.bypass_permissions))
+            return None
+
+    broker = _ControlAssistantScopeBroker(Recorder(), {"nebula.work.chat_settings"})
+
+    async def run():
+        await broker.execute(
+            SimpleNamespace(tool_name="nebula.work.chat_settings"), scope
+        )
+        await broker.execute(SimpleNamespace(tool_name="mcp.other.change"), scope)
+
+    asyncio.run(run())
+    assert observed == [
+        ("nebula.work.chat_settings", True),
+        ("mcp.other.change", False),
+    ]
+
+
+def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    provider = store.create(
+        ProviderProfile(
+            name="Local", provider_type="ollama", is_local=True, model_allowlist=["model-a"]
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            provider_profile_id=provider.id,
+            model="model-a",
+        )
+    )
+    client = TestClient(app)
+    url = f"/api/v1/chat-sessions/{chat.id}/assistant-config"
+    assert client.get(url).status_code == 401
+    headers = {"Authorization": "Bearer test-token"}
+    before = client.get(url, headers=headers)
+    assert before.status_code == 200, before.text
+    changed = client.patch(
+        url,
+        headers=headers,
+        json={
+            "expected_revision": before.json()["revision"],
+            "settings": {"reasoning_effort": "high", "include_knowledge": False},
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    after = client.get(url, headers=headers).json()
+    assert after["settings"]["reasoning_effort"] == "high"
+    assert after["settings"]["include_knowledge"] is False
+    stale = client.patch(
+        url,
+        headers=headers,
+        json={
+            "expected_revision": before.json()["revision"],
+            "settings": {"reasoning_effort": "low"},
+        },
+    )
+    assert stale.status_code in {400, 409, 422}

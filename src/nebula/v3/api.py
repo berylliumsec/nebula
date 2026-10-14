@@ -168,6 +168,11 @@ from .chat import (
     isolate_settings_assistant_request,
     unarchive_chat_session,
 )
+from .chat_assistant_config import (
+    ChatAssistantConfigPatch,
+    chat_assistant_config,
+    update_chat_assistant_config,
+)
 from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
@@ -1022,6 +1027,11 @@ class ChatSessionUpdateRequest(NebulaModel):
             if values is not None and len(values) != len(set(values)):
                 raise ValueError(f"{name} selection contains duplicates")
         return self
+
+
+class ChatAssistantConfigWrite(NebulaModel):
+    expected_revision: int = Field(ge=1)
+    settings: ChatAssistantConfigPatch
 
 
 class ChatSessionForkRequest(NebulaModel):
@@ -11594,6 +11604,65 @@ def create_app(
     ) -> ChatSession:
         return chat_service().apply_runtime_switch(session_id, request)
 
+    @app.get(
+        f"{API_PREFIX}/chat-sessions/{{session_id}}/assistant-config",
+        tags=["chat-sessions"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_chat_assistant_config(session_id: str) -> dict[str, Any]:
+        session = store.get(ChatSession, session_id)
+        return {
+            "session_id": session.id,
+            "revision": session.revision,
+            "settings": chat_assistant_config(store, session),
+        }
+
+    @app.patch(
+        f"{API_PREFIX}/chat-sessions/{{session_id}}/assistant-config",
+        tags=["chat-sessions"],
+        dependencies=[Depends(require_auth)],
+    )
+    def set_chat_assistant_config(
+        session_id: str, request: ChatAssistantConfigWrite
+    ) -> dict[str, Any]:
+        session = store.get(ChatSession, session_id)
+        current = chat_assistant_config(store, session)
+        selected = {
+            **current,
+            **request.settings.model_dump(exclude_unset=True, mode="json"),
+        }
+        if (
+            session.backend == ChatBackend.PROVIDER
+            and selected["backend"] == "provider"
+            and (selected["profile_id"], selected["model"])
+            != (session.provider_profile_id, session.model)
+        ):
+            preflight = chat_service().runtime_switch_preflight(
+                session.id,
+                ChatRuntimeSwitchPreflightRequest(
+                    provider_id=selected["profile_id"],
+                    model=selected["model"],
+                    tools_enabled=bool(selected["tools_enabled"]),
+                    expected_session_revision=request.expected_revision,
+                ),
+            )
+            if not preflight.compatible or preflight.requires_compaction_confirmation:
+                raise ValueError(
+                    preflight.reason or "open the chat to confirm this runtime switch"
+                )
+        saved = update_chat_assistant_config(
+            store,
+            session,
+            request.settings,
+            expected_revision=request.expected_revision,
+            workspace_resolver=chat_service().workspace_resolver,
+        )
+        return {
+            "session_id": saved.id,
+            "revision": saved.revision,
+            "settings": chat_assistant_config(store, saved),
+        }
+
     @app.patch(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
         response_model=ChatSession,
@@ -11643,7 +11712,6 @@ def create_app(
                 is_subagent_session(current)
                 or current.metadata.get("temporary_assistant") is True
                 or current.metadata.get("side_chat") is True
-                or current.metadata.get("control_assistant") is True
                 or isinstance(current.metadata.get("archived_at"), str)
             ):
                 raise ConflictError(
@@ -11706,6 +11774,28 @@ def create_app(
                 metadata["allow_subagents"] = enabled
                 if "max_active_subagents" in request.model_fields_set:
                     metadata["max_active_subagents"] = request.max_active_subagents
+        saved_config = metadata.get("assistant_config")
+        if isinstance(saved_config, dict):
+            synced = dict(saved_config)
+            for field in (
+                "mcp_server_ids",
+                "hook_ids",
+                "reasoning_effort",
+                "subagent_reasoning_effort",
+                "allow_subagents",
+                "allow_agent_messaging",
+                "max_active_subagents",
+            ):
+                if field in request.model_fields_set:
+                    synced[field] = getattr(request, field)
+            for field, config_field in (
+                ("subagent_provider_id", "subagent_provider_id"),
+                ("subagent_harness_profile_id", "subagent_harness_profile_id"),
+                ("subagent_model", "subagent_model"),
+            ):
+                if field in request.model_fields_set:
+                    synced[config_field] = getattr(request, field)
+            metadata["assistant_config"] = synced
         changes["metadata"] = metadata
         updated = store.update(
             ChatSession,

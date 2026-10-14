@@ -1,7 +1,6 @@
 """Project-bound chat and mission operations for the dedicated Nebula assistant.
 
-This is a narrow control plane over Core's existing services. It deliberately
-does not expose a generic API caller or general agent tools to the control turn.
+This is a project-bound control plane over Core's chat and mission services.
 """
 
 from __future__ import annotations
@@ -13,7 +12,17 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI
 
-from .chat import ChatCompletionRequest, ChatRequestMessage, ChatService
+from .chat import (
+    ChatCompletionRequest,
+    ChatRequestMessage,
+    ChatRuntimeSwitchPreflightRequest,
+    ChatService,
+)
+from .chat_assistant_config import (
+    ChatAssistantConfigPatch,
+    chat_assistant_config,
+    update_chat_assistant_config,
+)
 from .chat_queue import ChatQueueService, QueueWrite
 from .domain import (
     AgentRun,
@@ -22,11 +31,15 @@ from .domain import (
     ChatSession,
     Engagement,
     HarnessProfile,
+    McpServerProfile,
     ProviderProfile,
     RunBackend,
+    ScopePolicy,
     Task,
 )
 from .harnesses import HarnessRuntimeService
+from .mcp import usable_mcp_tools
+from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
 from .storage import NebulaStore
 
@@ -41,6 +54,58 @@ CHAT_TARGET_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {"session_id": {"type": "string", "minLength": 1, "maxLength": 200}},
     "required": ["session_id"],
+}
+CHAT_SETTINGS_TARGET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"session_id": {"type": "string", "minLength": 1, "maxLength": 200}},
+    "required": ["session_id"],
+}
+CHAT_SETTINGS_FIELDS: dict[str, Any] = {
+    "backend": {"type": "string", "enum": ["provider", "harness"]},
+    "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "model": {"type": "string", "minLength": 1, "maxLength": 500},
+    "reasoning_effort": {
+        "type": ["string", "null"],
+        "enum": [None, "none", "minimal", "low", "medium", "high", "xhigh"],
+    },
+    "harness_reasoning_effort": {"type": ["string", "null"]},
+    "harness_service_tier": {"type": ["string", "null"]},
+    "harness_mode": {"type": ["string", "null"]},
+    "harness_cyber_access_program": {
+        "type": ["string", "null"],
+        "enum": [None, "automatic", "standard", "daybreakBlue", "daybreakRed"],
+    },
+    "mcp_server_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
+    "hook_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
+    "include_knowledge": {"type": "boolean"},
+    "allow_cloud_knowledge": {"type": "boolean"},
+    "tools_enabled": {"type": "boolean"},
+    "allow_subagents": {"type": "boolean"},
+    "allow_agent_messaging": {"type": "boolean"},
+    "max_active_subagents": {"type": ["integer", "null"], "minimum": 1, "maximum": 100},
+    "subagent_provider_id": {"type": ["string", "null"]},
+    "subagent_harness_profile_id": {"type": ["string", "null"]},
+    "subagent_model": {"type": ["string", "null"]},
+    "subagent_reasoning_effort": {
+        "type": ["string", "null"],
+        "enum": [None, "none", "minimal", "low", "medium", "high", "xhigh"],
+    },
+}
+SET_CHAT_SETTINGS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "session_id": CHAT_SETTINGS_TARGET_SCHEMA["properties"]["session_id"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "settings": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": CHAT_SETTINGS_FIELDS,
+            "minProperties": 1,
+        },
+    },
+    "required": ["session_id", "expected_revision", "settings"],
 }
 MISSION_TARGET_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -57,6 +122,17 @@ START_CHAT_SCHEMA: dict[str, Any] = {
         "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "model": {"type": "string", "minLength": 1, "maxLength": 500},
         "tools_enabled": {"type": "boolean"},
+        "harness_session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "settings": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                key: value
+                for key, value in CHAT_SETTINGS_FIELDS.items()
+                if key not in {"backend", "profile_id", "model"}
+            },
+            "minProperties": 1,
+        },
     },
     "required": ["prompt"],
 }
@@ -139,6 +215,166 @@ class ControlAssistantWork:
             raise ValueError("choose an assistant chat from this project's work roster")
         return chat
 
+    def _settings_chat(self, project_id: str, session_id: Any) -> ChatSession:
+        target = _text(session_id, "session_id", 200)
+        if target == "self":
+            matches = self.store.find_entities(
+                ChatSession,
+                {},
+                engagement_id=project_id,
+                newest_first=True,
+                limit=None,
+            )
+            session = next(
+                (
+                    item
+                    for item in matches
+                    if item.metadata.get("control_assistant") is True
+                ),
+                None,
+            )
+            if session is None:
+                raise ValueError("Nebula assistant has no saved conversation yet")
+            return session
+        return self._chat(project_id, target)
+
+    def chat_settings(self, project_id: str, session_id: Any) -> dict[str, Any]:
+        session = self._settings_chat(project_id, session_id)
+        current = chat_assistant_config(self.store, session)
+        available = model_choices(self.store)
+        harness = None
+        if current["backend"] == "harness":
+            harness = self.store.get(HarnessProfile, current["profile_id"])
+        model_option = (
+            next(
+                (
+                    item
+                    for item in harness.capabilities.model_options
+                    if item.model == current["model"]
+                ),
+                None,
+            )
+            if harness
+            else None
+        )
+        project = self._project(project_id)
+        scope = (
+            self.store.get(ScopePolicy, project.scope_policy_id)
+            if project.scope_policy_id
+            else None
+        )
+        mcp = [
+            {
+                "id": item.id,
+                "name": item.name,
+                "tools": len(
+                    usable_mcp_tools(
+                        item,
+                        bypass_permissions=bool(scope and scope.bypass_permissions),
+                    )
+                ),
+            }
+            for item in self.store.find_entities(McpServerProfile, {}, limit=None)
+            if item.enabled
+            and (
+                item.metadata.get("built_in") != "notebook_v1"
+                or item.metadata.get("engagement_id") == project_id
+            )
+            and item.capabilities.checked_at is not None
+        ]
+        hooks = (
+            [
+                {"id": item.id, "name": item.manifest.name}
+                for item in discover_native_hooks(
+                    self.chat.workspace_resolver(project_id)
+                )
+            ]
+            if current["backend"] == "provider"
+            else []
+        )
+        return {
+            "session_id": session.id,
+            "target": "self"
+            if session.metadata.get("control_assistant") is True
+            else "chat",
+            "title": session.title,
+            "url": _chat_url(project_id, session.id),
+            "revision": session.revision,
+            "settings": current,
+            "bound_runtime": {
+                "backend": session.backend.value,
+                "profile_id": session.provider_profile_id
+                if session.backend == ChatBackend.PROVIDER
+                else session.harness_profile_id,
+                "model": session.model,
+            },
+            "available": {
+                **available,
+                "harness_reasoning_efforts": [
+                    item.model_dump(mode="json")
+                    for item in model_option.reasoning_efforts
+                ]
+                if model_option
+                else [],
+                "harness_service_tiers": [
+                    item.model_dump(mode="json") for item in model_option.service_tiers
+                ]
+                if model_option
+                else [],
+                "harness_cyber_access_programs": model_option.cyber_access_programs
+                if model_option
+                else None,
+                "harness_modes": harness.capabilities.modes if harness else [],
+                "mcp_servers": mcp,
+                "hooks": hooks,
+            },
+            "applies_to": "next message; queued and running turns keep their submitted settings",
+        }
+
+    def set_chat_settings(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self._settings_chat(project_id, arguments.get("session_id"))
+        expected_revision = arguments.get("expected_revision")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("read current settings and provide expected_revision")
+        patch = ChatAssistantConfigPatch.model_validate(arguments.get("settings"))
+        current = chat_assistant_config(self.store, session)
+        selected = {**current, **patch.model_dump(exclude_unset=True, mode="json")}
+        if (
+            session.backend == ChatBackend.PROVIDER
+            and selected["backend"] == "provider"
+            and (selected["profile_id"], selected["model"])
+            != (session.provider_profile_id, session.model)
+        ):
+            preflight = self.chat.runtime_switch_preflight(
+                session.id,
+                ChatRuntimeSwitchPreflightRequest(
+                    provider_id=selected["profile_id"],
+                    model=selected["model"],
+                    tools_enabled=bool(selected["tools_enabled"]),
+                    expected_session_revision=expected_revision,
+                ),
+            )
+            if not preflight.compatible or preflight.requires_compaction_confirmation:
+                raise ValueError(
+                    preflight.reason or "open the chat to confirm this runtime switch"
+                )
+        saved = update_chat_assistant_config(
+            self.store,
+            session,
+            patch,
+            expected_revision=expected_revision,
+            workspace_resolver=self.chat.workspace_resolver,
+        )
+        return {
+            "session_id": saved.id,
+            "url": _chat_url(project_id, saved.id),
+            "revision": saved.revision,
+            "settings": chat_assistant_config(self.store, saved),
+            "applies_to": "next message; queued and running turns keep their submitted settings",
+        }
+
     def _run(self, project_id: str, run_id: Any) -> AgentRun:
         run = self.store.get(AgentRun, _text(run_id, "run_id", 200))
         if run.engagement_id != project_id:
@@ -153,6 +389,8 @@ class ControlAssistantWork:
             "actions": [
                 "nebula.work.overview",
                 "nebula.work.chat",
+                "nebula.work.chat_settings",
+                "nebula.work.set_chat_settings",
                 "nebula.work.mission",
                 "nebula.work.start_chat",
                 "nebula.work.message_chat",
@@ -318,9 +556,31 @@ class ControlAssistantWork:
         self._project(project_id)
         prompt = _text(arguments.get("prompt"), "prompt", 20000)
         backend, profile_id, model = self._runtime(arguments)
-        tools_enabled = arguments.get("tools_enabled", False)
+        setting_values = arguments.get("settings") or {}
+        if not isinstance(setting_values, dict):
+            raise ValueError("settings must contain Assistant settings choices")
+        if {"backend", "profile_id", "model"} & setting_values.keys():
+            raise ValueError(
+                "choose the new chat runtime with backend, profile_id, and model"
+            )
+        settings = (
+            ChatAssistantConfigPatch.model_validate(setting_values)
+            if setting_values
+            else None
+        )
+        tools_enabled = setting_values.get(
+            "tools_enabled", arguments.get("tools_enabled", False)
+        )
         if type(tools_enabled) is not bool:
             raise ValueError("tools_enabled must be true or false")
+        harness_session_id = arguments.get("harness_session_id")
+        if harness_session_id is not None:
+            harness_session_id = _text(harness_session_id, "harness_session_id", 200)
+            if backend != "harness":
+                raise ValueError("only harness chats can resume an existing session")
+        chosen = (
+            settings.model_dump(exclude_unset=True, mode="json") if settings else {}
+        )
         if backend == "provider":
             request = ChatCompletionRequest(
                 backend=ChatBackend.PROVIDER,
@@ -329,6 +589,15 @@ class ControlAssistantWork:
                 model=model,
                 messages=[ChatRequestMessage(role=ChatRole.USER, content=prompt)],
                 tools_enabled=tools_enabled,
+                mcp_server_ids=chosen.get("mcp_server_ids", []),
+                hook_ids=chosen.get("hook_ids", []),
+                include_knowledge=chosen.get("include_knowledge", True),
+                allow_cloud_knowledge=chosen.get("allow_cloud_knowledge", False),
+                allow_subagents=chosen.get("allow_subagents", False),
+                allow_agent_messaging=chosen.get("allow_agent_messaging", False),
+                max_active_subagents=chosen.get("max_active_subagents"),
+                subagent_reasoning_effort=chosen.get("subagent_reasoning_effort"),
+                reasoning_effort=chosen.get("reasoning_effort"),
                 stream=True,
             )
             prepared = await self.chat.prepare_async(request)
@@ -346,12 +615,40 @@ class ControlAssistantWork:
                 model=model,
                 prompt=prompt,
                 chat_session_id=None,
-                harness_session_id=None,
-                mcp_server_ids=[],
-                include_knowledge=True,
-                allow_cloud_knowledge=False,
+                harness_session_id=harness_session_id,
+                mcp_server_ids=chosen.get("mcp_server_ids", []),
+                include_knowledge=chosen.get("include_knowledge", True),
+                allow_cloud_knowledge=chosen.get("allow_cloud_knowledge", False),
                 allow_remote_mcp=False,
-                allow_agent_messaging=False,
+                allow_agent_messaging=chosen.get("allow_agent_messaging", False),
+                harness_mode=chosen.get("harness_mode"),
+                harness_reasoning_effort=chosen.get("harness_reasoning_effort"),
+                harness_service_tier=chosen.get("harness_service_tier"),
+                harness_cyber_access_program=chosen.get("harness_cyber_access_program"),
+                provider_subagent={
+                    **(
+                        {"harness_profile_id": chosen["subagent_harness_profile_id"]}
+                        if chosen.get("subagent_harness_profile_id")
+                        else {
+                            "provider_profile_id": chosen.get(
+                                "subagent_provider_id", ""
+                            )
+                        }
+                    ),
+                    "model": chosen.get("subagent_model", ""),
+                    **(
+                        {"max_active": chosen["max_active_subagents"]}
+                        if chosen.get("max_active_subagents")
+                        else {}
+                    ),
+                    **(
+                        {"reasoning_effort": chosen["subagent_reasoning_effort"]}
+                        if chosen.get("subagent_reasoning_effort")
+                        else {}
+                    ),
+                }
+                if chosen.get("allow_subagents")
+                else None,
             )
             self.harness.start_chat_turn(harness_turn.id)
             turn_id = turn.id
@@ -393,15 +690,64 @@ class ControlAssistantWork:
             }
         if delivery != "next":
             raise ValueError("choose next or steer delivery")
+        next_settings = chat_assistant_config(self.store, session)
+        next_backend = ChatBackend(next_settings["backend"])
+        next_profile = next_settings["profile_id"]
+        sharing_allowed = (
+            self.store.get(
+                ProviderProfile, next_profile
+            ).privacy.auto_share_tool_results
+            if next_backend == ChatBackend.PROVIDER
+            else self.store.get(
+                HarnessProfile, next_profile
+            ).privacy.auto_share_tool_results
+        )
         request = ChatCompletionRequest(
-            backend=session.backend,
+            backend=next_backend,
             engagement_id=project_id,
             session_id=session.id,
-            provider_id=session.provider_profile_id,
-            harness_profile_id=session.harness_profile_id,
-            model=session.model,
+            provider_id=next_profile if next_backend == ChatBackend.PROVIDER else None,
+            harness_profile_id=next_profile
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            model=next_settings["model"],
             messages=[ChatRequestMessage(role=ChatRole.USER, content=text)],
-            tools_enabled=bool(session.metadata.get("tools_enabled")),
+            tools_enabled=bool(next_settings["tools_enabled"]),
+            mcp_server_ids=next_settings["mcp_server_ids"],
+            hook_ids=next_settings["hook_ids"]
+            if next_backend == ChatBackend.PROVIDER
+            else [],
+            include_knowledge=next_settings["include_knowledge"],
+            allow_cloud_knowledge=next_settings["allow_cloud_knowledge"],
+            allow_cloud_tool_results=sharing_allowed,
+            reasoning_effort=next_settings["reasoning_effort"]
+            if next_backend == ChatBackend.PROVIDER
+            else None,
+            harness_reasoning_effort=next_settings["harness_reasoning_effort"]
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            harness_service_tier=next_settings["harness_service_tier"]
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            harness_mode=next_settings["harness_mode"]
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            harness_cyber_access_program=next_settings["harness_cyber_access_program"]
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            allow_subagents=next_settings["allow_subagents"],
+            allow_agent_messaging=next_settings["allow_agent_messaging"],
+            max_active_subagents=next_settings["max_active_subagents"],
+            subagent_provider_id=next_settings["subagent_provider_id"]
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            subagent_harness_profile_id=next_settings["subagent_harness_profile_id"]
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            subagent_model=next_settings["subagent_model"]
+            if next_backend == ChatBackend.HARNESS
+            else None,
+            subagent_reasoning_effort=next_settings["subagent_reasoning_effort"],
             stream=True,
         )
         queue = self.queue.get(session.id)
@@ -551,6 +897,18 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.chat_settings",
+        "Read saved next-turn Assistant settings, their revision, and available choices for a listed chat or session_id=self.",
+        CHAT_SETTINGS_TARGET_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.set_chat_settings",
+        "Change the next-turn Assistant settings for one listed chat or session_id=self. First read chat_settings and pass its revision. Running and queued turns keep their submitted settings. Read back the saved result.",
+        SET_CHAT_SETTINGS_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.mission",
         "Read the saved status and tasks for one listed mission.",
         MISSION_TARGET_SCHEMA,
@@ -604,6 +962,10 @@ async def dispatch_work_tool(
         return work.overview(project_id)
     if name == "nebula.work.chat":
         return work.chat_detail(project_id, arguments.get("session_id"))
+    if name == "nebula.work.chat_settings":
+        return work.chat_settings(project_id, arguments.get("session_id"))
+    if name == "nebula.work.set_chat_settings":
+        return work.set_chat_settings(project_id, arguments)
     if name == "nebula.work.mission":
         return work.mission_detail(project_id, arguments.get("run_id"))
     if name == "nebula.work.start_chat":
