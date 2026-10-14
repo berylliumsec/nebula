@@ -347,15 +347,22 @@ async function clickAssistantSettings(page: Page) {
 
 async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string> } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
-  const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
   // Match the production-test override used by the shared real-Core harness.
   const coreCandidates = [
     process.env.NEBULA_TEST_CORE_BIN,
     process.env.NEBULA_CORE_BINARY,
     path.join(repository, ".venv/bin/nebula-core"),
-    commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined,
   ].filter((candidate): candidate is string => Boolean(candidate));
-  const coreBinary = coreCandidates.find(existsSync);
+  let coreBinary = coreCandidates.find(existsSync);
+  if (!coreBinary) {
+    const gitResult = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" });
+    const commonGitDir = gitResult.status === 0 ? gitResult.stdout?.trim() : "";
+    if (commonGitDir) {
+      const worktreeBinary = path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core");
+      coreCandidates.push(worktreeBinary);
+      if (existsSync(worktreeBinary)) coreBinary = worktreeBinary;
+    }
+  }
   if (!coreBinary) throw new Error(`No nebula-core test binary was found in: ${coreCandidates.join(", ")}`);
   const dataDir = options.dataDir ?? await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
   let token = options.token ?? "playwright-real-core-token-2026";
