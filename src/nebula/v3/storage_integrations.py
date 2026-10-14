@@ -600,12 +600,23 @@ class StorageIntegrationService:
             async with client.stream(
                 "POST", source.callback_url + path, json=body, headers=headers
             ) as response:
-                response.raise_for_status()
                 chunks = bytearray()
                 async for chunk in response.aiter_bytes():
                     chunks.extend(chunk)
                     if len(chunks) > MAX_CALLBACK_BYTES:
                         raise ValueError("callback response exceeds 64 KiB")
+                if response.status_code == 409 and path.endswith("/preview"):
+                    try:
+                        refusal = json.loads(chunks)
+                    except ValueError:
+                        refusal = None
+                    reason = refusal.get("error") if isinstance(refusal, dict) else None
+                    if isinstance(reason, str):
+                        reason = " ".join(reason.split())[:500]
+                    if not reason:
+                        reason = "the selected source is no longer available; choose another offer"
+                    raise ConflictError(f"Storage source refused preview: {reason}")
+                response.raise_for_status()
         value = json.loads(chunks)
         if not isinstance(value, dict):
             raise ValueError("callback response must be an object")

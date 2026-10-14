@@ -1,23 +1,28 @@
 {
-  "change_digest": "c93cd5a1b2594245b31c6c2847f477c404c825a4d93dde65e7951029816eb27a",
-  "reviewed_by": "Codex review of the 3.0.22 updater fixture and formatting-only follow-up",
-  "reason": "The 3.0.22 published release updater workflow verified asset checksums, then its Cargo signature verifier failed before execution because the Tauri config requires resources/notebook-runtime. Select the one workflow contract test that executes the fixture step and checks the declared resource is present. The recovered updater dispatch against the published tag is the definitive integration check.",
-  "exclusions": "Only the updater workflow fixture and its focused Python contract test changed. No application code or release artifact changed. No frontend, native, Playwright, unrelated packaging, optional diagnostics, or full-suite tests are selected.",
+  "change_digest": "3ea38cc381c68d02d8fe8adf09d4f123b74f96b09d9566fde6ea9c3d7ae4dafe",
+  "reviewed_by": "Codex storage preview refusal review",
+  "reason": "The storage callback now preserves a bounded source refusal and maps preview HTTP 409 to an actionable Core conflict. Select the storage integration Python contract tests and the existing production LAN storage journey, extended to exercise refusal, retry, approval, receipt, and refresh in desktop and mobile profiles.",
+  "exclusions": "No component or native implementation changed. The selected real-Core Playwright journey covers the existing storage action UI and API-to-UI error presentation. Unrelated backend and browser journeys and full suites are excluded.",
   "expected_tests": {
-    "python": 1,
+    "python": 10,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_packaging.py::test_updater_manifest_supports_validated_recovery_with_native_libraries"
-  ],
+  "python": ["tests/v3/test_storage_integrations.py"],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:storage-integrations/assistant-real-desktop",
+    "entry:storage-integrations/assistant-real-compact",
+    "entry:storage-integrations/assistant-real-chromium-320",
+    "entry:storage-integrations/assistant-real-chromium-390",
+    "entry:storage-integrations/assistant-real-chromium-430",
+    "entry:storage-integrations/assistant-real-webkit-320",
+    "entry:storage-integrations/assistant-real-webkit-390",
+    "entry:storage-integrations/assistant-real-webkit-430"
+  ]
 }
