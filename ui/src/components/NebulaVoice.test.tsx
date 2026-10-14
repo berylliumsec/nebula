@@ -33,6 +33,7 @@ const roster = {
   project: { id: "project", name: "Project" },
   chats: [{ id: "chat", title: "Surface review", backend: "harness", model: "model", state: "working", url: "/chat" }],
   missions: [{ id: "mission", name: "Audit scope", status: "running", backend: "harness", updated_at: "now", url: "/mission" }],
+  attention: [{ kind: "approval", action_id: "approval", owner_kind: "chat", owner_id: "chat", owner: "Code agent", summary: "write_file", url: "/chat" }],
   more_chats: false, more_missions: false,
 };
 
@@ -42,7 +43,7 @@ describe("Nebula Voice", () => {
     Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(microphone) } });
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   it("connects once, shows project work, delegates transcript text, and stays open until Exit", async () => {
     const user = userEvent.setup();
@@ -59,6 +60,8 @@ describe("Nebula Voice", () => {
     expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Listening");
     expect(screen.getByRole("dialog", { name: "Nebula Voice" })).toBeVisible();
     expect(screen.getByText("Surface review")).toBeVisible();
+    expect(screen.getByText("1 needs attention")).toBeVisible();
+    expect(screen.getByText("write_file")).toBeVisible();
     await user.click(screen.getByRole("button", { name: /Surface review/ }));
     expect(await screen.findByText("Reviewing")).toBeVisible();
     await act(async () => {
@@ -94,5 +97,104 @@ describe("Nebula Voice", () => {
     await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
     expect(await screen.findByRole("alert")).toHaveTextContent("GPT-Live rejected this offer");
     expect(screen.getByRole("alert")).not.toHaveTextContent("event channel closed");
+  });
+
+  it("keeps speaker recovery visible when a spoken reply has no audio track", async () => {
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer" }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} initialMicrophone={Promise.resolve(microphone)} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Speaker output" })).toBeVisible();
+    await act(async () => FakePeer.latest.channel.emit({ type: "session.output_transcript.delta", delta: "Hello there." }));
+    expect(screen.getByText("Hello there.")).toBeVisible();
+    expect(screen.getByRole("group", { name: "Speaker audio" })).toHaveTextContent("no speaker stream arrived");
+    expect(screen.getByRole("button", { name: "Reconnect voice" })).toBeVisible();
+  });
+
+  it("binds the remote audio track and starts playback independently of captions", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    class FakeRemoteMediaStream {
+      constructor(public tracks: MediaStreamTrack[]) {}
+      getTracks() { return this.tracks; }
+    }
+    vi.stubGlobal("MediaStream", FakeRemoteMediaStream);
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer" }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} initialMicrophone={Promise.resolve(microphone)} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    const remote = { kind: "audio" } as MediaStreamTrack;
+    await act(async () => FakePeer.latest.dispatchEvent(Object.assign(new Event("track"), { track: remote })));
+    const output = document.querySelector("audio") as HTMLAudioElement;
+    expect((output.srcObject as unknown as FakeRemoteMediaStream).getTracks()).toEqual([remote]);
+    expect(output.muted).toBe(false);
+    expect(output.volume).toBe(1);
+    expect(play).toHaveBeenCalledOnce();
+  });
+
+  it("shows the active microphone and switches to a selected input", async () => {
+    const user = userEvent.setup();
+    const currentTrack = { enabled: true, label: "iPhone Microphone", stop: vi.fn() };
+    const chosenTrack = { enabled: true, label: "MacBook Pro Microphone", stop: vi.fn() };
+    const current = { getTracks: () => [currentTrack], getAudioTracks: () => [currentTrack] } as unknown as MediaStream;
+    const chosen = { getTracks: () => [chosenTrack], getAudioTracks: () => [chosenTrack] } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(chosen);
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+      getUserMedia,
+      enumerateDevices: vi.fn().mockResolvedValue([
+        { kind: "audioinput", deviceId: "iphone", label: "iPhone Microphone" },
+        { kind: "audioinput", deviceId: "mac", label: "MacBook Pro Microphone" },
+      ]),
+    } });
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer" }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} initialMicrophone={Promise.resolve(current)} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole("button", { name: "Microphone input" }));
+    expect(screen.getByRole("group", { name: "Microphone input" })).toHaveTextContent("Using iPhone Microphone");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Input device" }), "mac");
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledWith({ audio: {
+      echoCancellation: true, noiseSuppression: true, deviceId: { exact: "mac" },
+    } }));
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledTimes(2));
+    expect(currentTrack.stop).toHaveBeenCalledOnce();
+    expect(screen.getByRole("group", { name: "Microphone input" })).toHaveTextContent("Using MacBook Pro Microphone");
+  });
+
+  it("moves the orb with microphone energy and settles it when muted", async () => {
+    const track = { enabled: true, stop: vi.fn() };
+    const liveMicrophone = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+    class FakeAudioContext {
+      createMediaStreamSource() { return { connect: vi.fn(), disconnect: vi.fn() }; }
+      createAnalyser() { return { fftSize: 512, connect: vi.fn(), disconnect: vi.fn(), getByteTimeDomainData: (samples: Uint8Array) => samples.fill(180) }; }
+      createGain() { return { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() }; }
+      destination = {};
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    }
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    let frame: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { frame = callback; return 1; });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer" }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} initialMicrophone={Promise.resolve(liveMicrophone)} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    await act(async () => { frame?.(0); frame?.(16); });
+    const orb = screen.getByTestId("voice-orb");
+    const moving = Number(orb.style.getPropertyValue("--voice-scale"));
+    expect(moving).toBeGreaterThan(1.02);
+    expect(Number.parseFloat(orb.style.getPropertyValue("--voice-rise"))).toBeLessThan(-1);
+    await userEvent.click(screen.getByRole("button", { name: "Turn microphone off" }));
+    await act(async () => { for (let index = 0; index < 10; index += 1) frame?.(32 + index * 16); });
+    expect(Number(orb.style.getPropertyValue("--voice-scale"))).toBeLessThan(moving);
+    expect(Number.parseFloat(orb.style.getPropertyValue("--voice-rise"))).toBeGreaterThan(-1);
   });
 });

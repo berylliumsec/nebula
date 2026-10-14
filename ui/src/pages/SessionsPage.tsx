@@ -6879,6 +6879,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 </>}
               </div>}
             </div>
+            {shellOnly && <NebulaAssistantLauncherButton />}
             {shellOnly && <MobileAttentionInbox onOpenChat={(item) => {
               setMobileListOpen(false);
               setMobileConversationMenuOpen(false);
@@ -6905,6 +6906,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           </button>}
             <div className="conversation-heading"><strong className="conversation-toolbar-title" title={conversationTitle}>{conversationTitle}</strong><small>{engagement?.name ?? "Assistant"} · {assistantSource}{runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}</small></div>
             {conversationActions}
+            {shellOnly && <NebulaAssistantLauncherButton />}
           </header>}
 
           {!shellOnly && api && engagement && <div ref={(element) => { chatTerminalSize.panelRef.current = element; }} id="chat-side-terminal" aria-label={chatTerminalVisible ? "Terminal beside chat" : undefined} role={chatTerminalVisible ? "region" : undefined} style={chatTerminalVisible ? chatTerminalSize.panelStyle : undefined} className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen && view === "terminal" ? " assistant-open" : ""}${chatTerminalVisible ? " chat-side-terminal" : ""}`} hidden={view !== "terminal" && !chatTerminalVisible}>
