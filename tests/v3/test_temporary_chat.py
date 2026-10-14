@@ -214,6 +214,26 @@ def test_side_chat_discovery_is_scoped_to_its_parent(popup):
     assert client.get("/chat/sessions/missing/side-chats").status_code == 404
 
 
+def test_multiple_side_chats_for_one_parent_survive_selective_close(popup):
+    store, client, _ = popup
+    service = ChatService(store)
+    first = service.fork_session("main", through_message_id="message", side_chat=True)
+    second = service.fork_session("main", through_message_id="message", side_chat=True)
+    assert {
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    } == {
+        first.id,
+        second.id,
+    }
+
+    assert client.delete(f"/chat/temporary-sessions/{second.id}").status_code == 204
+    assert [
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    ] == [first.id]
+    assert store.get(ChatSession, first.id).parent_session_id == "main"
+    assert store.get(ChatSession, "main").id == "main"
+
+
 def test_cannot_discard_main_or_copy_another_project(popup):
     store, client, _ = popup
     assert client.delete("/chat/temporary-sessions/main").status_code == 409

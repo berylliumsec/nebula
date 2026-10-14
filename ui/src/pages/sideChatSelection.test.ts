@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatSessionSummary } from "../api/types";
-import { sideChatForConversation } from "./sideChatSelection";
+import { nextSideChatNumber, sideChatForConversation, sideChatsForConversation, sideChatTabLabel } from "./sideChatSelection";
 
 function side(id: string, parentId: string, isSideChat = true): ChatSessionSummary {
   return {id, parentSessionId: parentId, isSideChat} as ChatSessionSummary;
@@ -21,5 +21,27 @@ describe("side chat selection", () => {
   it("honors a deep link to an older side chat only within its parent", () => {
     expect(sideChatForConversation(sideChats, "a", "a-old")?.id).toBe("a-old");
     expect(sideChatForConversation(sideChats, "a", "ordinary")?.id).toBe("a-new");
+  });
+
+  it("keeps tabs in creation order when replies reorder the Core list", () => {
+    const first = {...side("first", "a"), createdAt: "2026-10-14T10:00:00Z"};
+    const second = {...side("second", "a"), createdAt: "2026-10-14T10:01:00Z"};
+    expect(sideChatsForConversation([second, side("other", "b"), first], "a").map(item => item.id)).toEqual(["first", "second"]);
+  });
+
+  it("keeps a saved tab number when an older sibling closes", () => {
+    const older = {...side("first", "a"), title: "Side chat #1 · Research", createdAt: "2026-10-14T10:00:00Z"};
+    const newer = {...side("second", "a"), title: "Side chat #2 · Research", createdAt: "2026-10-14T10:01:00Z"};
+    expect(nextSideChatNumber([newer, older], "a")).toBe(3);
+    expect(sideChatTabLabel(newer, 0)).toBe("Side 2");
+    expect(sideChatTabLabel(newer, 0)).toBe(sideChatTabLabel(newer, 1));
+  });
+
+  it("numbers new chats after legacy chats without duplicate tab labels", () => {
+    const first = {...side("first", "a"), title: "Earlier reply", createdAt: "2026-10-14T10:00:00Z"};
+    const second = {...side("second", "a"), title: "Later reply", createdAt: "2026-10-14T10:01:00Z"};
+    const third = {...side("third", "a"), title: "Side chat #2 · Research", createdAt: "2026-10-14T10:02:00Z"};
+    expect(nextSideChatNumber([second, first], "a")).toBe(3);
+    expect([first, second, third].map(sideChatTabLabel)).toEqual(["Side 1", "Side 2", "Side 3"]);
   });
 });

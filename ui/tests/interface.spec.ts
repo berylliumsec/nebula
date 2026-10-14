@@ -818,28 +818,27 @@ reloadTest("assistant upgrade links open workspace files and websites in the mat
     return route.fallback();
   });
   await openWorkspace(page, "/?view=chat&session=link-chat", "Workbench");
-  const compact = await page.evaluate(() => matchMedia("(max-width: 760px)").matches);
   const reply = page.locator(".chat-message.assistant .assistant-markdown");
   await reply.getByRole("link", { name: "Open file" }).click();
-  await expect(page).toHaveURL(compact ? /view=code/ : /view=chat.*side=code/);
-  await expect(page).toHaveURL(/openFile=notes%2Freview.md/);
-  await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
-  await expect(page.locator(".code-editor-panel")).toContainText("second line");
-  if (!compact) await expect(page.getByRole("region", { name: "Code beside chat" })).toBeVisible();
+  const code = page.getByRole("region", { name: "Code 1 beside chat" });
+  await expect(code).toBeVisible();
+  await expect(code.getByRole("tab", { name: "Code 1" })).toHaveAttribute("aria-selected", "true");
+  await expect(code.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+  await expect(code.locator(".code-editor-panel")).toContainText("second line");
   await page.reload();
-  await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
-  if (compact) await page.goBack();
+  await expect(code.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+  await code.getByRole("button", { name: "Close Code 1 tab" }).click();
   await expect(reply.getByRole("link", { name: "Open site" })).toBeVisible();
   expect(await reply.getByText("Outside").evaluate(element => element.closest("a")?.getAttribute("href"))).toBeNull();
   await reply.getByRole("link", { name: "Open site" }).click();
-  await expect(page).toHaveURL(compact ? /view=browser/ : /view=chat.*side=browser/);
-  if (!compact) await expect(page.getByRole("region", { name: "Browser beside chat" })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue("https://example.test/review");
+  const browser = page.getByRole("region", { name: "Browser 1 beside chat" });
+  await expect(browser).toBeVisible();
+  await expect(browser.getByRole("textbox", { name: "Browser address" })).toHaveValue("https://example.test/review");
   expect(linkedNavigations).toEqual(["https://example.test/review"]);
   await page.reload();
-  await expect(page.getByRole("textbox", { name: "Browser address" })).toHaveValue("https://example.test/review");
+  await expect(browser.getByRole("textbox", { name: "Browser address" })).toHaveValue("https://example.test/review");
   expect(linkedNavigations).toHaveLength(1);
-  if (compact) await page.goBack();
+  await browser.getByRole("button", { name: "Close Browser 1 tab" }).click();
   await reply.getByRole("link", { name: "Open site" }).click();
   await expect.poll(() => linkedNavigations.length).toBe(2);
 });
@@ -5702,7 +5701,7 @@ test("assistant upgrade keeps a short operator message's actions on top and clic
   await expect(page.getByRole("button", { name: "Open parent" })).toBeVisible();
 });
 
-test("assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation", async ({ page }, testInfo) => {
+reloadTest("assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation", async ({ page }, testInfo) => {
   await installTruthfulCore(page);
   const provider = {
     ...entity, id: "side-chat-provider", name: "Side chat provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
@@ -5889,6 +5888,176 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   expect(discardAttempts).toBe(2);
   await expect(page).not.toHaveURL(/sideChat=/);
   await expect(page.locator(`.session-select[data-session-id="${side.id}"]`)).toHaveCount(0);
+});
+
+reloadTest("assistant upgrade multiple side chats switch and a linked file opens code in the side pane", async ({page}, testInfo) => {
+  await installTruthfulCore(page);
+  const provider = {...entity, id: "multi-side-provider", name: "Local provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["side-model"], capabilities: {streaming: true},
+    privacy: {local_only: true, permits_sensitive_data: true}, metadata: {default_model: "side-model"}};
+  const parent = {...entity, id: "multi-side-parent", engagement_id: "scratch-project", title: "Project research", backend: "provider", provider_profile_id: provider.id, model: "side-model", metadata: {}};
+  const side = [1, 2].map(index => ({...parent, id: `multi-side-${index}`, title: `Side chat #${index} · Project research`,
+    created_at: `2026-07-12T10:0${index}:00Z`, parent_session_id: parent.id, forked_from_message_id: "parent-answer", metadata: {side_chat: true}}));
+  const question = {...entity, id: "parent-question", engagement_id: "scratch-project", session_id: parent.id, sequence: 1, role: "user", content: "Review the file", citations: [], metadata: {}};
+  const answer = {...question, id: "parent-answer", sequence: 2, role: "assistant", content: "Review complete"};
+  const created: typeof side = [];
+  const discarded: string[] = [];
+  const openedFiles: string[] = [];
+  await page.context().route("**/api/v1/**", async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({json: [provider]});
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({json: {provider_id: provider.id, healthy: true, models: ["side-model"]}});
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({json: [parent]});
+    const selected = side.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && request.method() === "GET") return route.fulfill({json: selected});
+    if (path.endsWith(`/chat/sessions/${parent.id}/side-chats`) && request.method() === "GET") return route.fulfill({json: [...created].reverse()});
+    if (path.endsWith(`/chat/sessions/${parent.id}/fork`) && request.method() === "POST") {
+      const next = side[created.length];
+      if (!next) return route.fulfill({status: 409, json: {detail: "Only two fixture chats"}});
+      created.push(next);
+      return route.fulfill({status: 201, json: next});
+    }
+    const closing = side.find(item => path.endsWith(`/chat/temporary-sessions/${item.id}`));
+    if (closing && request.method() === "DELETE") {
+      discarded.push(closing.id);
+      created.splice(created.findIndex(item => item.id === closing.id), 1);
+      return route.fulfill({status: 204});
+    }
+    if (path.includes("/chat/temporary-sessions/") && path.endsWith("/keepalive")) return route.fulfill({status: 204});
+    if (path.endsWith(`/chat/sessions/${parent.id}/messages`)) return route.fulfill({json: [question, answer]});
+    const messageSide = side.find(item => path.endsWith(`/chat/sessions/${item.id}/messages`));
+    if (messageSide) return route.fulfill({json: [
+      {...question, id: `${messageSide.id}-inherited-question`, session_id: messageSide.id, source_message_id: question.id},
+      {...answer, id: `${messageSide.id}-inherited-answer`, session_id: messageSide.id, source_message_id: answer.id},
+      {...question, id: `${messageSide.id}-question`, session_id: messageSide.id, sequence: 3, content: `Question in ${messageSide.id}`},
+      {...answer, id: `${messageSide.id}-answer`, session_id: messageSide.id, sequence: 4,
+        content: messageSide.id === side[0].id ? "Read [example.py](src/example.py#L2)." : "Second branch answer."},
+    ]});
+    if (path.endsWith("/workspace/download")) {
+      openedFiles.push(url.searchParams.get("path") ?? "");
+      return route.fulfill({contentType: "text/plain", body: "first line\nsecond line\n"});
+    }
+    if (path.endsWith("/pending-turn")) return route.fulfill({json: null});
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${parent.id}`, "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (mobile) {
+    await page.getByRole("button", {name: "Conversation actions"}).click();
+    await page.getByRole("menuitem", {name: /Open side chat/}).click();
+  } else {
+    await page.getByRole("button", {name: "Chat tools"}).click();
+    await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Side chats/}).click();
+  }
+  const pane = page.getByRole("region", {name: "Side chat", exact: true});
+  await expect(pane.getByRole("tab", {name: "Side 1"})).toHaveAttribute("aria-selected", "true");
+  if (mobile) {
+    await pane.getByRole("button", {name: "Back to main chat"}).click();
+    await page.getByRole("button", {name: "Conversation actions"}).click();
+    await page.getByRole("menuitem", {name: /New side chat/}).click();
+  } else {
+    await page.getByRole("button", {name: "Chat tools"}).click();
+    await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /New side chat/}).click();
+  }
+  await expect(pane.getByRole("tab", {name: "Side 2"})).toHaveAttribute("aria-selected", "true");
+  await expect(pane.getByRole("tab", {name: /Code 1/})).toHaveCount(0);
+  expect(discarded).toEqual([]);
+  const secondDraft = pane.locator("textarea[data-guide='composer']");
+  await secondDraft.fill("Keep this draft");
+  await pane.getByRole("tab", {name: "Side 2"}).focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(pane.getByRole("tab", {name: "Side 1"})).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/sideChat=multi-side-1/);
+  await pane.getByRole("tab", {name: "Side 2"}).click();
+  await expect(secondDraft).toHaveValue("Keep this draft");
+  await pane.getByRole("tab", {name: "Side 1"}).click();
+
+  if (testInfo.project.name === "desktop") await page.setViewportSize({width: 1920, height: 900});
+  await pane.getByRole("link", {name: "example.py"}).click();
+  await expect.poll(() => openedFiles).toContain("src/example.py");
+  const code = page.getByRole("region", {name: "Code 1 beside chat"});
+  await expect(code).toBeVisible();
+  await expect(code.getByText("example.py", {exact: true}).first()).toBeVisible();
+  await expect(page.locator(".session-workspace.side-tool-active")).toBeVisible();
+  await expect(pane).toBeHidden();
+  await expect(code.getByRole("tab", {name: "Code 1"})).toHaveAttribute("aria-selected", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  await code.getByRole("tab", {name: "Side 2"}).click();
+  await expect(pane.getByRole("tab", {name: "Side 2"})).toHaveAttribute("aria-selected", "true");
+  await pane.getByRole("tab", {name: "Code 1"}).click();
+  await expect(code).toBeVisible();
+  await expect(code.getByText("example.py", {exact: true}).first()).toBeVisible();
+  await code.getByRole("tab", {name: "Side 1"}).click();
+  await pane.getByRole("link", {name: "example.py"}).click();
+  const secondCode = page.getByRole("region", {name: "Code 2 beside chat"});
+  await expect(secondCode).toBeVisible();
+  await expect(secondCode.getByRole("tab", {name: "Code 2"})).toHaveAttribute("aria-selected", "true");
+  await secondCode.getByRole("button", {name: "Close Code 2 tab"}).click();
+  await expect(code).toBeVisible();
+  await code.getByRole("button", {name: "Close Code 1 tab"}).click();
+  await expect(pane).toBeVisible();
+  await pane.getByRole("tab", {name: "Side 1"}).click();
+  await expect(pane.getByRole("tab", {name: "Side 1"})).toHaveAttribute("aria-selected", "true");
+  await pane.getByRole("button", {name: "Close side chat"}).click();
+  await expect(pane.getByRole("tab", {name: "Side 2"})).toHaveAttribute("aria-selected", "true");
+  expect(discarded).toEqual([side[0].id]);
+  await pane.getByRole("button", {name: "Close side chat"}).click();
+  await expect(pane).toHaveCount(0);
+  expect(discarded).toEqual([side[0].id, side[1].id]);
+});
+
+reloadTest("assistant upgrade Chat tools menu creates a tab for every companion", async ({page}) => {
+  await installTruthfulCore(page);
+  const provider = {...entity, id: "menu-panel-provider", name: "Local provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["side-model"], capabilities: {streaming: true},
+    privacy: {local_only: true, permits_sensitive_data: true}, metadata: {default_model: "side-model"}};
+  const parent = {...entity, id: "menu-panel-parent", engagement_id: "scratch-project", title: "Panel menu", backend: "provider", provider_profile_id: provider.id, model: "side-model", metadata: {}};
+  const side = {...parent, id: "menu-panel-side", title: "Side chat #1 · Panel menu", parent_session_id: parent.id, forked_from_message_id: "menu-panel-answer", metadata: {side_chat: true}};
+  await page.context().route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") return route.fulfill({json: [provider]});
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({json: {provider_id: provider.id, healthy: true, models: ["side-model"]}});
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") return route.fulfill({json: [parent]});
+    if (path.endsWith(`/chat-sessions/${side.id}`) && route.request().method() === "GET") return route.fulfill({json: side});
+    if (path.endsWith(`/chat/sessions/${parent.id}/side-chats`)) return route.fulfill({json: [side]});
+    if (path.endsWith(`/chat/sessions/${parent.id}/messages`) || path.endsWith(`/chat/sessions/${side.id}/messages`)) return route.fulfill({json: []});
+    if (path.endsWith("/pending-turn")) return route.fulfill({json: null});
+    await route.fallback();
+  });
+  await openWorkspace(page, `/?view=chat&session=${parent.id}&sideChat=${side.id}`, "Workbench");
+  const pane = page.getByRole("region", {name: "Side chat", exact: true});
+  await expect(pane).toBeVisible();
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const entries = [
+    {menu: "Terminal", tab: "Terminal 1"}, {menu: "Terminal", tab: "Terminal 2"},
+    {menu: "Code editor", tab: "Code 1"}, {menu: "Browser", tab: "Browser 1"},
+    {menu: "Notes", tab: "Notes 1"}, {menu: "Notebook", tab: "Notebook 1"},
+    {menu: "Chat details", tab: "Chat details 1"}, {menu: "Tool assistance", tab: "Tool assistance 1"},
+  ];
+  for (const [index, entry] of entries.entries()) {
+    if (mobile) {
+      if (index > 0) await page.getByRole("region", {name: `${entries[index - 1].tab} beside chat`}).getByRole("tab", {name: "Side 1"}).click();
+      await pane.getByRole("button", {name: "Back to main chat"}).click();
+      await page.getByRole("button", {name: "Conversation actions"}).click();
+      await page.getByRole("menuitem", {name: new RegExp(`^${entry.menu}\\b`)}).click();
+    } else {
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: new RegExp(`^${entry.menu}\\b`)}).click();
+    }
+    const active = page.getByRole("region", {name: `${entry.tab} beside chat`});
+    await expect(active).toBeVisible();
+    await expect(active.getByRole("tablist", {name: "Side panels for this conversation"}).getByRole("tab", {name: entry.tab, exact: true})).toHaveAttribute("aria-selected", "true");
+    await expect(active.getByRole("tab", {name: "Side 1"})).toBeVisible();
+  }
+  await page.reload();
+  const last = page.getByRole("region", {name: "Tool assistance 1 beside chat"});
+  await expect(last).toBeVisible();
+  await expect(last.getByRole("tab", {name: "Terminal 2"})).toBeVisible();
+  await expect(last.getByRole("tab", {name: "Code 1"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Add side chat tab"})).toHaveCount(0);
 });
 
 test("conversation switching pages long history and renders only nearby transcript rows", async ({ page }, testInfo) => {
@@ -14213,6 +14382,13 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await expect(page.getByRole("button", {name: "Start new chat"})).toBeVisible();
   await page.getByRole("button", {name: "Start new chat"}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
+  await expect(composer).toBeVisible();
+  const withSideTab = new URL(page.url());
+  withSideTab.searchParams.append("panel", "terminal:1:shell-probe");
+  withSideTab.searchParams.set("panelTab", "shell-probe");
+  await page.goto(withSideTab.toString());
+  await expect(page.locator("#side-tool-panel")).toHaveCount(0);
+  await page.getByRole("button", {name: "Start new chat"}).click();
   await expect(composer).toBeVisible();
   const send = page.getByRole("button", {name: "Send message"});
   await expect(send).toBeVisible();

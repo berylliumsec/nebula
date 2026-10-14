@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, CircleAlert, Clipboard, LoaderCircle, Play, Sparkles, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
@@ -12,7 +12,7 @@ interface Props {
   providers: ProviderHealth[];
   harnesses: HarnessProfile[];
   onRun: (candidate: FencedRunCandidate) => void;
-  triggerVariant?: "icon" | "menu";
+  triggerVariant?: "icon" | "menu" | "panel";
 }
 
 const EMPTY: PostToolAssistantConfig = { suggestNextSteps: false, takeNotes: false, backendKind: "provider", cloudConfirmed: false };
@@ -46,13 +46,15 @@ function analysisRuntimeStatus(config: PostToolAssistantConfig, providers: Provi
 }
 
 export function PostToolAssistant({ api, engagementId, providers, harnesses, onRun, triggerVariant = "icon" }: Props) {
+  const instanceId = useId();
+  const menuId = triggerVariant === "panel" ? `post-tool-assistance-${instanceId}` : "post-tool-assistance-menu";
   const [config, setConfig] = useState<PostToolAssistantConfig>(EMPTY);
   const [result, setResult] = useState<GeneratedDraft>();
   const [expanded, setExpanded] = useState(false);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [savingToggle, setSavingToggle] = useState(false);
-  const [controlsOpen, setControlsOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(triggerVariant === "panel");
   const [feedback, setFeedback] = useState<ToolFeedback>();
   const [feedbackPosition, setFeedbackPosition] = useState({ top: 18, right: 18 });
   const togglesRef = useRef<HTMLDivElement>(null);
@@ -94,7 +96,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   }, [feedback, positionFeedback]);
 
   useEffect(() => {
-    if (!controlsOpen) return;
+    if (!controlsOpen || triggerVariant === "panel") return;
     const close = (event: MouseEvent | globalThis.KeyboardEvent) => {
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
       if (event instanceof MouseEvent && togglesRef.current?.contains(event.target as Node)) return;
@@ -106,7 +108,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", close);
     };
-  }, [controlsOpen]);
+  }, [controlsOpen, triggerVariant]);
 
   const configRef = useRef(config);
   configRef.current = config;
@@ -218,12 +220,12 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
 
   return <>
     <div className="post-tool-menu" ref={togglesRef}>
-      <button className={triggerVariant === "menu" ? "workbench-menu-item" : "icon-button subtle"} type="button" role={triggerVariant === "menu" ? "menuitem" : undefined} data-guide="tool-assistance" aria-label="Tool assistance" title="Tool assistance" aria-expanded={controlsOpen} aria-controls="post-tool-assistance-menu" onClick={() => setControlsOpen((open) => !open)}>
+      {triggerVariant !== "panel" && <button className={triggerVariant === "menu" ? "workbench-menu-item" : "icon-button subtle"} type="button" role={triggerVariant === "menu" ? "menuitem" : undefined} data-guide="tool-assistance" aria-label="Tool assistance" title="Tool assistance" aria-expanded={controlsOpen} aria-controls={menuId} onClick={() => setControlsOpen((open) => !open)}>
         {busy ? <LoaderCircle className="spin" size={16} aria-label="Analyzing tool result" /> : <Sparkles size={16} aria-hidden="true" />}
         {triggerVariant === "menu" && <span><strong>Tool assistance</strong><small>Suggestions and project notes</small></span>}
         {(config.suggestNextSteps || config.takeNotes) && <span className="status-dot healthy" aria-label="Tool assistance enabled" />}
-      </button>
-      {controlsOpen && <div className="post-tool-menu-panel" id="post-tool-assistance-menu" role="group" aria-label="Post-tool assistance">
+      </button>}
+      {controlsOpen && <div className="post-tool-menu-panel" id={menuId} role="group" aria-label="Post-tool assistance">
         <header><strong>Tool assistance</strong><small>Optional follow-up after completed work</small></header>
         <label><span><strong>Suggest next steps</strong><small>Propose a reviewed follow-up action</small></span><input aria-label="Suggest next steps" type="checkbox" checked={config.suggestNextSteps} disabled={savingToggle} onChange={() => void toggle("suggestNextSteps")} /></label>
         <label><span><strong>Take notes</strong><small>Draft a project note from the result</small></span><input aria-label="Take notes" type="checkbox" checked={config.takeNotes} disabled={savingToggle} onChange={() => void toggle("takeNotes")} /></label>
