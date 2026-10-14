@@ -168,7 +168,7 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
             (presentedViewController ?? self).present(alert, animated: true)
             return
         }
-        // A fresh document is required: PairingGate consumes its fragment only on mount.
+        // Load each one-time offer in a fresh web document.
         // The one-time secret is never written to native preferences.
         webView.stopLoading()
         offline.isHidden = true
