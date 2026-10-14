@@ -283,6 +283,43 @@ def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypa
     asyncio.run(scenario())
 
 
+def test_start_remote_harness_chat_keeps_peer_messaging_off(tmp_path, monkeypatch):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Remote Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="model-a",
+            capabilities=HarnessCapabilities(models=["model-a"], mcp=True),
+            privacy={"local_only": False, "permits_sensitive_data": True},
+        )
+    )
+    work = app.state.control_assistant_work
+    started = []
+    monkeypatch.setattr(
+        work.harness, "start_chat_turn", lambda turn_id: started.append(turn_id)
+    )
+
+    async def scenario():
+        result = await work.start_chat(
+            project.id,
+            {
+                "backend": "harness",
+                "profile_id": profile.id,
+                "prompt": "Reply with one line without tools",
+            },
+        )
+        assert result["backend"] == "harness"
+        assert started
+        session = store.get(ChatSession, result["session_id"])
+        assert session.metadata.get("allow_agent_messaging") is False
+        assert session.metadata.get("control_assistant") is not True
+
+    asyncio.run(scenario())
+
+
 def test_mission_start_uses_existing_core_route_and_reads_back(tmp_path, monkeypatch):
     store, app, _ = _app(tmp_path)
     selected = store.create(Engagement(name="Selected"))

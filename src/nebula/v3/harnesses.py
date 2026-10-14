@@ -8450,6 +8450,7 @@ class HarnessRuntimeService:
         self.automation_tool_platform = automation_tool_platform
         self.browser_automation_platform = browser_automation_platform
         self.settings_assistant_api: SettingsAssistantApi | None = None
+        self.control_assistant_work: Any = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
             raise ValueError("tool platform must use the harness runtime store")
@@ -8512,6 +8513,9 @@ class HarnessRuntimeService:
 
     def bind_settings_assistant_api(self, gateway: SettingsAssistantApi) -> None:
         self.settings_assistant_api = gateway
+
+    def bind_control_assistant_work(self, work: Any) -> None:
+        self.control_assistant_work = work
 
     def bind_provider_subagents(self, service: SubagentService) -> None:
         """Bind the provider-chat subagent service harness chats delegate to."""
@@ -10397,7 +10401,7 @@ class HarnessRuntimeService:
                 )
             ):
                 raise HarnessConfigurationError(
-                    "The Nebula assistant accepts Nebula help and settings tools only."
+                    "The Nebula assistant accepts bounded Nebula help, settings, navigation, and work tools only."
                 )
             include_knowledge = False
             allow_cloud_knowledge = False
@@ -10988,8 +10992,9 @@ class HarnessRuntimeService:
             "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
             "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
             "host files from this assistant; after fixing access, the operator can ask the general "
-            "assistant in a new session to make the edit. Call only nebula.help, nebula.settings, and nebula.navigate "
-            "tools. For a theme change, call nebula.settings.set_device_theme; 'Zero theme' means zero-dark. "
+            "assistant in a new session to make the edit. Call only nebula.help, nebula.settings, and nebula.navigate tools "
+            "for product help, settings, and navigation; use nebula.work tools for project chats and missions. "
+            "For a theme change, call nebula.settings.set_device_theme; 'Zero theme' means zero-dark. "
             "For a Docker or Host mode change, call nebula.settings.set_project_mode. "
             "For URL, target, port, or permission scope changes, call nebula.settings.set_project_scope; "
             "all_destinations keeps other permission checks, while allow_all bypasses them. "
@@ -11006,7 +11011,13 @@ class HarnessRuntimeService:
             "action was saved from the tool result alone. Confirm Core changes only after a saved "
             "read-back. Link a relevant setting as /settings#target only when explaining where it is. "
             "The assistant window handles explicit Docker/Host mode changes "
-            "with Core read-back. If facts are unavailable, say what needs checking."
+            "with Core read-back. For assistant chats and missions, call nebula.work.catalog to see configured "
+            "runtimes and nebula.work.overview to resolve the exact target in this project. Inspect a chat or "
+            "mission before steering or stopping it. Start work only on an explicit operator request. "
+            "Use message_chat delivery=next for a durable follow-up, and delivery=steer only for a live "
+            "harness turn. Started or queued is not completed work; report the saved ID, current status, "
+            "and a link from the tool result so the operator can open it. "
+            "Browser and notes control are not available here yet. If facts are unavailable, say what needs checking."
             if control_assistant
             else "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
             "Do not claim to have changed a Nebula setting from this conversation."
@@ -14079,6 +14090,23 @@ class HarnessRuntimeService:
                     },
                 }
             )
+        if settings_only and self.control_assistant_work is not None:
+            from .control_assistant_work import WORK_TOOLS
+
+            for name, description, schema, read_only in WORK_TOOLS:
+                tools.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "inputSchema": schema,
+                        "annotations": {
+                            "readOnlyHint": read_only,
+                            "destructiveHint": name in {"nebula.work.stop_chat", "nebula.work.stop_mission"},
+                            "idempotentHint": read_only,
+                            "openWorldHint": False,
+                        },
+                    }
+                )
         if settings_only:
             self._gateway_tool_maps[session.id] = {}
             self._gateway_oci_tool_maps[session.id] = {}
@@ -14531,11 +14559,24 @@ class HarnessRuntimeService:
             is True
         )
         if (
-            name.startswith(("nebula.settings.", "nebula.help.", "nebula.navigate."))
+            name.startswith(("nebula.settings.", "nebula.help.", "nebula.navigate.", "nebula.work."))
         ) != settings_only:
             raise HarnessConfigurationError(
                 "This tool is not available to this assistant."
             )
+        if name.startswith("nebula.work."):
+            from .control_assistant_work import WORK_TOOLS, dispatch_work_tool
+
+            if self.control_assistant_work is None or name not in {item[0] for item in WORK_TOOLS}:
+                raise HarnessConfigurationError("This work tool is unavailable in this Core.")
+            value = await dispatch_work_tool(
+                self.control_assistant_work, turn.engagement_id, name, arguments
+            )
+            return {
+                "content": [{"type": "text", "text": json.dumps(value)}],
+                "structuredContent": value,
+                "isError": False,
+            }
         if name in {
             "nebula.help.search",
             "nebula.help.project_context",

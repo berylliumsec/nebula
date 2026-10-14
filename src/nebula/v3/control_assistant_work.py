@@ -348,6 +348,7 @@ class ControlAssistantWork:
                 include_knowledge=True,
                 allow_cloud_knowledge=False,
                 allow_remote_mcp=False,
+                allow_agent_messaging=False,
             )
             self.harness.start_chat_turn(harness_turn.id)
             turn_id = turn.id
@@ -557,7 +558,7 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.start_chat",
-        "Start a separate Core-owned assistant chat for this project. Use a listed runtime. tools_enabled grants that chat its usual project tools; use only when the operator requested work. The result means started, not finished.",
+        "Start a separate Core-owned assistant chat for this project. Use a listed runtime. For provider chats, tools_enabled grants the usual project tools; use only when the operator requested work. Peer messaging starts off. The result means started, not finished.",
         START_CHAT_SCHEMA,
         False,
     ),
