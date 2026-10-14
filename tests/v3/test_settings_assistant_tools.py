@@ -318,9 +318,12 @@ def test_control_session_keeps_its_identity_and_accepts_selected_assistant_tools
     scoped = isolate_settings_assistant_request(settings)
     assert scoped.include_knowledge is True
     assert scoped.allow_mcp_catalog is True
-    assert isolate_settings_assistant_request(
-        settings.model_copy(update={"tools_enabled": True})
-    ).tools_enabled is True
+    assert (
+        isolate_settings_assistant_request(
+            settings.model_copy(update={"tools_enabled": True})
+        ).tools_enabled
+        is True
+    )
     saved = ChatSession(
         engagement_id="project",
         title="Nebula assistant",

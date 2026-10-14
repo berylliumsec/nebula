@@ -634,7 +634,10 @@ def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
     project = store.create(Engagement(name="Selected"))
     provider = store.create(
         ProviderProfile(
-            name="Local", provider_type="ollama", is_local=True, model_allowlist=["model-a"]
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
         )
     )
     chat = store.create(

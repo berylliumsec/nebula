@@ -20,7 +20,7 @@ import time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Literal, Mapping
+from typing import Annotated, Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
@@ -44,7 +44,13 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    Field,
+    SecretStr,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -175,6 +181,7 @@ from .chat_assistant_config import (
 )
 from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
+from .live_voice import create_live_session
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
 from .conditional_reads import conditional, content_etag, revision_etag
 from .container_terminal import (
@@ -1068,6 +1075,16 @@ class ChatAttentionItem(NebulaModel):
     session_id: str
     session_title: str
     requested_at: datetime
+
+
+class VoiceSessionRequest(NebulaModel):
+    engagement_id: str = Field(min_length=1, max_length=200)
+    # The final CRLF is part of the browser's SDP offer. The common model's
+    # whitespace stripping would change the offer before it reaches OpenAI.
+    sdp: Annotated[
+        str,
+        StringConstraints(strip_whitespace=False, min_length=16, max_length=65_536),
+    ]
 
 
 class ChatImageUploadRequest(NebulaModel):
@@ -11511,6 +11528,116 @@ def create_app(
             ),
             None,
         )
+
+    def _live_api_key() -> str:
+        # An OpenAI-compatible or custom endpoint must not have its credential
+        # forwarded to OpenAI's fixed Live endpoint.
+        for profile in store.find_entities(ProviderProfile, {}, limit=None):
+            if (
+                not profile.enabled
+                or profile.provider_type
+                not in {"openai", "openai-responses", "openai_responses"}
+                or not profile.secret_ref
+            ):
+                continue
+            if profile.endpoint:
+                endpoint = urlsplit(profile.endpoint)
+                if endpoint.scheme != "https" or endpoint.hostname != "api.openai.com":
+                    continue
+            try:
+                return credentials.resolve(profile.secret_ref).get_secret_value()
+            except CredentialError:
+                continue
+        key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if key:
+            return key
+        raise HTTPException(
+            status_code=503,
+            detail="GPT-Live needs a direct OpenAI API key. Configure an enabled OpenAI provider or set OPENAI_API_KEY on the Nebula host, then retry.",
+        )
+
+    @app.post(
+        f"{API_PREFIX}/voice/session",
+        tags=["voice"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_voice_session(request: VoiceSessionRequest) -> dict[str, str]:
+        project = store.get(Engagement, request.engagement_id)
+        if not request.sdp.startswith("v=0\r\n"):
+            raise HTTPException(
+                status_code=422, detail="A WebRTC SDP offer is required"
+            )
+        try:
+            return await create_live_session(
+                api_key=_live_api_key(), project_name=project.name, sdp=request.sdp
+            )
+        except httpx.HTTPStatusError as exc:
+            upstream_status = exc.response.status_code
+            emit_diagnostic(
+                "error",
+                "providers",
+                "voice.session_upstream_failed",
+                "GPT-Live session creation failed",
+                metadata={"http_status": upstream_status},
+            )
+            if upstream_status in {401, 403}:
+                detail = "OpenAI rejected the GPT-Live credential or model access. Check the OpenAI API key and GPT-Live access, then retry."
+            elif upstream_status == 429:
+                detail = "GPT-Live is at its session or rate limit. Wait a moment, then retry."
+            elif upstream_status in {400, 422}:
+                detail = "GPT-Live rejected the WebRTC offer. Reconnect voice to create a fresh offer, then retry."
+            else:
+                detail = "GPT-Live could not start. Check OpenAI service availability and retry."
+            raise HTTPException(
+                status_code=502,
+                detail=detail,
+            ) from exc
+        except (httpx.RequestError, ValueError) as exc:
+            emit_diagnostic(
+                "error",
+                "providers",
+                "voice.session_connection_failed",
+                "GPT-Live session connection failed",
+                exception=exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="GPT-Live did not establish a voice session. Check network access and retry.",
+            ) from exc
+
+    @app.get(
+        f"{API_PREFIX}/voice/work",
+        tags=["voice"],
+        dependencies=[Depends(require_auth)],
+    )
+    def voice_work_roster(engagement_id: str) -> dict[str, Any]:
+        return control_assistant_work.overview(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/voice/work/chats/{{session_id}}",
+        tags=["voice"],
+        dependencies=[Depends(require_auth)],
+    )
+    def voice_chat_detail(session_id: str, engagement_id: str) -> dict[str, Any]:
+        try:
+            return control_assistant_work.chat_detail(engagement_id, session_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Chat is not in this project"
+            ) from exc
+
+    @app.get(
+        f"{API_PREFIX}/voice/work/missions/{{run_id}}",
+        tags=["voice"],
+        dependencies=[Depends(require_auth)],
+    )
+    def voice_mission_detail(run_id: str, engagement_id: str) -> dict[str, Any]:
+        try:
+            return control_assistant_work.mission_detail(engagement_id, run_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="Mission is not in this project"
+            ) from exc
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
