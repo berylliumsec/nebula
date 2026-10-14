@@ -13,7 +13,8 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
   useEffect(() => {
     let current = true;
     void api.notebookFileIndex(projectId).then(value => {if (current) setStatus(value);}).catch(caught => {
-      if (current) setError(logCaughtDiagnostic("interface.notebook.index_status_failed", "File index status unavailable.", caught));
+      logCaughtDiagnostic("interface.notebook.index_status_failed", "File index status unavailable.", caught);
+      if (current) setError("File index status unavailable.");
     });
     return () => {current = false;};
   }, [api, projectId, listing]);
@@ -22,7 +23,10 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
     try {
       setStatus(await api.setNotebookFileIndex(projectId, path));
       onChanged();
-    } catch (caught) { setError(logCaughtDiagnostic("interface.notebook.index_connect_failed", "File index could not be connected.", caught)); }
+    } catch (caught) {
+      logCaughtDiagnostic("interface.notebook.index_connect_failed", "File index could not be connected.", caught);
+      setError("File index could not be connected.");
+    }
     finally { setBusy(false); }
   };
   const remove = async () => {
@@ -30,7 +34,10 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
     try {
       setStatus(await api.removeNotebookFileIndex(projectId));
       onChanged();
-    } catch (caught) { setError(logCaughtDiagnostic("interface.notebook.index_remove_failed", "File index could not be removed.", caught)); }
+    } catch (caught) {
+      logCaughtDiagnostic("interface.notebook.index_remove_failed", "File index could not be removed.", caught);
+      setError("File index could not be removed.");
+    }
     finally { setBusy(false); }
   };
   return <section className="notebook-index-settings" aria-label="Notebook file index">

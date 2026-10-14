@@ -1,5 +1,5 @@
 {
-  "change_digest": "e980fb37d94c1fbeba5356131e6b28d3cf36701c6a121c730da74682e2b0ebf7",
+  "change_digest": "9a7109055cd793b9e2ac3e50cacb47eed132c23903574d7646ec72b42a71c9a5",
   "reviewed_by": "Codex focused notebook file index review",
   "reason": "Optional per-project SQLite notebook inventory changes Core listing, the notebook selector, and host file browsing. Select exact index and inventory Python tests, touched component tests, the notebook browser journeys at desktop and mobile widths, and the production real-Core index connection journey on LAN.",
   "exclusions": "No native code changed. Unrelated backend, frontend, and browser journeys and full suites are excluded. The selected real-Core journey exercises configuration through the visible host file browser on LAN.",
