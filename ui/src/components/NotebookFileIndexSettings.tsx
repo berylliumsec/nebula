@@ -42,7 +42,7 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
   };
   return <section className="notebook-index-settings" aria-label="Notebook file index">
     <p>Use a host SQLite repository file index to find notebooks faster. The project folder still owns the files.</p>
-    {status?.path && <p role="status"><strong>{status.state === "fallback" ? "Scanning project folder" : "File index connected"}</strong> <code>{status.path}</code>{status.detail && <span> {status.detail}</span>}</p>}
+    {status?.path && <p role="status"><strong>{status.state === "fallback" ? "Scanning project folder" : status.state === "partial" ? "File index updating" : "File index connected"}</strong> <code>{status.path}</code>{status.detail && <span> {status.detail}</span>}</p>}
     <HostFolderPicker api={api} purpose="index" value={status?.path ?? undefined} onSelect={path => {void connect(path);}} />
     {status?.path && <button className="button quiet" type="button" disabled={busy} onClick={() => void remove()}>Remove index</button>}
     {busy && <span role="status">Checking file index…</span>}

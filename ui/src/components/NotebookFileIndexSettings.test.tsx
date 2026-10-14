@@ -39,3 +39,13 @@ it("loads SQLite files on later host folder pages", async () => {
   await user.click(await screen.findByRole("button", {name: "later.db"}));
   expect(api.setNotebookFileIndex).toHaveBeenCalledWith("p", "/indexes/later.db");
 });
+
+it("shows when an updating index may omit notebooks", async () => {
+  const api = {
+    notebookFileIndex: vi.fn(async () => ({path: "/indexes/inventory.db", state: "partial", detail: "The index is updating; some notebooks may be missing. Remove the index to scan the project folder."})),
+  };
+  render(<DialogProvider><NotebookFileIndexSettings api={api as unknown as ApiClient} projectId="p" onChanged={vi.fn()} /></DialogProvider>);
+  expect(await screen.findByText("File index updating")).toBeVisible();
+  expect(screen.getByText(/some notebooks may be missing/)).toBeVisible();
+  expect(screen.getByRole("button", {name: "Remove index"})).toBeVisible();
+});

@@ -28,21 +28,22 @@ def _inventory(tmp_path, root, *, complete=1, pending=0):
     return path
 
 
-def test_file_index_lists_exact_project_and_rejects_unready_index(tmp_path):
+def test_file_index_lists_exact_project_and_reports_partial_index(tmp_path):
     root = tmp_path / "workspace"
     root.mkdir()
     path = _inventory(tmp_path, root)
-    assert [item["path"] for item in list_indexed_notebooks(str(path), root)] == [
-        "a.ipynb"
-    ]
+    assert [
+        item["path"] for item in list_indexed_notebooks(str(path), root).entries
+    ] == ["a.ipynb"]
     other = tmp_path / "other"
     other.mkdir()
     with pytest.raises(FileIndexUnavailable, match="does not contain"):
         list_indexed_notebooks(str(path), other)
     with sqlite3.connect(path) as connection:
         connection.execute("UPDATE repositories SET pending_files=1")
-    with pytest.raises(FileIndexUnavailable, match="reconciling"):
-        list_indexed_notebooks(str(path), root)
+    partial = list_indexed_notebooks(str(path), root)
+    assert [item["path"] for item in partial.entries] == ["a.ipynb"]
+    assert "some notebooks may be missing" in partial.warning
 
 
 def test_project_prefers_index_then_falls_back_and_removal_persists(
@@ -81,6 +82,21 @@ def test_project_prefers_index_then_falls_back_and_removal_persists(
         ]
         with sqlite3.connect(index) as connection:
             connection.execute("UPDATE repositories SET pending_files=1")
+        assert [
+            item["path"] for item in await service.list_async(project.id, refresh=True)
+        ] == ["a.ipynb", "new.ipynb"]
+        assert service.file_index_status(project.id)["state"] == "partial"
+        assert not scans
+        with sqlite3.connect(index) as connection:
+            connection.execute("UPDATE repositories SET pending_files=0")
+            connection.execute("DELETE FROM files")
+        assert [
+            item["path"] for item in await service.list_async(project.id, refresh=True)
+        ] == ["new.ipynb"]
+        assert service.file_index_status(project.id)["state"] == "connected"
+        assert not scans
+        with sqlite3.connect(index) as connection:
+            connection.execute("DROP TABLE files")
         assert [
             item["path"] for item in await service.list_async(project.id, refresh=True)
         ] == ["fallback.ipynb"]

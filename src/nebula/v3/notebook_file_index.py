@@ -11,6 +11,7 @@ import time
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 from urllib.parse import quote
 
 
@@ -18,7 +19,12 @@ class FileIndexUnavailable(ValueError):
     pass
 
 
-def list_indexed_notebooks(database: str, workspace: Path) -> list[dict[str, object]]:
+class IndexedNotebookListing(NamedTuple):
+    entries: list[dict[str, object]]
+    warning: str | None
+
+
+def list_indexed_notebooks(database: str, workspace: Path) -> IndexedNotebookListing:
     root = workspace.expanduser().resolve(strict=True)
     index = Path(database).expanduser().resolve(strict=True)
     if not index.is_file() or index.suffix.lower() not in {
@@ -46,17 +52,23 @@ def list_indexed_notebooks(database: str, workspace: Path) -> list[dict[str, obj
                     "This index does not contain the project folder."
                 )
             repository_id, complete, pending, reconciled = row
+            warning = None
             if not complete or pending:
-                raise FileIndexUnavailable("The file index is still reconciling.")
+                warning = (
+                    "The index is updating; some notebooks may be missing. "
+                    "Remove the index to scan the project folder."
+                )
             try:
                 updated = datetime.fromisoformat(str(reconciled).replace("Z", "+00:00"))
                 age = (datetime.now(timezone.utc) - updated).total_seconds()
             except (TypeError, ValueError):
-                raise FileIndexUnavailable(
-                    "The file index has no valid refresh time."
-                ) from None
-            if age < -60 or age > 300:
-                raise FileIndexUnavailable("The file index is out of date.")
+                # diagnostic-expected: an invalid timestamp is shown as a partial index warning.
+                age = None
+            if warning is None and (age is None or age < -60 or age > 300):
+                warning = (
+                    "The index refresh time is unknown or old; some notebooks may "
+                    "be missing. Remove the index to scan the project folder."
+                )
             rows = connection.execute(
                 "SELECT path, size, mtime_ns FROM files "
                 "WHERE repository_id = ? AND path GLOB '*.ipynb' "
@@ -91,4 +103,4 @@ def list_indexed_notebooks(database: str, workspace: Path) -> list[dict[str, obj
         except (OverflowError, TypeError, ValueError):
             # diagnostic-expected: malformed indexed metadata is omitted from discovery.
             continue
-    return result
+    return IndexedNotebookListing(result, warning)
