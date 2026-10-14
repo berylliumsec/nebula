@@ -762,7 +762,7 @@ def isolate_settings_assistant_request(
         )
     ):
         raise ChatConfigurationError(
-            "The Nebula assistant accepts Nebula help and settings tools only; remove general tools and attached context."
+            "The Nebula assistant accepts bounded Nebula help, settings, navigation, and work tools only; remove general tools and attached context."
         )
     return request.model_copy(
         update={"include_knowledge": False, "allow_mcp_catalog": False}
@@ -5709,7 +5709,14 @@ class ChatService:
                 "confirms it. Do not claim a browser action was saved from a tool result alone. Link a relevant "
                 "setting as /settings#target only when explaining where it is. The assistant window "
                 "saves explicit policy changes without another confirmation and reads back Core state. If facts "
-                "are unavailable, say what needs checking. Never claim that suggesting a change applied it."
+                "are unavailable, say what needs checking. Never claim that suggesting a change applied it. "
+                "For assistant chats and missions, call nebula.work.catalog to see configured runtimes and "
+                "nebula.work.overview to resolve the exact target in the selected project. Inspect a chat or "
+                "mission before steering or stopping it. Start work only on an explicit operator request. "
+                "Use message_chat delivery=next for a durable follow-up, and delivery=steer only for a live "
+                "harness turn. A started or queued result is not completed work; report its saved ID and "
+                "current status and a link from the tool result so the operator can open it. "
+                "Browser and notes control are not available in this assistant yet."
             )
         else:
             instructions += (
@@ -5848,7 +5855,7 @@ class ChatService:
                 ("MCP servers", bool(mcp_profiles)),
                 ("SSH hosts", bool(ssh_environments)),
                 ("web search", web_search_selected),
-                ("Nebula product help and settings", settings_assistant_available),
+                ("Nebula product help, settings, and work", settings_assistant_available),
                 ("browser control", bool(browser_session_id)),
                 ("project model context", model_context),
                 ("skill resources", skill_resources_selected),

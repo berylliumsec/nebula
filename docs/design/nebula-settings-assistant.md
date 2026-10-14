@@ -35,6 +35,9 @@ Settings assistant and the complete destination catalog.
 | Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
+| Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets | Core sessions, turns, queues and runs | Tool unit and real Core |
+| Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
+| Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 
 The setting catalog lists every Settings section. Dedicated actions handle
 device appearance, provider and harness default models, post-tool preferences,
@@ -85,6 +88,19 @@ are deduplicated by tool-call id. Browser action outcomes remain attached to
 their Core message in browser storage so the requesting device shows the
 confirmation again after refresh. The transcript follows new results into view.
 The general assistant never receives these tools.
+The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
+`nebula.work.chat`, `nebula.work.mission`, `nebula.work.start_chat`,
+`nebula.work.message_chat`, `nebula.work.stop_chat`,
+`nebula.work.start_mission`, `nebula.work.steer_mission`, and
+`nebula.work.stop_mission`. These typed tools are bound to the selected project
+by Core. They list targets and enabled runtimes before an action; they do not
+accept arbitrary API paths, workspace commands or cross-project target IDs.
+A requested chat follow-up is saved to Core's durable queue. Live steering is
+available only for an active harness chat or harness mission. A provider chat
+can receive a queued next message; a provider mission cannot be live-steered.
+Starting work reports its saved ID and current state, never a completed result.
+The existing Settings controls remain available. Browser and notes mutation
+tools are separate future work; this slice does not grant them.
 The packaged app destination list covers the All projects page, the selected
 project overview and its Work, Assets, Evidence, Sources, Results, Findings and
 Reports pages, all eight Workbench views, Library and Settings. Its entries
