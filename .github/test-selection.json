@@ -1,23 +1,47 @@
 {
-  "change_digest": "477c0820800cb1b693a700c9273daadcbb03c466dd4367c42eb181e62db181d8",
-  "reviewed_by": "Codex review of the 3.0.21 clean-install Gitless smoke failure",
-  "reason": "The 3.0.21 Ubuntu clean-install job collected its single release case, then the shared test helper dereferenced absent Git output before launching the installed Core. Resolve the explicit installed Core binary before probing Git for an optional worktree fallback. Select only the affected release core browser journey; the next tagged preparation is the definitive installed-DEB check.",
-  "exclusions": "Only the Playwright Core binary lookup helper changed. No application, packaging, receipt, or workflow logic changed; no Python, frontend unit, native, unrelated browser, manual diagnostic, or full-suite tests are selected. The local case uses the extracted 3.0.21 DEB with Git masked; the next tagged Ubuntu job checks a clean installed DEB.",
+  "change_digest": "1e0c153d24ae0ba478d0ed886f4120948974172ce9fd35467101e0e431ed5282",
+  "reviewed_by": "Codex focused notebook file index review",
+  "reason": "Optional per-project SQLite notebook inventory changes Core listing, the notebook selector, and host file browsing. Select exact index and inventory Python tests, touched component tests, the notebook browser journeys at desktop and mobile widths, and the production real-Core index connection journey on LAN.",
+  "exclusions": "No native code changed. Unrelated backend, frontend, and browser journeys and full suites are excluded. The selected real-Core journey exercises configuration through the visible host file browser on LAN.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 5,
+    "frontend": 13,
     "native": 0,
-    "playwright": 1
+    "playwright": 17
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_notebook_file_index.py",
+    "tests/v3/test_notebooks.py::test_notebook_inventory_does_not_block_core_and_coalesces_scans",
+    "tests/v3/test_notebooks.py::test_notebook_inventory_route_keeps_core_health_responsive"
+  ],
+  "frontend": [
+    "ui/src/components/NotebookPanel.test.tsx",
+    "ui/src/components/NotebookFileIndexSettings.test.tsx",
+    "ui/src/components/HostFolderPicker.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:release-core-smoke/real-core"
+    "entry:notebook-file-index/desktop",
+    "entry:notebook-file-index/compact",
+    "entry:notebook-file-index/mobile-chromium-small",
+    "entry:notebook-file-index/mobile-chromium-wide",
+    "entry:notebook-file-index/mobile-webkit-small",
+    "entry:notebook-file-index/mobile-webkit",
+    "entry:notebook-file-index/mobile-webkit-wide",
+    "entry:notebooks/desktop",
+    "entry:notebooks/compact",
+    "entry:notebooks/mobile-chromium-small",
+    "entry:notebooks/mobile-chromium-wide",
+    "entry:notebooks/mobile-webkit-small",
+    "entry:notebooks/mobile-webkit",
+    "entry:notebooks/mobile-webkit-wide",
+    "entry:notebook-file-index/assistant-real-desktop",
+    "entry:notebook-file-index/assistant-real-chromium-390",
+    "entry:notebook-file-index/assistant-real-webkit-390"
   ]
 }
