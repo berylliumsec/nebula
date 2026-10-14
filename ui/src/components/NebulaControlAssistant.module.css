@@ -11,6 +11,7 @@
 .transcript pre { max-width: 100%; overflow: auto; }
 .question { margin: 12px 0; color: var(--muted); }
 .answer { line-height: 1.6; }
+.quickActions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
 .catalog { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
 .catalog summary { cursor: pointer; }
 .catalog input { box-sizing: border-box; width: 100%; margin-top: 10px; }

@@ -10074,6 +10074,21 @@ export class ApiClient {
         if (!turnId || !toolCallId || !capability) return;
         let receipt = wire.receipt ?? (wire.payload?.receipt && typeof wire.payload.receipt === "object"
           && !Array.isArray(wire.payload.receipt) ? wire.payload.receipt as Record<string, unknown> : undefined);
+        // Codex MCP results keep the structured result under payload.result.
+        // Expose only completed Nebula work starts to the control assistant UI.
+        if (!receipt && wire.server_id === "nebula" && !wire.payload?.error
+          && (capability === "nebula.work.start_chat" || capability === "nebula.work.start_mission"
+            || capability === "nebula_work_start_chat" || capability === "nebula_work_start_mission"
+            || /^nebula_work_start_(?:chat|mission)_[0-9a-f]{10,}$/.test(capability))) {
+          const result = wire.payload?.result;
+          if (result && typeof result === "object" && !Array.isArray(result)
+            && !(result as Record<string, unknown>).isError) {
+            const structured = (result as Record<string, unknown>).structuredContent;
+            if (structured && typeof structured === "object" && !Array.isArray(structured)) {
+              receipt = structured as Record<string, unknown>;
+            }
+          }
+        }
         // Grok's MCP adapter places the structured tool result in OkayOutput.
         // Decode only scoped Nebula settings or navigation results, never arbitrary tool text.
         if (!receipt && wire.server_id === "nebula" && (/^nebula_settings_/.test(capability)

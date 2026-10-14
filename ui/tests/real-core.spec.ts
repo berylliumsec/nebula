@@ -781,7 +781,7 @@ interface LocalModelStub {
   responseContent?: string;
 }
 
-async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; goalResponseDelayMs?: number; delayedMessage?: string; matchingDelayMs?: number; models?: string[]; responseContent?: string; beforeResponse?: (body: Record<string, unknown>) => Promise<void> } = {}): Promise<LocalModelStub> {
+async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; goalResponseDelayMs?: number; delayedMessage?: string; matchingDelayMs?: number; models?: string[]; responseContent?: string; beforeResponse?: (body: Record<string, unknown>) => Promise<void>; toolCall?: (body: Record<string, unknown>) => {name: string; arguments: Record<string, unknown>} | undefined } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
   const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true, responseContent: options.responseContent };
   const server = createServer(async (request, response) => {
@@ -848,6 +848,19 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
         return;
       }
       await options.beforeResponse?.(body);
+      const selectedTool = options.toolCall?.(body);
+      if (selectedTool && tools.some(tool => tool.function?.name === selectedTool.name)) {
+        response.end(JSON.stringify({
+          id: "chatcmpl-real-core-work-tool", object: "chat.completion", created: 1,
+          model: "security-model",
+          choices: [{index: 0, message: {role: "assistant", content: null,
+            tool_calls: [{id: "call-real-core-work-tool", type: "function", function: {
+              name: selectedTool.name, arguments: JSON.stringify(selectedTool.arguments),
+            }}]}, finish_reason: "tool_calls"}],
+          usage: {prompt_tokens: 24, completion_tokens: 8, total_tokens: 32},
+        }));
+        return;
+      }
       if (options.delayedMessage && options.matchingDelayMs && body.stream !== true && messages.some((message) =>
         typeof message.content === "string" && message.content.includes(options.delayedMessage!))) {
         await new Promise(resolve => setTimeout(resolve, options.matchingDelayMs));
@@ -6159,6 +6172,102 @@ test("project execution mode Nebula help answers a Docker host-file question and
     { name: "API context", dispose: () => api.dispose() },
     { name: "model stub", dispose: () => stopLocalModelStub(stub) },
     { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
+test("assistant upgrade control assistant starts project work on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  let providerId = "";
+  const requestText = "Start a mission named LAN control mission to inspect this synthetic project.";
+  const stub = await startLocalModelStub({
+    responseContent: "The mission was started in this project. Open Missions to follow its progress.",
+    toolCall: body => {
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+      if (!messages.some(message => message.role === "user" && message.content === requestText)
+        || messages.some(message => message.role === "tool")) return undefined;
+      return {name: "nebula_work_start_mission", arguments: {
+        name: "LAN control mission", objective: "Inspect this synthetic project", backend: "provider",
+        profile_id: providerId, model: "security-model", max_tool_calls: 0,
+      }};
+    },
+  });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {
+      name: "Control assistant LAN acceptance", description: "Synthetic project", client_name: null,
+      status: "active", tags: [], workspace_path: null, metadata: {},
+    }});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = ((await projectResponse.json()) as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Control assistant model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    providerId = provider.id;
+    const verified = await api.post(`providers/${encodeURIComponent(providerId)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    const workbenchUrl = `${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`;
+    await page.goto(workbenchUrl);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Nebula assistant"});
+    await expect(assistant.getByRole("button", {name: "Start mission"})).toBeVisible();
+    const bounds = await assistant.boundingBox();
+    const viewport = page.viewportSize()!;
+    expect(bounds).toBeTruthy();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    expect((await assistant.getByRole("button", {name: "Start mission"}).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Nebula assistant"]').analyze()).violations).toEqual([]);
+    await assistant.getByRole("button", {name: "Start mission"}).click();
+    const composer = assistant.getByRole("textbox", {name: "Ask Nebula a question"});
+    await expect(composer).toBeFocused();
+    await composer.fill(requestText);
+    await composer.press("Enter");
+    await expect(assistant.getByText("The mission was started in this project. Open Missions to follow its progress.")).toBeVisible({timeout: 45_000});
+    const missionLink = assistant.getByRole("link", {name: "Open mission"});
+    await expect(missionLink).toBeVisible();
+    await expect(missionLink).toHaveAttribute("href", new RegExp(`^/projects/${projectId}/workbench\\?view=missions&mission=[a-f0-9-]+$`));
+    await expect.poll(async () => {
+      const response = await api.get("runs", {params: {engagement_id: projectId}});
+      expect(response.ok(), await response.text()).toBe(true);
+      const runs = await response.json() as Array<{id: string; engagement_id: string; metadata?: {name?: string}}>;
+      return runs.filter(run => run.engagement_id === projectId && run.metadata?.name === "LAN control mission").length;
+    }).toBe(1);
+    expect(stub.requests.some(item => Array.isArray(item.tools) &&
+      (item.tools as Array<{function?: {name?: string}}>).some(tool => tool.function?.name === "nebula_work_start_mission"))).toBe(true);
+    // The disposable LAN fixture uses a URL token instead of a paired device.
+    await page.goto("about:blank");
+    await page.goto(workbenchUrl);
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Nebula assistant"}).getByText("The mission was started in this project. Open Missions to follow its progress.")).toBeVisible();
+    const savedMissionLink = page.getByRole("dialog", {name: "Nebula assistant"}).getByRole("link", {name: "Open mission"});
+    await expect(savedMissionLink).toBeVisible();
+    const savedMissionId = new URL((await savedMissionLink.getAttribute("href"))!, core.origin).searchParams.get("mission");
+    if ((page.viewportSize()?.width ?? 1440) <= 760) await savedMissionLink.tap();
+    else { await savedMissionLink.focus(); await savedMissionLink.press("Enter"); }
+    await expect(page).toHaveURL(new RegExp(`view=missions&mission=${savedMissionId}`));
+    await expect(page.getByRole("navigation", {name: "Mission history"}).getByRole("button", {name: /LAN control mission/})).toHaveAttribute("aria-current", "true");
+    await testInfo.attach("control-assistant-work", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
   ]);
 });
 

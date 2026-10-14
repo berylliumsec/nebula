@@ -1,37 +1,31 @@
 {
-  "change_digest": "3eb39c7fe1a361812b335599d3febef7edab097946a91957236bd551caa43fc8",
-  "reviewed_by": "Codex focused shell goal and side device browser review",
-  "reason": "The assistant-only shell hid the Core-backed draft goal editor, and a manually opened Browser side tab inherited the read-only Assistant browser. Select the goal editor contract, side-tab URL cleanup, and production LAN real-Core journeys for goal draft edit and skill persistence, manual device-browser creation/reload/page open/close, plus the existing linked-page route. Exercise the two changed journeys in permanent desktop and mobile Chromium/WebKit profiles at 320, 390, and 430 pixel mobile widths.",
-  "exclusions": "No Python or native source changed. Unrelated assistant, provider, workspace, and full-suite tests are excluded. Real-Core browser journeys use disposable data and a local model stub. Browser-engine execution inside packaged Tauri/Electron shells, external providers, physical devices, and software keyboards are outside this automated run and are not claimed.",
+  "change_digest": "24e2a5d9c6e559c2b1570ec561716fd2e2b809a1f8bf43d83f9d3b27e3c49901",
+  "reviewed_by": "Codex focused control assistant work review",
+  "reason": "The control assistant gains project-bound chat and mission tools while existing settings controls remain available. Cover provider and harness tool exposure, project isolation, queued follow-ups, start and interrupt actions, and remote Codex chat creation without implicit peer-message sharing. Cover work prompts, transcript persistence, validated Core receipts and client SSE normalization, then create and open a mission through the production bundle on a LAN-origin real Core with keyboard navigation on desktop and touch navigation in Chromium/WebKit phone profiles. The selected settings file also corrects its stale Docker-default assertion to the current Host policy. A focused type correction gives provider and harness profiles distinct names, uses ChatRole enum values, and types the mission payload for Python 3.12 mypy.",
+  "exclusions": "No native source or packaged shell changed. Full suites and unrelated settings, browser, notes, provider, mission, and workspace journeys are excluded. The real-Core model is a local deterministic stub; a live Codex harness is checked separately. Physical phone and software keyboard remain outside automated coverage.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 25,
+    "python": 18,
+    "frontend": 20,
     "native": 0,
-    "playwright": 17
+    "playwright": 8
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_control_assistant_work.py",
+    "tests/v3/test_settings_assistant_tools.py"
+  ],
   "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/pages/sidePanelTabs.test.ts"
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/api/client.workReceipts.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:shell-goal-draft/assistant-real-desktop",
-    "entry:shell-goal-draft/assistant-real-compact",
-    "entry:shell-goal-draft/assistant-real-chromium-320",
-    "entry:shell-goal-draft/assistant-real-chromium-390",
-    "entry:shell-goal-draft/assistant-real-chromium-430",
-    "entry:shell-goal-draft/assistant-real-webkit-320",
-    "entry:shell-goal-draft/assistant-real-webkit-390",
-    "entry:shell-goal-draft/assistant-real-webkit-430",
-    "entry:side-device-browser/assistant-real-desktop",
-    "entry:side-device-browser/assistant-real-compact",
-    "entry:side-device-browser/assistant-real-chromium-320",
-    "entry:side-device-browser/assistant-real-chromium-390",
-    "entry:side-device-browser/assistant-real-chromium-430",
-    "entry:side-device-browser/assistant-real-webkit-320",
-    "entry:side-device-browser/assistant-real-webkit-390",
-    "entry:side-device-browser/assistant-real-webkit-430",
-    "entry:assistant-links/assistant-real-desktop"
+    "entry:control-assistant-work/assistant-real-desktop",
+    "entry:control-assistant-work/assistant-real-compact",
+    "entry:control-assistant-work/assistant-real-chromium-320",
+    "entry:control-assistant-work/assistant-real-chromium-390",
+    "entry:control-assistant-work/assistant-real-chromium-430",
+    "entry:control-assistant-work/assistant-real-webkit-320",
+    "entry:control-assistant-work/assistant-real-webkit-390",
+    "entry:control-assistant-work/assistant-real-webkit-430"
   ]
 }
