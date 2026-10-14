@@ -34,6 +34,7 @@ HOOK_EVENTS = {
     "tool.after",
 }
 MAX_HOOK_OUTPUT_BYTES = 64 * 1024
+MAX_INHERITED_ANCESTORS = 12  # Enough for the shared-root/projects/workspace layout.
 
 
 class NativeHookError(RuntimeError):
@@ -116,6 +117,7 @@ class NativeHookManifest(NebulaModel):
     timeout_seconds: int = Field(default=10, ge=1, le=300)
     side_effects: Literal["none", "workspace", "external"] = "none"
     failure_policy: Literal["continue", "block"] = "continue"
+    inherit_to_descendants: bool = False
 
     @field_validator("events")
     @classmethod
@@ -161,17 +163,53 @@ def _read_bounded(path: Path, *, maximum: int) -> bytes:
     return path.read_bytes()
 
 
-def discover_native_hooks(workspace: Path) -> list[NativeHookDescriptor]:
-    root = workspace.resolve() / ".agents" / "hooks"
+def _resolved_workspace(workspace: Path) -> Path:
+    """Resolve a workspace without allowing links to escape opted-in policy roots."""
+
+    lexical = Path(os.path.abspath(workspace))
+    resolved = workspace.resolve()
+    if lexical != resolved:
+        for depth, ancestor in enumerate(lexical.parents):
+            if depth >= MAX_INHERITED_ANCESTORS:
+                break
+            ancestor_hooks = _discover_hook_root(ancestor, inherited=True)
+            if ancestor_hooks and not resolved.is_relative_to(ancestor.resolve()):
+                raise NativeHookError(
+                    "workspace path escapes an opted-in ancestor hook root"
+                )
+    return resolved
+
+
+def _discover_hook_root(
+    workspace: Path, *, inherited: bool = False
+) -> list[NativeHookDescriptor]:
+    agents = workspace / ".agents"
+    if agents.is_symlink():
+        raise NativeHookError(".agents must be a regular directory")
+    if not agents.exists():
+        return []
+    if not agents.is_dir():
+        raise NativeHookError(".agents must be a regular directory")
+    root = agents / "hooks"
+    if root.is_symlink():
+        raise NativeHookError(".agents/hooks must be a regular directory")
     if not root.exists():
         return []
-    if root.is_symlink() or not root.is_dir():
+    if not root.is_dir():
         raise NativeHookError(".agents/hooks must be a regular directory")
     descriptors: list[NativeHookDescriptor] = []
     for directory in sorted(root.iterdir(), key=lambda item: item.name.casefold()):
-        if directory.is_symlink() or not directory.is_dir():
+        if directory.is_symlink():
+            raise NativeHookError(
+                f"hook directory cannot be a symlink: {directory.name}"
+            )
+        if not directory.is_dir():
             continue
         manifest_path = directory / HOOK_MANIFEST
+        if manifest_path.is_symlink():
+            raise NativeHookError(
+                f"hook manifest cannot be a symlink: {directory.name}"
+            )
         if not manifest_path.exists():
             continue
         raw = _read_bounded(manifest_path, maximum=64 * 1024)
@@ -181,6 +219,8 @@ def discover_native_hooks(workspace: Path) -> list[NativeHookDescriptor]:
             raise NativeHookError(
                 f"invalid hook manifest {directory.name}: {exc}"
             ) from exc
+        if inherited and not manifest.inherit_to_descendants:
+            continue
         executable_source = directory / manifest.command[0]
         if executable_source.is_symlink():
             raise NativeHookError(
@@ -207,6 +247,34 @@ def discover_native_hooks(workspace: Path) -> list[NativeHookDescriptor]:
                 executable_sha256=hashlib.sha256(executable_bytes).hexdigest(),
             )
         )
+    return descriptors
+
+
+def discover_native_hooks(workspace: Path) -> list[NativeHookDescriptor]:
+    """Discover local hooks and explicitly opted-in hooks from bounded ancestors.
+
+    Git markers are not inheritance boundaries: a child workspace can create a
+    valid nested Git repository, so treating `.git` as a stop marker would let
+    it suppress a trusted ancestor hook. Ancestor hooks inherit only through the
+    typed manifest opt-in and the bounded realpath walk below.
+    """
+
+    workspace_root = _resolved_workspace(workspace)
+    inherited: list[NativeHookDescriptor] = []
+    for depth, ancestor in enumerate(workspace_root.parents):
+        if depth >= MAX_INHERITED_ANCESTORS:
+            break
+        inherited.extend(_discover_hook_root(ancestor, inherited=True))
+    local = _discover_hook_root(workspace_root)
+    descriptors = [*inherited, *local]
+    seen_ids: set[str] = set()
+    for descriptor in descriptors:
+        if descriptor.id in seen_ids:
+            raise NativeHookError(
+                f"duplicate native hook id across ancestor and workspace roots: "
+                f"{descriptor.id!r}"
+            )
+        seen_ids.add(descriptor.id)
     return descriptors
 
 

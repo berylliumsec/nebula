@@ -540,16 +540,24 @@ record, not a child goal, and its approvals stay on the child turn; see
   replace or manage Codex/Grok context, compaction, checkpoints, goals or native
   hook execution. Harness-owned facilities remain behind their adapter contract.
 
-G9 implementation checkpoint (2026-09-18): Core now discovers provider-native hook
-manifests only from `<workspace>/.agents/hooks/*/hook.json`, validates a versioned
-event contract, relative in-directory executable, timeout, failure policy and declared
+G9 implementation checkpoint (2026-09-18): Core discovers provider-native hook
+manifests from `<workspace>/.agents/hooks/*/hook.json`, validates a versioned event
+contract, relative in-directory executable, timeout, failure policy and declared
 side-effect class, and exposes the bounded catalog through the authenticated API.
 Selection freezes manifest and executable digests. The durable runner revalidates
 both before launch, sends a versioned JSON event on stdin with a minimal environment,
 caps captured output, persists running and terminal outcomes, and treats timeout or
 launch failure as data rather than approval. Hook output has no path to approval
 state. At this foundation checkpoint, chat lifecycle wiring and recovery were still
-open.
+open. A later discovery extension allows an ancestor hook to inherit into descendant
+workspaces only when its manifest sets `inherit_to_descendants: true`. Exact
+workspace hooks remain available without the opt-in; ancestor discovery checks at
+most 12 realpath parents, and Git markers do not stop inheritance because a child
+can create a nested repository. Symlinked workspace paths that escape an opted-in
+hook root, hook roots, hook directories, manifests, or executables fail closed.
+Automatic hooks are rediscovered on each broker call; because workspace owners
+can edit their own hook files, this mechanism does not provide tamperproof policy
+integrity against a workspace writer.
 
 G9 lifecycle checkpoint (2026-09-18): provider chat requests can now explicitly
 select bounded hook IDs. Core snapshots those exact `.agents` definitions into the

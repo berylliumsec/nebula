@@ -356,10 +356,11 @@ class AutomationBroker:
         exit_code: int | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "tool_name": invocation.tool_name,
             "tool_call_id": call_id,
             "arguments": invocation.arguments,
+            "workspace_path": str(invocation.workspace.resolve()),
             "origin": invocation.origin.value,
             "requested_by": invocation.requested_by,
             "execution_mode": self.execution_mode,
@@ -367,6 +368,25 @@ class AutomationBroker:
             **({"exit_code": exit_code} if exit_code is not None else {}),
             **({"error": error[:1_000]} if error else {}),
         }
+        if (
+            invocation.tool_name == PROCESS_IO_NAME
+            and invocation.arguments.get("action") == "write"
+        ):
+            process_id = invocation.arguments.get("process_id")
+            if isinstance(process_id, str):
+                owner_id = (
+                    invocation.runtime_session_id
+                    or invocation.chat_session_id
+                    or invocation.run_id
+                )
+                process_context = self.manager.native_hook_process_context(
+                    process_id,
+                    engagement_id=invocation.engagement_id,
+                    owner_id=owner_id,
+                )
+                if process_context is not None:
+                    payload["process_context"] = process_context
+        return payload
 
     async def _run_tool_hooks(
         self,
