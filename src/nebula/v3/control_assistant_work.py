@@ -26,22 +26,29 @@ from .chat_assistant_config import (
 from .chat_queue import ChatQueueService, QueueWrite
 from .domain import (
     AgentRun,
+    Approval,
+    ApprovalStatus,
     ChatBackend,
     ChatRole,
     ChatSession,
     Engagement,
     HarnessProfile,
+    HarnessInteraction,
+    HarnessInteractionStatus,
+    HarnessTurnOrigin,
     McpServerProfile,
     ProviderProfile,
     RunBackend,
+    RunStatus,
     ScopePolicy,
     Task,
+    ToolCallOrigin,
 )
 from .harnesses import HarnessRuntimeService
 from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
-from .storage import NebulaStore
+from .storage import NebulaStore, NotFoundError
 
 
 EMPTY_SCHEMA: dict[str, Any] = {
@@ -167,6 +174,55 @@ STEER_MISSION_SCHEMA: dict[str, Any] = {
         "text": {"type": "string", "minLength": 1, "maxLength": 20000},
     },
     "required": ["run_id", "text"],
+}
+ACTION_TARGET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"action_id": {"type": "string", "minLength": 1, "maxLength": 200}},
+    "required": ["action_id"],
+}
+DECIDE_APPROVAL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **ACTION_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "decision": {"type": "string", "enum": ["approve", "reject", "stop"]},
+        "reason": {"type": "string", "maxLength": 1000},
+    },
+    "required": ["action_id", "expected_revision", "decision"],
+}
+ANSWER_QUESTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **ACTION_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "action": {"type": "string", "enum": ["answer", "decline", "cancel"]},
+        "response": {"type": "object", "maxProperties": 32},
+    },
+    "required": ["action_id", "expected_revision", "action"],
+}
+UPDATE_CHAT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "archived": {"type": "boolean"},
+    },
+    "required": ["session_id", "expected_revision"],
+}
+RETRY_MISSION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **MISSION_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "allow_cloud_tool_results": {"type": "boolean"},
+    },
+    "required": ["run_id", "expected_revision"],
 }
 
 
@@ -399,6 +455,13 @@ class ControlAssistantWork:
                 "nebula.work.start_mission",
                 "nebula.work.steer_mission",
                 "nebula.work.stop_mission",
+                "nebula.work.attention",
+                "nebula.work.approval",
+                "nebula.work.decide_approval",
+                "nebula.work.question",
+                "nebula.work.answer_question",
+                "nebula.work.update_chat",
+                "nebula.work.retry_mission",
             ],
             "scope": "selected project; browser and notes control are not included",
         }
@@ -406,6 +469,7 @@ class ControlAssistantWork:
     def overview(self, project_id: str) -> dict[str, Any]:
         project = self._project(project_id)
         pending = self.chat.pending_turns(project_id)
+        attention = self.attention(project_id)["items"]
         chats = [
             item
             for item in self.store.find_entities(
@@ -435,6 +499,7 @@ class ControlAssistantWork:
                     "backend": item.backend.value,
                     "model": item.model,
                     "state": "working" if item.id in pending else "idle",
+                    "archived": isinstance(item.metadata.get("archived_at"), str),
                     "turn_id": pending[item.id].id if item.id in pending else None,
                     "url": _chat_url(project_id, item.id),
                 }
@@ -453,6 +518,8 @@ class ControlAssistantWork:
             ],
             "more_chats": len(chats) > 30,
             "more_missions": len(runs) > 30,
+            "attention": attention[:5],
+            "more_attention": len(attention) > 5,
         }
 
     def chat_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
@@ -466,6 +533,8 @@ class ControlAssistantWork:
             "url": _chat_url(project_id, session.id),
             "backend": session.backend.value,
             "model": session.model,
+            "revision": session.revision,
+            "archived": isinstance(session.metadata.get("archived_at"), str),
             "pending_turn": {
                 "id": pending.id,
                 "status": pending.status.value,
@@ -496,6 +565,7 @@ class ControlAssistantWork:
             "url": _mission_url(project_id, run.id),
             "objective": run.objective[:5000],
             "status": run.status.value,
+            "revision": run.revision,
             "backend": run.backend.value,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
@@ -503,6 +573,292 @@ class ControlAssistantWork:
                 {"id": task.id, "title": task.title, "status": task.status.value}
                 for task in tasks
             ],
+        }
+
+    def _approval(self, project_id: str, action_id: Any) -> tuple[Approval, str, str]:
+        approval = self.store.get(Approval, _text(action_id, "action_id", 200))
+        if approval.engagement_id != project_id:
+            raise ValueError(
+                "choose a pending approval from this project's attention list"
+            )
+        if approval.origin == ToolCallOrigin.CHAT and approval.chat_session_id:
+            chat = self._chat(project_id, approval.chat_session_id)
+            return approval, chat.title, _chat_url(project_id, chat.id)
+        if approval.origin == ToolCallOrigin.MISSION:
+            run = self._run(project_id, approval.run_id)
+            return (
+                approval,
+                str(run.metadata.get("name") or run.objective)[:300],
+                _mission_url(project_id, run.id),
+            )
+        raise ValueError("approval has no supported chat or mission owner")
+
+    def _question(
+        self, project_id: str, action_id: Any
+    ) -> tuple[HarnessInteraction, str, str]:
+        question = self.store.get(
+            HarnessInteraction, _text(action_id, "action_id", 200)
+        )
+        if question.engagement_id != project_id:
+            raise ValueError(
+                "choose a pending question from this project's attention list"
+            )
+        if question.origin == HarnessTurnOrigin.CHAT and question.chat_session_id:
+            chat = self._chat(project_id, question.chat_session_id)
+            return question, chat.title, _chat_url(project_id, chat.id)
+        if question.origin == HarnessTurnOrigin.MISSION and question.run_id:
+            run = self._run(project_id, question.run_id)
+            return (
+                question,
+                str(run.metadata.get("name") or run.objective)[:300],
+                _mission_url(project_id, run.id),
+            )
+        raise ValueError("question has no supported chat or mission owner")
+
+    def attention(self, project_id: str) -> dict[str, Any]:
+        self._project(project_id)
+        items: list[dict[str, Any]] = []
+        for approval in self.store.find_entities(
+            Approval,
+            {"status": ApprovalStatus.PENDING.value},
+            engagement_id=project_id,
+            newest_first=True,
+            limit=100,
+        ):
+            try:
+                _, title, url = self._approval(project_id, approval.id)
+            except (NotFoundError, ValueError):
+                continue
+            items.append(
+                {
+                    "kind": "approval",
+                    "action_id": approval.id,
+                    "owner_kind": approval.origin.value,
+                    "owner_id": approval.chat_session_id
+                    if approval.origin == ToolCallOrigin.CHAT
+                    else approval.run_id,
+                    "owner": title,
+                    "url": url,
+                    "summary": str(
+                        approval.exact_request.get("tool_name") or "Tool request"
+                    )[:200],
+                    "risk": approval.risk_class.value,
+                    "requested_at": approval.requested_at.isoformat(),
+                }
+            )
+        for question in self.store.find_entities(
+            HarnessInteraction,
+            {"status": HarnessInteractionStatus.PENDING.value},
+            engagement_id=project_id,
+            newest_first=True,
+            limit=100,
+        ):
+            try:
+                _, title, url = self._question(project_id, question.id)
+            except (NotFoundError, ValueError):
+                continue
+            items.append(
+                {
+                    "kind": "question",
+                    "action_id": question.id,
+                    "owner_kind": question.origin.value,
+                    "owner_id": question.chat_session_id
+                    if question.origin == HarnessTurnOrigin.CHAT
+                    else question.run_id,
+                    "owner": title,
+                    "url": url,
+                    "summary": question.prompt[:500],
+                    "contains_secret": question.contains_secret,
+                    "requested_at": question.created_at.isoformat(),
+                }
+            )
+        items.sort(
+            key=lambda item: (item["requested_at"], item["action_id"]), reverse=True
+        )
+        return {"project_id": project_id, "items": items, "count": len(items)}
+
+    def approval_detail(self, project_id: str, action_id: Any) -> dict[str, Any]:
+        approval, title, url = self._approval(project_id, action_id)
+        exact = approval.exact_request
+        return {
+            "action_id": approval.id,
+            "revision": approval.revision,
+            "status": approval.status.value,
+            "owner": title,
+            "url": url,
+            "tool_name": str(exact.get("tool_name") or "Tool request")[:200],
+            "arguments": exact.get("arguments")
+            if isinstance(exact.get("arguments"), dict)
+            else {},
+            "command": exact.get("argv")
+            if isinstance(exact.get("argv"), list)
+            else None,
+            "target": approval.target,
+            "risk": approval.risk_class.value,
+            "expected_effects": approval.expected_effects,
+            "policy_rationale": approval.policy_rationale,
+            "requested_by": approval.requested_by,
+            "expires_at": approval.expires_at.isoformat()
+            if approval.expires_at
+            else None,
+        }
+
+    async def decide_approval(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        approval, _, url = self._approval(project_id, arguments.get("action_id"))
+        if approval.status != ApprovalStatus.PENDING:
+            raise ValueError("approval is no longer pending; read it again")
+        if approval.revision != arguments.get("expected_revision"):
+            raise ValueError(
+                "approval changed; read its current revision before deciding"
+            )
+        decision = arguments.get("decision")
+        if decision not in {"approve", "reject", "stop"}:
+            raise ValueError("choose approve, reject, or stop")
+        reason = arguments.get("reason")
+        if reason is not None:
+            reason = _text(reason, "reason", 1000)
+        await self._request(
+            "POST",
+            f"/api/v1/approvals/{quote(approval.id, safe='')}/decision",
+            {"decision": decision, "reason": reason},
+        )
+        saved = self.store.get(Approval, approval.id)
+        return {
+            "action_id": saved.id,
+            "status": saved.status.value,
+            "decision_recorded": saved.status.value
+            in {"approved", "rejected", "cancelled"},
+            "url": url,
+            "result": "decision saved in Core; the chat or mission may still be running",
+        }
+
+    def question_detail(self, project_id: str, action_id: Any) -> dict[str, Any]:
+        question, title, url = self._question(project_id, action_id)
+        return {
+            "action_id": question.id,
+            "revision": question.revision,
+            "status": question.status.value,
+            "owner": title,
+            "url": url,
+            "prompt": question.prompt,
+            "questions": question.questions,
+            "response_schema": question.response_schema,
+            "contains_secret": question.contains_secret,
+        }
+
+    async def answer_question(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        question, _, url = self._question(project_id, arguments.get("action_id"))
+        if question.status != HarnessInteractionStatus.PENDING:
+            raise ValueError("question is no longer pending; read it again")
+        if question.revision != arguments.get("expected_revision"):
+            raise ValueError(
+                "question changed; read its current revision before responding"
+            )
+        action = arguments.get("action")
+        if action not in {"answer", "decline", "cancel"}:
+            raise ValueError("choose answer, decline, or cancel")
+        if question.contains_secret and action == "answer":
+            raise ValueError(
+                "this answer contains a secret; open the chat or mission to enter it privately"
+            )
+        response = arguments.get("response") or {}
+        if not isinstance(response, dict) or (action == "answer" and not response):
+            raise ValueError("provide the requested structured response")
+        await self._request(
+            "POST",
+            f"/api/v1/harness-interactions/{quote(question.id, safe='')}/decision",
+            {"action": action, "response": response},
+        )
+        saved = self.store.get(HarnessInteraction, question.id)
+        return {
+            "action_id": saved.id,
+            "status": saved.status.value,
+            "response_recorded": saved.status != HarnessInteractionStatus.PENDING,
+            "url": url,
+            "result": "response delivered to the active harness turn; work may still be running",
+        }
+
+    async def update_chat(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self._chat(project_id, arguments.get("session_id"))
+        if session.revision != arguments.get("expected_revision"):
+            raise ValueError("chat changed; read its current revision before updating")
+        body: dict[str, Any] = {"expected_revision": session.revision}
+        if "title" in arguments:
+            body["title"] = _text(arguments["title"], "title", 300)
+        if "archived" in arguments:
+            if type(arguments["archived"]) is not bool:
+                raise ValueError("archived must be true or false")
+            body["archived"] = arguments["archived"]
+        if len(body) == 1:
+            raise ValueError("provide a title or archived choice")
+        await self._request(
+            "PATCH", f"/api/v1/chat-sessions/{quote(session.id, safe='')}", body
+        )
+        saved = self._chat(project_id, session.id)
+        return {
+            "session_id": saved.id,
+            "title": saved.title,
+            "archived": isinstance(saved.metadata.get("archived_at"), str),
+            "revision": saved.revision,
+            "url": _chat_url(project_id, saved.id),
+        }
+
+    async def retry_mission(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        run = self._run(project_id, arguments.get("run_id"))
+        if run.revision != arguments.get("expected_revision"):
+            raise ValueError(
+                "mission changed; read its current revision before retrying"
+            )
+        if run.status not in {
+            RunStatus.COMPLETE,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.INTERRUPTED,
+        }:
+            raise ValueError(
+                "only a completed, failed, cancelled, or interrupted mission can be retried"
+            )
+        allow_cloud = arguments.get("allow_cloud_tool_results", False)
+        if type(allow_cloud) is not bool:
+            raise ValueError("allow_cloud_tool_results must be true or false")
+        existing = next(
+            (
+                item
+                for item in self.store.find_entities(
+                    AgentRun, {}, engagement_id=project_id, newest_first=True, limit=100
+                )
+                if item.metadata.get("retry_of_run_id") == run.id
+            ),
+            None,
+        )
+        if existing is not None:
+            return {
+                "run_id": existing.id,
+                "retry_of_run_id": run.id,
+                "status": existing.status.value,
+                "url": _mission_url(project_id, existing.id),
+                "result": "an existing retry is already saved in Core",
+            }
+        created = await self._request(
+            "POST",
+            f"/api/v1/runs/{quote(run.id, safe='')}/retry",
+            {"allow_cloud_tool_results": allow_cloud},
+        )
+        saved = self._run(project_id, created["id"])
+        return {
+            "run_id": saved.id,
+            "retry_of_run_id": run.id,
+            "status": saved.status.value,
+            "url": _mission_url(project_id, saved.id),
+            "result": "retry started in Core; work may still be running",
         }
 
     def _runtime(self, arguments: dict[str, Any]) -> tuple[str, str, str]:
@@ -951,6 +1307,48 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         MISSION_TARGET_SCHEMA,
         False,
     ),
+    (
+        "nebula.work.attention",
+        "List pending approvals and questions in the selected project's assistant chats and missions. Use this before choosing a request; do not guess IDs.",
+        EMPTY_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.approval",
+        "Read the exact pending approval, risk, target, and expected effects before deciding. Use an action_id from nebula.work.attention.",
+        ACTION_TARGET_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.decide_approval",
+        "Approve, reject, or stop one exact pending chat or mission request after the operator explicitly directs that decision. Read nebula.work.approval first and pass its revision. A saved approval is not proof that the work finished.",
+        DECIDE_APPROVAL_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.question",
+        "Read one pending harness question, its answer choices and revision. Use an action_id from nebula.work.attention.",
+        ACTION_TARGET_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.answer_question",
+        "Answer, decline, or cancel one pending harness question only on the operator's explicit instruction. Read nebula.work.question first and pass its revision. Secret answers must use the private chat or mission UI.",
+        ANSWER_QUESTION_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.update_chat",
+        "Rename, archive, or restore one listed assistant chat. Read nebula.work.chat first and pass its revision. Active turns must finish or stop before changing title or archive state.",
+        UPDATE_CHAT_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.retry_mission",
+        "Retry one terminal mission after reading nebula.work.mission and passing its revision. A matching saved retry is returned instead of starting duplicate work. Remote MCP result transfer requires the operator's explicit consent.",
+        RETRY_MISSION_SCHEMA,
+        False,
+    ),
 )
 
 
@@ -981,4 +1379,18 @@ async def dispatch_work_tool(
         return await work.steer_mission(project_id, arguments)
     if name == "nebula.work.stop_mission":
         return await work.stop_mission(project_id, arguments.get("run_id"))
+    if name == "nebula.work.attention":
+        return work.attention(project_id)
+    if name == "nebula.work.approval":
+        return work.approval_detail(project_id, arguments.get("action_id"))
+    if name == "nebula.work.decide_approval":
+        return await work.decide_approval(project_id, arguments)
+    if name == "nebula.work.question":
+        return work.question_detail(project_id, arguments.get("action_id"))
+    if name == "nebula.work.answer_question":
+        return await work.answer_question(project_id, arguments)
+    if name == "nebula.work.update_chat":
+        return await work.update_chat(project_id, arguments)
+    if name == "nebula.work.retry_mission":
+        return await work.retry_mission(project_id, arguments)
     raise ValueError("work tool is not available")

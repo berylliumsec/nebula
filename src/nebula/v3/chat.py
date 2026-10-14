@@ -5681,7 +5681,9 @@ class ChatService:
                 "for your own next-turn settings. A saved setting applies to the next message, not a "
                 "running or already queued turn. Start work only on an explicit operator request. "
                 "Use message_chat delivery=next for a durable follow-up, and delivery=steer only for a live "
-                "harness turn. A started or queued result is not completed work; report its saved ID and "
+                "harness turn. For pending approvals or questions, call nebula.work.attention, "
+                "inspect the exact request, and decide only on an explicit operator instruction. "
+                "A saved approval is not completed work. A started or queued result is not completed work; report its saved ID and "
                 "current status and a link from the tool result so the operator can open it. "
                 "Browser and notes control are not available in this assistant yet."
             )

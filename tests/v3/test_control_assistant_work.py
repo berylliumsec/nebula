@@ -10,8 +10,11 @@ from nebula.v3.api import create_app
 from nebula.v3.control_assistant_work import WORK_TOOLS, dispatch_work_tool
 from nebula.v3.domain import (
     AgentRun,
+    Approval,
+    ApprovalStatus,
     ChatBackend,
     ChatSession,
+    ChatTurn,
     Engagement,
     HarnessCapabilities,
     HarnessKind,
@@ -19,7 +22,12 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessRuntimeOption,
     HarnessSession,
+    HarnessInteraction,
+    HarnessInteractionKind,
+    HarnessTurn,
+    HarnessTurnOrigin,
     ProviderProfile,
+    RiskClass,
     ScopePolicy,
 )
 from nebula.v3.runtime_platform import RuntimePlatform, _ControlAssistantScopeBroker
@@ -166,6 +174,296 @@ def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path
             work.chat_detail(selected.id, target)
     with pytest.raises(ValueError, match="this project's work roster"):
         work.mission_detail(selected.id, foreign_run.id)
+
+
+def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Working chat",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=selected.id,
+            session_id=chat.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status="waiting_approval",
+        )
+    )
+    approval = store.create(
+        Approval(
+            engagement_id=selected.id,
+            run_id=turn.id,
+            origin="chat",
+            chat_session_id=chat.id,
+            chat_turn_id=turn.id,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            exact_request={
+                "tool_name": "write_file",
+                "arguments": {"path": "report.md"},
+            },
+            target="report.md",
+            expected_effects=["Write report.md"],
+            policy_rationale="Workspace write requires a decision",
+            requested_by="Working chat",
+        )
+    )
+    foreign_run = store.create(
+        AgentRun(engagement_id=other.id, objective="Foreign mission")
+    )
+    foreign = store.create(
+        Approval(
+            engagement_id=other.id,
+            run_id=foreign_run.id,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            exact_request={"tool_name": "scan"},
+            policy_rationale="Review scan",
+            requested_by="Foreign mission",
+        )
+    )
+    work = app.state.control_assistant_work
+    attention = work.attention(selected.id)
+    assert [item["action_id"] for item in attention["items"]] == [approval.id]
+    detail = work.approval_detail(selected.id, approval.id)
+    assert detail["tool_name"] == "write_file"
+    assert detail["expected_effects"] == ["Write report.md"]
+    assert detail["revision"] == approval.revision
+    with pytest.raises(ValueError, match="this project's attention list"):
+        work.approval_detail(selected.id, foreign.id)
+
+    async def scenario():
+        with pytest.raises(ValueError, match="approval changed"):
+            await dispatch_work_tool(
+                work,
+                selected.id,
+                "nebula.work.decide_approval",
+                {
+                    "action_id": approval.id,
+                    "expected_revision": approval.revision + 1,
+                    "decision": "approve",
+                },
+            )
+        assert store.get(Approval, approval.id).status == ApprovalStatus.PENDING
+        return await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.decide_approval",
+            {
+                "action_id": approval.id,
+                "expected_revision": detail["revision"],
+                "decision": "approve",
+                "reason": "Operator approved this exact file write",
+            },
+        )
+
+    result = asyncio.run(scenario())
+    assert result["status"] == "approved"
+    assert result["decision_recorded"] is True
+    assert "session=" + chat.id in result["url"]
+    assert work.attention(selected.id)["count"] == 0
+    assert (
+        store.get(Approval, approval.id).decision_note
+        == "Operator approved this exact file write"
+    )
+
+
+def test_control_assistant_answers_pending_harness_question_without_leaking_secret(
+    tmp_path,
+):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    run = store.create(AgentRun(engagement_id=selected.id, objective="Audit scope"))
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=selected.id, harness_profile_id="fixture", model="model-a"
+        )
+    )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=selected.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.MISSION,
+            run_id=run.id,
+            prompt="Audit scope",
+        )
+    )
+    question = store.create(
+        HarnessInteraction(
+            engagement_id=selected.id,
+            harness_turn_id=harness_turn.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.MISSION,
+            kind=HarnessInteractionKind.USER_INPUT,
+            run_id=run.id,
+            vendor_request_id="question-1",
+            prompt="Which area should I inspect?",
+            questions=[{"id": "area", "header": "Area", "options": ["UI", "API"]}],
+        )
+    )
+    secret = store.create(
+        HarnessInteraction(
+            engagement_id=selected.id,
+            harness_turn_id=harness_turn.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.MISSION,
+            kind=HarnessInteractionKind.MCP_ELICITATION,
+            run_id=run.id,
+            vendor_request_id="question-2",
+            prompt="Enter a private token",
+            contains_secret=True,
+        )
+    )
+    work = app.state.control_assistant_work
+    assert {item["action_id"] for item in work.attention(selected.id)["items"]} == {
+        question.id,
+        secret.id,
+    }
+    detail = work.question_detail(selected.id, question.id)
+    assert detail["prompt"] == "Which area should I inspect?"
+    with pytest.raises(ValueError, match="this project's attention list"):
+        work.question_detail(other.id, question.id)
+
+    async def scenario():
+        with pytest.raises(ValueError, match="contains a secret"):
+            await work.answer_question(
+                selected.id,
+                {
+                    "action_id": secret.id,
+                    "expected_revision": secret.revision,
+                    "action": "answer",
+                    "response": {"token": "nope"},
+                },
+            )
+        future = asyncio.get_running_loop().create_future()
+        app.state.harness_runtime_service._interaction_futures[question.id] = future
+        result = await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.answer_question",
+            {
+                "action_id": question.id,
+                "expected_revision": detail["revision"],
+                "action": "answer",
+                "response": {"area": "API"},
+            },
+        )
+        secret_future = asyncio.get_running_loop().create_future()
+        app.state.harness_runtime_service._interaction_futures[secret.id] = (
+            secret_future
+        )
+        declined = await work.answer_question(
+            selected.id,
+            {
+                "action_id": secret.id,
+                "expected_revision": secret.revision,
+                "action": "decline",
+            },
+        )
+        return result, future.result(), declined, secret_future.result()
+
+    result, delivered, declined, secret_delivery = asyncio.run(scenario())
+    assert result["status"] == "answered"
+    assert delivered == {"action": "answer", "response": {"area": "API"}}
+    assert declined["status"] == "declined"
+    assert secret_delivery == {"action": "decline", "response": {}}
+    assert work.question_detail(selected.id, question.id)["status"] == "answered"
+
+
+def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Old title",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    run = store.create(
+        AgentRun(engagement_id=selected.id, objective="Review scope", status="failed")
+    )
+    work = app.state.control_assistant_work
+
+    async def update():
+        return await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.update_chat",
+            {
+                "session_id": chat.id,
+                "expected_revision": chat.revision,
+                "title": "New title",
+                "archived": True,
+            },
+        )
+
+    changed = asyncio.run(update())
+    assert changed["title"] == "New title"
+    assert changed["archived"] is True
+    assert work.chat_detail(selected.id, chat.id)["archived"] is True
+    with pytest.raises(ValueError, match="chat changed"):
+        asyncio.run(update())
+    with pytest.raises(ValueError, match="this project's work roster"):
+        asyncio.run(
+            work.update_chat(
+                other.id,
+                {
+                    "session_id": chat.id,
+                    "expected_revision": changed["revision"],
+                    "archived": False,
+                },
+            )
+        )
+
+    calls = []
+
+    async def fake_retry(method, path, body):
+        calls.append((method, path, body))
+        saved = store.create(
+            AgentRun(
+                engagement_id=selected.id,
+                objective=run.objective,
+                metadata={"retry_of_run_id": run.id},
+            )
+        )
+        return {"id": saved.id}
+
+    monkeypatch.setattr(work, "_request", fake_retry)
+    retry = {"run_id": run.id, "expected_revision": run.revision}
+    first = asyncio.run(work.retry_mission(selected.id, retry))
+    second = asyncio.run(work.retry_mission(selected.id, retry))
+    assert first["run_id"] == second["run_id"]
+    assert len(calls) == 1
+    assert calls[0][2] == {"allow_cloud_tool_results": False}
+    assert second["result"] == "an existing retry is already saved in Core"
 
 
 def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
