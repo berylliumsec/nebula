@@ -1,17 +1,18 @@
 {
-  "change_digest": "41564e1da8528ca9fcc8778c3a9de4927a3f733519013e1887cad5062af498d6",
-  "reviewed_by": "Codex focused shell goal draft review",
-  "reason": "The assistant-only shell omitted the Core-backed goal editor after Save draft. Select the goal editor component contract and a production LAN real-Core journey that creates a draft through the shell, recovers from a failed goal read, reopens it, edits the objective, attaches a project skill, and verifies persistence after reload. Run that journey in permanent desktop and mobile Chromium/WebKit profiles, including 320, 390, and 430 pixel mobile widths.",
-  "exclusions": "No Python or native behavior changed. Unrelated assistant, provider, workspace, and full-suite tests are excluded. The real-Core browser journey uses disposable data and a local model stub; external providers, physical devices, and a software keyboard are outside this automated run.",
+  "change_digest": "3eb39c7fe1a361812b335599d3febef7edab097946a91957236bd551caa43fc8",
+  "reviewed_by": "Codex focused shell goal and side device browser review",
+  "reason": "The assistant-only shell hid the Core-backed draft goal editor, and a manually opened Browser side tab inherited the read-only Assistant browser. Select the goal editor contract, side-tab URL cleanup, and production LAN real-Core journeys for goal draft edit and skill persistence, manual device-browser creation/reload/page open/close, plus the existing linked-page route. Exercise the two changed journeys in permanent desktop and mobile Chromium/WebKit profiles at 320, 390, and 430 pixel mobile widths.",
+  "exclusions": "No Python or native source changed. Unrelated assistant, provider, workspace, and full-suite tests are excluded. Real-Core browser journeys use disposable data and a local model stub. Browser-engine execution inside packaged Tauri/Electron shells, external providers, physical devices, and software keyboards are outside this automated run and are not claimed.",
   "expected_tests": {
     "python": 0,
-    "frontend": 22,
+    "frontend": 25,
     "native": 0,
-    "playwright": 8
+    "playwright": 17
   },
   "python": [],
   "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx"
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/pages/sidePanelTabs.test.ts"
   ],
   "native": [],
   "playwright": [
@@ -22,6 +23,15 @@
     "entry:shell-goal-draft/assistant-real-chromium-430",
     "entry:shell-goal-draft/assistant-real-webkit-320",
     "entry:shell-goal-draft/assistant-real-webkit-390",
-    "entry:shell-goal-draft/assistant-real-webkit-430"
+    "entry:shell-goal-draft/assistant-real-webkit-430",
+    "entry:side-device-browser/assistant-real-desktop",
+    "entry:side-device-browser/assistant-real-compact",
+    "entry:side-device-browser/assistant-real-chromium-320",
+    "entry:side-device-browser/assistant-real-chromium-390",
+    "entry:side-device-browser/assistant-real-chromium-430",
+    "entry:side-device-browser/assistant-real-webkit-320",
+    "entry:side-device-browser/assistant-real-webkit-390",
+    "entry:side-device-browser/assistant-real-webkit-430",
+    "entry:assistant-links/assistant-real-desktop"
   ]
 }

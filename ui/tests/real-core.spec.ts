@@ -8822,6 +8822,78 @@ test("assistant upgrade shell goal draft remains editable with skills on product
   ]);
 });
 
+test("assistant upgrade side Browser opens device controls on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const model = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const project = (await (await api.get("engagements")).json() as Array<{id: string}>)[0];
+    const providerResponse = await api.post("providers", {data: {
+      name: "Side browser fixture", provider_type: "vllm", endpoint: `${model.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const createdResponse = await api.post("chat/goal-conversations", {data: {
+      engagement_id: project.id, backend: "provider", provider_id: provider.id,
+      model: "security-model", objective: "Review browser routing", completion_criteria: ["Open a page"],
+    }});
+    expect(createdResponse.ok(), await createdResponse.text()).toBe(true);
+    const created = await createdResponse.json() as {session: {id: string}};
+    const pairApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+    });
+    const pairing = await (await pairApi.post("auth/pairings", {data: {name: "Side browser device"}})).json() as {secret: string; confirmation_code: string};
+    await pairApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Side browser device");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=${created.session.id}`);
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "Conversation actions"}).click();
+      await page.getByRole("menuitem", {name: /^Browser/}).click();
+    } else {
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /^Browser/}).click();
+    }
+    const panel = page.getByRole("region", {name: "Browser 1 beside chat"});
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole("textbox", {name: "Web address"})).toBeVisible();
+    await expect(panel.getByRole("region", {name: "Assistant browser"})).toHaveCount(0);
+    const panelId = new URL(page.url()).searchParams.get("panelTab");
+    expect(panelId).toBeTruthy();
+    expect(new URL(page.url()).searchParams.get(`panelBrowserEngine.${panelId}`)).toBe("native");
+    await page.reload();
+    await expect(panel.getByRole("textbox", {name: "Web address"})).toBeVisible();
+    const address = panel.getByRole("textbox", {name: "Web address"});
+    await address.fill(`${core.origin}/web-build.json`);
+    const openedPage = page.context().waitForEvent("page");
+    await panel.getByRole("button", {name: "Open", exact: true}).click();
+    const deviceTab = await openedPage;
+    await deviceTab.waitForURL(`${core.origin}/web-build.json`);
+    await deviceTab.close();
+    await expect(panel.getByRole("status").filter({hasText: "New tab requested"})).toBeVisible();
+    expect((await new AxeBuilder({page}).include("#side-tool-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await panel.getByRole("button", {name: "Close Browser 1 tab"}).click();
+    await expect(panel).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.has(`panelBrowserEngine.${panelId}`)).toBe(false);
+    await testInfo.attach("side-device-browser", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), sessionId: created.session.id, pageOpened: `${core.origin}/web-build.json`}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model fixture", dispose: () => stopLocalModelStub(model)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "single");
