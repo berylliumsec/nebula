@@ -10320,7 +10320,7 @@ class HarnessRuntimeService:
         content_blocks: list[ChatContentBlock] | None = None,
         provider_subagent: dict[str, Any] | None = None,
         pending_provider_subagent: dict[str, Any] | None = None,
-        allow_agent_messaging: bool = False,
+        allow_agent_messaging: bool | None = None,
         control_assistant: bool = False,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
@@ -10345,6 +10345,19 @@ class HarnessRuntimeService:
             allow_cloud_knowledge = False
             max_artifact_queries = 0
         profile = self.store.get(HarnessProfile, profile_id)
+        from .chat_agent_messages import resolve_agent_messaging_choice
+
+        saved_chat = (
+            self.store.get(ChatSession, chat_session_id) if chat_session_id else None
+        )
+        messaging_choice = resolve_agent_messaging_choice(
+            self.store,
+            engagement_id,
+            saved_chat,
+            allow_agent_messaging,
+            control_assistant=control_assistant,
+        )
+        allow_agent_messaging = bool(messaging_choice and profile.capabilities.mcp)
         subagent_setting: dict[str, Any] | None = None
         if provider_subagent is not None:
             if self.provider_subagents is None:
@@ -10523,7 +10536,11 @@ class HarnessRuntimeService:
                 or cyber_program != frozen_options.get("cyber_access_program")
             )
             self._validate_harness_privacy(
-                engagement_id, profile, selected_mcp, allow_remote_mcp=allow_remote_mcp
+                engagement_id,
+                profile,
+                selected_mcp,
+                allow_remote_mcp=allow_remote_mcp,
+                uses_gateway_tools=allow_agent_messaging,
             )
             if changed:
                 settings_previous_session_id = session.id if session else None
@@ -10614,6 +10631,7 @@ class HarnessRuntimeService:
                     profile,
                     session.mcp_server_ids,
                     allow_remote_mcp=allow_remote_mcp,
+                    uses_gateway_tools=allow_agent_messaging,
                 )
                 if mcp_server_ids:
                     raise HarnessConfigurationError(
@@ -10625,6 +10643,7 @@ class HarnessRuntimeService:
                     profile,
                     mcp_server_ids or [],
                     allow_remote_mcp=allow_remote_mcp,
+                    uses_gateway_tools=allow_agent_messaging,
                 )
                 session = self.create_session(
                     engagement_id=engagement_id,
@@ -10657,7 +10676,7 @@ class HarnessRuntimeService:
                         if control_assistant
                         else "pending",
                         **({"control_assistant": True} if control_assistant else {}),
-                        "allow_agent_messaging": allow_agent_messaging,
+                        "allow_agent_messaging": messaging_choice,
                         "harness_runtime_options": session.metadata.get(
                             "runtime_options", {}
                         ),
@@ -10670,8 +10689,6 @@ class HarnessRuntimeService:
             # leaves a choice out (a composer that has not reloaded it yet)
             # would otherwise drop the tools from the vendor catalog,
             # reconnecting it now and again at the next send.
-            if chat.metadata.get("allow_agent_messaging") is True:
-                allow_agent_messaging = True
             saved_subagent = chat.metadata.get("provider_subagent")
             if (
                 subagent_setting is None
@@ -10789,7 +10806,7 @@ class HarnessRuntimeService:
         chat = self._remember_chat_provider_subagent(
             chat, subagent_setting or pending_provider_subagent
         )
-        chat = self._remember_chat_agent_messaging(chat, allow_agent_messaging)
+        chat = self._remember_chat_agent_messaging(chat, messaging_choice)
         subagent_update = (
             self.provider_subagents.harness_update(chat.id)
             if self.provider_subagents is not None
@@ -10888,6 +10905,7 @@ class HarnessRuntimeService:
                 or _native_capability_names(native_capabilities)
                 or knowledge_access
                 or subagent_setting
+                or allow_agent_messaging
                 or control_assistant
             ),
             max_artifact_queries=max_artifact_queries,
@@ -13378,6 +13396,7 @@ class HarnessRuntimeService:
         mcp_server_ids: list[str],
         *,
         allow_remote_mcp: bool,
+        uses_gateway_tools: bool = False,
     ) -> None:
         engagement = self.store.get(Engagement, engagement_id)
         if engagement.scope_policy_id:
@@ -13390,7 +13409,7 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "engagement scope is local-only and cannot use this harness"
                 )
-        if mcp_server_ids and not profile.privacy.local_only:
+        if (mcp_server_ids or uses_gateway_tools) and not profile.privacy.local_only:
             if not profile.privacy.permits_sensitive_data:
                 raise HarnessConfigurationError(
                     "harness profile does not permit MCP results to reach its model"
