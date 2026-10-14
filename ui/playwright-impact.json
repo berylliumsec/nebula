@@ -36,7 +36,7 @@
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
     {"name": "headless-lan", "patterns": ["ui/src/components/SecurityDashboard*", "ui/src/electron-browser.css", "src/nebula/v3/agent_security_tools.py"], "areas": ["headless-lan"]},
     {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
-    {"name": "ios-assistant-only", "patterns": ["ui/src/App.tsx", "ui/src/components/AppShell.tsx", "ui/src/components/MobileAttentionInbox.tsx", "ui/src/components/MobileDrawerChrome.tsx", "ui/src/components/PairingGate.tsx", "ui/src/pages/SessionsPage.tsx", "ui/src/mobile-shell.css", "ui/src/api/client.ts", "ui/src/api/runtime.ts", "ui/src/state/WorkspaceContext.tsx", "src/nebula/v3/api.py"], "areas": ["ios-assistant-only"]},
+    {"name": "ios-assistant-only", "patterns": ["ui/src/App.tsx", "ui/src/components/AppShell.tsx", "ui/src/components/MobileAttentionInbox.tsx", "ui/src/components/MobileDrawerChrome.tsx", "ui/src/components/PairingGate.tsx", "ui/src/pages/SessionsPage.tsx", "ui/src/mobile-shell.css", "ui/src/api/client.ts", "ui/src/api/runtime.ts", "ui/src/state/WorkspaceContext.tsx", "src/nebula/v3/api.py"], "areas": ["ios-assistant-only", "shell-goal-draft"]},
     {"name": "phone-shell", "patterns": ["ui/src/mobile-shell.css", "ui/src/hooks/useCompactLayout*", "ui/src/components/Mobile*", "ui/src/components/CompactSettingsList*", "ui/src/components/terminalKeys*"], "areas": ["phone-shell", "mobile-layout", "phone-route-ownership", "phone-inspector-return"]},
     {"name": "icon-pack", "patterns": ["ui/src/icons/**", "scripts/import_icon_pack.mjs", "ui/package.json", "ui/package-lock.json", "ui/tsconfig.app.json", "ui/vite.config.ts"], "areas": ["icon-pack"]},
     {"name": "settings-catalog", "patterns": ["ui/src/settingsCatalog.ts"], "areas": ["settings-search", "critical-workspaces"]},
@@ -77,6 +77,16 @@
       {"area":"ios-assistant-only","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects","runtime":"real-core","shard":"1/1"},
       {"area":"ios-assistant-only","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects","runtime":"real-core","shard":"1/1"},
       {"area":"ios-assistant-only","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects","runtime":"real-core","shard":"1/1"}
+    ],
+    "shell-goal-draft": [
+      {"area":"shell-goal-draft","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"shell-goal-draft","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"shell-goal-draft","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"shell-goal-draft","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"shell-goal-draft","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"shell-goal-draft","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"shell-goal-draft","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"shell-goal-draft","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade shell goal draft remains editable with skills on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "ios-mobile-web-regression": [
       {"area":"ios-mobile-web-regression","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"mobile Workbench navigation has one authority and no duplicate tab strip","runtime":"mock","shard":"1/1"}
