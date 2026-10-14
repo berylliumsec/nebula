@@ -14101,7 +14101,8 @@ class HarnessRuntimeService:
                         "inputSchema": schema,
                         "annotations": {
                             "readOnlyHint": read_only,
-                            "destructiveHint": name in {"nebula.work.stop_chat", "nebula.work.stop_mission"},
+                            "destructiveHint": name
+                            in {"nebula.work.stop_chat", "nebula.work.stop_mission"},
                             "idempotentHint": read_only,
                             "openWorldHint": False,
                         },
@@ -14559,7 +14560,9 @@ class HarnessRuntimeService:
             is True
         )
         if (
-            name.startswith(("nebula.settings.", "nebula.help.", "nebula.navigate.", "nebula.work."))
+            name.startswith(
+                ("nebula.settings.", "nebula.help.", "nebula.navigate.", "nebula.work.")
+            )
         ) != settings_only:
             raise HarnessConfigurationError(
                 "This tool is not available to this assistant."
@@ -14567,8 +14570,12 @@ class HarnessRuntimeService:
         if name.startswith("nebula.work."):
             from .control_assistant_work import WORK_TOOLS, dispatch_work_tool
 
-            if self.control_assistant_work is None or name not in {item[0] for item in WORK_TOOLS}:
-                raise HarnessConfigurationError("This work tool is unavailable in this Core.")
+            if self.control_assistant_work is None or name not in {
+                item[0] for item in WORK_TOOLS
+            }:
+                raise HarnessConfigurationError(
+                    "This work tool is unavailable in this Core."
+                )
             value = await dispatch_work_tool(
                 self.control_assistant_work, turn.engagement_id, name, arguments
             )
