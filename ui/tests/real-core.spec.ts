@@ -452,7 +452,7 @@ test("stabilization storage public source reaches dashboard chat and approved re
       response.statusCode = 401; response.end(JSON.stringify({ error: "token required" })); return;
     }
     if (request.url === "/v1/diagnose") {
-      response.end(JSON.stringify({ diagnostics: "Read-only fixture check: capacity is low.", offers: [{ id: "copy", title: "Copy fixture artifact" }] }));
+      response.end(JSON.stringify({ diagnostics: "Read-only fixture check: capacity is low.", offers: [{ id: "copy", title: "Archive copy · /fixture/long-project-name/research/artifacts" }] }));
     } else if (request.url === "/v1/actions/copy/preview") {
       if (refusePreview) {
         response.statusCode = 409;
@@ -548,23 +548,41 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await expect(page.getByText("20 B free of 100 B")).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
     const action = page.locator(".storage-action");
-    await expect(action.getByText("Copy fixture artifact")).toBeVisible();
-    await action.getByRole("button", { name: "Preview effects" }).click();
-    await expect(page.locator(".storage-actions").getByRole("alert")).toContainText("unsupported tree entry: /fixture/backup-link");
-    refusePreview = false;
-    await action.getByRole("button", { name: "Preview effects" }).click();
-    await expect(action.getByRole("button", { name: "Approve exact plan and execute" })).toBeVisible();
-    await action.getByRole("button", { name: "Approve exact plan and execute" }).click();
-    await expect(action.getByText("complete", { exact: true })).toBeVisible();
-    await action.getByText("Execution receipt").click();
-    await expect(action.getByText(/verified/)).toBeVisible();
+    await expect(action.getByText("Archive copy · /fixture/long-project-name/research/artifacts")).toBeVisible();
     await page.locator(".storage-incident").getByRole("link", { name: "Open assistant chat" }).click();
     await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/workbench\\?view=chat&session=`));
     const chatActions = page.locator(".storage-chat-actions");
-    await expect(chatActions.getByRole("heading", { name: "Source actions" })).toBeVisible();
-    await expect(chatActions.getByText("Copy fixture artifact")).toBeVisible();
-    await expect(chatActions.getByText("complete", { exact: true })).toBeVisible();
+    const toggle = chatActions.getByRole("button", { name: /Storage incident/ });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect((await toggle.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expect(chatActions.getByRole("region", { name: "Storage actions" })).toBeHidden();
     await expect(page.getByText("The storage volume is low. Check recent growth and backups.")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".chat-composer")).toBeInViewport();
+    expect((await page.locator(".chat-thread").boundingBox())?.height ?? 0).toBeGreaterThan(100);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+    expect((await page.locator(".chat-thread").boundingBox())?.height ?? 0).toBeGreaterThan(100);
+    const chatAction = chatActions.locator(".storage-action");
+    await chatAction.getByRole("button", { name: "Preview effects" }).click();
+    await expect(chatActions.getByRole("alert")).toContainText("unsupported tree entry: /fixture/backup-link");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(chatActions.getByRole("alert")).toContainText("unsupported tree entry: /fixture/backup-link");
+    expect((await page.locator(".chat-thread").boundingBox())?.height ?? 0).toBeGreaterThan(100);
+    refusePreview = false;
+    await toggle.click();
+    await chatAction.getByRole("button", { name: "Preview effects" }).click();
+    await expect(chatAction.getByRole("button", { name: "Approve exact plan and execute" })).toBeVisible();
+    await expect(toggle).toContainText("awaiting approval");
+    await chatAction.getByRole("button", { name: "Approve exact plan and execute" }).click();
+    await expect(chatAction.getByText("complete", { exact: true })).toBeVisible();
+    await chatAction.getByText("Execution receipt").click();
+    await expect(chatAction.getByText(/verified/)).toBeVisible();
+    await expect(chatActions.getByRole("region", { name: "Storage actions" })).toBeVisible();
+    await expect(chatActions.getByText("Archive copy · /fixture/long-project-name/research/artifacts")).toBeVisible();
+    await expect(chatActions.getByText("complete", { exact: true })).toBeVisible();
+    expect((await new AxeBuilder({ page }).include(".storage-chat-actions").analyze()).violations).toEqual([]);
     expect(callbackRequests).toContain("/v1/diagnose");
     expect(callbackRequests).toContain("/v1/actions/copy/preview");
     expect(callbackRequests).toContain("/v1/actions/copy/execute");
@@ -583,6 +601,13 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await page.goto(`${core.origin}/storage`);
     await expect(page.getByText("NAS One")).toBeVisible();
     await expect(page.locator(".storage-action").getByText("complete", { exact: true })).toBeVisible();
+    await page.locator(".storage-incident").getByRole("link", { name: "Open assistant chat" }).click();
+    const recoveredChatActions = page.locator(".storage-chat-actions");
+    const recoveredToggle = recoveredChatActions.getByRole("button", { name: /Storage incident/ });
+    await expect(recoveredToggle).toHaveAttribute("aria-expanded", "false");
+    await recoveredToggle.click();
+    await expect(recoveredChatActions.getByText("complete", { exact: true })).toBeVisible();
+    await expect(recoveredChatActions.getByText("Execution receipt")).toBeVisible();
   } finally {
     await sender.dispose(); await api.dispose(); await stopRealCore(core);
     await stopLocalModelStub(model);

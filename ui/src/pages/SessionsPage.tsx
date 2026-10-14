@@ -6288,7 +6288,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const panelIdSuffix = embeddedSideChat ? "-side-chat" : "";
   const assistantPanel = (
             <div className="chat-panel">
-              {!embeddedSideChat && sessionId && <StorageChatActions api={api} sessionId={sessionId} />}
+              {!embeddedSideChat && sessionId && <StorageChatActions key={sessionId} api={api} sessionId={sessionId} />}
               <ChatSearchPanel open={transcriptSearchOpen} onClose={closeTranscriptSearch} key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
                 updateSearchParams(next => {
                   next.set(embeddedSideChat ? "sideChat" : "session", hit.session_id);

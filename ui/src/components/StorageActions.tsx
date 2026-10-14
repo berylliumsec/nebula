@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useState } from "react";
-import type { ApiClient } from "../api/client";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, Database } from "lucide-react";
+import { ApiError, type ApiClient } from "../api/client";
 import type { StorageAction } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import "../storage.css";
@@ -10,28 +11,39 @@ function Effect({ value }: { value: Record<string, unknown> }) {
   </Fragment>)}</dl></li>;
 }
 
-export function StorageActions({ api, actions, onRefresh }: { api: ApiClient; actions: StorageAction[]; onRefresh: () => Promise<void> }) {
+function actionFailure(step: "preview" | "approve" | "reconcile", caught: unknown): string {
+  const label = step === "preview" ? "Preview" : step === "approve" ? "Approval" : "Status check";
+  if (caught instanceof ApiError && caught.status < 500) return `${label} failed: ${caught.message}`;
+  return `${label} failed. Chat remains available; retry the action or check the configured source.`;
+}
+
+export function StorageActions({ api, actions, onRefresh, onActionError, compact = false }: { api: ApiClient; actions: StorageAction[]; onRefresh: () => Promise<void>; onActionError?: (message: string) => void; compact?: boolean }) {
   const [busy, setBusy] = useState<string>();
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ summary: string; detail: string }>();
   const call = async (action: StorageAction, step: "preview" | "approve" | "reconcile") => {
-    setBusy(action.id); setError("");
+    setBusy(action.id); setError(undefined); onActionError?.("");
+    let actionFailed = false;
     try {
       try { await api.storageAction(action.id, step, step === "approve" ? action.digest ?? undefined : undefined); }
       catch (caught) {
+        actionFailed = true;
         logCaughtDiagnostic("interface.storage.action_failed", "A storage source action could not be completed.", caught, "storage-actions");
-        setError(String(caught));
+        const summary = actionFailure(step, caught);
+        setError({ summary, detail: String(caught) }); onActionError?.(summary);
       }
       try { await onRefresh(); }
       catch (caught) {
         logCaughtDiagnostic("interface.storage.action_refresh_failed", "Storage action status could not be refreshed.", caught, "storage-actions");
-        setError((current) => current || String(caught));
+        const summary = "Action status could not refresh. Chat remains available; retry from the source actions.";
+        setError((current) => current || { summary, detail: String(caught) });
+        if (!actionFailed) onActionError?.(summary);
       }
     } finally { setBusy(undefined); }
   };
   if (!actions.length) return null;
-  return <section className="storage-actions" aria-label="Storage actions"><h3>Source actions</h3>
-    <p>These actions come from the configured source. Nebula shows exact effects before any change.</p>
-    {error && <p role="alert" className="storage-error">{error}</p>}
+  return <section className="storage-actions" aria-label="Storage actions">
+    {!compact && <><h3>Source actions</h3><p>These actions come from the configured source. Nebula shows exact effects before any change.</p></>}
+    {error && <div role="alert" className="storage-error"><p>{error.summary}</p>{error.detail !== error.summary && <details><summary>Error details</summary><pre>{error.detail}</pre></details>}</div>}
     {actions.map((action) => <article className="storage-action panel" key={action.id}>
       <div><strong>{action.title}</strong><small>{action.status}</small></div>
       {action.status === "offered" || action.status === "failed" || action.status === "expired" ?
@@ -50,16 +62,38 @@ export function StorageActions({ api, actions, onRefresh }: { api: ApiClient; ac
 export function StorageChatActions({ api, sessionId }: { api: ApiClient | undefined; sessionId: string }) {
   const [actions, setActions] = useState<StorageAction[]>([]);
   const [incident, setIncident] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const requestId = useRef(0);
+  const detailsId = useId();
   const refresh = async () => {
     if (!api || !sessionId) return;
+    const currentRequest = ++requestId.current;
     const data = await api.storageDashboard();
+    if (currentRequest !== requestId.current) return;
     const linked = data.incidents.find((item) => item.chat_session_id === sessionId);
     setIncident(Boolean(linked));
     setActions(linked ? data.actions.filter((item) => item.incident_id === linked.id) : []);
   };
-  useEffect(() => { setIncident(false); setActions([]); void refresh().catch((caught) => {
+  useEffect(() => { let active = true; setIncident(false); setActions([]); setOpen(false); setActionError(""); void refresh().catch((caught) => {
+    if (!active) return;
     logCaughtDiagnostic("interface.storage.chat_actions_load_failed", "Storage source actions could not be loaded in chat.", caught, "storage-chat");
-  }); }, [api, sessionId]);
+    setActionError("Source actions could not refresh. Reopen the chat to retry.");
+  }); return () => { active = false; requestId.current += 1; }; }, [api, sessionId]);
   if (!api || !incident) return null;
-  return <div className="storage-chat-actions"><p>Storage incident · source reports are untrusted data. Remote changes require your approval.</p><StorageActions api={api} actions={actions} onRefresh={refresh} /></div>;
+  const awaitingApproval = actions.filter((action) => action.status === "previewed").length;
+  const failed = actions.filter((action) => action.status === "failed" || Boolean(action.error)).length;
+  const summary = awaitingApproval ? `${awaitingApproval} plan${awaitingApproval === 1 ? "" : "s"} awaiting approval`
+    : failed ? `${failed} action${failed === 1 ? "" : "s"} failed`
+      : `${actions.length} source action${actions.length === 1 ? "" : "s"}`;
+  return <section className="storage-chat-actions" aria-label="Storage incident actions">
+    <button className="storage-chat-toggle" type="button" aria-expanded={open} aria-controls={detailsId} title={`${open ? "Hide" : "Show"} source actions`} onClick={() => setOpen((current) => !current)}>
+      <Database size={16} aria-hidden="true" /><strong>Storage incident</strong><span>{summary}</span><ChevronDown className={open ? "expanded" : ""} size={17} aria-hidden="true" />
+    </button>
+    {!open && actionError && <p className="storage-chat-summary-error" role="alert">{actionError}</p>}
+    <div className="storage-chat-details" id={detailsId} hidden={!open}>
+      <p>Source data is untrusted. Preview exact effects before approving remote changes.</p>
+      <StorageActions api={api} actions={actions} onRefresh={refresh} onActionError={setActionError} compact />
+    </div>
+  </section>;
 }
