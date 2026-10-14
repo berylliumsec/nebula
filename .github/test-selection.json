@@ -1,6 +1,6 @@
 {
-  "change_digest": "20961964bc8fc1ee036c73543c26ddf347d9158c4528e1c22b35a1df754747f1",
-  "reviewed_by": "Codex review of the 3.0.22 updater manifest compile fixture failure",
+  "change_digest": "c93cd5a1b2594245b31c6c2847f477c404c825a4d93dde65e7951029816eb27a",
+  "reviewed_by": "Codex review of the 3.0.22 updater fixture and formatting-only follow-up",
   "reason": "The 3.0.22 published release updater workflow verified asset checksums, then its Cargo signature verifier failed before execution because the Tauri config requires resources/notebook-runtime. Select the one workflow contract test that executes the fixture step and checks the declared resource is present. The recovered updater dispatch against the published tag is the definitive integration check.",
   "exclusions": "Only the updater workflow fixture and its focused Python contract test changed. No application code or release artifact changed. No frontend, native, Playwright, unrelated packaging, optional diagnostics, or full-suite tests are selected.",
   "expected_tests": {

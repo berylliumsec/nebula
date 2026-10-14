@@ -306,7 +306,9 @@ def test_linux_deb_declares_bundled_chromium_runtime_dependencies():
     }
 
 
-def test_updater_manifest_supports_validated_recovery_with_native_libraries(tmp_path: Path):
+def test_updater_manifest_supports_validated_recovery_with_native_libraries(
+    tmp_path: Path,
+):
     workflow = (ROOT / ".github/workflows/publish-updater-manifest.yml").read_text(
         encoding="utf-8"
     )
@@ -325,15 +327,21 @@ def test_updater_manifest_supports_validated_recovery_with_native_libraries(tmp_
     assert 'touch "ui/src-tauri/binaries/nebula-core-$target"' in workflow
 
     steps = yaml.safe_load(workflow)["jobs"]["manifest"]["steps"]
-    fixture_step = next(step for step in steps if step.get("name") == "Prepare compile-time sidecar boundary")
+    fixture_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Prepare compile-time sidecar boundary"
+    )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     rustc = bin_dir / "rustc"
     rustc.write_text("#!/bin/sh\nprintf 'host: x86_64-unknown-linux-gnu\\n'\n")
     rustc.chmod(0o755)
     subprocess.run(
-        ["bash", "-e", "-c", fixture_step["run"]], cwd=tmp_path,
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}, check=True,
+        ["bash", "-e", "-c", fixture_step["run"]],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        check=True,
     )
     assert "resources/notebook-runtime" in tauri["bundle"]["resources"]
     notebook = tmp_path / "ui/src-tauri/resources/notebook-runtime"
