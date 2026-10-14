@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from .chat_subagents import SUBAGENT_LIMIT_CEILING
+from .chat_agent_messages import resolve_agent_messaging_choice
 from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
@@ -78,7 +79,7 @@ class GoalConversationCreate(GoalCreate):
     reasoning_effort: ReasoningEffort | None = None
     allow_subagents: bool = False
     subagent_reasoning_effort: ReasoningEffort | None = None
-    allow_agent_messaging: bool = False
+    allow_agent_messaging: bool | None = None
     max_active_subagents: int | None = Field(
         default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
     )
@@ -268,7 +269,9 @@ class ChatGoalService:
                 "reasoning_effort": body.reasoning_effort,
                 "allow_subagents": body.allow_subagents,
                 "subagent_reasoning_effort": body.subagent_reasoning_effort,
-                "allow_agent_messaging": body.allow_agent_messaging,
+                "allow_agent_messaging": resolve_agent_messaging_choice(
+                    self.store, body.engagement_id, None, body.allow_agent_messaging
+                ),
                 "max_active_subagents": body.max_active_subagents,
                 "message_count": 0,
                 "last_sequence": 0,

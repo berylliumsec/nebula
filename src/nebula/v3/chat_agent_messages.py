@@ -36,6 +36,7 @@ from .domain import (
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
+    Engagement,
     RiskClass,
     ScopePolicy,
     utc_now,
@@ -86,6 +87,27 @@ _UNFINISHED = {
 }
 
 
+def resolve_agent_messaging_choice(
+    store: NebulaStore,
+    engagement_id: str,
+    session: ChatSession | None,
+    requested: bool | None,
+    *,
+    control_assistant: bool = False,
+) -> bool:
+    """Use the project default once; an existing conversation owns its choice."""
+
+    if control_assistant or (
+        session is not None and not AgentMessageService._eligible(session)
+    ):
+        return False
+    if requested is not None:
+        return requested
+    if session is not None:
+        return session.metadata.get("allow_agent_messaging") is True
+    return store.get(Engagement, engagement_id).assistant_defaults.allow_agent_messaging
+
+
 class AgentMessageService:
     """Own peer discovery, durable delivery, and active-turn notification."""
 
@@ -99,6 +121,7 @@ class AgentMessageService:
             is_subagent_session(session)
             or session.metadata.get("temporary_assistant") is True
             or session.metadata.get("side_chat") is True
+            or session.metadata.get("control_assistant") is True
             or isinstance(session.metadata.get("archived_at"), str)
         )
 

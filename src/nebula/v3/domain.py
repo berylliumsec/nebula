@@ -908,7 +908,7 @@ class AssistantDefaults(NebulaModel):
     subagent_model: str | None = Field(default=None, max_length=500)
     max_active_subagents: int | None = Field(default=None, ge=1, le=32)
     subagent_reasoning_effort: str | None = Field(default=None, max_length=20)
-    allow_agent_messaging: bool = False
+    allow_agent_messaging: bool = True
 
 
 class Engagement(Entity):
