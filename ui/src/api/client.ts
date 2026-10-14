@@ -6852,6 +6852,18 @@ export class ApiClient {
     return this.request<Array<{ path: string; size: number; modified_at: string }>>(`engagements/${encodeURIComponent(projectId)}/notebooks${refresh ? "?refresh=true" : ""}`).then(items => items.map(item => ({path: item.path, size: item.size, modifiedAt: item.modified_at})));
   }
 
+  notebookFileIndex(projectId: string): Promise<import("./types").NotebookFileIndexStatus> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`);
+  }
+
+  setNotebookFileIndex(projectId: string, path: string): Promise<import("./types").NotebookFileIndexStatus> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "PUT", body: JSON.stringify({path})});
+  }
+
+  removeNotebookFileIndex(projectId: string): Promise<import("./types").NotebookFileIndexStatus> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "DELETE"});
+  }
+
   createNotebook(projectId: string, path: string): Promise<import("./types").NotebookFile> {
     return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks`, {method: "POST", body: JSON.stringify({path})});
   }
@@ -9070,10 +9082,11 @@ export class ApiClient {
     ).then(mapSourceControlDiff);
   }
 
-  listHostWorkspaceFolders(path?: string, offset = 0, filter = ""): Promise<{
+  listHostWorkspaceFolders(path?: string, offset = 0, filter = "", includeSqliteFiles = false): Promise<{
     path: string;
     parent?: string;
     directories: Array<{ name: string; path: string }>;
+    files: Array<{ name: string; path: string }>;
     truncated: boolean;
     nextOffset?: number;
   }> {
@@ -9081,11 +9094,13 @@ export class ApiClient {
     if (path) parameters.set("path", path);
     if (offset > 0) parameters.set("offset", String(offset));
     if (filter.trim()) parameters.set("filter", filter.trim());
+    if (includeSqliteFiles) parameters.set("include_sqlite_files", "true");
     const query = parameters.size ? `?${parameters}` : "";
     return this.request<{
       path: string;
       parent?: string | null;
       directories: Array<{ name: string; path: string }>;
+      files: Array<{ name: string; path: string }>;
       truncated: boolean;
       next_offset?: number | null;
     }>(`workspace-folders${query}`).then(({ parent, next_offset, ...value }) => ({
