@@ -32,6 +32,10 @@ With native build 4 or later, the web view runs edge to edge with no native bar.
 The installed app opens the Core-backed assistant: project conversations, the composer, saved
 results, and pending chat approvals or agent questions. Terminal, Missions,
 Activity, and other Workbench tools stay in full Nebula on desktop or mobile web.
+Build 5 adds the microphone permission description for Nebula Voice. The Core UI
+also exposes the Nebula assistant and Voice from this shell. Voice needs a trusted
+HTTPS server address; HTTP LAN addresses continue to support text chat and show
+an in-place HTTPS recovery message if Voice is started.
 The page's `theme-color` controls the status bar. Native UI appears only for:
 
 - **Connect** — first launch, or App connection in the conversation drawer,

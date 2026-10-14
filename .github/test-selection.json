@@ -1,21 +1,24 @@
 {
-  "change_digest": "24e2a5d9c6e559c2b1570ec561716fd2e2b809a1f8bf43d83f9d3b27e3c49901",
-  "reviewed_by": "Codex focused control assistant work review",
-  "reason": "The control assistant gains project-bound chat and mission tools while existing settings controls remain available. Cover provider and harness tool exposure, project isolation, queued follow-ups, start and interrupt actions, and remote Codex chat creation without implicit peer-message sharing. Cover work prompts, transcript persistence, validated Core receipts and client SSE normalization, then create and open a mission through the production bundle on a LAN-origin real Core with keyboard navigation on desktop and touch navigation in Chromium/WebKit phone profiles. The selected settings file also corrects its stale Docker-default assertion to the current Host policy. A focused type correction gives provider and harness profiles distinct names, uses ChatRole enum values, and types the mission payload for Python 3.12 mypy.",
-  "exclusions": "No native source or packaged shell changed. Full suites and unrelated settings, browser, notes, provider, mission, and workspace journeys are excluded. The real-Core model is a local deterministic stub; a live Codex harness is checked separately. Physical phone and software keyboard remain outside automated coverage.",
+  "change_digest": "a6cbf5cf5a09f769da3a8b002ea5d2b00b49f7c64278c83c9f3d4a52d8253aa5",
+  "reviewed_by": "Codex combined control assistant settings and Nebula Voice review",
+  "reason": "The combined change gives Nebula assistant project-bound chat and mission controls, saved next-turn Assistant settings for its own and other chats, and a full-screen GPT-Live voice surface. Selected Python cases cover work dispatch, project and control-only scope, approval and question decisions with stale and foreign-project rejection, chat rename/archive, mission retry deduplication, settings validation, revision-guarded persistence, voice transport, exact SDP preservation, credential selection, authentication, and upstream error mapping. Selected UI cases cover saved settings, work receipts, assistant entry, voice delegation, pending attention visibility, remote audio track playback, visible speaker recovery when captions arrive without audio, microphone-reactive orb movement and mute recovery, active microphone display and input switching, and failure recovery without overwriting the useful error. Eight real-Core production LAN browser profiles exercise mission creation, settings save, reload, and use; eight voice browser profiles cover full-screen lifecycle, pending attention, speaker diagnostics, microphone-reactive orb, exact orb centering, accessibility, and 320-430 px emulated phones on Chromium and WebKit. The combined HTTPS LAN dogfood uses the configured Codex harness and a direct GPT-Live session probe. The installed iPhone assistant shell now mounts the same control assistant, exposes its launcher in the conversation header, and keeps the existing text/approval workflow reachable; four selected shell entries check this integration in desktop, emulated mobile Chromium/WebKit, and real-Core WebKit on LAN.",
+  "exclusions": "The iOS native manifest and build number changed; its microphone usage string is parsed locally, but a signed Xcode build and physical WKWebView microphone/speaker verification require the Mac and phone. No Rust native tests apply. Full suites and unrelated browser, notes, provider, mission, and workspace journeys are excluded. The real-Core browser test uses a deterministic local provider stub; the voice browser matrix simulates WebRTC. Live audio, physical-device microphone, software keyboard, and physical mobile Safari/Android are separate manual gates and must not be inferred from these selected tests.",
   "expected_tests": {
-    "python": 18,
-    "frontend": 20,
+    "python": 33,
+    "frontend": 30,
     "native": 0,
-    "playwright": 8
+    "playwright": 20
   },
   "python": [
     "tests/v3/test_control_assistant_work.py",
-    "tests/v3/test_settings_assistant_tools.py"
+    "tests/v3/test_settings_assistant_tools.py",
+    "tests/v3/test_voice.py"
   ],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/api/client.workReceipts.test.ts"
+    "ui/src/components/NebulaVoice.test.tsx",
+    "ui/src/api/client.workReceipts.test.ts",
+    "ui/src/api/client.assistantConfig.test.ts"
   ],
   "native": [],
   "playwright": [
@@ -26,6 +29,18 @@
     "entry:control-assistant-work/assistant-real-chromium-430",
     "entry:control-assistant-work/assistant-real-webkit-320",
     "entry:control-assistant-work/assistant-real-webkit-390",
-    "entry:control-assistant-work/assistant-real-webkit-430"
+    "entry:control-assistant-work/assistant-real-webkit-430",
+    "entry:nebula-voice/desktop",
+    "entry:nebula-voice/compact",
+    "entry:nebula-voice/mobile-chromium-small",
+    "entry:nebula-voice/mobile-chromium-ledger-390",
+    "entry:nebula-voice/mobile-chromium-wide",
+    "entry:nebula-voice/mobile-webkit-small",
+    "entry:nebula-voice/mobile-webkit",
+    "entry:nebula-voice/mobile-webkit-wide",
+    "entry:ios-assistant-only/desktop",
+    "entry:ios-assistant-only/mobile-chromium-small",
+    "entry:ios-assistant-only/mobile-webkit",
+    "entry:ios-assistant-only/assistant-real-webkit-390"
   ]
 }

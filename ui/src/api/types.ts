@@ -1692,8 +1692,10 @@ export interface VoiceWorkRoster {
   project: { id: string; name: string };
   chats: { id: string; title: string; backend: string; model: string; state: string; url: string }[];
   missions: { id: string; name: string; status: string; backend: string; updated_at: string; url: string }[];
+  attention?: { kind: "approval" | "question"; action_id: string; owner_kind: "chat" | "mission"; owner_id: string; owner: string; summary: string; risk?: string; contains_secret?: boolean; url: string }[];
   more_chats: boolean;
   more_missions: boolean;
+  more_attention?: boolean;
 }
 
 export interface VoiceWorkDetail {

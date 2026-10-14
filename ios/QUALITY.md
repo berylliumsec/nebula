@@ -18,6 +18,10 @@ Workbench. Phones already running native build 4 need only the updated Core UI
 bundle. Older installed builds, including build 3, need the current signed app;
 no data migration is needed.
 
+Nebula Voice adds a native microphone permission in build 5. Phones on build 4
+can receive the updated assistant UI from Core, but need the signed build 5 app
+to capture audio. Voice also requires a trusted HTTPS Core address.
+
 Journey: launch the paired app, choose a project and conversation, message a
 configured agent, read streaming and saved output, handle inline approval or
 agent input, refresh, background/resume, and recover from a Core outage. The
@@ -25,7 +29,9 @@ cross-project “Needs you” list reads pending chat actions from Core only whi
 the app is open; it does not send push notifications. Conversation identity is
 in the URL; transcript, pending actions and decisions are Core-owned; connection
 addresses and pairing remain native and WebKit-owned respectively. Terminal,
-Missions, Activity, agent configuration, and execution launch have no app entry.
+the dedicated Missions screen, Activity, and execution launch have no app entry.
+Build 5 exposes Nebula assistant in the conversation header; it can control chats
+and missions through Core and open the full-screen Voice surface.
 
 Acceptance requires a focused API test, production-bundle desktop and mobile
 Chromium/WebKit browser checks, a paired disposable real Core on a non-loopback
