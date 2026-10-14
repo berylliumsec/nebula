@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+from datetime import datetime
 from hashlib import sha256
 import json
 from threading import Lock
@@ -16,6 +17,8 @@ from pydantic import Field, model_validator
 from .domain import (
     AgentRun,
     ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     EngagementStatus,
     NebulaModel,
@@ -24,10 +27,17 @@ from .domain import (
     WorkItem,
     WorkUpdate,
 )
+from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .runtime_platform import RuntimeToolComponents
 from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NebulaStore, NotFoundError
-from .tools import IdempotencyBehavior, ToolExecutionResult, ToolInvocation, ToolSpec
+from .tools import (
+    IdempotencyBehavior,
+    ToolExecutionResult,
+    ToolInvocation,
+    ToolNotPermitted,
+    ToolSpec,
+)
 from pathlib import Path
 
 WorkStatus = Literal["backlog", "ready", "in_progress", "blocked", "review", "done"]
@@ -156,6 +166,18 @@ class WorkAgentActivity(NebulaModel):
     turn_id: str
 
 
+class WorkAgentItem(NebulaModel):
+    id: str
+    title: str
+    status: WorkStatus
+    last_update_at: datetime | None
+
+
+class WorkAgentRosterEntry(WorkAgentActivity):
+    # A recorded assignment or chat link, not proof of the agent's exact focus.
+    work_item: WorkAgentItem | None = None
+
+
 class WorkChangeFeed:
     """In-process signals; clients reread Core after connecting or a change."""
 
@@ -218,6 +240,117 @@ class WorkService:
 
     def enabled(self, engagement_id: str) -> bool:
         return self.store.get(Engagement, engagement_id).work_enabled
+
+    def active_agents(
+        self, engagement_id: str | None = None
+    ) -> list[WorkAgentActivity]:
+        """The live Work roster used by the operator view and agent tool."""
+
+        if engagement_id is not None:
+            project = self.store.get(Engagement, engagement_id)
+            if project.status == EngagementStatus.ARCHIVED:
+                return []
+        active_statuses = [
+            ChatTurnStatus.QUEUED.value,
+            ChatTurnStatus.ROUTING.value,
+            ChatTurnStatus.WAITING_APPROVAL.value,
+            ChatTurnStatus.WAITING_CALLBACK.value,
+            ChatTurnStatus.FINALIZING.value,
+            ChatTurnStatus.INTERRUPTED.value,
+        ]
+        turns = self.store.find_entities(
+            ChatTurn,
+            {"status": active_statuses},
+            engagement_id=engagement_id,
+            limit=None,
+        )
+        activity: list[WorkAgentActivity] = []
+        project_statuses: dict[str, EngagementStatus] = {}
+        for turn in turns:
+            if turn.status == ChatTurnStatus.INTERRUPTED:
+                recovery = turn.request_snapshot.get("recovery", {})
+                if not isinstance(recovery, dict) or not (
+                    recovery.get("required") or recovery.get("automatic_retry_pending")
+                ):
+                    continue
+            session = self.store.get(ChatSession, turn.session_id)
+            if engagement_id is not None and session.engagement_id != engagement_id:
+                continue
+            if session.metadata.get("temporary_assistant") or session.metadata.get(
+                "side_chat"
+            ):
+                continue
+            if engagement_id is None:
+                project_status = project_statuses.get(session.engagement_id)
+                if project_status is None:
+                    project_status = self.store.get(
+                        Engagement, session.engagement_id
+                    ).status
+                    project_statuses[session.engagement_id] = project_status
+                if project_status == EngagementStatus.ARCHIVED:
+                    continue
+            waiting = not is_subagent_session(session) and (
+                turn.status == ChatTurnStatus.WAITING_APPROVAL
+                or turn.status == ChatTurnStatus.INTERRUPTED
+                and not core_resumes_interrupted_turn(turn)
+            )
+            activity.append(
+                WorkAgentActivity(
+                    session_id=session.id,
+                    engagement_id=session.engagement_id,
+                    title=session.title,
+                    state="waiting" if waiting else "working",
+                    turn_id=turn.id,
+                )
+            )
+        return activity
+
+    def agent_roster(self, engagement_id: str) -> list[WorkAgentRosterEntry]:
+        """Read this project's live agents and their recorded open Work links."""
+
+        activity = self.active_agents(engagement_id)
+        if not activity:
+            return []
+        items: list[WorkItem] = []
+        offset = 0
+        while page := self.store.list_entities(
+            WorkItem,
+            engagement_id=engagement_id,
+            offset=offset,
+            limit=1_000,
+            newest_first=True,
+        ):
+            items.extend(page)
+            offset += len(page)
+        open_items = [item for item in items if item.status != "done"]
+        roster: list[WorkAgentRosterEntry] = []
+        for agent in activity:
+            linked = next(
+                (
+                    item
+                    for item in open_items
+                    if item.assignee_session_id == agent.session_id
+                    or item.source_kind == "chat"
+                    and item.source_id == agent.session_id
+                ),
+                None,
+            )
+            roster.append(
+                WorkAgentRosterEntry(
+                    **agent.model_dump(),
+                    work_item=(
+                        WorkAgentItem(
+                            id=linked.id,
+                            title=linked.title,
+                            status=linked.status,
+                            last_update_at=linked.last_update_at,
+                        )
+                        if linked is not None
+                        else None
+                    ),
+                )
+            )
+        return roster
 
     def set_enabled(self, engagement_id: str, enabled: bool) -> Engagement:
         for _ in range(3):
@@ -671,6 +804,82 @@ WORK_AVAILABLE_INSTRUCTIONS = (
     "a task, and work_check_in to post an update when appropriate. For a linked "
     "child project, pass its name as project_name to work_list or work_create."
 )
+WORK_ROSTER_INSTRUCTIONS = (
+    "Use work_agents to see which conversations are working or waiting in this "
+    "project and their linked open Work items. An unlinked conversation has no "
+    "recorded task; a link is an assignment, not proof of its exact current focus."
+)
+
+
+class WorkRosterBroker:
+    def __init__(self, service: WorkService) -> None:
+        self.service = service
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: object | None = None,
+    ) -> ToolExecutionResult:
+        del approval
+        if invocation.tool_name != "work_agents":
+            raise ValueError("unknown Work roster tool")
+        if invocation.engagement_id != scope.engagement_id:
+            raise ToolNotPermitted(
+                "Work roster is limited to this project", rule="work.roster.project"
+            )
+        if invocation.chat_session_id is not None:
+            session = self.service.store.get(ChatSession, invocation.chat_session_id)
+            if session.engagement_id != invocation.engagement_id:
+                raise ToolNotPermitted(
+                    "Work roster is limited to this project", rule="work.roster.project"
+                )
+        return ToolExecutionResult(
+            output={
+                "agents": [
+                    agent.model_dump(mode="json")
+                    for agent in self.service.agent_roster(invocation.engagement_id)
+                ]
+            }
+        )
+
+
+def work_roster_components(
+    service: WorkService,
+    engagement_id: str,
+    workspace: Path,
+    scope: ScopePolicy | None = None,
+) -> RuntimeToolComponents:
+    return RuntimeToolComponents(
+        broker=WorkRosterBroker(service),
+        scope=scope
+        or ScopePolicy(
+            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
+            engagement_id=engagement_id,
+        ),
+        workspace=workspace,
+        specs={
+            "work_agents": ToolSpec(
+                name="work_agents",
+                description=(
+                    "List this project's live working and waiting agents, with their "
+                    "linked open Work item when recorded. Available even when Work "
+                    "posting and peer messaging are off."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.LOCAL_READ,
+                idempotency=IdempotencyBehavior.SAFE,
+                budget_class="artifact_query",
+            )
+        },
+        runtime_digest="work-roster-v1",
+    )
 
 
 class WorkBroker:

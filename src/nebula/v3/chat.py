@@ -321,7 +321,13 @@ from .chat_agent_messages import (
     agent_message_components,
     contract_digest_segment as agent_message_digest_segment,
 )
-from .work import WORK_AVAILABLE_INSTRUCTIONS, WorkService, work_components
+from .work import (
+    WORK_AVAILABLE_INSTRUCTIONS,
+    WORK_ROSTER_INSTRUCTIONS,
+    WorkService,
+    work_components,
+    work_roster_components,
+)
 from .tool_results import (
     MAX_MODEL_ARTIFACT_REFS,
     TOOL_RESULT_SCHEMA,
@@ -1594,6 +1600,7 @@ def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> 
         )
         + (AGENT_MESSAGE_ROUTING_INSTRUCTIONS if "send_agent_message" in names else "")
         + (WORK_AVAILABLE_INSTRUCTIONS if "work_check_in" in names else "")
+        + ("\n" + WORK_ROSTER_INSTRUCTIONS if "work_agents" in names else "")
         + (NOTES_ROUTING_INSTRUCTIONS if NOTES_WRITE_TOOL_NAME in names else "")
         + (
             KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS
@@ -5577,6 +5584,17 @@ class ChatService:
             and not (session and session.metadata.get("side_chat") is True)
             and profile.tools_verified_for(selected_model)
         )
+        work_roster_enabled = bool(
+            not settings_only
+            and engagement_id
+            and not (session and session.metadata.get("side_chat") is True)
+            and profile.tools_verified_for(selected_model)
+            and (
+                provider.config.local
+                or profile.privacy.permits_sensitive_data
+                and request.allow_cloud_tool_results
+            )
+        )
         # Every subagent turn can message the assistant that delegated to it,
         # so it always routes tools, even when its task has no others.
         child_messaging = bool(subagent_child and engagement_id)
@@ -5587,6 +5605,7 @@ class ChatService:
             or child_messaging
             or agent_messaging_enabled
             or work_enabled
+            or work_roster_enabled
             or request.mcp_server_ids
             or request.ssh_environment_ids
             or any(item.resources for item in skill_snapshots)
@@ -5699,6 +5718,8 @@ class ChatService:
             )
         if work_enabled:
             instructions += "\n\n" + WORK_AVAILABLE_INSTRUCTIONS
+        if work_roster_enabled:
+            instructions += "\n\n" + WORK_ROSTER_INSTRUCTIONS
         if subagent_child:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
@@ -5835,6 +5856,7 @@ class ChatService:
                 ("messages to the parent agent", child_messaging),
                 ("agent messaging", agent_messaging_enabled),
                 ("project Work", work_enabled),
+                ("project Work roster", work_roster_enabled),
             )
             if selected
         ]
@@ -5916,6 +5938,7 @@ class ChatService:
                     and not child_messaging
                     and not agent_messaging_enabled
                     and not work_enabled
+                    and not work_roster_enabled
                 ):
                     raise ChatConfigurationError(
                         "no runtime capabilities were selected"
@@ -6012,6 +6035,23 @@ class ChatService:
                     tool_components = combine_tool_components(
                         tool_components,
                         work_components(
+                            self.work,
+                            engagement_id,
+                            workspace=(
+                                tool_components.workspace
+                                if tool_components is not None
+                                else Path(
+                                    (engagement.workspace_path if engagement else None)
+                                    or "."
+                                ).resolve()
+                            ),
+                            scope=tool_components.scope if tool_components else None,
+                        ),
+                    )
+                if work_roster_enabled:
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        work_roster_components(
                             self.work,
                             engagement_id,
                             workspace=(
@@ -6480,6 +6520,7 @@ class ChatService:
                     "subagent_child": child_messaging,
                     "allow_agent_messaging": agent_messaging_enabled,
                     "work_enabled": work_enabled,
+                    "work_roster_enabled": work_roster_enabled,
                     "max_active_subagents": (
                         request.max_active_subagents if subagents_enabled else None
                     ),
@@ -12398,6 +12439,25 @@ class ChatService:
                 components = combine_tool_components(
                     components,
                     work_components(
+                        self.work,
+                        turn.engagement_id,
+                        workspace=(
+                            components.workspace
+                            if components is not None
+                            else Path(
+                                self.store.get(
+                                    Engagement, turn.engagement_id
+                                ).workspace_path
+                                or "."
+                            ).resolve()
+                        ),
+                        scope=components.scope if components else None,
+                    ),
+                )
+            if turn.request_snapshot.get("work_roster_enabled"):
+                components = combine_tool_components(
+                    components,
+                    work_roster_components(
                         self.work,
                         turn.engagement_id,
                         workspace=(

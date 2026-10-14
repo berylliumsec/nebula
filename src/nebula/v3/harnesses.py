@@ -461,6 +461,12 @@ _GATEWAY_AGENT_MESSAGE_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
 }
 
 _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
+    "work.agents": (
+        "List live working and waiting conversations in this project and each "
+        "conversation's linked open Work item, if recorded. This read is available "
+        "even when Work posting or peer messaging is off.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
     "work.list": (
         "List this project's work items, or a linked child project's items by name. Use this before creating duplicates.",
         {
@@ -881,10 +887,25 @@ def _harness_developer_instructions(
         )
         + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
         + (
+            "Use work.agents to see which conversations are working or waiting "
+            "in this project and their linked open Work items. An unlinked "
+            "conversation has no recorded task; a link is an assignment, not "
+            "proof of its exact current focus. "
+            if any(item.get("name") == "work.agents" for item in gateway_tools)
+            else ""
+        )
+        + (
             "Project Work is available through work.list, work.create, and work.check_in. For a linked child project, pass its name as project_name to work.list or work.create, then check in by item ID. Use these tools to record work when appropriate. "
             if any(
-                str(item.get("name") or "").startswith("work.")
-                or str(item.get("name") or "").startswith("work_")
+                str(item.get("name") or "")
+                in {
+                    "work.list",
+                    "work.create",
+                    "work.check_in",
+                    "work_list",
+                    "work_create",
+                    "work_check_in",
+                }
                 for item in gateway_tools
             )
             else ""
@@ -13855,19 +13876,20 @@ class HarnessRuntimeService:
                         },
                     }
                 )
-        if self.work.enabled(current.engagement_id) and not current.metadata.get(
-            "analysis_only"
-        ):
+        if not current.metadata.get("analysis_only"):
+            work_enabled = self.work.enabled(current.engagement_id)
             for name, (description, schema) in _GATEWAY_WORK_SCHEMAS.items():
+                if name != "work.agents" and not work_enabled:
+                    continue
                 tools.append(
                     {
                         "name": name,
                         "description": description,
                         "inputSchema": schema,
                         "annotations": {
-                            "readOnlyHint": name == "work.list",
+                            "readOnlyHint": name in {"work.agents", "work.list"},
                             "destructiveHint": False,
-                            "idempotentHint": name == "work.list",
+                            "idempotentHint": name in {"work.agents", "work.list"},
                             "openWorldHint": False,
                         },
                     }
@@ -14718,7 +14740,7 @@ class HarnessRuntimeService:
     ) -> dict[str, Any]:
         """Use the active turn's project and actor, never caller-supplied scope."""
 
-        if not self.work.enabled(turn.engagement_id):
+        if name != "work.agents" and not self.work.enabled(turn.engagement_id):
             raise ToolNotPermitted(
                 "Work MCP is off for this project.", rule="work.turned_off"
             )
@@ -14726,6 +14748,10 @@ class HarnessRuntimeService:
             raise ToolNotPermitted(
                 "Work MCP is unavailable in analysis-only turns.",
                 rule="work.analysis_only",
+            )
+        if name == "work.agents" and arguments:
+            raise refused_before_execution(
+                InvalidToolArguments("work.agents takes no arguments")
             )
         actor_id = turn.chat_session_id or turn.run_id or turn.id
         call = ToolCall(
@@ -14744,11 +14770,18 @@ class HarnessRuntimeService:
         call = self.store.reserve_tool_call(call)
         self._attach_gateway_tool_call(turn, call.id)
         try:
-            if name == "work.list":
+            if name == "work.agents":
+                result: dict[str, Any] = {
+                    "agents": [
+                        agent.model_dump(mode="json")
+                        for agent in self.work.agent_roster(turn.engagement_id)
+                    ]
+                }
+            elif name == "work.list":
                 target_id = self.work.agent_project(
                     turn.engagement_id, arguments.get("project_name")
                 )
-                result: dict[str, Any] = {
+                result = {
                     "items": [
                         item.model_dump(mode="json")
                         for item in self.work.list(target_id)

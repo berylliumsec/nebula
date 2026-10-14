@@ -14,12 +14,13 @@ the local Core database.
 | Check in | An update appears in history and changes item status | Core `WorkUpdate` and `WorkItem` | service, API, real Core browser |
 | Track agent | A live assigned conversation appears as working; a blocked task stays distinct from activity | Core chat activity and Work records | browser |
 | Agent initiative | Eligible turns name the Work tools without a timed check-in prompt | Core tool catalog and turn instructions | service and gateway |
+| Agent roster | An eligible agent can read its project's live working and waiting conversations and any linked open Work item, even when Work posting or peer messaging is off | Core chat turns, sessions, and Work items | service, API, provider, and gateway |
 | Live updates and navigate | Core signals saved Work changes and chat activity transitions; the board and timeline refresh without polling and survive reload and deep links | Core change feed, URL, and Core database | real Core browser |
 | Retry | A repeated request ID returns the same saved item or update | Core entity IDs | service and API |
 | Import | An authenticated batch creates projects, tasks, and one source update per task; a retry returns the same records | Core project, Work item, and update IDs | API and real Core |
 | Group projects | Existing projects can be linked to a parent without overwriting tasks; the Work page nests children, searches names, and shows parent rollups | Core project parent ID | API, component, and real Core browser |
 | Find imported work | The overview pages Work items, uses one active-agent query, and lets the operator search a large project list | Core list routes and UI query | component and browser |
-| Disable agents | The gateway refuses writes and no longer advertises Work after a session reconnects; saved records remain | Core project setting | gateway and API |
+| Disable Work posting | The gateway refuses Work writes and stops advertising list/create/check-in after a session reconnects; the read-only roster remains available | Core project setting | gateway and API |
 
 The built-in session MCP gateway supplies `work.list`, `work.create`, and
 `work.check_in` to managed harness agents. Provider-chat agents receive equivalent
@@ -30,6 +31,16 @@ The gateway derives the actor from the active turn and verifies the direct
 parent-child link and both projects' Work settings. Unrelated projects remain
 inaccessible. A parent check-in records the source conversation's project so
 the Work page opens the correct conversation.
+The read-only `work.agents` gateway tool (provider name `work_agents`) is offered
+by default to eligible project agents, independently of Work posting and peer
+messaging. It returns the same live activity projection as the operator's Work
+overview, scoped to the agent's project, plus an assigned or chat-linked open
+Work item when one is recorded. An unlinked conversation has no recorded task;
+an assignment is not proof of the agent's exact current focus. The tool does
+not return transcripts or check-in history and cannot address another agent.
+For cloud provider chats, the roster is offered only when the provider privacy
+profile permits sensitive results and the operator has granted tool-result
+consent for that turn; a plain text turn remains usable without consent.
 Nebula names the available Work tools in eligible agent turns. It does not
 steer agents for timed Work updates. An authenticated Core event stream signals
 saved changes to the Work page. The page refetches authoritative records after

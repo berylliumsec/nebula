@@ -32,11 +32,16 @@ no missing fonts, placeholders, or child overflow in the four frames.
 6. The recipient transcript labels the sender as a **main agent**. The recipient
    can reply through the same scoped capability.
 
-Messages never cross project ownership. Agents cannot discover or address
-themselves, subagents, temporary assistants, archived conversations, or peers
-that have disabled the setting. An unavailable or out-of-scope target produces
+Messages never cross project ownership. The messaging directory cannot discover
+or address the current conversation, subagents, temporary assistants, archived
+conversations, or peers that have disabled the setting. An unavailable or out-of-scope target produces
 the same `unknown peer agent session_id` response so hidden sessions are not
 disclosed.
+
+This describes the messaging directory and its addressability rule. The separate
+read-only Work roster can show active conversations in the same project, including
+ones with messaging disabled; seeing a conversation there does not grant permission
+to send it a message.
 
 ## State authorities
 
