@@ -8639,6 +8639,28 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
     });
+    await page.goto(core.origin);
+    const unpairedBanner = page.locator(".assistant-only-shell > .main-content > .workspace-state-banner.failed");
+    await expect(unpairedBanner).toBeVisible({timeout: 20_000});
+    await expect(unpairedBanner.getByText("Pair this phone to continue.")).toBeVisible();
+    await expect(page.getByRole("heading", {name: "No projects yet"})).toHaveCount(0);
+    const unpairedLayout = await unpairedBanner.evaluate(banner => {
+      const bounds = banner.getBoundingClientRect();
+      const notice = banner.querySelector(".diagnostic-error-notice")?.getBoundingClientRect();
+      const actions = [...banner.querySelectorAll(":scope > button, :scope > a")].map(action => action.getBoundingClientRect());
+      return {bounds: {top: bounds.top, right: bounds.right, bottom: bounds.bottom}, notice: notice && {right: notice.right, bottom: notice.bottom}, actions: actions.map(action => ({left: action.left, right: action.right, height: action.height})), viewport: {width: innerWidth, height: innerHeight}};
+    });
+    expect(unpairedLayout.bounds.top).toBeGreaterThanOrEqual(0);
+    expect(unpairedLayout.bounds.right).toBeLessThanOrEqual(unpairedLayout.viewport.width);
+    expect(unpairedLayout.bounds.bottom).toBeLessThanOrEqual(unpairedLayout.viewport.height);
+    expect(unpairedLayout.notice?.right).toBeLessThanOrEqual(unpairedLayout.bounds.right);
+    expect(unpairedLayout.notice?.bottom).toBeLessThanOrEqual(unpairedLayout.bounds.bottom);
+    expect(unpairedLayout.actions).toHaveLength(2);
+    for (const action of unpairedLayout.actions) {
+      expect(action.left).toBeGreaterThanOrEqual(0);
+      expect(action.right).toBeLessThanOrEqual(unpairedLayout.viewport.width);
+      expect(action.height).toBeGreaterThanOrEqual(44);
+    }
     const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "iPhone assistant acceptance"}})).json();
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("iPhone assistant acceptance");
