@@ -1,10 +1,10 @@
 {
-  "change_digest": "9641f433c7f23d8864cb0e614a88d907ae8a5f378297472696eda852be68e8d5",
-  "reviewed_by": "Codex review of the 3.0.20 bundled-Chromium and checkout-cleanup smoke failures",
-  "reason": "The 3.0.20 Ubuntu job collected one case but Playwright requested an unbundled headless shell; checkout also removed the downloaded DEB before receipt writing. Select the workflow contract and receipt-binding tests plus the one core browser case. PR CI exercises the browser journey against source Core; the next release preparation must prove the installed DEB, bundled full Chromium, and embedded production UI.",
-  "exclusions": "No application feature or native code changed. No frontend unit tests, unrelated Playwright entries, optional release diagnostics, or full suite are selected. The release-only Chromium channel and artifact path receive their definitive integration check in the next installed-DEB Ubuntu release job.",
+  "change_digest": "477c0820800cb1b693a700c9273daadcbb03c466dd4367c42eb181e62db181d8",
+  "reviewed_by": "Codex review of the 3.0.21 clean-install Gitless smoke failure",
+  "reason": "The 3.0.21 Ubuntu clean-install job collected its single release case, then the shared test helper dereferenced absent Git output before launching the installed Core. Resolve the explicit installed Core binary before probing Git for an optional worktree fallback. Select only the affected release core browser journey; the next tagged preparation is the definitive installed-DEB check.",
+  "exclusions": "Only the Playwright Core binary lookup helper changed. No application, packaging, receipt, or workflow logic changed; no Python, frontend unit, native, unrelated browser, manual diagnostic, or full-suite tests are selected. The local case uses the extracted 3.0.21 DEB with Git masked; the next tagged Ubuntu job checks a clean installed DEB.",
   "expected_tests": {
-    "python": 2,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 1
@@ -14,10 +14,7 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_packaging.py::test_release_prepares_only_artifacts_and_one_ubuntu_installed_core_smoke",
-    "tests/test_release_core_smoke_receipt.py::test_passed_receipt_binds_exact_installed_deb"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [
