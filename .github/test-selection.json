@@ -1,5 +1,5 @@
 {
-  "change_digest": "3ea38cc381c68d02d8fe8adf09d4f123b74f96b09d9566fde6ea9c3d7ae4dafe",
+  "change_digest": "5d5585c166f775c054f0dc97ca28e53c7f40bbe31a05c36b0cc08b3c05604e5c",
   "reviewed_by": "Codex storage preview refusal review",
   "reason": "The storage callback now preserves a bounded source refusal and maps preview HTTP 409 to an actionable Core conflict. Select the storage integration Python contract tests and the existing production LAN storage journey, extended to exercise refusal, retry, approval, receipt, and refresh in desktop and mobile profiles.",
   "exclusions": "No component or native implementation changed. The selected real-Core Playwright journey covers the existing storage action UI and API-to-UI error presentation. Unrelated backend and browser journeys and full suites are excluded.",

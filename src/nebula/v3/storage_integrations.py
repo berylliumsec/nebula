@@ -608,7 +608,7 @@ class StorageIntegrationService:
                 if response.status_code == 409 and path.endswith("/preview"):
                     try:
                         refusal = json.loads(chunks)
-                    except ValueError:
+                    except ValueError:  # diagnostic-expected: source refusal may be non-JSON; use the generic refusal.
                         refusal = None
                     reason = refusal.get("error") if isinstance(refusal, dict) else None
                     if isinstance(reason, str):
