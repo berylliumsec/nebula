@@ -11377,6 +11377,7 @@ def create_app(
                 try:
                     sessions[session_id] = store.get(ChatSession, session_id)
                 except NotFoundError:
+                    # diagnostic-expected: a deleted chat has no pending action to open.
                     sessions[session_id] = None
             session = sessions[session_id]
             if (
@@ -11392,6 +11393,7 @@ def create_app(
                         Engagement, session.engagement_id
                     )
                 except NotFoundError:
+                    # diagnostic-expected: a deleted project has no pending action to open.
                     projects[session.engagement_id] = None
             project = projects[session.engagement_id]
             if not project or project.status == EngagementStatus.ARCHIVED:
@@ -11399,6 +11401,7 @@ def create_app(
             try:
                 turn = store.get(ChatTurn, turn_id)
             except NotFoundError:
+                # diagnostic-expected: the turn may disappear after the pending-action scan.
                 return None
             if (
                 turn.session_id != session.id
@@ -11443,6 +11446,7 @@ def create_app(
             try:
                 harness_turn = store.get(HarnessTurn, interaction.harness_turn_id)
             except NotFoundError:
+                # diagnostic-expected: the harness turn may disappear after the pending-action scan.
                 continue
             resolved = target(interaction.chat_session_id, harness_turn.chat_turn_id)
             if not resolved:

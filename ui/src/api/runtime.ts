@@ -44,7 +44,7 @@ export async function browserSessionAuthorizationStatus(normalizedBase: string):
     if (response.ok) return "authorized";
     return response.status === 401 || response.status === 403 ? "unauthorized" : "unreachable";
   } catch {
-    // A stopped Core cannot answer an authorization question. Keep pairing intact.
+    // diagnostic-expected: an unreachable Core has an in-place retry state; keep pairing intact.
     return "unreachable";
   }
 }
