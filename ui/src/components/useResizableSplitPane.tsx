@@ -14,7 +14,7 @@ function storedRatio(key: string): number {
 }
 
 /** Two independent chat panes start equally sized and retain a device-local ratio. */
-export function useResizableSplitPane(storageKey: string, enabled: boolean, extraPanel = false) {
+export function useResizableSplitPane(storageKey: string, enabled: boolean) {
   const containerRef = useRef<HTMLElement | null>(null);
   const drag = useRef<{ pointerId: number; startX: number; startRatio: number } | undefined>(undefined);
   const [ratio, setRatio] = useState(() => storedRatio(storageKey));
@@ -29,10 +29,7 @@ export function useResizableSplitPane(storageKey: string, enabled: boolean, extr
     return () => observer.disconnect();
   }, [enabled]);
 
-  // Keep three readable columns only when the workspace itself has room.
-  const extraPanelVisible = enabled && extraPanel && width >= 1280;
-  const extraPanelWidth = extraPanelVisible ? Math.min(720, Math.max(480, Math.round(width * 0.34))) : 0;
-  const available = Math.max(1, width - DIVIDER_WIDTH - extraPanelWidth);
+  const available = Math.max(1, width - DIVIDER_WIDTH);
   const minRatio = Math.min(0.5, MIN_PANE_WIDTH / available);
   const maxRatio = 1 - minRatio;
   const clamp = (value: number) => Math.max(minRatio, Math.min(maxRatio, value));
@@ -90,9 +87,7 @@ export function useResizableSplitPane(storageKey: string, enabled: boolean, extr
   </div> : null;
 
   const style: CSSProperties | undefined = enabled
-    ? { gridTemplateColumns: extraPanelVisible
-      ? `${Math.round(effectiveRatio * available)}px ${DIVIDER_WIDTH}px ${Math.round((1 - effectiveRatio) * available)}px ${extraPanelWidth}px`
-      : `${effectiveRatio}fr ${DIVIDER_WIDTH}px ${1 - effectiveRatio}fr` }
+    ? { gridTemplateColumns: `${effectiveRatio}fr ${DIVIDER_WIDTH}px ${1 - effectiveRatio}fr` }
     : undefined;
-  return { containerRef, extraPanelVisible, resizeHandle, style };
+  return { containerRef, resizeHandle, style };
 }

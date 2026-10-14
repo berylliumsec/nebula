@@ -25,9 +25,9 @@ function savedSideChatNumber(sideChat: ChatSessionSummary): number | undefined {
 
 export function nextSideChatNumber(sideChats: ChatSessionSummary[], parentId: string): number {
   const owned = sideChatsForConversation(sideChats, parentId);
-  return Math.max(0, ...owned.map(item => savedSideChatNumber(item) ?? 1)) + 1;
+  return Math.max(owned.length, 0, ...owned.map(item => savedSideChatNumber(item) ?? 1)) + 1;
 }
 
 export function sideChatTabLabel(sideChat: ChatSessionSummary, legacyIndex: number): string {
-  return `Side ${savedSideChatNumber(sideChat) ?? legacyIndex + 1}`;
+  return `Side ${Math.max(savedSideChatNumber(sideChat) ?? 0, legacyIndex + 1)}`;
 }

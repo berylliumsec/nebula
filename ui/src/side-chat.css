@@ -24,15 +24,23 @@
 .side-chat-conversations { display: none; }
 .side-chat-switcher { display: flex; flex: 0 0 52px; min-width: 0; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border-soft); }
 .side-chat-tabs { display: flex; flex: 1 1 auto; min-width: 0; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
-.side-chat-tabs > button { position: relative; flex: 0 0 auto; min-width: 76px; min-height: 44px; padding: 4px 12px; border: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.side-chat-tabs > button { position: relative; display: inline-flex; flex: 0 0 auto; min-width: 76px; min-height: 44px; align-items: center; justify-content: center; gap: 5px; padding: 4px 12px; border: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
 .side-chat-tabs > button[aria-selected="true"] { color: var(--text-strong); background: var(--surface-muted); font-weight: var(--weight-semibold); }
 .side-chat-tabs > button[aria-selected="true"]::after { position: absolute; right: 12px; bottom: 3px; left: 12px; height: 2px; border-radius: 2px; background: var(--blue-bright); content: ""; }
-.side-chat-tabs > button:focus-visible, .side-chat-new:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.side-chat-new { flex: 0 0 44px; width: 44px; min-height: 44px; }
-.session-workspace.side-chat-code-wide > .side-chat-code-panel,
+.side-chat-tabs > button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.side-tool-panel { z-index: 4; display: flex; grid-column: 3; grid-row: 1 / span 2; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border-soft); background: var(--canvas); }
+.side-tool-panel[data-active="false"], .session-workspace.side-tool-active > .side-chat-pane { visibility: hidden; }
+.side-tool-panel[hidden], .side-tool-content[hidden] { display: none !important; }
+.side-tool-content { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
+.side-tool-content > * { flex: 1 1 0; min-width: 0; min-height: 0; }
+.side-tool-details, .side-tool-assistance { overflow-y: auto; }
+.side-tool-assistance { padding: 12px; }
+.side-tool-assistance .post-tool-menu-panel { position: static; width: 100%; box-shadow: none; }
+.side-tool-terminal > .container-terminal-panel { height: 100%; }
 .session-workspace.side-chat-code-overlay > .side-chat-code-panel { position: relative; z-index: 4; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border-soft); background: var(--canvas); }
-.side-chat-code-panel > .code-editor-panel { flex: 1 1 0; min-height: 0; }
-.session-workspace.side-chat-code-wide > .side-chat-code-panel { grid-column: 4; grid-row: 1 / span 2; }
+.side-chat-code-panel > .side-chat-header { flex: 0 0 auto; }
+.side-chat-code-body { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
+.side-chat-code-body > .code-editor-panel { flex: 1 1 0; min-width: 0; min-height: 0; }
 .session-workspace.side-chat-code-overlay > .side-chat-code-panel { grid-column: 3; grid-row: 1 / span 2; }
 .session-workspace.side-chat-code-overlay > .side-chat-pane { visibility: hidden; }
 .side-chat-context { display: grid; gap: 5px; padding: 8px 16px 10px; border-bottom: 1px solid var(--border-soft); }
@@ -68,9 +76,10 @@
   .session-workspace.side-chat-open > :is(.conversation-toolbar, .chat-panel, .chat-studio, .chat-empty-state, .side-chat-divider) { display: none; }
   .session-workspace.side-chat-open > .side-chat-pane { grid-column: 1; grid-row: 1; border-left: 0; }
   .side-chat-back { display: grid; }
-  .side-chat-close { display: none; }
+  .side-chat-close { display: grid; }
   .side-chat-header { padding-left: 8px; }
   .session-workspace.side-chat-code-overlay > .side-chat-code-panel { grid-column: 1; grid-row: 1; border-left: 0; }
+  .session-workspace.side-chat-open > .side-tool-panel { grid-column: 1; grid-row: 1; border-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

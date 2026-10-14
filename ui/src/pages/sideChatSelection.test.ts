@@ -36,4 +36,12 @@ describe("side chat selection", () => {
     expect(sideChatTabLabel(newer, 0)).toBe("Side 2");
     expect(sideChatTabLabel(newer, 0)).toBe(sideChatTabLabel(newer, 1));
   });
+
+  it("numbers new chats after legacy chats without duplicate tab labels", () => {
+    const first = {...side("first", "a"), title: "Earlier reply", createdAt: "2026-10-14T10:00:00Z"};
+    const second = {...side("second", "a"), title: "Later reply", createdAt: "2026-10-14T10:01:00Z"};
+    const third = {...side("third", "a"), title: "Side chat #2 · Research", createdAt: "2026-10-14T10:02:00Z"};
+    expect(nextSideChatNumber([second, first], "a")).toBe(3);
+    expect([first, second, third].map(sideChatTabLabel)).toEqual(["Side 1", "Side 2", "Side 3"]);
+  });
 });
