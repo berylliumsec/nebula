@@ -1,9 +1,9 @@
-"""Core-owned goals for provider-backed chat sessions."""
+"""Core-owned goals for provider and harness chat sessions."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -23,6 +23,8 @@ from .domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    HarnessProfile,
+    HarnessSession,
     McpServerProfile,
     ProviderProfile,
     utc_now,
@@ -65,10 +67,12 @@ class GoalSkillWrite(BaseModel):
 
 
 class GoalConversationCreate(GoalCreate):
-    """Create a durable provider conversation before its first message."""
+    """Create a durable conversation before its first message."""
 
     engagement_id: str = Field(min_length=1, max_length=200)
-    provider_id: str = Field(min_length=1, max_length=200)
+    backend: ChatBackend = ChatBackend.PROVIDER
+    provider_id: str | None = Field(default=None, min_length=1, max_length=200)
+    harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     model: str = Field(min_length=1, max_length=500)
     tools_enabled: bool = False
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
@@ -77,6 +81,12 @@ class GoalConversationCreate(GoalCreate):
     # settings PATCH would save them: the goal's first turn is one Core
     # starts, and it reads them from the conversation.
     reasoning_effort: ReasoningEffort | None = None
+    harness_reasoning_effort: str | None = None
+    harness_service_tier: str | None = None
+    harness_cyber_access_program: str | None = None
+    subagent_provider_id: str | None = None
+    subagent_harness_id: str | None = None
+    subagent_model: str | None = None
     allow_subagents: bool = False
     subagent_reasoning_effort: ReasoningEffort | None = None
     allow_agent_messaging: bool | None = None
@@ -86,6 +96,11 @@ class GoalConversationCreate(GoalCreate):
 
     @model_validator(mode="after")
     def selections_are_unique(self) -> "GoalConversationCreate":
+        if self.backend == ChatBackend.PROVIDER:
+            if not self.provider_id or self.harness_profile_id:
+                raise ValueError("provider goals require only provider_id")
+        elif not self.harness_profile_id or self.provider_id:
+            raise ValueError("harness goals require only harness_profile_id")
         if len(self.mcp_server_ids) != len(set(self.mcp_server_ids)):
             raise ValueError("MCP server selection contains duplicates")
         if len(self.hook_ids) != len(set(self.hook_ids)):
@@ -122,8 +137,18 @@ def active_time_changes(goal: ChatGoal, *, working: bool, now: datetime) -> dict
 
 
 class ChatGoalService:
-    def __init__(self, store: NebulaStore):
+    def __init__(self, store: NebulaStore, harness_runtime: Any | None = None):
         self.store = store
+        self.harness_runtime = harness_runtime
+
+    def _validate_token_budget(self, session: ChatSession, budget: int | None) -> None:
+        if session.backend != ChatBackend.HARNESS or budget is None:
+            return
+        profile = self.store.get(HarnessProfile, session.harness_profile_id or "")
+        if not profile.capabilities.detailed_usage:
+            raise ConflictError(
+                "this harness does not report token usage; use a step or time limit"
+            )
 
     def has_working_subagents(self, session_id: str) -> bool:
         """Whether this conversation has a running child at any depth."""
@@ -210,8 +235,7 @@ class ChatGoalService:
 
     def create(self, session_id: str, body: GoalCreate) -> ChatGoal:
         session = self.store.get(ChatSession, session_id)
-        if session.backend != ChatBackend.PROVIDER:
-            raise ConflictError("provider-backed goals require a provider conversation")
+        self._validate_token_budget(session, body.token_budget)
         try:
             self.get(session_id)
         except (
@@ -241,7 +265,73 @@ class ChatGoalService:
         """Persist an empty conversation and its goal draft as one unit."""
 
         self.store.get(Engagement, body.engagement_id)
-        provider = self.store.get(ProviderProfile, body.provider_id)
+        if body.backend == ChatBackend.HARNESS:
+            if self.harness_runtime is None:
+                raise ConflictError("harness goals are unavailable in this Core")
+            profile = self.store.get(HarnessProfile, body.harness_profile_id or "")
+            if (
+                body.token_budget is not None
+                and not profile.capabilities.detailed_usage
+            ):
+                raise ConflictError(
+                    "this harness does not report token usage; use a step or time limit"
+                )
+            with self.store.transaction() as transaction:
+                harness_session = self.harness_runtime.create_session(
+                    engagement_id=body.engagement_id,
+                    profile_id=profile.id,
+                    model=body.model,
+                    mcp_server_ids=body.mcp_server_ids,
+                    reasoning_effort=body.harness_reasoning_effort,
+                    service_tier=body.harness_service_tier,
+                    cyber_access_program=body.harness_cyber_access_program,
+                    tools_enabled=body.tools_enabled,
+                    transaction=transaction,
+                )
+                session = ChatSession(
+                    id=str(uuid4()),
+                    engagement_id=body.engagement_id,
+                    title=" ".join(body.objective.split())[:300] or "Goal conversation",
+                    backend=ChatBackend.HARNESS,
+                    harness_profile_id=profile.id,
+                    harness_session_id=harness_session.id,
+                    model=harness_session.model,
+                    metadata={
+                        "context_management": "runtime_managed",
+                        "initial_title_state": "goal",
+                        "harness_runtime_options": harness_session.metadata.get(
+                            "runtime_options", {}
+                        ),
+                        "provider_subagent": (
+                            {
+                                "provider_profile_id": body.subagent_provider_id or "",
+                                "harness_profile_id": body.subagent_harness_id,
+                                "model": body.subagent_model,
+                                "max_active": body.max_active_subagents,
+                                "reasoning_effort": body.subagent_reasoning_effort,
+                            }
+                            if body.allow_subagents
+                            and body.subagent_model
+                            and (body.subagent_provider_id or body.subagent_harness_id)
+                            else None
+                        ),
+                        "allow_agent_messaging": body.allow_agent_messaging,
+                    },
+                )
+                goal = ChatGoal(
+                    engagement_id=body.engagement_id,
+                    session_id=session.id,
+                    objective=body.objective,
+                    completion_criteria=body.completion_criteria,
+                    plan=body.plan,
+                    token_budget=body.token_budget,
+                    time_budget_seconds=body.time_budget_seconds,
+                    step_budget=body.step_budget,
+                    child_budget=body.child_budget,
+                )
+                transaction.add_all([session, goal])
+            return GoalConversationCreated(session=session, goal=goal)
+        provider = self.store.get(ProviderProfile, body.provider_id or "")
         if not provider.enabled:
             raise ConflictError("the selected provider is disabled")
         if provider.model_allowlist and body.model not in provider.model_allowlist:
@@ -249,10 +339,10 @@ class ChatGoalService:
                 f"model {body.model!r} is not allowed by provider {provider.id!r}"
             )
         for profile_id in body.mcp_server_ids:
-            profile = self.store.get(McpServerProfile, profile_id)
-            if not profile.enabled:
+            mcp_profile = self.store.get(McpServerProfile, profile_id)
+            if not mcp_profile.enabled:
                 raise ConflictError(
-                    f"MCP server {profile.name!r} is disabled and cannot be selected"
+                    f"MCP server {mcp_profile.name!r} is disabled and cannot be selected"
                 )
         session_id = str(uuid4())
         title = " ".join(body.objective.split())[:300] or "Goal conversation"
@@ -330,6 +420,13 @@ class ChatGoalService:
         elif body.action == "resume":
             if goal.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}:
                 raise ConflictError("only a paused or blocked goal can be resumed")
+            if (
+                goal.token_budget is not None
+                and goal.metadata.get("usage_unknown") is True
+            ):
+                raise ConflictError(
+                    "remove the token limit before resuming; harness usage was unavailable"
+                )
             interrupted = [
                 turn
                 for turn in self.store.list_session_entities(ChatTurn, session_id)
@@ -411,6 +508,13 @@ class ChatGoalService:
 
     def update(self, session_id: str, body: GoalUpdate) -> ChatGoal:
         goal = self.get(session_id)
+        self._validate_token_budget(
+            self.store.get(ChatSession, session_id), body.token_budget
+        )
+        if body.token_budget is not None and goal.metadata.get("usage_unknown") is True:
+            raise ConflictError(
+                "token usage was unavailable in an earlier harness turn"
+            )
         if body.expected_revision != goal.revision:
             raise ConflictError(
                 "goal changed on another device; review the latest goal before retrying"
@@ -473,57 +577,88 @@ class ChatGoalService:
 
     def start_child(self, session_id: str, body: GoalCreate) -> ChatGoal:
         parent = self.get(session_id)
-        reserved = self.reserve_child(parent.id, expected_revision=parent.revision)
+        if parent.status != ChatGoalStatus.RUNNING or parent.child_budget is None:
+            raise ConflictError(
+                "child work requires a running goal with a child budget"
+            )
+        if (
+            parent.children_started >= parent.child_budget
+            or len(parent.child_session_ids) >= CHAT_GOAL_CHILD_LIMIT
+        ):
+            raise ConflictError("goal child budget is exhausted")
         parent_session = self.store.get(ChatSession, session_id)
-        child_session = self.store.create(
-            ChatSession(
+        self._validate_token_budget(parent_session, body.token_budget)
+        with self.store.transaction() as transaction:
+            harness_session = None
+            if parent_session.backend == ChatBackend.HARNESS:
+                if self.harness_runtime is None:
+                    raise ConflictError("harness goals are unavailable in this Core")
+                source = self.store.get(
+                    HarnessSession, parent_session.harness_session_id or ""
+                )
+                harness_session = self.harness_runtime._fork_session(
+                    source, reason="goal child", transaction=transaction
+                )
+            child_session = ChatSession(
                 id=str(uuid4()),
                 engagement_id=parent_session.engagement_id,
                 title=f"{parent.objective[:80]} (child)",
                 backend=parent_session.backend,
                 provider_profile_id=parent_session.provider_profile_id,
+                harness_profile_id=parent_session.harness_profile_id,
+                harness_session_id=harness_session.id if harness_session else None,
                 model=parent_session.model,
                 parent_session_id=parent_session.id,
                 metadata={
                     "delegated_from_session_id": parent_session.id,
                     "delegated_from_goal_id": parent.id,
-                    "workspace_is_shared": False,
-                    "isolated_child_workspace": True,
+                    "workspace_is_shared": parent_session.backend
+                    == ChatBackend.HARNESS,
+                    "isolated_child_workspace": parent_session.backend
+                    == ChatBackend.PROVIDER,
+                    **(
+                        {
+                            "context_management": "runtime_managed",
+                            "initial_title_state": "goal",
+                        }
+                        if harness_session
+                        else {}
+                    ),
                 },
             )
-        )
-        # The child's skills are stored in its own conversation, which may
-        # outlive the parent's.
-        skill_entries, skill_parts = split_skill_snapshots(
-            resolve_skill_snapshots(
-                self.store, parent.skill_snapshots, session_id=parent.session_id
-            ),
-            engagement_id=parent.engagement_id,
-            session_id=child_session.id,
-        )
-        child = ChatGoal(
-            engagement_id=parent.engagement_id,
-            session_id=child_session.id,
-            objective=body.objective,
-            completion_criteria=body.completion_criteria,
-            plan=body.plan,
-            token_budget=body.token_budget,
-            time_budget_seconds=body.time_budget_seconds,
-            step_budget=body.step_budget,
-            child_budget=0,
-            parent_goal_id=parent.id,
-            skill_snapshots=skill_entries,
-            status=ChatGoalStatus.DRAFT,
-        )
-        with self.store.transaction() as transaction:
+            skill_entries, skill_parts = split_skill_snapshots(
+                resolve_skill_snapshots(
+                    self.store, parent.skill_snapshots, session_id=parent.session_id
+                ),
+                engagement_id=parent.engagement_id,
+                session_id=child_session.id,
+            )
+            child = ChatGoal(
+                engagement_id=parent.engagement_id,
+                session_id=child_session.id,
+                objective=body.objective,
+                completion_criteria=body.completion_criteria,
+                plan=body.plan,
+                token_budget=body.token_budget,
+                time_budget_seconds=body.time_budget_seconds,
+                step_budget=body.step_budget,
+                child_budget=0,
+                parent_goal_id=parent.id,
+                skill_snapshots=skill_entries,
+                status=ChatGoalStatus.DRAFT,
+            )
+            transaction.add(child_session)
             stage_snapshot_parts(transaction, skill_parts)
             transaction.add(child)
-        self.store.update(
-            ChatGoal,
-            reserved.id,
-            {"child_session_ids": [*reserved.child_session_ids, child_session.id]},
-            expected_revision=reserved.revision,
-        )
+            transaction.update(
+                ChatGoal,
+                parent.id,
+                {
+                    "children_started": parent.children_started + 1,
+                    "child_session_ids": [*parent.child_session_ids, child_session.id],
+                },
+                expected_revision=parent.revision,
+            )
         return child
 
     def list_children(self, session_id: str) -> list[ChatGoal]:
@@ -631,13 +766,14 @@ def goals_router(
     store: NebulaStore,
     *,
     goal_dispatcher: Callable[[str, str], Awaitable[str | None]] | None = None,
+    harness_runtime: Any | None = None,
     skill_snapshot_resolver: Callable[
         [str, list[SkillSelection], list[SkillSnapshot]], list[SkillSnapshot]
     ]
     | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["chat"])
-    service = ChatGoalService(store)
+    service = ChatGoalService(store, harness_runtime)
 
     @router.post(
         "/chat/goal-conversations",

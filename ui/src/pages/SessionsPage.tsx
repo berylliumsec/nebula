@@ -1716,7 +1716,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   // soon as the model works. Reading it again is what keeps the panel honest
   // and keeps an operator's Pause/Cancel from failing on a stale revision.
   const readProviderGoal = useCallback(async (signal?: AbortSignal): Promise<ChatGoal | undefined> => {
-    if (!api || !sessionId || runtimeKind !== "provider") return undefined;
+    if (!api || !sessionId) return undefined;
     try {
       const goal = await api.getChatGoal(sessionId, signal);
       setProviderGoal((current) => sameJson(current, goal) ? current : goal);
@@ -1735,7 +1735,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [api, runtimeKind, sessionId]);
 
   useEffect(() => {
-    if (!api || !sessionId || runtimeKind !== "provider") {
+    if (!api || !sessionId) {
       setProviderGoal(undefined); setLiveGoalTokenEstimate(0); setProviderGoalError(undefined); setProviderGoalLoading(false); return;
     }
     const controller = new AbortController();
@@ -1748,7 +1748,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   // ends. Both are read back so the panel's numbers and its revision track
   // Core rather than the moment the conversation was opened.
   useEffect(() => {
-    if (!api || !sessionId || runtimeKind !== "provider") return;
+    if (!api || !sessionId) return;
     if (providerGoal?.status !== "running" && !sending) return;
     const controller = new AbortController();
     // A hidden page waits and reads the goal again as soon as it is visible.
@@ -2786,17 +2786,25 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   const createGoalConversation = async (draft: ProviderGoalDraft): Promise<ChatGoal> => {
     if (!api || !engagement) throw new Error("Select a project before adding a goal.");
-    if (!providerId || !model.trim()) throw new Error("Choose a provider and model before adding a goal.");
+    if (!model.trim() || (runtimeKind === "provider" ? !providerId : !harnessId)) throw new Error("Choose an assistant and model before adding a goal.");
     const created = await api.createChatGoalConversation({
       engagementId: engagement.id,
-      providerId,
+      backend: runtimeKind,
+      providerId: runtimeKind === "provider" ? providerId : undefined,
+      harnessProfileId: runtimeKind === "harness" ? harnessId : undefined,
       model: model.trim(),
-      toolsEnabled: canUseTools,
+      toolsEnabled: runtimeKind === "harness" ? true : canUseTools,
       mcpServerIds: selectedMcpIds,
-      hookIds: selectedHookIds,
+      hookIds: runtimeKind === "provider" ? selectedHookIds : [],
       // The goal's first turn is one Core starts, and it reads these from
       // the conversation; without them the new chat unchecks Subagents.
-      reasoningEffort: reasoningEffort || undefined,
+      reasoningEffort: runtimeKind === "provider" ? reasoningEffort || undefined : undefined,
+      harnessReasoningEffort: runtimeKind === "harness" ? harnessReasoningEffort || undefined : undefined,
+      harnessServiceTier: runtimeKind === "harness" ? harnessServiceTier || undefined : undefined,
+      harnessCyberAccessProgram: runtimeKind === "harness" ? harnessCyberAccessProgram || undefined : undefined,
+      subagentProviderId: runtimeKind === "harness" && allowSubagents ? subagentProviderId || undefined : undefined,
+      subagentHarnessId: runtimeKind === "harness" && allowSubagents ? subagentHarnessId || undefined : undefined,
+      subagentModel: runtimeKind === "harness" && allowSubagents ? subagentModel || undefined : undefined,
       allowSubagents,
       allowAgentMessaging,
       maxActiveSubagents: allowSubagents ? subagentLimit : undefined,
@@ -5183,7 +5191,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       hookIds: embeddedSideChat ? [] : runtimeKind === "provider" ? selectedHookIds : undefined,
       engagementId: engagement.id,
       sessionId: returnedSessionId,
-      goalId: !embeddedSideChat && runtimeKind === "provider" && providerGoal?.status === "running" ? providerGoal.id : undefined,
+      goalId: !embeddedSideChat && providerGoal?.status === "running" ? providerGoal.id : undefined,
       skill: !embeddedSideChat && runtimeKind === "provider" && selectedHarnessSkill
         ? { name: selectedHarnessSkill.name, path: selectedHarnessSkill.path }
         : undefined,
@@ -6048,7 +6056,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const showHarnessStatusRail = runtimeKind === "harness"
     && (!decisionNotice || pendingHarnessRequests > 0)
     && Boolean(harnessActivity)
-    && Boolean((authoritativeState?.busy ?? harnessActivity?.busy) || pendingHarnessRequests);
+    && Boolean((authoritativeState?.busy ?? harnessActivity?.busy) || pendingHarnessRequests || harnessActivity?.goal);
   const assistantSource = runtimeKind === "harness"
     ? selectedHarness?.name ?? "Agent harness"
     : selectedProvider?.name ?? "Model provider";
@@ -6481,7 +6489,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               <form className="chat-composer" data-quiet-attention={composerBusy || pendingHarnessRequests > 0 || Boolean(chatError) || Boolean(harnessActivityError) || Boolean(stateSyncError) || Boolean(decisionNotice) || Boolean(pendingResponse) || queuedFollowUps.length > 0 || studioGoalOpen || assistantSettingsOpen || projectSnapshot === "floating" || !runtimeReady ? "true" : undefined} onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <QuietLensHorizontalContour className="chat-composer-lens" />
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
-              {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor"><ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} showFullGoal={studioRailAvailable && studioGoalOpen} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} /></div>}</>}
+              {api && !embeddedSideChat && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor"><ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} tokenBudgetAvailable={runtimeKind === "provider" || selectedHarness?.capabilities?.detailedUsage === true} settingsBusy={assistantSettingsBusy} showFullGoal={studioRailAvailable && studioGoalOpen} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} /></div>}</>}
               {sessionId && !pendingSubagentApproval && <ChatSubagentRail
                 subagents={subagentState.subagents}
                 open={sessionInspectorOpen && drawerTab === "subagents"}
@@ -6797,13 +6805,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             <div className="chat-studio" data-rail={studioRailAvailable} data-goal-open={studioGoalOpen}>
               {assistantPanel}
               {studioRailAvailable && <ChatStudioRail
-                goal={runtimeKind === "provider" ? providerGoal : undefined}
+                goal={providerGoal}
                 harnessGoal={runtimeKind === "harness" ? harnessActivity?.goal : undefined}
                 subagents={subagentState.subagents}
                 pendingRequests={pendingHarnessRequests}
                 sessionId={sessionId}
                 goalEditorOpen={studioGoalOpen}
-                canEditGoal={runtimeKind === "provider" && Boolean(api)}
+                canEditGoal={Boolean(api)}
                 onToggleGoal={() => setStudioGoalOpen(open => !open)}
                 onOpenSubagents={() => updateSearchParams(next => next.set("drawer", "subagents"))}
                 onOpenSessionDetails={() => updateSearchParams(next => next.set("drawer", "context"))}
@@ -6844,7 +6852,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           : drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} /> : <p>Results appear after the first saved turn.</p> : <>
           {api && sessionId && searchParams.get("turn") && <ChatTurnDetails api={api} sessionId={sessionId} turnId={searchParams.get("turn")!} onMessage={openDrawerMessage} />}
           <WorkingContextPanel hasSession={Boolean(sessionId)} loading={contextStatusLoading} error={contextStatusError || undefined} status={activeContextStatus} onRetry={() => setContextRefreshKey((value) => value + 1)} />
-          {runtimeKind === "provider" && api && sessionId && <ProviderGoalChildren api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}</>}
+          {api && sessionId && <ProviderGoalChildren api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}</>}
         </ChatWorkspaceDrawer>}
       </div>
       <nav className="mobile-companion-nav" aria-label="Mobile operator navigation">

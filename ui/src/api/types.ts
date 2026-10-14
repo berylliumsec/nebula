@@ -1998,6 +1998,7 @@ export interface ChatGoal {
   activeSince?: string;
   childrenStarted: number;
   usage: ChatUsage;
+  usageUnknown?: boolean;
   linkedTurnIds: Identifier[];
   blockedReason?: string;
   completionSummary?: string;

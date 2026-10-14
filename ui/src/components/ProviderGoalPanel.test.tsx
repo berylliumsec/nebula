@@ -394,3 +394,25 @@ it("counts the active stretch a running goal is still accruing", () => {
   render(<DialogProvider><ProviderGoalPanel api={{} as unknown as ApiClient} sessionId="session" goal={running} onChange={vi.fn()} /></DialogProvider>);
   expect(screen.getByRole("region", { name: "Conversation goal" })).toHaveTextContent(/\ds active/);
 });
+
+it("offers step and time limits when a harness has no usable token counts", () => {
+  render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} tokenBudgetAvailable={false} onCreate={vi.fn()} onChange={vi.fn()} /></DialogProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Add goal" }));
+  fireEvent.click(screen.getByText("Limits", { exact: true }));
+  expect(screen.queryByLabelText("Token budget")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Step budget")).toBeVisible();
+  expect(screen.getByLabelText("Active time limit (minutes, 30 minimum)")).toBeVisible();
+  expect(screen.getByText(/Token limits need usage reported by the harness/)).toBeVisible();
+});
+
+it("shows incomplete harness usage and lets the operator remove an existing token limit", async () => {
+  const limited: ChatGoal = { ...draft, status: "paused", revision: 5, tokenBudget: 100, usageUnknown: true, blockedReason: "Harness token usage was unavailable." };
+  const updateChatGoal = vi.fn().mockResolvedValue({ ...limited, revision: 6, tokenBudget: undefined });
+  render(<DialogProvider><ProviderGoalPanel api={{ updateChatGoal } as unknown as ApiClient} sessionId="session" goal={limited} tokenBudgetAvailable={false} onChange={vi.fn()} /></DialogProvider>);
+  expect(screen.getByText(/usage incomplete/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
+  fireEvent.click(screen.getByText("Limits", { exact: true }));
+  fireEvent.change(screen.getByLabelText("Token budget"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(updateChatGoal).toHaveBeenCalledWith("session", expect.not.objectContaining({ tokenBudget: 100 })));
+});

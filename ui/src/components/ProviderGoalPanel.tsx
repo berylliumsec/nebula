@@ -75,12 +75,13 @@ export interface ProviderGoalDraft {
   childBudget?: number;
 }
 
-export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, settingsBusy = false, showFullGoal = false, onCreate, onChange, onWorkDispatched }: {
+export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, tokenBudgetAvailable = true, settingsBusy = false, showFullGoal = false, onCreate, onChange, onWorkDispatched }: {
   api: ApiClient;
   sessionId?: string;
   goal?: ChatGoal;
   skills?: HarnessSkillSummary[];
   liveTokenEstimate?: number;
+  tokenBudgetAvailable?: boolean;
   settingsBusy?: boolean;
   showFullGoal?: boolean;
   onCreate?(draft: ProviderGoalDraft): Promise<ChatGoal>;
@@ -320,7 +321,8 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       <label>Completion criteria<textarea value={criteria} required placeholder="One criterion per line" onChange={event => setCriteria(event.target.value)} /></label>
       <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
       <details><summary>Limits</summary><div className="chat-goal-limits">
-        <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>
+        {tokenBudgetAvailable && <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>}
+        {!tokenBudgetAvailable && <small>Token limits need usage reported by the harness. Step and time limits remain available.</small>}
         <label>Active time limit (minutes, 30 minimum)<input type="number" min="30" step="1" value={timeBudget} onChange={event => setTimeBudget(event.target.value)} /></label>
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
@@ -337,9 +339,9 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   ]).values()];
   const liveTokens = Math.max(0, Math.floor(liveTokenEstimate ?? 0));
   const displayedTokens = goal.usage.totalTokens + liveTokens;
-  const tokenLabel = liveTokens > 0 ? `~${displayedTokens.toLocaleString()} tokens` : `${displayedTokens.toLocaleString()} tokens`;
+  const tokenLabel = goal.usageUnknown ? `at least ${displayedTokens.toLocaleString()} tokens · usage incomplete` : liveTokens > 0 ? `~${displayedTokens.toLocaleString()} tokens` : `${displayedTokens.toLocaleString()} tokens`;
   return <section className={`chat-goal-panel${detailsOpen ? "" : " is-collapsed"}`} aria-label="Conversation goal" data-guide="goal-panel">
-    <header><button className="chat-goal-toggle" type="button" aria-expanded={detailsOpen} aria-controls="chat-goal-details" aria-label={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} title={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} onClick={() => setDetailsOpen(value => !value)}><ChevronDown size={17} aria-hidden="true" /></button><span className="chat-goal-heading"><Flag size={15} aria-hidden="true" /><strong title={goal.objective}>{goal.objective}</strong></span><small><span className={`chat-goal-status ${goal.status}`}>{goal.status.replaceAll("_", " ")}</span><span className="chat-goal-step">step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""}</span><span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with exact provider usage when the turn settles." : undefined}>{tokenLabel}</span><span>{Math.floor(activeSeconds(goal, tick))}s active</span>{goal.timeBudgetSeconds !== undefined && <span>{Math.max(0, Math.ceil((goal.timeBudgetSeconds - activeSeconds(goal, tick)) / 60))}m left</span>}{goal.childBudget !== undefined && <span>{goal.childrenStarted}/{goal.childBudget} children</span>}<span>{goal.skillSnapshots.length} skills</span></small></header>
+    <header><button className="chat-goal-toggle" type="button" aria-expanded={detailsOpen} aria-controls="chat-goal-details" aria-label={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} title={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} onClick={() => setDetailsOpen(value => !value)}><ChevronDown size={17} aria-hidden="true" /></button><span className="chat-goal-heading"><Flag size={15} aria-hidden="true" /><strong title={goal.objective}>{goal.objective}</strong></span><small><span className={`chat-goal-status ${goal.status}`}>{goal.status.replaceAll("_", " ")}</span><span className="chat-goal-step">step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""}</span><span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with reported usage when the turn settles." : undefined}>{tokenLabel}</span><span>{Math.floor(activeSeconds(goal, tick))}s active</span>{goal.timeBudgetSeconds !== undefined && <span>{Math.max(0, Math.ceil((goal.timeBudgetSeconds - activeSeconds(goal, tick)) / 60))}m left</span>}{goal.childBudget !== undefined && <span>{goal.childrenStarted}/{goal.childBudget} children</span>}<span>{goal.skillSnapshots.length} skills</span></small></header>
     {goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
     <div id="chat-goal-details" hidden={!detailsOpen} className="chat-goal-details">
     <details className="chat-goal-objective" open={objectiveOpen} onToggle={event => setObjectiveOpen(event.currentTarget.open)}>
@@ -360,7 +362,8 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       <label>Completion criteria<textarea value={criteria} required placeholder="One criterion per line" onChange={event => setCriteria(event.target.value)} /></label>
       <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
       <details><summary>Limits</summary><div className="chat-goal-limits">
-        <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>
+        {(tokenBudgetAvailable || goal.tokenBudget !== undefined) && <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>}
+        {!tokenBudgetAvailable && <small>Token tracking is unavailable for this harness. Remove an existing token limit to resume.</small>}
         <label>Active time limit (minutes, 30 minimum)<input type="number" min="30" step="1" value={timeBudget} onChange={event => setTimeBudget(event.target.value)} /></label>
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>

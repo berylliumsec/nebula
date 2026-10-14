@@ -8530,3 +8530,100 @@ test("notebook real Core runs bundled Python on a LAN origin and restores output
     await testInfo.attach("notebook-lan-receipt", {body: JSON.stringify({origin: core.origin, projectId, viewport: page.viewportSize(), output: "42", build: "production"}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
+
+test("assistant upgrade harness goal works on production LAN Core across new and existing chats", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "goal");
+  await withOwnedCleanup(async () => {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const manifest = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>; builtAt: string};
+    const entry = Object.keys(manifest.assets).find(name => name.startsWith("assets/index-") && name.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(manifest.assets[entry!]);
+    const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Harness goal LAN browser"}})).json() as {secret: string; confirmation_code: string};
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Harness goal LAN browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+
+    const goalPanel = page.getByRole("region", {name: "Conversation goal"});
+    const revealGoal = async () => {
+      const pointerFine = await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
+      if (pointerFine) {
+        await page.locator(".chat-composer").hover();
+      }
+      const rail = page.getByRole("region", {name: "Goal", exact: true});
+      if (!await goalPanel.isVisible() && await rail.isVisible()) {
+        if (pointerFine) await page.locator(".chat-studio-rail").hover();
+        const reveal = rail.getByRole("button", {name: /Create goal|View full goal and evidence gates/});
+        if (await reveal.isVisible()) await reveal.click({timeout: 10_000});
+      }
+      if (!await goalPanel.isVisible()) await clickAssistantSettings(page);
+      await expect(goalPanel).toBeVisible();
+      const expand = goalPanel.getByRole("button", {name: "Expand goal controls"});
+      if (await expand.isVisible()) await expand.click();
+    };
+    const addGoal = async (objective: string, steps: number) => {
+      await revealGoal();
+      await goalPanel.getByRole("button", {name: "Add goal"}).click({timeout: 10_000});
+      await goalPanel.getByRole("textbox", {name: "Objective"}).fill(objective);
+      await goalPanel.getByRole("textbox", {name: "Completion criteria"}).fill("A durable reply is retained");
+      await goalPanel.getByText("Limits", {exact: true}).click();
+      await goalPanel.getByRole("spinbutton", {name: "Step budget"}).fill(String(steps));
+      await goalPanel.getByRole("button", {name: "Save draft"}).click();
+      await expect.poll(async () => {
+        const id = new URL(page.url()).searchParams.get("session");
+        return Boolean(id && (await core.api.get(`chat/sessions/${id}/goal`)).ok());
+      }).toBe(true);
+      await revealGoal();
+      await expect(goalPanel.getByRole("button", {name: "Start"})).toBeVisible();
+    };
+
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await addGoal("Trace a new harness conversation through two Core turns", 2);
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    const newSessionId = new URL(page.url()).searchParams.get("session")!;
+    const savedNew = await (await core.api.get(`chat-sessions/${newSessionId}`)).json() as {backend: string; harness_session_id: string};
+    expect(savedNew.backend).toBe("harness");
+    expect(savedNew.harness_session_id).toBeTruthy();
+    await goalPanel.getByRole("button", {name: "Start"}).click({timeout: 10_000});
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${newSessionId}/goal`)).json()).status).toBe("paused");
+    const newGoal = await (await core.api.get(`chat/sessions/${newSessionId}/goal`)).json() as {current_step: number; blocked_reason: string; usage: {total_tokens: number}};
+    expect(newGoal.current_step).toBe(2);
+    expect(newGoal.blocked_reason).toBe("Goal step budget is exhausted.");
+    expect(newGoal.usage.total_tokens).toBe(18);
+    await expect(goalPanel).toContainText("step 2/2");
+    await expect(page.getByText(/Native (harness )?goal: complete/).first()).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".chat-goal-panel").analyze()).violations).toEqual([]);
+    await page.reload();
+    await revealGoal();
+    await expect(goalPanel).toContainText("step 2/2");
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY");
+    const messages = await (await core.api.get(`chat/sessions/${newSessionId}/messages`)).json() as Array<{role: string}>;
+    expect(messages.filter(message => message.role === "assistant")).toHaveLength(2);
+
+    const settingsDialog = page.getByRole("dialog", {name: "Assistant settings"});
+    if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Start an ordinary harness chat");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY");
+    const existingSessionId = new URL(page.url()).searchParams.get("session")!;
+    await addGoal("FAIL_ONCE then recover with an explicit Resume", 2);
+    expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
+    await goalPanel.getByRole("button", {name: "Start"}).click({timeout: 10_000});
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${existingSessionId}/goal`)).json()).status).toBe("paused");
+    await expect(goalPanel).toContainText("stopped or failed", {timeout: 15_000});
+    await goalPanel.getByRole("button", {name: "Resume"}).click();
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${existingSessionId}/goal`)).json()).status).toBe("paused");
+    await expect(goalPanel).toContainText("Goal step budget is exhausted.", {timeout: 15_000});
+    await core.restart();
+    await page.reload();
+    await revealGoal();
+    await expect(goalPanel).toContainText("Goal step budget is exhausted.");
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY");
+    expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
+    await testInfo.attach("harness-goal-lan", {body: JSON.stringify({origin: core.origin, build: "production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), newSessionId, existingSessionId, outcome: "create, continue, native status, failure, resume, refresh, restart"}), contentType: "application/json"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
