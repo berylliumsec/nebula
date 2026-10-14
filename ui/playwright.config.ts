@@ -132,7 +132,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
     ...project,
     // Stabilization journeys must not silently disappear behind older per-screen
     // filters. File/project boundaries still apply, including isolated real Core.
-    ...("grep" in project ? {grep: new RegExp(`stabilization|automation callback|${project.name.startsWith("mobile-") ? "provider and harness usage|" : ""}${project.grep.source}`)} : {}),
+    ...("grep" in project ? {grep: new RegExp(`stabilization|automation callback|iPhone assistant shell|${project.name.startsWith("mobile-") ? "provider and harness usage|" : ""}${project.grep.source}`)} : {}),
   })),
   webServer: process.env.NEBULA_RELEASE_CORE_SMOKE === "1" ? undefined : {
     command: testCommand,

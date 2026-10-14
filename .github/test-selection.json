@@ -1,26 +1,44 @@
 {
-  "change_digest": "449fd316dea70e4c7742d10434a9fe2b2ebce26a8a370aece7d1c42f14c6bccc",
-  "reviewed_by": "Codex focused harness goal review",
-  "reason": "Harness goal changes cross durable Core goal, harness turn, subagent report, queue, API, and shared chat UI boundaries. Select the new harness goal cases for Codex, Grok, and Claude fixtures; existing provider goal creation and continuation regressions; the goal panel and rail component cases; and one real Core production LAN journey on desktop Chromium plus mobile Chromium and WebKit at the required widths. The real Core fixture runs an inert harness adapter and verifies new and existing chats, native status, automatic continuation, failure and explicit resume, refresh, and Core restart.",
-  "exclusions": "No Rust or native code changed. Unrelated provider, mission, browser, release, and full UI suites are excluded. Physical mobile devices and live vendor accounts are outside this disposable fixture run; the browser matrix uses emulated Android and iPhone profiles. Recurring schedules, deployment, and the existing linked conversation are not part of this change.",
+  "change_digest": "31f74f0c072babaeecfae96134ec752d90cecff68d93f4b635a277b8efdc16a3",
+  "reviewed_by": "Codex focused iPhone assistant coverage review, 2026-10-14",
+  "reason": "The changed journey is the paired installed iPhone shell opening Core-backed chats, showing and resolving chat-origin attention, and surviving reload and reconnect. The selected API test checks authentication, cross-project pending action filtering, ordering, and resolution. Product-knowledge checks cover the changed guidance source digest and Core index sync. Component tests check Core-authoritative badge refresh, failed retry polling, and separation of unreachable Core from revoked pairing. One exact shell journey is run across permanent desktop at 1440/1024, phone Chromium/WebKit widths, and landscape profiles; one existing mobile WebKit Workbench journey checks ordinary mobile browser access remains intact. The paired production-LAN real-Core case also checks an unpaired page opening a same-document pairing link, streaming, approval, persistence, and outage recovery with an inert harness. Landscape checks guard the focused composer and Send button after keyboard zoom. The native connection choice now persists when Connect is tapped, while successful-load history and last-connected time remain separate; the signed physical iPhone check exercises immediate relaunch over Wi-Fi.",
+  "exclusions": "Rust is unchanged, so the native Rust selection is empty. Unrelated Python, frontend, browser, and full suites are excluded. Separate signed iPhone 11 XCUITests over localNetwork passed immediate live-server selection/relaunch and one-time live-Core pairing on 2026-10-14; the Swift device tests are outside the Rust selection schema. Local Python collection uses the available 3.11 environment; CI selects supported 3.12.",
   "expected_tests": {
-    "python": 18,
+    "python": 3,
     "frontend": 23,
     "native": 0,
-    "playwright": 8
+    "playwright": 14
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
-    "tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message"
+    "tests/v3/test_api.py::test_chat_attention_lists_pending_operator_actions_across_projects_only",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/components/ChatStudioRail.test.tsx"
+    "ui/src/components/MobileAttentionInbox.test.tsx",
+    "ui/src/api/runtime.test.ts",
+    "ui/src/state/WorkspaceContext.recovery.test.tsx"
   ],
   "native": [],
-  "playwright": ["area:harness-goal"]
+  "playwright": [
+    "entry:ios-assistant-only/desktop",
+    "entry:ios-assistant-only/compact",
+    "entry:ios-assistant-only/mobile-chromium-small",
+    "entry:ios-assistant-only/mobile-chromium",
+    "entry:ios-assistant-only/mobile-chromium-wide",
+    "entry:ios-assistant-only/mobile-webkit-small",
+    "entry:ios-assistant-only/mobile-webkit",
+    "entry:ios-assistant-only/mobile-webkit-wide",
+    "entry:ios-assistant-only/browser-chromium-landscape",
+    "entry:ios-assistant-only/browser-webkit-landscape",
+    "entry:ios-mobile-web-regression/mobile-webkit",
+    "entry:ios-assistant-only/assistant-real-desktop",
+    "entry:ios-assistant-only/assistant-real-chromium-390",
+    "entry:ios-assistant-only/assistant-real-webkit-390"
+  ]
 }

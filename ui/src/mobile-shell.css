@@ -216,3 +216,158 @@
   :root[data-theme] .terminal-key.latched { border-color: var(--blue); color: var(--action-primary-text); background: var(--action-primary); }
   :root[data-theme] .terminal-key:disabled { opacity: .45; }
 }
+
+/* The installed iPhone shell is a chat client, including landscape widths. */
+:root[data-theme] .app-shell.assistant-only-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  transition: none;
+}
+:root[data-theme] .assistant-only-shell > .main-content {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
+  border: 0;
+  border-radius: 0;
+}
+/* WKWebView magnifies focused controls below 16px, including in landscape. */
+:root[data-theme] .assistant-only-shell :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select),
+:root[data-theme] .pairing-gate input { font-size: 16px; }
+:root[data-theme] .assistant-only-shell > .main-content > .workspace-state-banner {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin: 12px 12px 0;
+  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px);
+  overflow-y: auto;
+}
+:root[data-theme] .assistant-only-shell > .main-content > .workspace-state-banner .diagnostic-error-notice {
+  width: 100%;
+}
+:root[data-theme] .assistant-only-shell > .main-content > .workspace-state-banner > :is(button, a) {
+  width: 100%;
+  min-height: 44px;
+}
+:root[data-theme] .assistant-only-shell .assistant-shell-empty {
+  min-height: 0;
+  flex: 1 1 0;
+  margin: 0 auto;
+  overflow-y: auto;
+}
+:root[data-theme] .assistant-only-shell .assistant-only-page,
+:root[data-theme] .assistant-only-shell .assistant-only-page.full-screen {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
+}
+:root[data-theme] .assistant-only-page > .session-layout.chat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  border: 0;
+}
+:root[data-theme] .assistant-only-page .session-workspace {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  padding: 0;
+}
+:root[data-theme] .assistant-only-page .chat-studio,
+:root[data-theme] .assistant-only-page .chat-panel { min-height: 0; flex: 1 1 0; }
+:root[data-theme] .assistant-only-page .chat-panel { border: 0; border-radius: 0; }
+:root[data-theme] .assistant-only-page .mobile-conversation-header.conversation-toolbar {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px 44px 44px;
+  min-height: 52px;
+  align-items: center;
+  padding: 2px 4px 4px;
+  border-bottom: 1px solid var(--border-soft);
+}
+:root[data-theme] .assistant-only-page .mobile-conversation-header .icon-button {
+  width: 44px;
+  height: 44px;
+}
+:root[data-theme] .assistant-only-page .mobile-attention-trigger { position: relative; }
+:root[data-theme] .mobile-attention-count {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  display: grid;
+  min-width: 17px;
+  height: 17px;
+  place-items: center;
+  padding-inline: 3px;
+  border-radius: 99px;
+  color: var(--action-primary-text);
+  background: var(--action-primary);
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+}
+:root[data-theme] .assistant-only-page .session-list { min-height: 0; }
+:root[data-theme] .assistant-only-page .mobile-drawer-project-picker > summary { cursor: pointer; list-style: none; }
+:root[data-theme] .assistant-only-page .mobile-drawer-project-picker > summary::-webkit-details-marker { display: none; }
+:root[data-theme] .assistant-only-page .mobile-drawer-project-options {
+  display: grid;
+  max-height: min(32vh, 260px);
+  overflow-y: auto;
+  margin: 0 8px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+}
+:root[data-theme] .assistant-only-page .mobile-drawer-project-options button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  color: var(--text);
+  background: var(--surface);
+  text-align: left;
+}
+:root[data-theme] .assistant-only-page .mobile-drawer-project-options button + button { border-top: 1px solid var(--border-soft); }
+:root[data-theme] .assistant-only-page .mobile-drawer-project-options button[aria-current="true"] { color: var(--text-strong); background: var(--surface-raised); }
+:root[data-theme] .mobile-attention-inbox,
+:root[data-theme] .assistant-shell-handoff { display: flex; max-height: min(90dvh, 720px); flex-direction: column; }
+:root[data-theme] .mobile-attention-inbox > header,
+:root[data-theme] .assistant-shell-handoff > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+:root[data-theme] .mobile-attention-inbox > header h2,
+:root[data-theme] .assistant-shell-handoff > header h2 { margin: 0; }
+:root[data-theme] .mobile-attention-inbox > header small { display: block; margin-top: 3px; color: var(--muted); }
+:root[data-theme] .mobile-attention-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+:root[data-theme] .mobile-attention-content ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+:root[data-theme] .mobile-attention-content li button {
+  display: grid;
+  width: 100%;
+  min-height: 60px;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--surface);
+  text-align: left;
+}
+:root[data-theme] .mobile-attention-content li button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-theme] .mobile-attention-content li button small { color: var(--muted); }
+:root[data-theme] .assistant-shell-handoff label,
+:root[data-theme] .assistant-shell-empty label { display: grid; gap: 6px; }
+:root[data-theme] .assistant-shell-handoff input,
+:root[data-theme] .assistant-shell-empty input { min-height: 44px; width: 100%; }
+:root[data-theme] .assistant-shell-empty { display: grid; align-content: center; justify-items: start; gap: 12px; max-width: 520px; margin: auto; }
+:root[data-theme] .assistant-shell-empty :is(h1, p) { margin: 0; }
+
+@media (max-width: 760px) {
+  :root[data-theme] .assistant-only-shell .assistant-only-page:not(.full-screen) { padding-bottom: env(safe-area-inset-bottom, 0px); }
+}

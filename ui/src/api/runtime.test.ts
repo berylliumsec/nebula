@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { browserAuthorizationRecovery, browserSessionIsAuthorized, browserSessionRequiresRelaunch, resolveApiRuntime } from "./runtime";
+import { browserAuthorizationRecovery, browserSessionAuthorizationStatus, browserSessionRequiresRelaunch, resolveApiRuntime } from "./runtime";
 
 describe("browser API runtime", () => {
   beforeEach(() => {
@@ -52,9 +52,9 @@ describe("browser API runtime", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const authorized = await browserSessionIsAuthorized("http://nebula.test");
+    const authorized = await browserSessionAuthorizationStatus("http://nebula.test");
 
-    expect(authorized).toBe(true);
+    expect(authorized).toBe("authorized");
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/v1\/health$/),
       expect.objectContaining({ credentials: "include" }),
@@ -64,8 +64,15 @@ describe("browser API runtime", () => {
   it("rejects a browser when Core rejects the session", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 401 })));
 
-    const authorized = await browserSessionIsAuthorized("http://nebula.test/api/v1");
+    const authorized = await browserSessionAuthorizationStatus("http://nebula.test/api/v1");
 
-    expect(authorized).toBe(false);
+    expect(authorized).toBe("unauthorized");
+  });
+
+  it("keeps network loss separate from rejected pairing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Core is offline")));
+    expect(await browserSessionAuthorizationStatus("http://nebula.test")).toBe("unreachable");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", {status: 503})));
+    expect(await browserSessionAuthorizationStatus("http://nebula.test")).toBe("unreachable");
   });
 });

@@ -24,12 +24,18 @@ complete Nebula's web pairing. HTTP is unencrypted; use it only on your trusted 
 or VPN. The app keeps normal TLS validation. External HTTP(S) links require
 confirmation and open in a Safari sheet.
 
-After connecting, the web view runs edge to edge with no native bar; the web UI's
-phone layout (Chat · Terminal · Activity · More) owns every screen and follows the
-page's `theme-color` for the status bar. Native UI appears only for:
+The selected server address is saved as soon as Connect is tapped, so an app restart
+or temporary network failure returns to that address. The recent-server chips and
+last-connected time update only after a page loads successfully.
 
-- **Connect** — first launch, or Settings → This iPhone → App connection, which
-  opens `nebula://settings` (server address, pairing link, reload).
+With native build 4 or later, the web view runs edge to edge with no native bar.
+The installed app opens the Core-backed assistant: project conversations, the composer, saved
+results, and pending chat approvals or agent questions. Terminal, Missions,
+Activity, and other Workbench tools stay in full Nebula on desktop or mobile web.
+The page's `theme-color` controls the status bar. Native UI appears only for:
+
+- **Connect** — first launch, or App connection in the conversation drawer,
+  which opens `nebula://settings` (server address, pairing link, reload).
 - **Offline** — a failed page load explains what failed and offers Try again,
   the other saved address, or Change server; the web view stays underneath.
 

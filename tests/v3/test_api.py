@@ -2683,6 +2683,207 @@ def test_session_activity_covers_conversations_beyond_the_first_page(api):
     assert states["chat-000"] == "idle"
 
 
+def test_chat_attention_lists_pending_operator_actions_across_projects_only(api):
+    from nebula.v3.domain import (
+        ChatBackend,
+        EngagementStatus,
+        HarnessInteraction,
+        HarnessInteractionKind,
+        HarnessSession,
+        HarnessTurn,
+        HarnessTurnOrigin,
+        HarnessTurnStatus,
+    )
+
+    client, store, _ = api
+    now = utc_now()
+    first = store.create(Engagement(id="attention-first", name="First project"))
+    second = store.create(Engagement(id="attention-second", name="Second project"))
+    archived = store.create(
+        Engagement(
+            id="attention-archived",
+            name="Archived project",
+            status=EngagementStatus.ARCHIVED,
+        )
+    )
+    provider = store.create(
+        ProviderProfile(
+            id="attention-provider", name="Provider", provider_type="openrouter"
+        )
+    )
+    provider_session = store.create(
+        ChatSession(
+            id="attention-provider-chat",
+            engagement_id=first.id,
+            title="Provider conversation",
+            provider_profile_id=provider.id,
+            model="model",
+        )
+    )
+    provider_turn = store.create(
+        ChatTurn(
+            id="attention-provider-turn",
+            engagement_id=first.id,
+            session_id=provider_session.id,
+            provider_profile_id=provider.id,
+            model="model",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+        )
+    )
+    approval = store.create(
+        Approval(
+            id="attention-approval",
+            engagement_id=first.id,
+            run_id=provider_turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=provider_session.id,
+            chat_turn_id=provider_turn.id,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            exact_request={"tool_name": "safe.scan"},
+            policy_rationale="review",
+            requested_by="chat-assistant",
+            requested_at=now - timedelta(minutes=1),
+        )
+    )
+    harness_session = store.create(
+        HarnessSession(
+            id="attention-harness-session",
+            engagement_id=second.id,
+            harness_profile_id="attention-harness",
+            model="model",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            id="attention-harness-chat",
+            engagement_id=second.id,
+            title="Harness conversation",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="attention-harness",
+            harness_session_id=harness_session.id,
+            model="model",
+        )
+    )
+    chat_turn = store.create(
+        ChatTurn(
+            id="attention-harness-chat-turn",
+            engagement_id=second.id,
+            session_id=chat.id,
+            backend=ChatBackend.HARNESS,
+            harness_turn_id="attention-harness-turn",
+            model="model",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+        )
+    )
+    harness_turn = store.create(
+        HarnessTurn(
+            id="attention-harness-turn",
+            engagement_id=second.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=chat.id,
+            chat_turn_id=chat_turn.id,
+            status=HarnessTurnStatus.WAITING_APPROVAL,
+            prompt="Question",
+        )
+    )
+    interaction = store.create(
+        HarnessInteraction(
+            id="attention-question",
+            engagement_id=second.id,
+            harness_turn_id=harness_turn.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            kind=HarnessInteractionKind.USER_INPUT,
+            chat_session_id=chat.id,
+            vendor_request_id="ask",
+            prompt="Which option?",
+            created_at=now,
+        )
+    )
+    store.create(
+        Approval(
+            id="attention-mission",
+            engagement_id=second.id,
+            run_id="mission",
+            risk_class=RiskClass.ACTIVE_SCAN,
+            exact_request={},
+            policy_rationale="mission",
+            requested_by="mission",
+        )
+    )
+    store.create(
+        ChatSession(
+            id="attention-archived-chat",
+            engagement_id=archived.id,
+            title="Archived chat",
+            provider_profile_id=provider.id,
+            model="model",
+        )
+    )
+    archived_turn = store.create(
+        ChatTurn(
+            id="attention-archived-turn",
+            engagement_id=archived.id,
+            session_id="attention-archived-chat",
+            provider_profile_id=provider.id,
+            model="model",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+        )
+    )
+    store.create(
+        Approval(
+            id="attention-archived-approval",
+            engagement_id=archived.id,
+            run_id=archived_turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id="attention-archived-chat",
+            chat_turn_id=archived_turn.id,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            exact_request={},
+            policy_rationale="review",
+            requested_by="chat-assistant",
+        )
+    )
+
+    url = "/api/v1/chat/attention"
+    assert client.get(url).status_code in {401, 403}
+    response = client.get(url, headers=_auth())
+    assert response.status_code == 200, response.text
+    assert response.json() == [
+        {
+            "kind": "question",
+            "action_id": interaction.id,
+            "engagement_id": second.id,
+            "engagement_name": second.name,
+            "session_id": chat.id,
+            "session_title": chat.title,
+            "requested_at": interaction.created_at.isoformat().replace("+00:00", "Z"),
+        },
+        {
+            "kind": "approval",
+            "action_id": approval.id,
+            "engagement_id": first.id,
+            "engagement_name": first.name,
+            "session_id": provider_session.id,
+            "session_title": provider_session.title,
+            "requested_at": approval.requested_at.isoformat().replace("+00:00", "Z"),
+        },
+    ]
+
+    store.update(
+        Approval,
+        approval.id,
+        {"status": ApprovalStatus.APPROVED, "decided_at": utc_now()},
+    )
+    store.update(
+        HarnessInteraction,
+        interaction.id,
+        {"status": "answered", "resolved_at": utc_now()},
+    )
+    assert client.get(url, headers=_auth()).json() == []
+
+
 def test_terminal_output_page_always_advances_past_a_multibyte_character(api):
     from nebula.v3.terminal_history import CapturedTerminalCommand
 

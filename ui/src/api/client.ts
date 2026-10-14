@@ -15,6 +15,7 @@ import type {
   ChatCompletionResponse,
   ChatSessionRenameRequest,
   ChatSessionActivity,
+  ChatAttentionItem,
   ChatSessionSummary,
   ChatSessionAssistantSettingsRequest,
   ChatStreamEvent,
@@ -9318,6 +9319,26 @@ export class ApiClient {
       `chat/session-activity?engagement_id=${encodeURIComponent(engagementId)}`,
       { signal },
     ).then(items => items.map(item => ({ sessionId: item.session_id, state: item.state, turnId: item.turn_id ?? undefined })));
+  }
+
+  listChatAttention(signal?: AbortSignal): Promise<ChatAttentionItem[]> {
+    return this.request<Array<{
+      kind: ChatAttentionItem["kind"];
+      action_id: string;
+      engagement_id: string;
+      engagement_name: string;
+      session_id: string;
+      session_title: string;
+      requested_at: string;
+    }>>("chat/attention", { signal }).then(items => items.map(item => ({
+      kind: item.kind,
+      actionId: item.action_id,
+      engagementId: item.engagement_id,
+      engagementName: item.engagement_name,
+      sessionId: item.session_id,
+      sessionTitle: item.session_title,
+      requestedAt: item.requested_at,
+    })));
   }
 
   /** ``listChatSessionActivity`` for a poll: undefined when Core answered 304. */
