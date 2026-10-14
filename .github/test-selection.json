@@ -1,20 +1,26 @@
 {
-  "change_digest": "65bdd629dd2515c1e8a82d6111e3a37fa6fa439384196bf76b9a64d54f70c3f6",
-  "reviewed_by": "Codex focused note destination review",
-  "reason": "The selected-text Take note journey now chooses an existing saved note or explicitly creates a new one. Run the NotesPanel component file, including lost-response retry, and the exact real-Core production LAN journey across desktop and mobile Chromium and WebKit widths. The real-Core journey verifies note identity, append content, durable reload, accessible dialog, and unchanged note count. The touched App integration case was also run locally by exact test name and passed.",
-  "exclusions": "No Python or native code changed; those test layers are omitted. The App test file has 14 failures in unrelated workspace and storage flows; its selected-text case passed locally, and the real-Core browser journey covers that integration in CI. Unrelated provider, chat, editor, browser, and release journeys are omitted. Existing notes typing and readiness browser journeys are outside the destination change; the selected NotesPanel component file covers their local save behavior. No physical mobile device is available for automated execution.",
+  "change_digest": "449fd316dea70e4c7742d10434a9fe2b2ebce26a8a370aece7d1c42f14c6bccc",
+  "reviewed_by": "Codex focused harness goal review",
+  "reason": "Harness goal changes cross durable Core goal, harness turn, subagent report, queue, API, and shared chat UI boundaries. Select the new harness goal cases for Codex, Grok, and Claude fixtures; existing provider goal creation and continuation regressions; the goal panel and rail component cases; and one real Core production LAN journey on desktop Chromium plus mobile Chromium and WebKit at the required widths. The real Core fixture runs an inert harness adapter and verifies new and existing chats, native status, automatic continuation, failure and explicit resume, refresh, and Core restart.",
+  "exclusions": "No Rust or native code changed. Unrelated provider, mission, browser, release, and full UI suites are excluded. Physical mobile devices and live vendor accounts are outside this disposable fixture run; the browser matrix uses emulated Android and iPhone profiles. Recurring schedules, deployment, and the existing linked conversation are not part of this change.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 20,
+    "python": 18,
+    "frontend": 23,
     "native": 0,
     "playwright": 8
   },
-  "python": [],
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
+    "tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message"
+  ],
   "frontend": [
-    "ui/src/components/NotesPanel.test.tsx"
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/components/ChatStudioRail.test.tsx"
   ],
   "native": [],
-  "playwright": [
-    "area:notes-selection-target"
-  ]
+  "playwright": ["area:harness-goal"]
 }

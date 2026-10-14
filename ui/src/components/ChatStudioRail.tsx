@@ -36,6 +36,7 @@ export function ChatStudioRail({
         {goalStatus && <small data-status={goalStatus}>{goalStatus.replaceAll("_", " ")}</small>}
       </div>
       <strong className="chat-studio-goal-summary" title={objective}>{objective || "No active goal"}</strong>
+      {goal && harnessGoal && <small title={harnessGoal.objective}>Native harness goal: {harnessGoal.status.replaceAll("_", " ")}</small>}
       {canEditGoal && <button type="button" className="chat-studio-link" aria-expanded={goalEditorOpen}
         aria-controls="chat-studio-goal-editor" onClick={onToggleGoal}>
         {goalEditorOpen ? "Hide full goal" : goal ? "View full goal and evidence gates" : "Create goal"} <ArrowUpRight size={14} aria-hidden="true" />

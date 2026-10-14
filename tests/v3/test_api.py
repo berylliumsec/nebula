@@ -253,8 +253,10 @@ def test_goal_conversation_exists_before_its_first_message(api):
         "reasoning_effort": None,
         "allow_subagents": False,
         "subagent_reasoning_effort": None,
-        # The durable operator choice for main-agent messaging (#536).
-        "allow_agent_messaging": False,
+        # An omitted choice inherits the project's durable default.
+        "allow_agent_messaging": store.get(
+            Engagement, "goal-first-project"
+        ).assistant_defaults.allow_agent_messaging,
         "max_active_subagents": None,
         "message_count": 0,
         "last_sequence": 0,

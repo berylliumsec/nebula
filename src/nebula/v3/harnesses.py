@@ -105,6 +105,9 @@ from .domain import (
     ChatBackend,
     ChatCitation,
     ChatContentBlock,
+    ChatGoal,
+    ChatGoalStatus,
+    ChatQueue,
     ChatMessage,
     ChatRole,
     ChatSession,
@@ -160,7 +163,13 @@ from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .providers import REASONING_EFFORTS
 from .policy import PolicyEffect, PolicyEngine, PolicyRequest
 from .redaction import redact_text, sanitize_display_text
-from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
+from .storage import (
+    ConflictError,
+    CorruptRecordError,
+    NebulaStore,
+    NotFoundError,
+    StoreTransaction,
+)
 from .mcp import (
     GATEWAY_TOOL_TIMEOUT_SECONDS,
     MAX_MCP_MESSAGE_BYTES,
@@ -8764,6 +8773,13 @@ class HarnessRuntimeService:
             expected_revision=turn.revision,
         )
         self._interrupt_owner(turn)
+        if turn.chat_session_id and turn.chat_turn_id:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.goal_id:
+                self._pause_goal(
+                    turn.chat_session_id,
+                    "Core restarted during a harness goal turn. Review the saved reply before resuming.",
+                )
         session = self.store.get(HarnessSession, turn.harness_session_id)
         if session.status not in {
             HarnessSessionStatus.CLOSED,
@@ -8819,6 +8835,13 @@ class HarnessRuntimeService:
             expected_revision=turn.revision,
         )
         self._interrupt_owner(turn)
+        if turn.chat_session_id and turn.chat_turn_id:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.goal_id:
+                self._pause_goal(
+                    turn.chat_session_id,
+                    "Core restarted before the harness goal turn started. Review it before resuming.",
+                )
         # The session only turns running once connected, so its status
         # belongs to other turns and stays as it is.
         session = self.store.get(HarnessSession, turn.harness_session_id)
@@ -9502,6 +9525,7 @@ class HarnessRuntimeService:
         cyber_access_program: str | None = None,
         tools_enabled: bool = True,
         control_assistant: bool = False,
+        transaction: StoreTransaction | None = None,
     ) -> HarnessSession:
         if self._closed:
             raise HarnessUnavailableError("harness runtime is shut down")
@@ -9647,7 +9671,11 @@ class HarnessRuntimeService:
             mcp_snapshot=snapshot,
             metadata=metadata,
         )
-        created = self.store.create(session)
+        if transaction is not None:
+            transaction.add(session)
+            created = session
+        else:
+            created = self.store.create(session)
         if components is not None:
             self._gateway_oci_components[created.id] = components
         return created
@@ -9727,7 +9755,13 @@ class HarnessRuntimeService:
         finally:
             await self.close_session(session.id)
 
-    def _fork_session(self, session: HarnessSession, *, reason: str) -> HarnessSession:
+    def _fork_session(
+        self,
+        session: HarnessSession,
+        *,
+        reason: str,
+        transaction: StoreTransaction | None = None,
+    ) -> HarnessSession:
         """Create an independent vendor session with the same frozen capabilities."""
 
         metadata = deepcopy(session.metadata)
@@ -9738,18 +9772,20 @@ class HarnessRuntimeService:
                 "context_management": "runtime_managed",
             }
         )
-        return self.store.create(
-            HarnessSession(
-                id=str(uuid4()),
-                engagement_id=session.engagement_id,
-                harness_profile_id=session.harness_profile_id,
-                model=session.model,
-                status=HarnessSessionStatus.STARTING,
-                mcp_server_ids=list(session.mcp_server_ids),
-                mcp_snapshot=deepcopy(session.mcp_snapshot),
-                metadata=metadata,
-            )
+        fork = HarnessSession(
+            id=str(uuid4()),
+            engagement_id=session.engagement_id,
+            harness_profile_id=session.harness_profile_id,
+            model=session.model,
+            status=HarnessSessionStatus.STARTING,
+            mcp_server_ids=list(session.mcp_server_ids),
+            mcp_snapshot=deepcopy(session.mcp_snapshot),
+            metadata=metadata,
         )
+        if transaction is not None:
+            transaction.add(fork)
+            return fork
+        return self.store.create(fork)
 
     def _fork_session_for_execution_mode(
         self,
@@ -10322,6 +10358,7 @@ class HarnessRuntimeService:
         model: str | None,
         prompt: str,
         chat_session_id: str | None,
+        goal_id: str | None = None,
         harness_session_id: str | None,
         mcp_server_ids: list[str] | None,
         title: str | None = None,
@@ -10877,6 +10914,66 @@ class HarnessRuntimeService:
         runtime_context = (runtime_context or "") + decision_instructions(
             operator_decisions
         )
+        from .chat_goals import ChatGoalService
+
+        goals = ChatGoalService(self.store)
+        try:
+            saved_goal = goals.get(chat.id)
+        except NotFoundError:  # diagnostic-expected: this chat has no Core goal yet
+            saved_goal = None
+        if goal_id is not None and (saved_goal is None or saved_goal.id != goal_id):
+            raise HarnessStateError("goal does not belong to this conversation")
+        goal = (
+            saved_goal
+            if saved_goal and saved_goal.status == ChatGoalStatus.RUNNING
+            else None
+        )
+        if goal_id is not None and goal is None:
+            raise HarnessStateError("goal must be running before a harness turn")
+        if goal is not None:
+            if goal.step_budget is not None and goal.current_step >= goal.step_budget:
+                raise HarnessStateError("goal step budget is exhausted")
+            if (
+                goal.time_budget_seconds is not None
+                and goal.active_elapsed_seconds() >= goal.time_budget_seconds
+            ):
+                raise HarnessStateError("goal active-time limit is exhausted")
+            if goal.token_budget is not None:
+                if not profile.capabilities.detailed_usage:
+                    raise HarnessStateError(
+                        "this harness does not report token usage for the goal limit"
+                    )
+                if goal.usage.total_tokens >= goal.token_budget:
+                    raise HarnessStateError("goal token budget is exhausted")
+            from .chat import _goal_time_instruction
+            from .chat_snapshot_parts import resolve_skill_snapshots
+            from .skill_catalog import SkillSnapshot, skill_instructions
+
+            goal_context = {
+                "objective": goal.objective,
+                "completion_criteria": goal.completion_criteria,
+                "plan": goal.plan,
+                "current_step": goal.current_step,
+                "remaining_steps": goal.step_budget - goal.current_step
+                if goal.step_budget is not None
+                else None,
+                "remaining_tokens": goal.token_budget - goal.usage.total_tokens
+                if goal.token_budget is not None
+                else None,
+            }
+            runtime_context += (
+                "\n\nCore-owned Nebula goal (separate from any native harness goal):\n"
+                + json.dumps(goal_context, ensure_ascii=False)
+                + "\nContinue concrete work until the criteria are met or the goal is paused, blocked, or completed in Core. "
+                "A status-only reply does not end this goal. Give the operator a concise evidence-backed handoff when finished."
+                + _goal_time_instruction(goal, utc_now())
+                + skill_instructions(
+                    SkillSnapshot.model_validate(snapshot)
+                    for snapshot in resolve_skill_snapshots(
+                        self.store, goal.skill_snapshots, session_id=goal.session_id
+                    )
+                )
+            )
         assistant_scope = (
             "\n\nYou are the Nebula product assistant. Answer Nebula usage questions and troubleshoot "
             "using the packaged product index: call nebula.help.search for product behavior, cite its "
@@ -10918,6 +11015,7 @@ class HarnessRuntimeService:
             id=str(uuid4()),
             engagement_id=engagement_id,
             session_id=chat.id,
+            goal_id=goal.id if goal else None,
             backend=ChatBackend.HARNESS,
             model=session.model,
             tools_enabled=bool(
@@ -11021,6 +11119,29 @@ class HarnessRuntimeService:
                 select(EntityRow.id).where(EntityRow.id == chat.id).with_for_update()
             ).scalar_one()
             self._assert_chat_turn_available(chat.id, database=transaction.session)
+            if goal is not None:
+                current_goal = self.store.get(ChatGoal, goal.id)
+                if (
+                    current_goal.revision != goal.revision
+                    or current_goal.status != ChatGoalStatus.RUNNING
+                    or current_goal.execution_claim_id is not None
+                ):
+                    raise ConflictError(
+                        "goal changed while the harness turn was starting"
+                    )
+                transaction.update(
+                    ChatGoal,
+                    goal.id,
+                    {
+                        "current_step": goal.current_step + 1,
+                        "linked_turn_ids": [*goal.linked_turn_ids, chat_turn.id],
+                        "execution_owner_id": "harness-runtime",
+                        "execution_claim_id": chat_turn.id,
+                        "execution_claimed_at": utc_now(),
+                        "active_since": goal.active_since or utc_now(),
+                    },
+                    expected_revision=goal.revision,
+                )
             transaction.add(chat_turn)
             transaction.add(harness_turn)
             from .chat_queue import link_queue_turn
@@ -11248,6 +11369,171 @@ class HarnessRuntimeService:
         finally:
             self._chat_turn_tasks.pop(turn_id, None)
             await self._settle_provider_subagents(turn_id)
+            try:
+                await self._settle_goal_turn(turn_id)
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.goal.settle_failed",
+                    "A harness goal turn could not be settled.",
+                    exc,
+                    stage="goal-settle",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+                )
+
+    def _pause_goal(self, session_id: str, reason: str) -> None:
+        from .chat_goals import ChatGoalService, GoalWrite
+
+        goals = ChatGoalService(self.store)
+        for _ in range(3):
+            try:
+                goal = goals.get(session_id)
+                if goal.status != ChatGoalStatus.RUNNING:
+                    return
+                goals.write(
+                    session_id,
+                    GoalWrite(
+                        expected_revision=goal.revision,
+                        action="pause",
+                        reason=reason[:2_000],
+                    ),
+                )
+                return
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: goal was removed before the pause
+                return
+            except (
+                ConflictError
+            ):  # diagnostic-expected: retry a concurrent goal revision
+                continue
+
+    async def _settle_goal_turn(self, harness_turn_id: str) -> None:
+        from .chat_goals import ChatGoalService
+
+        harness_turn = self.store.get(HarnessTurn, harness_turn_id)
+        if not harness_turn.chat_turn_id or not harness_turn.chat_session_id:
+            return
+        turn = self.store.get(ChatTurn, harness_turn.chat_turn_id)
+        if not turn.goal_id:
+            return
+        if turn.status != ChatTurnStatus.COMPLETE:
+            self._pause_goal(
+                turn.session_id,
+                "The harness response stopped or failed. Review its saved state, then resume the goal.",
+            )
+            return
+        goals = ChatGoalService(self.store)
+        goal = goals.get(turn.session_id)
+        if goal.status != ChatGoalStatus.RUNNING:
+            return
+        if goals.has_working_subagents(turn.session_id):
+            goals.settle_active_time(turn.session_id)
+            return
+        if goal.step_budget is not None and goal.current_step >= goal.step_budget:
+            self._pause_goal(turn.session_id, "Goal step budget is exhausted.")
+            return
+        if (
+            goal.time_budget_seconds is not None
+            and goal.active_elapsed_seconds() >= goal.time_budget_seconds
+        ):
+            self._pause_goal(turn.session_id, "Goal active-time budget is exhausted.")
+            return
+        await self.dispatch_running_goal(
+            turn.session_id,
+            "Review the active Nebula goal and its completion criteria. Continue concrete work now. "
+            "If all criteria are met, give an evidence-backed completion summary. "
+            "Do not stop merely to report status.",
+        )
+
+    async def dispatch_running_goal(
+        self, session_id: str, instruction: str
+    ) -> str | None:
+        """Start one harness turn for an idle Core-owned goal."""
+        from .chat_goals import ChatGoalService
+
+        goals = ChatGoalService(self.store)
+        try:
+            goal = goals.get(session_id)
+            chat = self.store.get(ChatSession, session_id)
+            if (
+                chat.backend != ChatBackend.HARNESS
+                or goal.status != ChatGoalStatus.RUNNING
+                or goal.execution_claim_id is not None
+            ):
+                return None
+            if goal.step_budget is not None and goal.current_step >= goal.step_budget:
+                self._pause_goal(session_id, "Goal step budget is exhausted.")
+                return None
+            if (
+                goal.time_budget_seconds is not None
+                and goal.active_elapsed_seconds() >= goal.time_budget_seconds
+            ):
+                self._pause_goal(session_id, "Goal active-time budget is exhausted.")
+                return None
+            if (
+                goal.token_budget is not None
+                and goal.usage.total_tokens >= goal.token_budget
+            ):
+                self._pause_goal(session_id, "Goal token budget is exhausted.")
+                return None
+            try:
+                queue = self.store.get(ChatQueue, "chat-queue-" + session_id)
+            except NotFoundError:  # diagnostic-expected: no follow-up queue exists yet
+                queue = None
+            if (
+                queue is not None
+                and not queue.paused
+                and any(
+                    item["status"] in {"queued", "claiming", "sending"}
+                    for item in queue.items
+                )
+            ):
+                # A saved operator follow-up owns the next available turn.
+                # Its turn will carry this running goal and settle it normally.
+                return None
+            self._assert_chat_turn_available(session_id)
+            _, turn, harness_turn = self.prepare_chat(
+                engagement_id=chat.engagement_id,
+                profile_id=chat.harness_profile_id or "",
+                model=chat.model,
+                prompt=instruction,
+                chat_session_id=chat.id,
+                goal_id=goal.id,
+                harness_session_id=None,
+                mcp_server_ids=None,
+                include_knowledge=False,
+            )
+            try:
+                self.start_chat_turn(harness_turn.id)
+            except Exception:
+                self._fail_turn(
+                    harness_turn.id,
+                    HarnessTurnStatus.INTERRUPTED,
+                    "The harness goal turn could not start.",
+                )
+                raise
+            return turn.id
+        except (
+            ChatHistoryConflict,
+            ConflictError,
+        ):  # diagnostic-expected: another sender won the durable claim
+            # Another sender or a report callback won the durable turn claim.
+            return None
+        except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.goal.dispatch_failed",
+                "A running harness goal could not start its next turn.",
+                exc,
+                stage="goal-dispatch",
+                metadata={"session_id": session_id},
+            )
+            self._pause_goal(
+                session_id,
+                f"Automatic goal continuation could not start: {exc}. Review and resume.",
+            )
+            return None
 
     async def _settle_provider_subagents(self, turn_id: str) -> None:
         """Stop a stopped or failed turn's children and post finished reports.
@@ -11589,6 +11875,7 @@ class HarnessRuntimeService:
             )
             final_message = ""
             usage = ChatTokenUsage()
+            usage_reported = False
             external_turn_id: str | None = None
             # Set once the vendor accepted the prompt (its started event).
             prompt_accepted = False
@@ -11771,6 +12058,7 @@ class HarnessRuntimeService:
                         )
                     elif event.type == "usage" and event.usage is not None:
                         usage = event.usage
+                        usage_reported = usage.total_tokens > 0
                     elif event.type in {"tool_started", "tool_completed"}:
                         event = self._record_tool_event(turn, session, event)
                     elif (
@@ -11830,7 +12118,9 @@ class HarnessRuntimeService:
                 # that all durable chat state is ready to reload. Complete the
                 # owning chat/run first so a reconnect can never observe a
                 # terminal harness turn before its final assistant message.
-                self._complete_owner(turn, final_message, usage)
+                self._complete_owner(
+                    turn, final_message, usage, usage_reported=usage_reported
+                )
                 turn = self.store.get(HarnessTurn, turn.id)
                 turn = self.store.update(
                     HarnessTurn,
@@ -13602,16 +13892,18 @@ class HarnessRuntimeService:
         mode: str | None = None
         plan: list[HarnessPlanEntry] = []
         goal: HarnessGoalSnapshot | None = None
-        if turn is not None:
-            state = self._turn_activity_state(turn)
-            mode, plan, goal = state.mode, list(state.plan), state.goal
-
         connection = self._connections.get(session.id)
         last_turn = (
             self.store.get(HarnessTurn, session.last_turn_id)
             if session.last_turn_id
             else None
         )
+        # Keep the native goal visible after a turn settles. It is a snapshot
+        # from the harness ledger, independent of the Core-owned ChatGoal.
+        state_turn = turn or last_turn
+        if state_turn is not None:
+            state = self._turn_activity_state(state_turn)
+            mode, plan, goal = state.mode, list(state.plan), state.goal
         return HarnessSessionActivity(
             session_id=session.id,
             session_status=session.status,
@@ -17464,7 +17756,12 @@ class HarnessRuntimeService:
             )
 
     def _complete_owner(
-        self, turn: HarnessTurn, final_message: str, usage: ChatTokenUsage
+        self,
+        turn: HarnessTurn,
+        final_message: str,
+        usage: ChatTokenUsage,
+        *,
+        usage_reported: bool = False,
     ) -> None:
         # Gateway reads can add citations while the vendor turn is running.
         # Reload before persisting the final chat message so those citations
@@ -17476,6 +17773,8 @@ class HarnessRuntimeService:
             and turn.chat_session_id
         ):
             chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.status == ChatTurnStatus.COMPLETE:
+                return
             existing = self._chat_messages(
                 turn.engagement_id, turn.chat_session_id, include_replaced=True
             )
@@ -17508,6 +17807,52 @@ class HarnessRuntimeService:
                     },
                     expected_revision=chat_turn.revision,
                 )
+                if chat_turn.goal_id:
+                    goal = self.store.get(ChatGoal, chat_turn.goal_id)
+                    combined = ChatTokenUsage(
+                        input_tokens=goal.usage.input_tokens + usage.input_tokens,
+                        output_tokens=goal.usage.output_tokens + usage.output_tokens,
+                        total_tokens=goal.usage.total_tokens + usage.total_tokens,
+                    )
+                    metadata = dict(goal.metadata)
+                    if not usage_reported:
+                        metadata["usage_unknown"] = True
+                    changes: dict[str, Any] = {"usage": combined, "metadata": metadata}
+                    if goal.execution_claim_id == chat_turn.id:
+                        changes.update(
+                            {
+                                "execution_owner_id": None,
+                                "execution_claim_id": None,
+                                "execution_claimed_at": None,
+                            }
+                        )
+                    if goal.status == ChatGoalStatus.RUNNING:
+                        now = utc_now()
+                        changes.update(
+                            {
+                                "active_since": None,
+                                "elapsed_seconds": goal.active_elapsed_seconds(now),
+                            }
+                        )
+                        reason = (
+                            "Harness token usage was unavailable. Remove the token limit before resuming."
+                            if goal.token_budget is not None and not usage_reported
+                            else "Goal token budget is exhausted. Review progress before resuming."
+                            if goal.token_budget is not None
+                            and combined.total_tokens >= goal.token_budget
+                            else None
+                        )
+                        if reason:
+                            changes.update(
+                                {
+                                    "status": ChatGoalStatus.PAUSED,
+                                    "paused_at": now,
+                                    "blocked_reason": reason,
+                                }
+                            )
+                    transaction.update(
+                        ChatGoal, goal.id, changes, expected_revision=goal.revision
+                    )
         elif turn.run_id:
             run = self.store.get(AgentRun, turn.run_id)
             if run.status not in {RunStatus.CANCELLED, RunStatus.INTERRUPTED}:

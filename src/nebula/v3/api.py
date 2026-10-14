@@ -10228,6 +10228,7 @@ def create_app(
                 title="Nebula assistant" if request.control_assistant else None,
                 content_blocks=request.messages[-1].content_blocks,
                 chat_session_id=request.session_id,
+                goal_id=request.goal_id,
                 harness_session_id=request.harness_session_id,
                 mcp_server_ids=request.mcp_server_ids,
                 runtime_context=runtime_context,
@@ -11246,11 +11247,20 @@ def create_app(
             for selection in selections
         ]
 
+    async def dispatch_conversation_goal(
+        session_id: str, instruction: str
+    ) -> str | None:
+        session = store.get(ChatSession, session_id)
+        if session.backend == ChatBackend.HARNESS:
+            return await harness_runtime.dispatch_running_goal(session_id, instruction)
+        return await provider_chat.dispatch_running_goal(session_id, instruction)
+
     app.include_router(
         goals_router(
             store,
-            goal_dispatcher=provider_chat.dispatch_running_goal,
+            goal_dispatcher=dispatch_conversation_goal,
             skill_snapshot_resolver=resolve_goal_skill_snapshots,
+            harness_runtime=harness_runtime,
         ),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],

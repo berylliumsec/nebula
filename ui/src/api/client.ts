@@ -3666,6 +3666,7 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
       outputTokens: Number(value.usage?.output_tokens ?? 0),
       totalTokens: Number(value.usage?.total_tokens ?? 0),
     },
+    usageUnknown: value.metadata?.usage_unknown === true,
     linkedTurnIds: Array.isArray(value.linked_turn_ids) ? value.linked_turn_ids.map(String) : [],
     blockedReason: typeof value.blocked_reason === "string" ? value.blocked_reason : undefined,
     completionSummary: typeof value.completion_summary === "string" ? value.completion_summary : undefined,
@@ -9755,13 +9756,21 @@ export class ApiClient {
 
   createChatGoalConversation(body: {
     engagementId: string;
-    providerId: string;
+    backend?: "provider" | "harness";
+    providerId?: string;
+    harnessProfileId?: string;
     model: string;
     toolsEnabled: boolean;
     mcpServerIds: string[];
     hookIds: string[];
     /** The composer's other choices, saved on the new conversation. */
     reasoningEffort?: ReasoningEffort;
+    harnessReasoningEffort?: string;
+    harnessServiceTier?: string;
+    harnessCyberAccessProgram?: string;
+    subagentProviderId?: string;
+    subagentHarnessId?: string;
+    subagentModel?: string;
     allowSubagents?: boolean;
     allowAgentMessaging?: boolean;
     maxActiveSubagents?: number;
@@ -9779,12 +9788,20 @@ export class ApiClient {
         method: "POST",
         body: JSON.stringify({
           engagement_id: body.engagementId,
-          provider_id: body.providerId,
+          backend: body.backend ?? "provider",
+          ...(body.providerId ? { provider_id: body.providerId } : {}),
+          ...(body.harnessProfileId ? { harness_profile_id: body.harnessProfileId } : {}),
           model: body.model,
           tools_enabled: body.toolsEnabled,
           mcp_server_ids: body.mcpServerIds,
           hook_ids: body.hookIds,
           ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
+          ...(body.harnessReasoningEffort ? { harness_reasoning_effort: body.harnessReasoningEffort } : {}),
+          ...(body.harnessServiceTier ? { harness_service_tier: body.harnessServiceTier } : {}),
+          ...(body.harnessCyberAccessProgram ? { harness_cyber_access_program: body.harnessCyberAccessProgram } : {}),
+          ...(body.subagentProviderId ? { subagent_provider_id: body.subagentProviderId } : {}),
+          ...(body.subagentHarnessId ? { subagent_harness_id: body.subagentHarnessId } : {}),
+          ...(body.subagentModel ? { subagent_model: body.subagentModel } : {}),
           ...(body.allowSubagents ? { allow_subagents: true } : {}),
           ...(body.allowAgentMessaging !== undefined ? { allow_agent_messaging: body.allowAgentMessaging } : {}),
           ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),

@@ -666,6 +666,16 @@
       {"area":"goal-live-tokens","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode shows token progress before provider usage settles","runtime":"mock","shard":"1/1"},
       {"area":"goal-live-tokens","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode shows token progress before provider usage settles","runtime":"mock","shard":"1/1"}
     ],
+    "harness-goal": [
+      {"area":"harness-goal","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-goal","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-goal","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-goal","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-goal","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-goal","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-goal","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-goal","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"}
+    ],
     "provider-goal-lifecycle-core": [
       {"area":"provider-goal-lifecycle-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core creates a goal before the first turn and pauses it on stop","runtime":"real-core","shard":"1/1"},
       {"area":"provider-goal-lifecycle-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core creates a goal before the first turn and pauses it on stop","runtime":"real-core","shard":"1/1"},

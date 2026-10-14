@@ -4666,6 +4666,13 @@ class SubagentService:
             return
         if goal.status != ChatGoalStatus.RUNNING or goal.execution_claim_id is not None:
             return
+        if record.parent_backend == ChatBackend.HARNESS:
+            if self.harness_runtime is not None:
+                await self.harness_runtime.dispatch_running_goal(
+                    record.parent_session_id,
+                    "Subagent reports are ready. Review them and continue the active Nebula goal.",
+                )
+            return
         try:
             # Like every turn Core starts for a goal, this one runs with what
             # the operator last chose: model, effort, tools, MCP servers, SSH

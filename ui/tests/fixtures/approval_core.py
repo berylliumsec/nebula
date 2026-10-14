@@ -18,7 +18,9 @@ from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     Approval,
     ChatSession,
+    ChatTokenUsage,
     HarnessCapabilities,
+    HarnessDetailedUsage,
     HarnessKind,
     HarnessProfile,
     HarnessModelOptions,
@@ -37,6 +39,7 @@ from nebula.v3.harnesses import (
     HarnessEvent,
     HarnessHealth,
     HarnessTransportError,
+    HarnessGoalSnapshot,
 )
 from nebula.v3.ssh_environments import SshProbeResult
 from nebula.v3.storage import NebulaStore
@@ -126,6 +129,33 @@ class InertConnection(HarnessConnection):
     async def run_turn(self, prompt, **kwargs):
         if self.request.session.engagement_id == "diagnostic":
             yield HarnessEvent(type="completed", message="OK")
+            return
+        if self.runtime.scenario == "goal":
+            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            failure_marker = self.runtime.fixture_root / "goal-failed-once"
+            if "FAIL_ONCE" in prompt and not failure_marker.exists():
+                failure_marker.write_text(turn.id)
+                raise HarnessTransportError("Inert goal fixture failed once")
+            yield HarnessEvent(
+                type="item_upsert",
+                item_id="native-goal",
+                item_kind="goal",
+                item_status="completed",
+                title="Native goal",
+                goal=HarnessGoalSnapshot(
+                    objective="Native harness review", status="complete"
+                ),
+            )
+            answer = f"GOAL_FIXTURE_REPLY {turn.chat_turn_id}"
+            yield HarnessEvent(type="message_delta", delta=answer)
+            yield HarnessEvent(
+                type="usage",
+                usage=ChatTokenUsage(input_tokens=4, output_tokens=5, total_tokens=9),
+                detailed_usage=HarnessDetailedUsage(
+                    input_tokens=4, output_tokens=5, total_tokens=9
+                ),
+            )
+            yield HarnessEvent(type="completed", message=answer)
             return
         if self.runtime.scenario == "agent_messaging":
             turn = self.runtime._active_gateway_turn(self.request.session.id)
@@ -292,8 +322,9 @@ class InertAdapter(HarnessAdapter):
             kind=self.kind,
             authentication_state="verified",
             capabilities=HarnessCapabilities(
+                detailed_usage=self.runtime.scenario == "goal",
                 models=["fixture", "fixture-next"]
-                if self.runtime.scenario in {"settings", "daybreak"}
+                if self.runtime.scenario in {"settings", "daybreak", "goal"}
                 else ["fixture"],
                 interruption=True,
                 model_options=[
@@ -312,7 +343,7 @@ class InertAdapter(HarnessAdapter):
                     )
                     for model in ["fixture", "fixture-next"]
                 ]
-                if self.runtime.scenario in {"settings", "daybreak"}
+                if self.runtime.scenario in {"settings", "daybreak", "goal"}
                 else [],
             ),
         )
@@ -414,6 +445,7 @@ if __name__ == "__main__":
             "environments",
             "sidebar",
             "agent_messaging",
+            "goal",
         ],
         default="single",
     )
@@ -486,6 +518,9 @@ if __name__ == "__main__":
                 executable="/bin/true",
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(
+                    detailed_usage=args.scenario == "goal"
+                ),
             )
         )
     ssh_service = None
