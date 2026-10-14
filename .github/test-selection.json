@@ -15,13 +15,6 @@
   ],
   "native": [],
   "playwright": [
-    "notes-selection-target/assistant-real-desktop",
-    "notes-selection-target/assistant-real-compact",
-    "notes-selection-target/assistant-real-chromium-320",
-    "notes-selection-target/assistant-real-chromium-390",
-    "notes-selection-target/assistant-real-chromium-430",
-    "notes-selection-target/assistant-real-webkit-320",
-    "notes-selection-target/assistant-real-webkit-390",
-    "notes-selection-target/assistant-real-webkit-430"
+    "area:notes-selection-target"
   ]
 }
