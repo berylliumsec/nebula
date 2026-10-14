@@ -11535,6 +11535,7 @@ def create_app(
                 is_subagent_session(current)
                 or current.metadata.get("temporary_assistant") is True
                 or current.metadata.get("side_chat") is True
+                or current.metadata.get("control_assistant") is True
                 or isinstance(current.metadata.get("archived_at"), str)
             ):
                 raise ConflictError(

@@ -116,14 +116,14 @@ describe("the Subagents choice", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps the last Assistant choices for a new chat and after reopening the project", { timeout: 20_000 }, async () => {
+  it("uses the project messaging default for each new chat without changing it from the conversation switch", { timeout: 20_000 }, async () => {
     const user = userEvent.setup();
     const defaults: Wire = {
       backend: null, provider_id: null, harness_id: null, model: null,
       reasoning_effort: null, harness_reasoning_effort: null, harness_service_tier: null,
       harness_mode: null, mcp_server_ids: [], hook_ids: [], allow_subagents: false,
       subagent_provider_id: null, subagent_model: null, max_active_subagents: null,
-      subagent_reasoning_effort: null, allow_agent_messaging: false,
+      subagent_reasoning_effort: null, allow_agent_messaging: true,
     };
     core((path, init) => {
       if (path.endsWith("/engagements")) return json([{ ...project, assistant_defaults: defaults }]);
@@ -140,8 +140,10 @@ describe("the Subagents choice", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Reasoning effort" }), "high");
     await waitFor(() => expect(defaults.reasoning_effort).toBe("high"));
     await user.click(screen.getByRole("checkbox", { name: /Subagents/ }));
+    expect(screen.getByRole("checkbox", { name: /Agent messaging/ })).toBeChecked();
     await user.click(screen.getByRole("checkbox", { name: /Agent messaging/ }));
-    await waitFor(() => expect(defaults.allow_agent_messaging).toBe(true));
+    expect(screen.getByRole("checkbox", { name: /Agent messaging/ })).not.toBeChecked();
+    expect(defaults.allow_agent_messaging).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "New chat" }));
     await openAssistantSettings(user);
@@ -269,7 +271,7 @@ describe("the Subagents choice", () => {
     await user.click(screen.getByRole("button", { name: "New chat" }));
     await openAssistantSettings(user);
     await user.selectOptions(await screen.findByRole("combobox", { name: "Chat runtime" }), "harness");
-    await user.click(await screen.findByRole("checkbox", { name: /Provider subagents/ }));
+    await user.click(await screen.findByRole("checkbox", { name: /^Subagents/ }));
     expect(screen.getByRole("combobox", { name: "Subagent model" })).toHaveValue("model-1");
     expect(screen.getByText("Checking tool support for this model…")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close assistant settings" }));
@@ -285,7 +287,7 @@ describe("the Subagents choice", () => {
     expect(sent.pending_provider_subagent).toEqual({ provider_profile_id: "provider-1", model: "model-1" });
     await waitFor(() => expect(calls(fetchMock, "/chat/sessions/harness-chat/context", "GET").length).toBeGreaterThan(0));
     await openAssistantSettings(user);
-    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Provider subagents/ })).toBeChecked());
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /^Subagents/ })).toBeChecked());
     expect(screen.getByRole("combobox", { name: "Subagent model" })).toHaveValue("model-1");
   });
 
@@ -328,6 +330,11 @@ describe("the Subagents choice", () => {
         }
         return json([listed]);
       }
+      if (path.endsWith("/chat/sessions/session-1/state")) return json({
+        schema: "nebula.session-state/v1", session_id: "session-1", revision: 1,
+        turn_id: null, harness_turn_id: null, execution: "idle", busy: false,
+        detail: "", connection: "connected", actions: [], pending: [], decisions: [],
+      });
       return undefined;
     });
     const user = userEvent.setup();
@@ -339,7 +346,8 @@ describe("the Subagents choice", () => {
     await user.type(composer, "Look around");
     expect(composer).toHaveValue("Look around");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(await screen.findByText("Done.")).toBeInTheDocument();
+    await waitFor(() => expect(calls(fetchMock, "/chat/completions")).toHaveLength(1));
+    await waitFor(() => expect(composer).toHaveValue(""));
     await openAssistantSettings(user);
     const box = screen.getByRole("checkbox", { name: /^Subagents/ });
     await waitFor(() => expect(box).toBeEnabled());

@@ -24,6 +24,7 @@
     {"name": "host-startup-default", "patterns": ["src/nebula/v3/setup.py", "ui/src/components/SideNav*", "ui/src/components/ProjectSwitcher.css", "ui/src/components/TopBar.tsx", "ui/src/quiet-lens.css"], "areas": ["host-startup-default"]},
     {"name": "host-startup-compat", "patterns": ["src/nebula/v3/setup.py", "ui/src/components/SideNav*"], "areas": ["host-startup-compat"]},
     {"name": "assistant-defaults", "patterns": ["ui/src/api/assistantDefaults*", "ui/src/pages/SessionsPage.tsx", "src/nebula/v3/domain.py", "src/nebula/v3/api.py"], "areas": ["assistant-defaults"]},
+    {"name": "agent-messaging", "patterns": ["src/nebula/v3/chat_agent_messages.py", "src/nebula/v3/migrations/versions/*default_main_agent_messaging.py", "ui/tests/fixtures/approval_core.py"], "areas": ["agent-messaging"]},
     {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import", "harness-delete", "harness-delete-core"]},
     {"name": "ssh-environments", "patterns": ["ui/src/components/Environment*", "ui/src/sshTools.ts", "src/nebula/v3/environments.py", "src/nebula/v3/ssh_environments.py"], "areas": ["ssh-environments"]},
@@ -560,6 +561,16 @@
       {"area":"project-runtime-policy","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
       {"area":"project-runtime-policy","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
       {"area":"project-runtime-policy","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"}
+    ],
+    "agent-messaging": [
+      {"area":"agent-messaging","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"agent-messaging","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"agent-messaging","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"agent-messaging","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"agent-messaging","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"agent-messaging","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"agent-messaging","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"agent-messaging","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade default-on peer agents exchange a durable next-turn reply on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "assistant-defaults": [
       {"area":"assistant-defaults","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade new chat reuses saved Assistant settings after reload","runtime":"real-core","shard":"1/1"},

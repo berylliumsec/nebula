@@ -1,28 +1,36 @@
 {
-  "change_digest": "f7601976c5c12920d6cb08426c45215c3f661d1ae56485ebbe17095cafb826e3",
-  "reviewed_by": "Codex storage chat layout review",
-  "reason": "The chat now keeps routine storage actions in a compact disclosure, bounds expanded details so the transcript and composer remain usable, and presents action failures concisely. Select the two focused component cases and the existing production LAN storage journey, extended to exercise collapse, long titles, error, retry, approval, receipt, accessibility, and restart recovery in desktop and mobile profiles.",
-  "exclusions": "No Core, native, or Python behavior changed. The selected real-Core browser journey covers the UI-to-Core action integration. Unrelated backend and browser journeys and full suites are excluded.",
+  "change_digest": "491b351e821a732affd58e444140901f54ad3d0cf5e4a2353892ef5ced33e701",
+  "reviewed_by": "Codex peer messaging focused coverage review",
+  "reason": "Default resolution, legacy upgrade preservation, provider and harness tool awareness, opt-out, peer boundaries, durable delivery, retry idempotency, and cloud consent are exercised by the selected Core files. Component tests cover defaults, explicit false, and consent recovery. One committed two-conversation real-Core journey covers creation, visible messages, next-turn reply, off, refresh, and reconnect in the production bundle on a LAN origin across permanent desktop and mobile Chromium and WebKit profiles.",
+  "exclusions": "No Rust or native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded. Physical device testing is not automated by this selection and must be reported separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 2,
+    "python": 12,
+    "frontend": 21,
     "native": 0,
     "playwright": 8
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/components/StorageActions.test.tsx"],
+  "python": [
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_agent_messaging_migration.py"
+  ],
+  "frontend": [
+    "ui/src/api/assistantDefaults.test.ts",
+    "ui/src/api/chatSubagentsSettings.test.ts",
+    "ui/src/App.subagentChoice.test.tsx",
+    "ui/src/pages/chatToolResultConsent.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "entry:storage-integrations/assistant-real-desktop",
-    "entry:storage-integrations/assistant-real-compact",
-    "entry:storage-integrations/assistant-real-chromium-320",
-    "entry:storage-integrations/assistant-real-chromium-390",
-    "entry:storage-integrations/assistant-real-chromium-430",
-    "entry:storage-integrations/assistant-real-webkit-320",
-    "entry:storage-integrations/assistant-real-webkit-390",
-    "entry:storage-integrations/assistant-real-webkit-430"
+    "entry:agent-messaging/assistant-real-desktop",
+    "entry:agent-messaging/assistant-real-compact",
+    "entry:agent-messaging/assistant-real-chromium-320",
+    "entry:agent-messaging/assistant-real-chromium-390",
+    "entry:agent-messaging/assistant-real-chromium-430",
+    "entry:agent-messaging/assistant-real-webkit-320",
+    "entry:agent-messaging/assistant-real-webkit-390",
+    "entry:agent-messaging/assistant-real-webkit-430"
   ]
 }

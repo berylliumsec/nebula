@@ -1557,6 +1557,7 @@ interface WireHarnessProfile extends WireEntity {
   };
   capabilities?: {
     authentication_state?: "verified" | "failed" | "unverified";
+    mcp?: boolean;
     session_state?: "verified" | "failed" | "unverified";
     turn_state?: "verified" | "failed" | "unverified";
     last_successful_turn_at?: string | null;
@@ -3538,7 +3539,7 @@ export function chatRequestBody(
     ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
     ...(body.allowSubagents ? { allow_subagents: true } : {}),
     ...(body.allowSubagents && body.subagentReasoningEffort ? { subagent_reasoning_effort: body.subagentReasoningEffort } : {}),
-    ...(body.allowAgentMessaging ? { allow_agent_messaging: true } : {}),
+    ...(body.allowAgentMessaging !== undefined ? { allow_agent_messaging: body.allowAgentMessaging } : {}),
     ...(body.allowSubagents && body.subagentProviderId && body.subagentModel
       ? { subagent_provider_id: body.subagentProviderId, subagent_model: body.subagentModel }
       : {}),
@@ -3757,6 +3758,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
       undefined,
     detail: value.capabilities?.detail ?? undefined,
     capabilities: {
+      mcp: value.capabilities?.mcp !== false,
       activityReplay: value.capabilities?.activity_replay === true,
       reasoningSummaries: value.capabilities?.reasoning_summaries === true,
       plans: value.capabilities?.plans === true,
@@ -9784,7 +9786,7 @@ export class ApiClient {
           hook_ids: body.hookIds,
           ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
           ...(body.allowSubagents ? { allow_subagents: true } : {}),
-          ...(body.allowAgentMessaging ? { allow_agent_messaging: true } : {}),
+          ...(body.allowAgentMessaging !== undefined ? { allow_agent_messaging: body.allowAgentMessaging } : {}),
           ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),
           ...(body.allowSubagents && body.subagentReasoningEffort ? { subagent_reasoning_effort: body.subagentReasoningEffort } : {}),
           objective: body.objective,

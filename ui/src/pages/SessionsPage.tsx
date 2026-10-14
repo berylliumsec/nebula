@@ -1404,7 +1404,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   // harness chat also picks the provider model its subagents run on.
   const [allowSubagents, setAllowSubagents] = useState(false);
   const pendingSubagentSaveSessionRef = useRef<string | undefined>(undefined);
-  const [allowAgentMessaging, setAllowAgentMessaging] = useState(false);
+  const [allowAgentMessaging, setAllowAgentMessaging] = useState(true);
   const pendingAgentMessagingSaveSessionRef = useRef<string | undefined>(undefined);
   const [subagentProviderId, setSubagentProviderId] = useState("");
   const [subagentHarnessId, setSubagentHarnessId] = useState("");
@@ -3394,7 +3394,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setAllowAgentMessaging(enabled);
     setAssistantSettingsError(undefined);
     if (!api || !sessionId || assistantSettingsBusy) {
-      void rememberAssistantDefaults({ allowAgentMessaging: enabled });
       setAssistantSettingsStatus("Agent messaging updated. Applies to your next message.");
       return;
     }
@@ -3410,7 +3409,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         expectedRevision: current.revision,
       });
       setSessions((items) => items.map((item) => item.id === updated.id ? updated : item));
-      await rememberAssistantDefaults({ allowAgentMessaging: updated.allowAgentMessaging === true });
       if (sessionSelectionGenerationRef.current === selectionGeneration) {
         setAllowAgentMessaging(updated.allowAgentMessaging === true);
         setAssistantSettingsStatus("Agent messaging saved. Applies to your next message.");
@@ -5079,14 +5077,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
           : selectedMcpIds.length) ? ["MCP servers" as const] : []),
         ...(browserControlEnabled ? ["Browser control" as const] : []),
-        ...(allowAgentMessaging ? ["Agent messaging" as const] : []),
+        ...(allowAgentMessaging && harnessRuntime?.capabilities?.mcp !== false ? ["Agent messaging" as const] : []),
       ]
       : providerTurnToolFamilies({
         commandRuntime: canUseTools,
         mcpServerIds: selectedMcpIds,
         sshEnvironmentIds: environmentIdsForTarget(environmentTarget),
         allowSubagents,
-        allowAgentMessaging,
+        allowAgentMessaging: allowAgentMessaging && modelVerified,
         subagentConversation: activeChatSession?.isSubagent === true,
         browserControl: browserControlEnabled,
         contextSourceKinds: !queuedFollowUp && !resent ? assistantDrafts.map((item) => item.source.kind) : [],
@@ -6337,7 +6335,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   onChange={(choice) => void saveSubagentChoice(choice)}
                 />}
                 {runtimeKind === "provider" && <div className="chat-provider-subagents"><label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveSubagentChoice({ enabled: event.target.checked, providerId: "", model: "", limit: subagentLimit, reasoningEffort: subagentReasoningEffort })} /><span><strong>Subagents</strong><small>Delegate independent work to parallel children on this model · {subagentLimitLabel(subagentLimit)}</small></span></label>{allowSubagents && <SubagentEffortField effort={subagentReasoningEffort} disabled={sending || assistantSettingsBusy} onChange={(reasoningEffort) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit: subagentLimit, reasoningEffort })} />}{allowSubagents && <SubagentLimitField limit={subagentLimit} delegator="the assistant" disabled={sending || assistantSettingsBusy} onChange={(limit) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit, reasoningEffort: subagentReasoningEffort })} />}</div>}
-                {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>Coordinate with other opted-in main agents in this project. Messages appear in both conversations.</small></span></label>}
+                {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.isSideChat && !activeChatSession.isControlAssistant && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>{runtimeKind === "provider" && !modelVerified ? "Available when this model is verified for tools. Text chat still works." : runtimeKind === "harness" && selectedHarness?.capabilities?.mcp === false ? "This harness does not advertise messaging tools. Text chat still works." : "Coordinate with main agents in this project. Messages appear in both conversations."}</small></span></label>}
                 {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void (async () => { try { if (await ensureNotebookConsent(nextIds)) await saveProviderAssistantSelections(nextIds, selectedHookIds); } catch (error) { logCaughtDiagnostic("interface.sessions.notebook_mcp_selection_failed", "Notebook MCP selection could not be saved.", error, "assistant_settings"); setAssistantSettingsError(String(error)); } })()} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => void chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
                 <AssistantSetupLinks items={[
@@ -6474,7 +6472,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   // only the prose is missing. That is not an error to alarm
                   // an operator with, and the conversation stays usable.
                   <div className="chat-recovery-notice unfinished" role="status"><p><strong>The model stopped without finishing this reply.</strong> Everything it did is saved — only the written answer is missing.</p><button className="button quiet" type="button" disabled={sending} onClick={() => void retryProviderFinalAnswer()}>Finish the answer</button></div>
-                : <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>)}
+                : <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{allowAgentMessaging && /agent messaging/i.test(chatError instanceof Error ? chatError.message : typeof chatError === "string" ? chatError : "") && <button className="button quiet" type="button" disabled={assistantSettingsBusy} onClick={() => void saveAgentMessagingChoice(false)}>Turn off agent messaging</button>}{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>)}
               {activeArchivedSession && <div className="chat-archived-notice" role="status"><Archive size={14} aria-hidden="true" /><span>This conversation is archived. Sending a message moves it back to your conversations.</span><button className="button quiet" type="button" disabled={Boolean(archivingSessionId)} onClick={() => void setConversationArchived(activeArchivedSession, false)}>Unarchive</button></div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
               {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}

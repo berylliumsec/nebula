@@ -127,6 +127,61 @@ class InertConnection(HarnessConnection):
         if self.request.session.engagement_id == "diagnostic":
             yield HarnessEvent(type="completed", message="OK")
             return
+        if self.runtime.scenario == "agent_messaging":
+            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            user_prompt = turn.metadata.get("user_prompt")
+            catalog = {
+                item["name"]
+                for item in self.runtime._gateway_catalog(self.request.session)["tools"]
+            }
+            if not {"agent.list", "agent.send", "agent.read"} <= catalog:
+                raise RuntimeError(
+                    "Peer tools were missing from the first enabled turn"
+                )
+            if user_prompt == "Send a note to peer":
+                listed = await self.runtime._gateway_agent_message(
+                    self.request.session, turn, "agent.list", {}
+                )
+                peers = listed["structuredContent"]["agents"]
+                if len(peers) != 1:
+                    raise RuntimeError(f"Expected one peer, found {len(peers)}")
+                await self.runtime._gateway_agent_message(
+                    self.request.session,
+                    turn,
+                    "agent.send",
+                    {
+                        "session_id": peers[0]["session_id"],
+                        "message": "Review the retry boundary.",
+                    },
+                )
+                answer = "Peer note sent"
+            elif user_prompt == "Reply to peer":
+                await self.runtime._gateway_agent_message(
+                    self.request.session, turn, "agent.read", {}
+                )
+                listed = await self.runtime._gateway_agent_message(
+                    self.request.session, turn, "agent.list", {}
+                )
+                peers = listed["structuredContent"]["agents"]
+                if len(peers) != 1:
+                    raise RuntimeError(
+                        f"Expected one peer for reply, found {len(peers)}"
+                    )
+                await self.runtime._gateway_agent_message(
+                    self.request.session,
+                    turn,
+                    "agent.send",
+                    {
+                        "session_id": peers[0]["session_id"],
+                        "message": "The retry boundary is idempotent.",
+                    },
+                )
+                answer = "Peer reply sent"
+            else:
+                answer = "Coordinator ready"
+            yield HarnessEvent(type="message_delta", delta=answer)
+            yield HarnessEvent(type="completed", message=answer)
+            return
         if (
             self.runtime.scenario in {"settings", "daybreak"}
             and "Popup wait for stop" in prompt
@@ -202,11 +257,15 @@ class InertConnection(HarnessConnection):
                 "progress_sequence": progress.sequence,
                 "event_type": progress.event_type,
                 "delta": progress.payload["delta"],
-                "completed_events": len(self.runtime.store.replay_operation_events(
-                    turn.id, event_types=["harness.completed"]
-                )),
+                "completed_events": len(
+                    self.runtime.store.replay_operation_events(
+                        turn.id, event_types=["harness.completed"]
+                    )
+                ),
             }
-            with (self.runtime.fixture_root / "progress-checkpoint.json").open("w") as proof:
+            with (self.runtime.fixture_root / "progress-checkpoint.json").open(
+                "w"
+            ) as proof:
                 json.dump(checkpoint, proof)
                 proof.flush()
                 os.fsync(proof.fileno())
@@ -354,6 +413,7 @@ if __name__ == "__main__":
             "crash_after_progress",
             "environments",
             "sidebar",
+            "agent_messaging",
         ],
         default="single",
     )
@@ -361,23 +421,44 @@ if __name__ == "__main__":
     store = NebulaStore(args.root / "nebula.db")
     scratch_id = bootstrap_scratch_project(store)
     if args.scenario == "sidebar" and scratch_id:
-        if not any(profile.id == "sidebar-provider" for profile in store.list_entities(ProviderProfile)):
-            store.create(ProviderProfile(id="sidebar-provider", name="Sidebar fixture", provider_type="vllm", is_local=True, model_allowlist=["fixture"]))
-        if not any(session.id == "sidebar-parent" for session in store.list_entities(ChatSession)):
+        if not any(
+            profile.id == "sidebar-provider"
+            for profile in store.list_entities(ProviderProfile)
+        ):
+            store.create(
+                ProviderProfile(
+                    id="sidebar-provider",
+                    name="Sidebar fixture",
+                    provider_type="vllm",
+                    is_local=True,
+                    model_allowlist=["fixture"],
+                )
+            )
+        if not any(
+            session.id == "sidebar-parent"
+            for session in store.list_entities(ChatSession)
+        ):
             for session_id, title, parent_id, metadata in (
                 ("sidebar-parent", "Main investigation", None, {}),
-                ("sidebar-child", "Subagent · API mapping", "sidebar-parent", {"subagent_id": "fixture-subagent"}),
+                (
+                    "sidebar-child",
+                    "Subagent · API mapping",
+                    "sidebar-parent",
+                    {"subagent_id": "fixture-subagent"},
+                ),
                 ("sidebar-branch", "Ordinary branch", "sidebar-parent", {}),
             ):
-                store.create(ChatSession(
-                    id=session_id,
-                    engagement_id=scratch_id,
-                    title=title,
-                    provider_profile_id="sidebar-provider",
-                    parent_session_id=parent_id,
-                    model="fixture",
-                    metadata=metadata,
-                ))
+                store.create(
+                    ChatSession(
+                        id=session_id,
+                        engagement_id=scratch_id,
+                        title=title,
+                        provider_profile_id="sidebar-provider",
+                        parent_session_id=parent_id,
+                        model="fixture",
+                        metadata=metadata,
+                    )
+                )
     artifacts = ArtifactStore(args.root / "artifacts")
     adapter = InertAdapter()
     if args.scenario == "daybreak":

@@ -23,7 +23,7 @@ it("saves a subagent choice on an existing conversation and clears its limit", a
   expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ subagent_reasoning_effort: null });
 });
 
-it("saves main-agent messaging and includes it only when enabled on turns", async () => {
+it("saves main-agent messaging and sends an explicit off choice", async () => {
   const wire = {
     id: "session-1", engagement_id: "engagement-1", title: "Chat", backend: "provider",
     provider_profile_id: "provider", model: "model-a", revision: 4,
@@ -43,6 +43,8 @@ it("saves main-agent messaging and includes it only when enabled on turns", asyn
   });
   const enabled = chatRequestBody({ messages: [{ role: "user", content: "Coordinate" }], allowAgentMessaging: true }, true);
   expect(enabled.allow_agent_messaging).toBe(true);
+  const disabled = chatRequestBody({ messages: [{ role: "user", content: "Work alone" }], allowAgentMessaging: false }, true);
+  expect(disabled.allow_agent_messaging).toBe(false);
   expect(chatRequestBody({ messages: [{ role: "user", content: "Work alone" }] }, true)).not.toHaveProperty("allow_agent_messaging");
 });
 
@@ -95,6 +97,9 @@ it("creates a goal conversation with the composer's subagent choice and effort",
   const plain = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
   expect(plain).not.toHaveProperty("allow_subagents");
   expect(plain).not.toHaveProperty("allow_agent_messaging");
+  await client.createChatGoalConversation({ ...draft, allowAgentMessaging: false });
+  const disabledGoal = JSON.parse(String(fetchMock.mock.calls[2][1]?.body));
+  expect(disabledGoal.allow_agent_messaging).toBe(false);
   expect(plain).not.toHaveProperty("max_active_subagents");
   expect(plain).not.toHaveProperty("reasoning_effort");
   expect(plain).not.toHaveProperty("subagent_reasoning_effort");
