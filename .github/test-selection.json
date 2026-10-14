@@ -19,13 +19,13 @@
   ],
   "native": [],
   "playwright": [
-    "control-assistant-work/assistant-real-desktop",
-    "control-assistant-work/assistant-real-compact",
-    "control-assistant-work/assistant-real-chromium-320",
-    "control-assistant-work/assistant-real-chromium-390",
-    "control-assistant-work/assistant-real-chromium-430",
-    "control-assistant-work/assistant-real-webkit-320",
-    "control-assistant-work/assistant-real-webkit-390",
-    "control-assistant-work/assistant-real-webkit-430"
+    "entry:control-assistant-work/assistant-real-desktop",
+    "entry:control-assistant-work/assistant-real-compact",
+    "entry:control-assistant-work/assistant-real-chromium-320",
+    "entry:control-assistant-work/assistant-real-chromium-390",
+    "entry:control-assistant-work/assistant-real-chromium-430",
+    "entry:control-assistant-work/assistant-real-webkit-320",
+    "entry:control-assistant-work/assistant-real-webkit-390",
+    "entry:control-assistant-work/assistant-real-webkit-430"
   ]
 }
