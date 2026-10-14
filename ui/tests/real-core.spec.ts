@@ -6240,6 +6240,26 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await composer.fill(requestText);
     await composer.press("Enter");
     await expect(assistant.getByText("The mission was started in this project. Open Missions to follow its progress.")).toBeVisible({timeout: 45_000});
+    const controlSession = await (await api.get(`chat/control-assistant/session?engagement_id=${projectId}`)).json() as {id: string};
+    await assistant.getByRole("button", {name: "Nebula assistant settings"}).click();
+    await expect(page).toHaveURL(new RegExp(`view=chat&session=${controlSession.id}`));
+    await clickAssistantSettings(page);
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    const effortSaved = page.waitForResponse(response => response.request().method() === "PATCH"
+      && response.url().endsWith(`/chat-sessions/${controlSession.id}`));
+    await settings.getByRole("combobox", {name: "Reasoning effort"}).selectOption("high");
+    expect((await effortSaved).ok()).toBe(true);
+    await page.reload();
+    await clickAssistantSettings(page);
+    await expect(page.getByRole("dialog", {name: "Assistant settings"}).getByRole("combobox", {name: "Reasoning effort"})).toHaveValue("high");
+    await page.getByRole("button", {name: "Close assistant settings"}).click();
+    await openNebulaAssistantFromShell(page);
+    const statusRequest = page.waitForRequest(request => request.url().endsWith("/chat/completions")
+      && request.method() === "POST" && request.postData()?.includes("Check current work status") === true);
+    await page.getByRole("dialog", {name: "Nebula assistant"}).getByRole("textbox", {name: "Ask Nebula a question"}).fill("Check current work status");
+    await page.getByRole("dialog", {name: "Nebula assistant"}).getByRole("button", {name: "Send to Nebula assistant"}).click();
+    await expect(statusRequest.then(request => request.postDataJSON() as {reasoning_effort?: string})).resolves.toMatchObject({reasoning_effort: "high"});
+    await expect(page.getByRole("dialog", {name: "Nebula assistant"}).getByText("The mission was started in this project. Open Missions to follow its progress.").last()).toBeVisible({timeout: 45_000});
     const missionLink = assistant.getByRole("link", {name: "Open mission"});
     await expect(missionLink).toBeVisible();
     await expect(missionLink).toHaveAttribute("href", new RegExp(`^/projects/${projectId}/workbench\\?view=missions&mission=[a-f0-9-]+$`));
@@ -9042,6 +9062,13 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     await expect(page.locator(".assistant-only-shell")).toBeVisible({timeout: 20_000});
     await expect(page.getByRole("button", {name: "New chat", exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "Open Nebula assistant"}).click();
+    const controlAssistant = page.getByRole("dialog", {name: "Nebula assistant"});
+    await expect(controlAssistant.getByRole("button", {name: "Start Nebula Voice"})).toBeVisible();
+    await controlAssistant.getByRole("button", {name: "Start Nebula Voice"}).click();
+    await expect(page.getByRole("dialog", {name: "Nebula Voice"}).getByRole("alert")).toContainText("trusted HTTPS address");
+    await page.getByRole("button", {name: "Exit voice mode"}).click();
+    await controlAssistant.getByRole("button", {name: "Close Nebula assistant"}).click();
     await expect(page.getByRole("navigation", {name: "Mobile operator navigation"})).toHaveCount(0);
     await page.getByRole("button", {name: "New chat", exact: true}).click();
     const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
