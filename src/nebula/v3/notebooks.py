@@ -632,6 +632,7 @@ class NotebookService:
                                 candidate = self.documents.path(engagement_id, path)
                                 info = candidate.stat()
                             except (OSError, NotebookError):
+                                # diagnostic-expected: a recently created file may be moved before indexing.
                                 created.discard(path)
                                 continue
                             entries.append(
@@ -655,6 +656,7 @@ class NotebookService:
                         "The file index has no notebooks; scanning the project folder."
                     )
                 except (FileIndexUnavailable, OSError, ValueError) as exc:
+                    # diagnostic-expected: index failure is visible in status and falls back to the workspace scan.
                     self._index_errors[engagement_id] = str(exc)
             # A linked workspace can contain a very large tree. Never walk it
             # on the FastAPI event loop, and share the result between callers.

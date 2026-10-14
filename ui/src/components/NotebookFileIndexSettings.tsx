@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/client";
 import type { NotebookFileIndexStatus } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { HostFolderPicker } from "./HostFolderPicker";
 
 export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: {
@@ -11,7 +12,9 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
   const [error, setError] = useState("");
   useEffect(() => {
     let current = true;
-    void api.notebookFileIndex(projectId).then(value => {if (current) setStatus(value);}).catch(caught => {if (current) setError(caught instanceof Error ? caught.message : "File index status unavailable.");});
+    void api.notebookFileIndex(projectId).then(value => {if (current) setStatus(value);}).catch(caught => {
+      if (current) setError(logCaughtDiagnostic("interface.notebook.index_status_failed", "File index status unavailable.", caught));
+    });
     return () => {current = false;};
   }, [api, projectId, listing]);
   const connect = async (path: string) => {
@@ -19,7 +22,7 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
     try {
       setStatus(await api.setNotebookFileIndex(projectId, path));
       onChanged();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "File index could not be connected."); }
+    } catch (caught) { setError(logCaughtDiagnostic("interface.notebook.index_connect_failed", "File index could not be connected.", caught)); }
     finally { setBusy(false); }
   };
   const remove = async () => {
@@ -27,7 +30,7 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
     try {
       setStatus(await api.removeNotebookFileIndex(projectId));
       onChanged();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "File index could not be removed."); }
+    } catch (caught) { setError(logCaughtDiagnostic("interface.notebook.index_remove_failed", "File index could not be removed.", caught)); }
     finally { setBusy(false); }
   };
   return <section className="notebook-index-settings" aria-label="Notebook file index">

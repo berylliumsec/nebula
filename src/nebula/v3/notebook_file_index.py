@@ -89,5 +89,6 @@ def list_indexed_notebooks(database: str, workspace: Path) -> list[dict[str, obj
                 }
             )
         except (OverflowError, TypeError, ValueError):
+            # diagnostic-expected: malformed indexed metadata is omitted from discovery.
             continue
     return result
