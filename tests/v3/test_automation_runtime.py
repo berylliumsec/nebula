@@ -618,7 +618,7 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
             ),
             store.get(ScopePolicy, f"scope:{engagement.id}"),
         )
-        assert allowed.result["action"] == "write"
+        assert allowed.output["action"] == "write"
         assert sessions[0].processes[0].writes == [b"rg needle AGENTS.md\n"]
 
     asyncio.run(scenario())
@@ -729,7 +729,8 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             preview.kind == "stdout" and "needle" in preview.text
             for preview in allowed.receipt.output_preview
         )
-        persisted = store.get(AutomationSession, allowed.receipt.session_id)
+        allowed_execution = store.list_entities(CommandExecution)[-1]
+        persisted = store.get(AutomationSession, allowed_execution.session_id)
         assert persisted.execution_mode == "host"
         assert persisted.metadata["network_boundary"] == "host_os"
 
@@ -744,7 +745,8 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             scope,
         )
         process_id = shell.receipt.process_id
-        process_session_id = shell.receipt.session_id
+        shell_execution = store.list_entities(CommandExecution)[-1]
+        process_session_id = shell_execution.session_id
         try:
             denied_write = tool_invocation(
                 engagement,
@@ -785,7 +787,7 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
                 ),
                 scope,
             )
-            assert allowed_write.result["action"] == "write"
+            assert allowed_write.output["action"] == "write"
         finally:
             await manager.close_session(process_session_id)
 
