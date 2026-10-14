@@ -621,7 +621,7 @@ class ChatCompletionRequest(NebulaModel):
     # Advertise start/wait/list/stop subagent tools, within the depth ceiling.
     allow_subagents: bool = False
     # Let this independent main conversation discover and message project peers.
-    allow_agent_messaging: bool = False
+    allow_agent_messaging: bool | None = None
     # How many subagents may run at once. None, the default, is no limit.
     max_active_subagents: int | None = Field(
         default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
@@ -5319,6 +5319,24 @@ class ChatService:
             else None
         )
         request = isolate_settings_assistant_request(request, scoped_session)
+        from .chat_agent_messages import resolve_agent_messaging_choice
+
+        messaging_project = (
+            scoped_session.engagement_id if scoped_session else request.engagement_id
+        )
+        request = request.model_copy(
+            update={
+                "allow_agent_messaging": resolve_agent_messaging_choice(
+                    self.store,
+                    messaging_project,
+                    scoped_session,
+                    request.allow_agent_messaging,
+                    control_assistant=request.control_assistant,
+                )
+                if messaging_project
+                else False,
+            }
+        )
         settings_only = request.control_assistant
         if request.backend != ChatBackend.PROVIDER or request.provider_id is None:
             raise ChatConfigurationError(
@@ -5547,7 +5565,10 @@ class ChatService:
             )
         )
         agent_messaging_enabled = bool(
-            request.allow_agent_messaging and not subagent_child and engagement_id
+            request.allow_agent_messaging
+            and not subagent_child
+            and engagement_id
+            and profile.tools_verified_for(selected_model)
         )
         work_enabled = bool(
             not settings_only
