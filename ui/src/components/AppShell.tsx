@@ -22,6 +22,7 @@ import { projectSurface } from "../resourceRoutes";
 import { useNavigationChords } from "../state/useNavigationChords";
 import { GuideProvider } from "../guides/GuideProvider";
 import { useGuideAction } from "../guides/guideActions";
+import { isNebulaShell } from "../hooks/useCompactLayout";
 
 const resourceLabels: Record<string, string> = {
   projects: "Projects", providers: "Model providers", harnesses: "Harnesses", library: "Library", providerCatalog: "Provider setup",
@@ -266,6 +267,14 @@ export function AppShell() {
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
             <GuideProvider>
+            {isNebulaShell() ? <div className="app-shell assistant-only-shell workbench-route">
+              <a className="skip-link" href="#main-content">Skip to chat</a>
+              <main id="main-content" className="main-content" tabIndex={-1}>
+                {workspaceState === "failed" && <div className="workspace-state-banner failed" role="alert"><DiagnosticErrorNotice error={coreError ?? "Check the Core connection and retry."} title={authorizationRecovery === "pair" ? "Pair this phone to continue." : "Core is unavailable."} fallback="Check the Core connection and retry." compact /><button className="button primary" type="button" onClick={reconnect}>Retry connection</button><a className="button quiet" href="nebula://settings">App connection</a></div>}
+                {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><strong>Some Core features are unavailable.</strong>{coreError && <small>{coreError}</small>}<button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
+                <Outlet />
+              </main>
+            </div> : <>
             {!isElectronRuntime() && <BrowserAutomationWorker />}
             <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${quietLens ? " quiet-lens-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed && !quietLens ? " sidebar-collapsed" : ""}`} data-quiet-pointer={quietPointerActive ? "active" : "idle"} data-quiet-rail={quietRailActive ? "active" : "idle"}>
@@ -320,6 +329,7 @@ export function AppShell() {
               {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} statusMode={settingLens.statusMode} onClose={() => setSettingLens(undefined)} />}
             </div>
             </NebulaControlAssistant>
+            </>}
             </GuideProvider>
           </ChromeProvider>
         </WorkbenchDraftProvider>

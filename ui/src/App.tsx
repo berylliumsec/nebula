@@ -4,6 +4,7 @@ import { AppShell } from "./components/AppShell";
 import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRoutes";
 import { rememberedProjectId, useWorkspace } from "./state/WorkspaceContext";
 import { useChrome } from "./state/ChromeContext";
+import { isNebulaShell } from "./hooks/useCompactLayout";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
@@ -36,7 +37,7 @@ function CanonicalProjectBoundary() {
     // project they were using, or any active one.
     const rememberedId = rememberedProjectId();
     const escape = engagement ?? engagements.find((item) => item.id === rememberedId) ?? engagements[0];
-    return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{escape && <Link className="button primary" to={projectRoot(escape.id)}>Open {escape.name}</Link>}</div></section>;
+    return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{escape && <Link className="button primary" to={isNebulaShell() ? `${projectSurface(escape.id, "workbench")}?view=chat` : projectRoot(escape.id)}>Open {escape.name}</Link>}</div></section>;
   }
   if (engagement?.id !== requested.id) return <div className="route-loading" role="status">Switching project…</div>;
   // Reconnecting the current project refreshes authoritative data in place.
@@ -100,6 +101,15 @@ function RetiredModelRedirect() {
 function WorkbenchRoute() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
+  if (isNebulaShell() && (params.get("view") !== "chat" || params.has("side") || params.has("sideChat") || params.has("companion"))) {
+    const chatParams = new URLSearchParams();
+    chatParams.set("view", "chat");
+    for (const key of ["session", "drawer", "message", "turn"]) {
+      const value = params.get(key);
+      if (value) chatParams.set(key, value);
+    }
+    return <Navigate to={`${location.pathname}?${chatParams}`} replace />;
+  }
   if (["model", "application-model"].includes(params.get("view") ?? "")) {
     params.set("view", "chat");
     for (const key of ["object", "edge", "category", "query"]) params.delete(key);
@@ -108,7 +118,34 @@ function WorkbenchRoute() {
   return <SessionsPage />;
 }
 
+function AssistantShellLanding() {
+  const { engagement, engagements, workspaceState } = useWorkspace();
+  const location = useLocation();
+  if (workspaceState === "starting" || workspaceState === "bootstrapping") return <div className="route-loading" role="status">Opening chats…</div>;
+  const selected = engagement ?? engagements.find(item => item.id === rememberedProjectId()) ?? engagements[0];
+  if (selected) {
+    const params = new URLSearchParams({ view: "chat" });
+    const requestedSession = new URLSearchParams(location.search).get("session");
+    if (requestedSession) params.set("session", requestedSession);
+    return <Navigate to={`${projectSurface(selected.id, "workbench")}?${params}`} replace />;
+  }
+  return <section className="page assistant-shell-empty"><h1>No projects yet</h1><p>Set up a project and an agent in full Nebula, then return here to chat.</p><a className="button secondary" href="nebula://settings">App connection</a></section>;
+}
+
+function AssistantShellHandoff() {
+  const location = useLocation();
+  const url = `${window.location.origin}${location.pathname}${location.search}`;
+  return <section className="page assistant-shell-empty"><h1>Open in full Nebula</h1><p>This page is outside the iPhone assistant. Your chats are still available here.</p><label>Page link<input readOnly value={url} onFocus={event => event.currentTarget.select()} /></label><Link className="button primary" to="/">Back to chats</Link></section>;
+}
+
 export function App() {
+  if (isNebulaShell()) return <Routes><Route element={<AppShell />}>
+    <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
+      <Route path="workbench" element={route(<WorkbenchRoute />)} />
+    </Route>
+    <Route index element={<AssistantShellLanding />} />
+    <Route path="*" element={<AssistantShellHandoff />} />
+  </Route></Routes>;
   return <Routes><Route element={<AppShell />}>
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
       <Route index element={route(<ProjectPage canonicalView="overview" />)} />
