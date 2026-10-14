@@ -370,6 +370,7 @@ from .notebooks import (
     NotebookError,
     NotebookService,
 )
+from .notebook_file_index import FileIndexUnavailable
 from .evidence import (
     EvidenceReferenceError,
     EvidenceTooLargeError,
@@ -1217,6 +1218,10 @@ class EngagementCreateRequest(Engagement):
     """Creation-only consent; this field is never persisted on the project."""
 
     host_access_acknowledged: bool = False
+
+
+class NotebookFileIndexRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
 
 
 class AutomationPolicyUpdateRequest(NebulaModel):
@@ -6219,6 +6224,7 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=500, ge=1, le=500),
         filter: str = Query(default="", max_length=255),
+        include_sqlite_files: bool = False,
     ) -> dict[str, Any]:
         requested = Path(path).expanduser() if path else Path.home()
         if not requested.is_absolute():
@@ -6231,6 +6237,52 @@ def create_app(
             ) from exc
         if not current.is_dir():
             raise HTTPException(status_code=422, detail="selected path is not a folder")
+        if include_sqlite_files:
+            name_filter = filter.strip().casefold()
+            try:
+                with os.scandir(current) as entries:
+                    candidates = []
+                    for entry in entries:
+                        try:
+                            if name_filter and name_filter not in entry.name.casefold():
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                kind = "directory"
+                            elif entry.is_file(
+                                follow_symlinks=False
+                            ) and entry.name.lower().endswith(
+                                (".db", ".sqlite", ".sqlite3")
+                            ):
+                                kind = "file"
+                            else:
+                                continue
+                            candidates.append((entry.name.casefold(), entry.name, kind))
+                        except OSError:
+                            # diagnostic-expected: unreadable entries are skipped by the host browser.
+                            continue
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=403, detail="folder cannot be listed"
+                ) from exc
+            candidates.sort()
+            index_page = candidates[offset : offset + limit]
+            more = offset + limit < len(candidates)
+            return {
+                "path": str(current),
+                "parent": None if current.parent == current else str(current.parent),
+                "directories": [
+                    {"name": name, "path": str(current / name)}
+                    for _, name, kind in index_page
+                    if kind == "directory"
+                ],
+                "files": [
+                    {"name": name, "path": str(current / name)}
+                    for _, name, kind in index_page
+                    if kind == "file"
+                ],
+                "truncated": more,
+                "next_offset": offset + len(index_page) if more else None,
+            }
         directories: list[dict[str, str]] = []
         directory_index = 0
         name_filter = filter.strip().casefold()
@@ -6266,6 +6318,7 @@ def create_app(
             "path": str(current),
             "parent": parent,
             "directories": page,
+            "files": [],
             "truncated": has_more,
             "next_offset": offset + len(page) if has_more else None,
         }
@@ -8391,6 +8444,36 @@ def create_app(
     ) -> list[dict[str, Any]]:
         notebook_mcp.register_profile(engagement_id)
         return await notebook_service.list_async(engagement_id, refresh=refresh)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/file-index",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def notebook_file_index(engagement_id: str) -> dict[str, Any]:
+        return notebook_service.file_index_status(engagement_id)
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/file-index",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_notebook_file_index(
+        engagement_id: str,
+        body: NotebookFileIndexRequest,
+    ) -> dict[str, Any]:
+        try:
+            return await notebook_service.set_file_index(engagement_id, body.path)
+        except (FileIndexUnavailable, OSError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/file-index",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def remove_notebook_file_index(engagement_id: str) -> dict[str, Any]:
+        return await notebook_service.set_file_index(engagement_id, None)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks",

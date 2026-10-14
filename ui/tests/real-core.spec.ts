@@ -8208,6 +8208,56 @@ test("production side chat branches and resumes from its parent conversation", a
     await stopRealCore(core);
   }
 });
+test("notebook real Core uses a supplied file index on LAN", async ({page}) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const workspace = path.join(core.dataDir, "indexed-project");
+    await mkdir(workspace);
+    const notebook = JSON.stringify({nbformat: 4, nbformat_minor: 5, metadata: {}, cells: []});
+    await writeFile(path.join(workspace, "indexed.ipynb"), notebook);
+    await writeFile(path.join(workspace, "scan-only.ipynb"), notebook);
+    const index = path.join(core.dataDir, "inventory.db");
+    const create = spawnSync("python3", ["-c", `import datetime, sqlite3, sys
+db, root = sys.argv[1:]
+with sqlite3.connect(db) as connection:
+ connection.executescript('CREATE TABLE repositories (id INTEGER PRIMARY KEY, root TEXT UNIQUE, complete INTEGER, pending_files INTEGER, last_reconciled_at TEXT); CREATE TABLE files (repository_id INTEGER, path TEXT, size INTEGER, mtime_ns INTEGER);')
+ connection.execute('INSERT INTO repositories VALUES (1, ?, 1, 0, ?)', (root, datetime.datetime.now(datetime.timezone.utc).isoformat()))
+ connection.execute("INSERT INTO files VALUES (1, 'indexed.ipynb', 12, 1000000000)")`, index, workspace], {encoding: "utf8"});
+    expect(create.status, create.stderr).toBe(0);
+    const response = await api.post("engagements", {data: {name: "Indexed project", workspace_path: workspace}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const project = await response.json() as {id: string};
+    await pairRealCoreBrowser(page, core, "Indexed notebook LAN browser");
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notebook&notebook=indexed.ipynb`);
+    const panel = page.getByRole("region", {name: "Project notebook"});
+    await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
+    await panel.locator("summary", {hasText: "File index"}).click();
+    await panel.getByRole("button", {name: "Browse index files"}).click();
+    const dialog = page.getByRole("dialog", {name: "Choose file index"});
+    for (let i = 0; i < 6; i++) {
+      const current = await dialog.locator(".host-folder-location code").textContent();
+      if (current === "/") break;
+      await dialog.getByRole("button", {name: "Up one level"}).click();
+      await expect(dialog.locator(".host-folder-location code")).toHaveText(path.dirname(current!));
+    }
+    await dialog.getByRole("button", {name: "tmp", exact: true}).click();
+    await dialog.getByRole("button", {name: path.basename(core.dataDir)}).click();
+    await dialog.getByRole("button", {name: "inventory.db"}).click();
+    await expect(panel.getByText("File index connected")).toBeVisible();
+    await expect(panel.getByRole("combobox", {name: "Notebook"})).not.toContainText("scan-only.ipynb");
+    await page.reload();
+    await panel.locator("summary", {hasText: "File index"}).click();
+    await expect(panel.getByText("File index connected")).toBeVisible();
+    await panel.getByRole("button", {name: "Remove index"}).click();
+    await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core process", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("notebook real Core runs bundled Python on a LAN origin and restores output", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const repository = path.resolve(import.meta.dirname, "../..");

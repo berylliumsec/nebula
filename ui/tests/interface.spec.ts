@@ -14159,3 +14159,36 @@ reloadTest("notebook Workbench tab and chat companion keep the same Python file"
     await expect(page.getByRole("region", {name: "Notebook beside chat"}).getByRole("combobox", {name: "Notebook"})).toHaveValue("quick.ipynb");
   }
 });
+
+reloadTest("notebook Workbench tab and chat companion keep the same Python file: file index connects from a host file and survives reload", async ({page}) => {
+  let indexPath: string | null = null;
+  await page.route("**/api/v1/**", async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (pathname.endsWith("/notebooks/status")) return route.fulfill({json: {project_id: "scratch-project", execution_mode: "host", host_access_acknowledged: true, consent_required: false, runtime_ready: true, mcp_profile_id: "notebook", mcp_enabled: true}});
+    if (pathname.endsWith("/workspace-folders")) return route.fulfill({json: {path: "/indexes", parent: "/", directories: [], files: [{name: "inventory.db", path: "/indexes/inventory.db"}], truncated: false}});
+    if (pathname.endsWith("/notebooks/file-index")) {
+      if (method === "PUT") indexPath = route.request().postDataJSON().path;
+      if (method === "DELETE") indexPath = null;
+      return route.fulfill({json: {path: indexPath, state: indexPath ? "connected" : "none", detail: null}});
+    }
+    if (pathname.endsWith("/notebooks") && method === "GET") return route.fulfill({json: indexPath ? [{path: "indexed.ipynb", size: 12, modified_at: entity.updated_at}] : []});
+    if (pathname.endsWith("/notebooks/file")) return route.fulfill({json: {path: "indexed.ipynb", revision: "r1", cell_revisions: {}, document: {nbformat: 4, nbformat_minor: 5, metadata: {}, cells: []}}});
+    if (pathname.endsWith("/notebooks/runs") && method === "GET") return route.fulfill({json: []});
+    return route.fallback();
+  });
+  await openWorkspace(page, "/?view=notebook", "Workbench");
+  const panel = page.getByRole("region", {name: "Project notebook"});
+  await panel.locator("summary", {hasText: "File index"}).click();
+  await panel.getByRole("button", {name: "Browse index files"}).click();
+  await page.getByRole("button", {name: "inventory.db"}).click();
+  await expect(panel.getByRole("combobox", {name: "Notebook"})).toHaveValue("indexed.ipynb");
+  await expect(panel.getByText("File index connected")).toBeVisible();
+  await page.reload();
+  await expect(panel.getByRole("combobox", {name: "Notebook"})).toHaveValue("indexed.ipynb");
+  await panel.locator("summary", {hasText: "File index"}).click();
+  await expect(panel.getByText("File index connected")).toBeVisible();
+  await panel.getByRole("button", {name: "Remove index"}).click();
+  await expect(panel.getByText("File index connected")).toHaveCount(0);
+  await expect(panel.getByRole("combobox", {name: "Notebook"})).toHaveValue("indexed.ipynb");
+});

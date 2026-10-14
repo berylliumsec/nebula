@@ -13,6 +13,9 @@ let api: Record<string, ReturnType<typeof vi.fn>>;
 beforeEach(() => {
   api = {
     notebookStatus: vi.fn(async () => ({projectId: "p", executionMode: "host", hostAccessAcknowledged: true, consentRequired: false, runtimeReady: true, mcpProfileId: "nebula-notebook-p", mcpEnabled: true})),
+    notebookFileIndex: vi.fn(async () => ({path: null, state: "none", detail: null})),
+    setNotebookFileIndex: vi.fn(async (_projectId: string, path: string) => ({path, state: "connected", detail: null})),
+    removeNotebookFileIndex: vi.fn(async () => ({path: null, state: "none", detail: null})),
     listNotebooks: vi.fn(async () => [{path: "quick.ipynb", size: 100, modifiedAt: "2026-10-13T00:00:00Z"}]),
     readNotebook: vi.fn(async () => initial()),
     listNotebookRuns: vi.fn(async () => []),

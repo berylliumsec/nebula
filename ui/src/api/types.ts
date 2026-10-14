@@ -2626,6 +2626,7 @@ export interface NotebookStatus {
 }
 
 export interface NotebookListing { path: string; size: number; modifiedAt: string }
+export interface NotebookFileIndexStatus { path: string | null; state: "none" | "connected" | "partial" | "fallback"; detail: string | null }
 export interface NotebookCell {
   id: string;
   cell_type: "code" | "markdown";
