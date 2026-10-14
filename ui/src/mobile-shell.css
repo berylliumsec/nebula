@@ -368,6 +368,22 @@
 :root[data-theme] .assistant-shell-empty { display: grid; align-content: center; justify-items: start; gap: 12px; max-width: 520px; margin: auto; }
 :root[data-theme] .assistant-shell-empty :is(h1, p) { margin: 0; }
 
+:root[data-theme] .assistant-only-page .chat-goal-trigger[data-status] { color: var(--text-strong); }
+body .dialog-backdrop > .modal-surface.modal-surface.assistant-goal-dialog:not(.terminal-screenshot-dialog):not(.host-folder-dialog) {
+  display: grid;
+  width: min(680px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  gap: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.assistant-goal-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.assistant-goal-dialog > header h2 { margin: 0; }
+.assistant-goal-dialog > header button { width: 44px; height: 44px; flex: 0 0 44px; }
+.assistant-goal-dialog .chat-goal-panel { min-width: 0; }
+.assistant-goal-dialog .chat-goal-panel.empty > .chat-goal-chip { width: 100%; }
+.assistant-goal-dialog .chat-goal-actions .button { min-height: 44px; }
+
 @media (max-width: 760px) {
   :root[data-theme] .assistant-only-shell .assistant-only-page:not(.full-screen) { padding-bottom: env(safe-area-inset-bottom, 0px); }
 }

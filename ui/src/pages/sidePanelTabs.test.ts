@@ -19,8 +19,10 @@ describe("side panel tabs", () => {
     appendSideToolTab(params, "code", "code-one");
     params.set("panelFile.code-one", "notes/review.md");
     appendSideToolTab(params, "browser", "browser-one");
+    params.set("panelBrowserEngine.browser-one", "native");
     removeSideToolTab(params, "browser-one");
     expect(params.get("panelTab")).toBe("code-one");
+    expect(params.has("panelBrowserEngine.browser-one")).toBe(false);
     removeSideToolTab(params, "code-one");
     expect(params.has("panelTab")).toBe(false);
     expect(params.has("panelFile.code-one")).toBe(false);

@@ -8720,6 +8720,180 @@ test("assistant upgrade harness goal works on production LAN Core across new and
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
+test("assistant upgrade shell goal draft remains editable with skills on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const model = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const project = (await (await api.get("engagements")).json() as Array<{id: string}>)[0];
+    expect(project?.id).toBeTruthy();
+    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(project.id).digest("hex"));
+    const skillPath = path.join(workspaceRoot, ".agents", "skills", "review", "SKILL.md");
+    await mkdir(path.dirname(skillPath), {recursive: true});
+    await writeFile(skillPath, "Review the saved goal's evidence before starting.\n", "utf8");
+    const providerResponse = await api.post("providers", {data: {
+      name: "Shell goal fixture", provider_type: "vllm", endpoint: `${model.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verification = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verification.ok(), await verification.text()).toBe(true);
+    const pairApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+    });
+    const pairing = await (await pairApi.post("auth/pairings", {data: {name: "Shell draft browser"}})).json() as {secret: string; confirmation_code: string};
+    await pairApi.dispose();
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
+    });
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Shell draft browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(page.locator(".assistant-only-shell")).toBeVisible();
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await clickAssistantSettings(page);
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("provider");
+    await settings.getByRole("combobox", {name: "Chat provider"}).selectOption(provider.id);
+    await expect(settings.getByRole("combobox", {name: "Chat model"})).toHaveValue("security-model");
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    const trigger = page.getByRole("button", {name: "Create goal"});
+    await expect(trigger).toBeVisible();
+    expect((await trigger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await trigger.click();
+    const dialog = page.getByRole("dialog", {name: "Goal"});
+    await dialog.getByRole("button", {name: "Add goal"}).click();
+    await dialog.getByRole("textbox", {name: "Objective"}).fill("Draft shell review");
+    await dialog.getByRole("textbox", {name: "Completion criteria"}).fill("Evidence is checked");
+    await dialog.getByRole("button", {name: "Save draft"}).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    const sessionId = new URL(page.url()).searchParams.get("session")!;
+    await expect(dialog.getByRole("region", {name: "Conversation goal"})).toContainText("draft");
+    await dialog.getByRole("button", {name: "Close goal"}).click();
+    let failGoalRead = true;
+    await page.route(`**/api/v1/chat/sessions/${sessionId}/goal`, async route => {
+      if (route.request().method() === "GET" && failGoalRead) {
+        failGoalRead = false;
+        await route.fulfill({status: 503, json: {detail: "Temporary goal read failure"}});
+      } else await route.continue();
+    });
+    await page.reload();
+    await expect(page.getByRole("button", {name: "Open goal"})).toBeVisible();
+    await page.getByRole("button", {name: "Open goal"}).click();
+    await expect(dialog.getByRole("alert")).toContainText("Temporary goal read failure");
+    await dialog.getByRole("button", {name: "Retry goal"}).click();
+    const panel = dialog.getByRole("region", {name: "Conversation goal"});
+    await expect(panel).toContainText("Draft shell review");
+    await panel.getByRole("button", {name: "Edit goal"}).click();
+    await panel.getByRole("textbox", {name: "Objective"}).fill("Edited shell review");
+    await panel.getByRole("button", {name: "Save changes"}).click();
+    await expect(panel).toContainText("Edited shell review");
+    await panel.getByRole("button", {name: "Edit skills"}).click();
+    await panel.getByRole("checkbox", {name: /review.*project/}).check();
+    await panel.getByRole("button", {name: "Save skills"}).click();
+    await expect(panel).toContainText("1 skills");
+    expect((await new AxeBuilder({page}).include(".assistant-goal-dialog").analyze()).violations).toEqual([]);
+    await dialog.getByRole("button", {name: "Close goal"}).click();
+    await page.reload();
+    await page.getByRole("button", {name: "Open goal"}).click();
+    await expect(panel).toContainText("Edited shell review");
+    await expect(panel).toContainText("1 skills");
+    await expect(panel.getByRole("button", {name: "Start"})).toBeVisible();
+    const saved = await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as {status: string; objective: string; skill_snapshots: Array<{path: string}>};
+    expect(saved).toMatchObject({status: "draft", objective: "Edited shell review"});
+    expect(saved.skill_snapshots.map(skill => skill.path)).toEqual([skillPath]);
+    expect(await (await api.get(`chat/sessions/${sessionId}/messages`)).json()).toEqual([]);
+    const geometry = await dialog.evaluate(element => ({left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right, width: innerWidth}));
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.width);
+    await testInfo.attach("shell-goal-draft", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), sessionId, result: "create, reopen, edit goal, attach skill, reload"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model fixture", dispose: () => stopLocalModelStub(model)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade side Browser opens device controls on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const model = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const project = (await (await api.get("engagements")).json() as Array<{id: string}>)[0];
+    const providerResponse = await api.post("providers", {data: {
+      name: "Side browser fixture", provider_type: "vllm", endpoint: `${model.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const createdResponse = await api.post("chat/goal-conversations", {data: {
+      engagement_id: project.id, backend: "provider", provider_id: provider.id,
+      model: "security-model", objective: "Review browser routing", completion_criteria: ["Open a page"],
+    }});
+    expect(createdResponse.ok(), await createdResponse.text()).toBe(true);
+    const created = await createdResponse.json() as {session: {id: string}};
+    const pairApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+    });
+    const pairing = await (await pairApi.post("auth/pairings", {data: {name: "Side browser device"}})).json() as {secret: string; confirmation_code: string};
+    await pairApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Side browser device");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=${created.session.id}`);
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "Conversation actions"}).click();
+      await page.getByRole("menuitem", {name: /^Browser/}).click();
+    } else {
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /^Browser/}).click();
+    }
+    const panel = page.getByRole("region", {name: "Browser 1 beside chat"});
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole("textbox", {name: "Web address"})).toBeVisible();
+    await expect(panel.getByRole("region", {name: "Assistant browser"})).toHaveCount(0);
+    const panelId = new URL(page.url()).searchParams.get("panelTab");
+    expect(panelId).toBeTruthy();
+    expect(new URL(page.url()).searchParams.get(`panelBrowserEngine.${panelId}`)).toBe("native");
+    await page.reload();
+    await expect(panel.getByRole("textbox", {name: "Web address"})).toBeVisible();
+    const address = panel.getByRole("textbox", {name: "Web address"});
+    await address.fill(`${core.origin}/web-build.json`);
+    const openedPage = page.context().waitForEvent("page");
+    await panel.getByRole("button", {name: "Open", exact: true}).click();
+    const deviceTab = await openedPage;
+    await deviceTab.waitForURL(`${core.origin}/web-build.json`);
+    await deviceTab.close();
+    await expect(panel.getByRole("status").filter({hasText: "New tab requested"})).toBeVisible();
+    expect((await new AxeBuilder({page}).include("#side-tool-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await panel.getByRole("button", {name: "Close Browser 1 tab"}).click();
+    await expect(panel).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.has(`panelBrowserEngine.${panelId}`)).toBe(false);
+    await testInfo.attach("side-device-browser", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), sessionId: created.session.id, pageOpened: `${core.origin}/web-build.json`}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model fixture", dispose: () => stopLocalModelStub(model)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("iPhone assistant shell production LAN pairs, resolves a pending agent approval, and reconnects", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "single");
