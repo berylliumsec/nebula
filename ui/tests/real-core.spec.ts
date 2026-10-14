@@ -442,6 +442,7 @@ test("stabilization storage public source reaches dashboard chat and approved re
   const effects = [{ operation: "write_example_receipt", path: "/disposable/storage", source_disposition: "retained" }];
   const digest = createHash("sha256").update(JSON.stringify(effects)).digest("hex");
   const callbackRequests: string[] = [];
+  let refusePreview = true;
   const callback = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -453,6 +454,11 @@ test("stabilization storage public source reaches dashboard chat and approved re
     if (request.url === "/v1/diagnose") {
       response.end(JSON.stringify({ diagnostics: "Read-only fixture check: capacity is low.", offers: [{ id: "copy", title: "Copy fixture artifact" }] }));
     } else if (request.url === "/v1/actions/copy/preview") {
+      if (refusePreview) {
+        response.statusCode = 409;
+        response.end(JSON.stringify({ error: "unsupported tree entry: /fixture/backup-link" }));
+        return;
+      }
       response.end(JSON.stringify({ effects, digest, expires_at: new Date(Date.now() + 300_000).toISOString() }));
     } else if (request.url === "/v1/actions/copy/execute") {
       response.end(JSON.stringify({ status: "complete", receipt: { operation: "write_example_receipt", verified: true } }));
@@ -543,6 +549,9 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
     const action = page.locator(".storage-action");
     await expect(action.getByText("Copy fixture artifact")).toBeVisible();
+    await action.getByRole("button", { name: "Preview effects" }).click();
+    await expect(page.locator(".storage-actions").getByRole("alert")).toContainText("unsupported tree entry: /fixture/backup-link");
+    refusePreview = false;
     await action.getByRole("button", { name: "Preview effects" }).click();
     await expect(action.getByRole("button", { name: "Approve exact plan and execute" })).toBeVisible();
     await action.getByRole("button", { name: "Approve exact plan and execute" }).click();

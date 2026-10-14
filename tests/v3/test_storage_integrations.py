@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import threading
 
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator, FormatChecker
@@ -401,6 +403,77 @@ def test_callback_offer_preview_approval_and_uncertain_lookup(tmp_path):
         ).status_code
         == 409
     )
+
+
+def test_source_preview_refusal_is_actionable_conflict(tmp_path, monkeypatch):
+    class Callback(BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.headers["Authorization"] == "Bearer callback-token"
+            self.rfile.read(int(self.headers["Content-Length"]))
+            if self.path == "/v1/diagnose":
+                code = 200
+                body = {
+                    "diagnostics": "read-only check",
+                    "offers": [
+                        {
+                            "id": "archive-copy:controller:fixture",
+                            "title": "Archive copy · /fixture",
+                        }
+                    ],
+                }
+            else:
+                assert self.path.endswith("/preview")
+                code = 409
+                body = {"error": "unsupported tree entry: /fixture/backup-link"}
+            encoded = json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Callback)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("NEBULA_TEST_STORAGE_CALLBACK_TOKEN", "callback-token")
+        client, store = setup(tmp_path)
+        created = enroll(client)
+        source = store.get_by_kind("storage_sources", created["source"]["id"])
+        store.update(
+            type(source),
+            source.id,
+            {
+                "enabled": True,
+                "callback_url": f"http://127.0.0.1:{server.server_port}",
+                "callback_credential_ref": "env:NEBULA_TEST_STORAGE_CALLBACK_TOKEN",
+            },
+            expected_revision=source.revision,
+        )
+        sender = {"Authorization": "Bearer " + created["token"]}
+        assert (
+            client.post(
+                "/api/v1/storage/events", headers=sender, json=event()
+            ).status_code
+            == 202
+        )
+        action = store.list_entities(StorageAction)[0]
+        preview = client.post(
+            f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH
+        )
+        assert preview.status_code == 409, preview.text
+        assert preview.json()["detail"] == (
+            "Storage source refused preview: unsupported tree entry: /fixture/backup-link"
+        )
+        saved = store.get(StorageAction, action.id)
+        assert saved.status == "offered" and saved.digest is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp_path):
