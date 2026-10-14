@@ -14212,7 +14212,17 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await expect(page.getByRole("button", {name: "Open conversations"})).toBeVisible({timeout: 30_000});
   await expect(page.getByRole("button", {name: "Start new chat"})).toBeVisible();
   await page.getByRole("button", {name: "Start new chat"}).click();
-  await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeVisible();
+  const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
+  await expect(composer).toBeVisible();
+  const send = page.getByRole("button", {name: "Send message"});
+  await expect(send).toBeVisible();
+  const sendBounds = await send.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    return {left: rect.left, right: rect.right, width: viewport?.width ?? innerWidth, offsetLeft: viewport?.offsetLeft ?? 0};
+  });
+  expect(sendBounds.left).toBeGreaterThanOrEqual(sendBounds.offsetLeft);
+  expect(sendBounds.right).toBeLessThanOrEqual(sendBounds.offsetLeft + sendBounds.width);
   await expect(page.getByRole("navigation", {name: "Mobile operator navigation"})).toHaveCount(0);
   await expect(page.locator(".persistent-terminal, .persistent-code-editor, .persistent-browser")).toHaveCount(0);
   await expect(page.getByRole("button", {name: /Needs you, 1 pending/})).toBeVisible();
