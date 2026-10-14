@@ -232,8 +232,34 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
   border: 0;
   border-radius: 0;
+}
+/* WKWebView magnifies focused controls below 16px, including in landscape. */
+:root[data-theme] .assistant-only-shell :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select),
+:root[data-theme] .pairing-gate input { font-size: 16px; }
+:root[data-theme] .assistant-only-shell > .main-content > .workspace-state-banner {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin: 12px 12px 0;
+  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px);
+  overflow-y: auto;
+}
+:root[data-theme] .assistant-only-shell > .main-content > .workspace-state-banner .diagnostic-error-notice {
+  width: 100%;
+}
+:root[data-theme] .assistant-only-shell > .main-content > .workspace-state-banner > :is(button, a) {
+  width: 100%;
+  min-height: 44px;
+}
+:root[data-theme] .assistant-only-shell .assistant-shell-empty {
+  min-height: 0;
+  flex: 1 1 0;
+  margin: 0 auto;
+  overflow-y: auto;
 }
 :root[data-theme] .assistant-only-shell .assistant-only-page,
 :root[data-theme] .assistant-only-shell .assistant-only-page.full-screen {
@@ -243,7 +269,7 @@
   min-height: 0;
   flex: 1 1 0;
   flex-direction: column;
-  padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
 }
 :root[data-theme] .assistant-only-page > .session-layout.chat {
   display: grid;

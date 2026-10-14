@@ -119,7 +119,7 @@ function WorkbenchRoute() {
 }
 
 function AssistantShellLanding() {
-  const { engagement, engagements, workspaceState } = useWorkspace();
+  const { engagement, engagements, resourceStatus, workspaceState } = useWorkspace();
   const location = useLocation();
   if (workspaceState === "starting" || workspaceState === "bootstrapping") return <div className="route-loading" role="status">Opening chats…</div>;
   const selected = engagement ?? engagements.find(item => item.id === rememberedProjectId()) ?? engagements[0];
@@ -129,6 +129,7 @@ function AssistantShellLanding() {
     if (requestedSession) params.set("session", requestedSession);
     return <Navigate to={`${projectSurface(selected.id, "workbench")}?${params}`} replace />;
   }
+  if (resourceStatus.projects.state !== "empty") return null;
   return <section className="page assistant-shell-empty"><h1>No projects yet</h1><p>Set up a project and an agent in full Nebula, then return here to chat.</p><a className="button secondary" href="nebula://settings">App connection</a></section>;
 }
 

@@ -1,19 +1,32 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { logCaughtDiagnostic } from "../diagnostics";
 
+function pairingFromFragment() {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const secret = fragment.get("pair");
+  return secret ? {secret, code: fragment.get("code") ?? ""} : undefined;
+}
+
 export function PairingGate({ children }: { children: ReactNode }) {
-  const pairing = useMemo(() => {
-    const fragment = new URLSearchParams(window.location.hash.slice(1));
-    const secret = fragment.get("pair");
-    if (!secret) return undefined;
-    const code = fragment.get("code") ?? "";
-    history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
-    return { secret, code };
-  }, []);
-  const [code, setCode] = useState(pairing?.code ?? "");
+  const [pairing, setPairing] = useState(pairingFromFragment);
+  const [code, setCode] = useState(() => pairingFromFragment()?.code ?? "");
   const [name, setName] = useState("My phone");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const capturePairing = () => {
+      const offer = pairingFromFragment();
+      if (!offer) return;
+      setPairing(offer);
+      setCode(offer.code);
+      setError(undefined);
+      setBusy(false);
+      history.replaceState(history.state, "", `${window.location.pathname}${window.location.search}`);
+    };
+    window.addEventListener("hashchange", capturePairing);
+    capturePairing();
+    return () => window.removeEventListener("hashchange", capturePairing);
+  }, []);
   if (!pairing) return children;
 
   const redeem = async (event: FormEvent) => {
