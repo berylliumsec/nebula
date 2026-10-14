@@ -219,15 +219,17 @@ def test_multiple_side_chats_for_one_parent_survive_selective_close(popup):
     service = ChatService(store)
     first = service.fork_session("main", through_message_id="message", side_chat=True)
     second = service.fork_session("main", through_message_id="message", side_chat=True)
-    assert {row["id"] for row in client.get("/chat/sessions/main/side-chats").json()} == {
+    assert {
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    } == {
         first.id,
         second.id,
     }
 
     assert client.delete(f"/chat/temporary-sessions/{second.id}").status_code == 204
-    assert [row["id"] for row in client.get("/chat/sessions/main/side-chats").json()] == [
-        first.id
-    ]
+    assert [
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    ] == [first.id]
     assert store.get(ChatSession, first.id).parent_session_id == "main"
     assert store.get(ChatSession, "main").id == "main"
 
