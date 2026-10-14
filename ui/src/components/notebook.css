@@ -5,6 +5,13 @@
 .notebook-header { position: sticky; top: 0; z-index: 2; justify-content: space-between; padding: .8rem 1rem; background: inherit; border-bottom: 1px solid var(--border, #343945); }
 .notebook-header > div { display: flex; align-items: center; gap: .5rem; }
 .notebook-header small, .notebook-cell-toolbar > span:first-child { color: var(--muted-text, #aab2c1); }
+.notebook-index-control { padding: .2rem 1rem; border-bottom: 1px solid var(--border, #343945); }
+.notebook-index-control > summary { width: fit-content; min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--muted-text, #aab2c1); }
+.notebook-index-control > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.notebook-index-settings { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding-bottom: .6rem; }
+.notebook-index-settings p { flex-basis: 100%; margin: 0; font-size: .82rem; }
+.notebook-index-settings code { overflow-wrap: anywhere; }
+.notebook-index-settings [role="alert"] { color: var(--danger, #ed9696); }
 .notebook-filebar, .notebook-create, .notebook-actions, .notebook-packages { padding: .55rem 1rem; }
 .notebook-filebar label, .notebook-packages label { display: flex; align-items: center; gap: .5rem; flex: 1; min-width: 0; }
 .notebook-filebar select, .notebook-create input, .notebook-packages input { min-width: 0; flex: 1; }

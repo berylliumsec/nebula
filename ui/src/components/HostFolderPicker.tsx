@@ -9,6 +9,7 @@ interface FolderListing {
   path: string;
   parent?: string;
   directories: Array<{ name: string; path: string }>;
+  files?: Array<{ name: string; path: string }>;
   truncated: boolean;
   nextOffset?: number;
 }
@@ -17,7 +18,7 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
   api?: ApiClient;
   value?: string;
   onSelect: (path: string) => void;
-  purpose?: "workspace" | "account";
+  purpose?: "workspace" | "account" | "index";
 }) {
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<FolderListing>();
@@ -55,9 +56,9 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
     setError(undefined);
     setLoadMoreError(undefined);
     try {
-      const nextListing = filter
-        ? await api.listHostWorkspaceFolders(path, 0, filter)
-        : await api.listHostWorkspaceFolders(path);
+      const nextListing = purpose === "index"
+        ? await api.listHostWorkspaceFolders(path, 0, filter, true)
+        : filter ? await api.listHostWorkspaceFolders(path, 0, filter) : await api.listHostWorkspaceFolders(path);
       if (sequence !== loadSequenceRef.current) return;
       setListing(nextListing);
       if (moveFocus) requestAnimationFrame(() => {
@@ -81,15 +82,16 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
     setLoadingMore(true);
     setLoadMoreError(undefined);
     try {
-      const page = folderFilter.trim()
-        ? await api.listHostWorkspaceFolders(path, nextOffset, folderFilter)
-        : await api.listHostWorkspaceFolders(path, nextOffset);
+      const page = purpose === "index"
+        ? await api.listHostWorkspaceFolders(path, nextOffset, folderFilter, true)
+        : folderFilter.trim() ? await api.listHostWorkspaceFolders(path, nextOffset, folderFilter) : await api.listHostWorkspaceFolders(path, nextOffset);
       setListing((current) => {
         if (!current || current.path !== page.path) return current;
         const known = new Set(current.directories.map((directory) => directory.path));
         return {
           ...page,
           directories: [...current.directories, ...page.directories.filter((directory) => !known.has(directory.path))],
+          files: [...(current.files ?? []), ...(page.files ?? []).filter(file => !(current.files ?? []).some(existing => existing.path === file.path))],
         };
       });
     } catch (caught) {
@@ -104,7 +106,8 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
   const openBrowser = () => {
     setFolderFilter("");
     setOpen(true);
-    void load(value?.trim() || listing?.path, false, "");
+    const start = purpose === "index" && value ? value.slice(0, value.lastIndexOf("/")) : value?.trim();
+    void load(start || listing?.path, false, "");
   };
 
   const closeBrowser = () => {
@@ -175,7 +178,7 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
 
   return <div className="host-folder-picker">
     <button ref={browseButtonRef} className="button secondary" type="button" disabled={!api || loading} onClick={openBrowser}>
-      {loading ? <LoaderCircle className="spin" size={14} /> : <FolderOpen size={14} />} Browse folders
+      {loading ? <LoaderCircle className="spin" size={14} /> : <FolderOpen size={14} />} {purpose === "index" ? "Browse index files" : "Browse folders"}
     </button>
     {!open && error && <small role="alert">{error}</small>}
     {open && createPortal(
@@ -183,8 +186,8 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
         <header>
           <div>
             <span className="host-folder-dialog-kicker"><Server size={14} /> Nebula host</span>
-            <h2 id="host-folder-dialog-title">{purpose === "account" ? "Choose account folder" : "Choose project folder"}</h2>
-            <p>{purpose === "account" ? "This folder stores the selected harness account’s sign-in and settings on the Nebula host." : "This folder becomes the shared working directory for Grok, Codex, and Kali."}</p>
+            <h2 id="host-folder-dialog-title">{purpose === "index" ? "Choose file index" : purpose === "account" ? "Choose account folder" : "Choose project folder"}</h2>
+            <p>{purpose === "index" ? "Choose a SQLite repository file index on the Nebula host." : purpose === "account" ? "This folder stores the selected harness account’s sign-in and settings on the Nebula host." : "This folder becomes the shared working directory for Grok, Codex, and Kali."}</p>
           </div>
           <button className="icon-button subtle" type="button" aria-label="Close folder browser" onClick={closeBrowser}><X size={18} /></button>
         </header>
@@ -192,14 +195,14 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
           <span>Current folder</span>
           <code title={listing?.path}>{(listing?.path ?? value?.trim()) || "Loading home folder…"}</code>
         </div>
-        <div className="host-folder-create">
+        {purpose !== "index" && <div className="host-folder-create">
           {newFolderOpen ? <form onSubmit={(event) => void createFolder(event)}>
             <label><span>New folder name</span><input ref={newFolderInputRef} required maxLength={255} value={newFolderName} onChange={(event) => { setNewFolderName(event.target.value); if (createError) setCreateError(undefined); }} /></label>
             <button className="button quiet" type="button" disabled={creatingFolder} onClick={cancelCreateFolder}>Cancel</button>
             <button className="button primary" type="submit" disabled={creatingFolder || !newFolderName.trim()}>{creatingFolder ? <LoaderCircle className="spin" size={14} /> : <FolderPlus size={14} />} {creatingFolder ? "Creating…" : "Create folder"}</button>
           </form> : <button className="button secondary" type="button" disabled={!listing || loading} onClick={beginCreateFolder}><FolderPlus size={14} /> New folder</button>}
           {createError && <small role="alert">{createError}</small>}
-        </div>
+        </div>}
         <label className="host-folder-filter">
           <Search size={15} aria-hidden="true" />
           <span className="sr-only">Filter folders</span>
@@ -210,17 +213,18 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
           {loading && <div className="host-folder-state" role="status"><LoaderCircle className="spin" size={20} /><span>Loading folders…</span></div>}
           {!loading && error && <div className="host-folder-state error" role="alert"><strong>Folder unavailable</strong><span>{error}</span><button ref={retryButtonRef} className="button secondary" type="button" onClick={() => void load(listing?.path, true)}>Try again</button></div>}
           {!loading && !error && listing?.directories.map((directory) => <button type="button" key={directory.path} title={directory.path} onClick={() => void load(directory.path, true)}><Folder size={18} /><span>{directory.name}</span><ChevronRight size={16} /></button>)}
-          {!loading && !error && listing && !listing.directories.length && <div className="host-folder-state"><FolderOpen size={20} /><span>{folderFilter.trim() ? `No folders match “${folderFilter.trim()}”.` : "This folder has no child folders."}</span></div>}
+          {purpose === "index" && !loading && !error && listing?.files?.map((file) => <button type="button" key={file.path} title={file.path} onClick={() => {onSelect(file.path); closeBrowser();}}><span>{file.name}</span></button>)}
+          {!loading && !error && listing && !listing.directories.length && !(purpose === "index" && listing.files?.length) && <div className="host-folder-state"><FolderOpen size={20} /><span>{folderFilter.trim() ? `No folders match “${folderFilter.trim()}”.` : purpose === "index" ? "No SQLite indexes in this folder." : "This folder has no child folders."}</span></div>}
         </div>
         {!loading && !error && listing?.truncated && <div className={`host-folder-truncated${loadMoreError ? " error" : ""}`}>
           {loadMoreError
-            ? <><span role="alert">More folders could not be loaded. {loadMoreError}</span><button ref={retryLoadMoreButtonRef} className="button quiet" type="button" aria-label="Try loading more again" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? <LoaderCircle className="spin" size={14} /> : null} Try again</button></>
-            : <><span>{listing.directories.length.toLocaleString()} folders shown.</span><button className="button quiet" type="button" aria-label="Load more folders" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? <LoaderCircle className="spin" size={14} /> : null} {loadingMore ? "Loading more…" : "Load more"}</button></>}
+            ? <><span role="alert">More {purpose === "index" ? "index entries" : "folders"} could not be loaded. {loadMoreError}</span><button ref={retryLoadMoreButtonRef} className="button quiet" type="button" aria-label="Try loading more again" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? <LoaderCircle className="spin" size={14} /> : null} Try again</button></>
+            : <><span>{(listing.directories.length + (purpose === "index" ? listing.files?.length ?? 0 : 0)).toLocaleString()} {purpose === "index" ? "entries" : "folders"} shown.</span><button className="button quiet" type="button" aria-label={purpose === "index" ? "Load more index entries" : "Load more folders"} disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? <LoaderCircle className="spin" size={14} /> : null} {loadingMore ? "Loading more…" : "Load more"}</button></>}
         </div>}
         <footer>
           <button className="button secondary" type="button" disabled={!listing?.parent || loading} onClick={() => void load(listing?.parent, true)}><ArrowUp size={16} /> Up one level</button>
-          <span>{listing?.path === "/" ? "The filesystem root cannot be used as a project folder." : "Select the folder shown above."}</span>
-          <button ref={selectButtonRef} className="button primary" type="button" disabled={!listing || listing.path === "/" || loading} onClick={selectCurrentFolder}>Select folder</button>
+          <span>{purpose === "index" ? "Select a database file above." : listing?.path === "/" ? "The filesystem root cannot be used as a project folder." : "Select the folder shown above."}</span>
+          {purpose !== "index" && <button ref={selectButtonRef} className="button primary" type="button" disabled={!listing || listing.path === "/" || loading} onClick={selectCurrentFolder}>Select folder</button>}
         </footer>
       </ModalSurface>,
       document.body,

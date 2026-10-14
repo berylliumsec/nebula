@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
+import { NotebookFileIndexSettings } from "./NotebookFileIndexSettings";
 import ReactMarkdown from "react-markdown";
 import { CircleStop, NotebookPen, PackageCheck, Bookmark, Play, Plus, RefreshCw, RotateCcw, Save, Plug, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
@@ -104,6 +105,7 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [listing, setListing] = useState(false);
+  const [indexOpen, setIndexOpen] = useState(false);
   const currentProject = useRef(projectId);
   const currentPath = useRef(path);
   const inventoryInFlight = useRef<{projectId: string; promise: Promise<void>} | null>(null);
@@ -233,6 +235,7 @@ export function NotebookPanel({api, projectId, active, path, onPathChange, pinne
     <header className="notebook-header"><div><NotebookPen size={18} /><strong>Notebook</strong>{status && <small>{status.executionMode === "host" ? "Host" : "Docker"} Python</small>}</div><button className="icon-button subtle" type="button" aria-label="Refresh notebook" title="Refresh notebook" onClick={() => void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err)))}><RefreshCw size={16} /></button></header>
     {error && <p className="notebook-error" role="alert">{error} <button className="button quiet" type="button" onClick={() => {setError(""); void refresh().catch(err => setError(logDiagnostic("interface.notebook.refresh_failed", "Notebook could not be refreshed.", err)));}}>Retry</button></p>}
     {notice && <p className="notebook-notice" role="status">{notice}<button className="icon-button subtle" type="button" aria-label="Dismiss notice" onClick={() => setNotice("")}><X size={14} /></button></p>}
+    <details className="notebook-index-control" onToggle={event => setIndexOpen(event.currentTarget.open)}><summary>File index</summary>{indexOpen && <NotebookFileIndexSettings api={api} projectId={projectId} listing={listing} onChanged={() => {void refreshInventory(true).catch(err => setError(logDiagnostic("interface.notebook.list_failed", "Notebooks could not be listed.", err)));}} />}</details>
     {status?.consentRequired && <div className="notebook-consent"><Plug size={17} /><span>Host execution needs one-time project approval.</span><button className="button secondary" type="button" onClick={onProjectSettings}>Review Host access</button></div>}
     <div className="notebook-filebar"><label>Notebook <select value={path ?? ""} onChange={event => onPathChange(event.target.value)}><option value="">{listing ? "Finding notebooks…" : "Choose a notebook"}</option>{path && !list.some(item => item.path === path) && <option value={path}>{path}</option>}{list.map(item => <option key={item.path} value={item.path}>{item.path}</option>)}</select></label>{path && onPin && <button className="icon-button subtle" type="button" aria-label={pinnedPath === path ? "Unpin notebook from chat" : "Pin notebook beside chat"} title={pinnedPath === path ? "Unpin from chat" : "Pin beside chat"} onClick={() => void onPin(pinnedPath === path ? null : path).catch(err => setError(logDiagnostic("interface.notebook.pin_failed", "Notebook could not be pinned beside chat.", err)))}><Bookmark size={16} fill={pinnedPath === path ? "currentColor" : "none"} /></button>}</div>
     <form className="notebook-create" onSubmit={event => {event.preventDefault(); void create();}}><input aria-label="New notebook name" placeholder="New notebook name" value={newPath} onChange={event => setNewPath(event.target.value)} /><button className="icon-button subtle" type="submit" disabled={!newPath.trim() || busy === "create"} aria-label="Create notebook" title="Create notebook"><Plus size={17} /></button></form>
