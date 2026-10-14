@@ -230,6 +230,7 @@ class ControlAssistantWork:
                     item
                     for item in matches
                     if item.metadata.get("control_assistant") is True
+                    and item.metadata.get("archived_at") is None
                 ),
                 None,
             )
