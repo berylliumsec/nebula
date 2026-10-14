@@ -17,6 +17,7 @@ import type {
   ChatSessionActivity,
   ChatAttentionItem,
   ChatSessionSummary,
+  ChatAssistantConfig,
   ChatSessionAssistantSettingsRequest,
   ChatStreamEvent,
   ChatTurn,
@@ -3608,6 +3609,9 @@ export function chatRequestBody(
 }
 
 function mapChatSession(value: WireChatSession): ChatSessionSummary {
+  const savedConfig = value.metadata?.assistant_config;
+  const assistantConfig = savedConfig && typeof savedConfig === "object" && !Array.isArray(savedConfig)
+    ? mapChatAssistantConfig(savedConfig as JsonObject) : undefined;
   return {
     id: value.id,
     engagementId: value.engagement_id,
@@ -3624,6 +3628,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     isSideChat: value.metadata?.side_chat === true,
     isControlAssistant: value.metadata?.control_assistant === true,
+    assistantConfig,
     inheritedMessageCount: typeof value.metadata?.inherited_message_count === "number"
       ? value.metadata.inherited_message_count : undefined,
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
@@ -3640,6 +3645,32 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
+  };
+}
+
+function mapChatAssistantConfig(value: JsonObject): ChatAssistantConfig | undefined {
+  if ((value.backend !== "provider" && value.backend !== "harness") || typeof value.profile_id !== "string" || typeof value.model !== "string") return undefined;
+  return {
+    backend: value.backend,
+    profileId: value.profile_id,
+    model: value.model,
+    reasoningEffort: value.reasoning_effort as ChatAssistantConfig["reasoningEffort"],
+    harnessReasoningEffort: typeof value.harness_reasoning_effort === "string" ? value.harness_reasoning_effort : undefined,
+    harnessServiceTier: typeof value.harness_service_tier === "string" ? value.harness_service_tier : undefined,
+    harnessMode: typeof value.harness_mode === "string" ? value.harness_mode : undefined,
+    harnessCyberAccessProgram: value.harness_cyber_access_program as ChatAssistantConfig["harnessCyberAccessProgram"],
+    mcpServerIds: Array.isArray(value.mcp_server_ids) ? value.mcp_server_ids.map(String) : [],
+    hookIds: Array.isArray(value.hook_ids) ? value.hook_ids.map(String) : [],
+    includeKnowledge: value.include_knowledge !== false,
+    allowCloudKnowledge: value.allow_cloud_knowledge === true,
+    toolsEnabled: value.tools_enabled === true,
+    allowSubagents: value.allow_subagents === true,
+    allowAgentMessaging: value.allow_agent_messaging === true,
+    maxActiveSubagents: typeof value.max_active_subagents === "number" ? value.max_active_subagents : undefined,
+    subagentProviderId: typeof value.subagent_provider_id === "string" ? value.subagent_provider_id : undefined,
+    subagentHarnessProfileId: typeof value.subagent_harness_profile_id === "string" ? value.subagent_harness_profile_id : undefined,
+    subagentModel: typeof value.subagent_model === "string" ? value.subagent_model : undefined,
+    subagentReasoningEffort: value.subagent_reasoning_effort as ChatAssistantConfig["subagentReasoningEffort"],
   };
 }
 
@@ -9287,12 +9318,28 @@ export class ApiClient {
   listChatSessions(
     engagementId: string,
     signal?: AbortSignal,
+    includeControlAssistant = false,
   ): Promise<Page<ChatSessionSummary>> {
     return this.listAll<WireChatSession>(
       "chat-sessions",
       signal,
       engagementId,
-    ).then((items) => page(items.map(mapChatSession).filter(session => !session.isSideChat && !session.isControlAssistant)));
+    ).then((items) => page(items.map(mapChatSession).filter(session => !session.isSideChat && (includeControlAssistant || !session.isControlAssistant))));
+  }
+
+  getChatAssistantConfig(sessionId: string): Promise<{sessionId: string; revision: number; settings: ChatAssistantConfig}> {
+    return this.request<{session_id: string; revision: number; settings: JsonObject}>(
+      `chat-sessions/${encodeURIComponent(sessionId)}/assistant-config`,
+    ).then(value => ({sessionId: value.session_id, revision: value.revision, settings: mapChatAssistantConfig(value.settings)!}));
+  }
+
+  updateChatAssistantConfig(sessionId: string, expectedRevision: number, settings: Record<string, unknown>): Promise<{sessionId: string; revision: number; settings: ChatAssistantConfig}> {
+    const wire: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(settings)) wire[key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)] = value;
+    return this.request<{session_id: string; revision: number; settings: JsonObject}>(
+      `chat-sessions/${encodeURIComponent(sessionId)}/assistant-config`,
+      {method: "PATCH", body: JSON.stringify({expected_revision: expectedRevision, settings: wire})},
+    ).then(value => ({sessionId: value.session_id, revision: value.revision, settings: mapChatAssistantConfig(value.settings)!}));
   }
 
   getControlAssistantSession(engagementId: string, signal?: AbortSignal): Promise<ChatSessionSummary | undefined> {
