@@ -5855,7 +5855,10 @@ class ChatService:
                 ("MCP servers", bool(mcp_profiles)),
                 ("SSH hosts", bool(ssh_environments)),
                 ("web search", web_search_selected),
-                ("Nebula product help, settings, and work", settings_assistant_available),
+                (
+                    "Nebula product help, settings, and work",
+                    settings_assistant_available,
+                ),
                 ("browser control", bool(browser_session_id)),
                 ("project model context", model_context),
                 ("skill resources", skill_resources_selected),

@@ -878,10 +878,13 @@ def provider_plugins(
         from .control_assistant_work import WORK_TOOLS, dispatch_work_tool
 
         for name, description, schema, read_only in WORK_TOOLS:
+
             async def run_work(
                 arguments: dict[str, Any], *, tool_name: str = name
             ) -> dict[str, Any]:
-                return await dispatch_work_tool(work, engagement_id, tool_name, arguments)
+                return await dispatch_work_tool(
+                    work, engagement_id, tool_name, arguments
+                )
 
             plugins.append(
                 AnalysisTool(
@@ -890,8 +893,12 @@ def provider_plugins(
                         description=description,
                         input_schema=schema,
                         output_schema={"type": "object", "additionalProperties": True},
-                        risk_class=RiskClass.LOCAL_READ if read_only else RiskClass.WORKSPACE_WRITE,
-                        idempotency=IdempotencyBehavior.SAFE if read_only else IdempotencyBehavior.NON_IDEMPOTENT,
+                        risk_class=RiskClass.LOCAL_READ
+                        if read_only
+                        else RiskClass.WORKSPACE_WRITE,
+                        idempotency=IdempotencyBehavior.SAFE
+                        if read_only
+                        else IdempotencyBehavior.NON_IDEMPOTENT,
                     ),
                     run_work,
                 )
