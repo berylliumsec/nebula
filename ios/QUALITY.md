@@ -1,5 +1,32 @@
 # iOS shell acceptance contract
 
+## Assistant-only app contract (2026-10-14)
+
+The installed iPhone app uses its existing Core connection, pairing cookie, and
+`NebulaShell/1.0` user-agent token. The Core-served production UI selects an
+assistant-only route for that token. Regular mobile browsers keep the full
+Workbench. No native app release or data migration is needed for the UI change,
+but the serving Core must include the updated UI bundle.
+
+Journey: launch the paired app, choose a project and conversation, message a
+configured agent, read streaming and saved output, handle inline approval or
+agent input, refresh, background/resume, and recover from a Core outage. The
+cross-project “Needs you” list reads pending chat actions from Core only while
+the app is open; it does not send push notifications. Conversation identity is
+in the URL; transcript, pending actions and decisions are Core-owned; connection
+addresses and pairing remain native and WebKit-owned respectively. Terminal,
+Missions, Activity, agent configuration, and execution launch have no app entry.
+
+Acceptance requires a focused API test, production-bundle desktop and mobile
+Chromium/WebKit browser checks, a paired disposable real Core on a non-loopback
+LAN origin, and signed physical iPhone verification of pairing, keyboard,
+rotation, background/resume, decision, outage, and retry. Record missing gates
+as incomplete and leave the implementation PR open until they are exercised.
+
+The dated sections below preserve earlier verification of the full Workbench
+phone layout. Its Terminal and Activity tabs are superseded for the installed
+app by the assistant-only contract above; they remain part of mobile web.
+
 Journey: launch Nebula on iPhone, confirm a LAN server, pair through Nebula's existing screen, select and use a chat, background/resume, and recover from a connection failure.
 
 | Step | Invariant | Authority | Evidence planned |

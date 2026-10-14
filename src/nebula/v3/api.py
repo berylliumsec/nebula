@@ -319,6 +319,7 @@ from .domain import (
     HarnessProfile,
     HarnessInteraction,
     HarnessInteractionStatus,
+    HarnessTurnOrigin,
     HarnessSession,
     HarnessTurn,
     HarnessWorkspaceAccess,
@@ -1046,6 +1047,16 @@ class ChatSessionActivity(NebulaModel):
     session_id: str
     state: Literal["working", "waiting", "idle"]
     turn_id: str | None = None
+
+
+class ChatAttentionItem(NebulaModel):
+    kind: Literal["approval", "question"]
+    action_id: str
+    engagement_id: str
+    engagement_name: str
+    session_id: str
+    session_title: str
+    requested_at: datetime
 
 
 class ChatImageUploadRequest(NebulaModel):
@@ -11342,6 +11353,117 @@ def create_app(
         # The conversation list polls this; an unchanged answer is a 304.
         unchanged = conditional(request, response, content_etag("activity", activity))
         return unchanged or activity
+
+    @app.get(
+        f"{API_PREFIX}/chat/attention",
+        response_model=list[ChatAttentionItem],
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    def list_chat_attention(request: Request, response: Response) -> Any:
+        """One Core-owned list of operator actions blocking ordinary chats."""
+
+        items: list[ChatAttentionItem] = []
+        sessions: dict[str, ChatSession | None] = {}
+        projects: dict[str, Engagement | None] = {}
+
+        def target(
+            session_id: str | None, turn_id: str | None
+        ) -> tuple[ChatSession, Engagement] | None:
+            if not session_id or not turn_id:
+                return None
+            if session_id not in sessions:
+                try:
+                    sessions[session_id] = store.get(ChatSession, session_id)
+                except NotFoundError:
+                    sessions[session_id] = None
+            session = sessions[session_id]
+            if (
+                not session
+                or session.metadata.get("temporary_assistant") is True
+                or session.metadata.get("side_chat") is True
+                or is_subagent_session(session)
+            ):
+                return None
+            if session.engagement_id not in projects:
+                try:
+                    projects[session.engagement_id] = store.get(
+                        Engagement, session.engagement_id
+                    )
+                except NotFoundError:
+                    projects[session.engagement_id] = None
+            project = projects[session.engagement_id]
+            if not project or project.status == EngagementStatus.ARCHIVED:
+                return None
+            try:
+                turn = store.get(ChatTurn, turn_id)
+            except NotFoundError:
+                return None
+            if (
+                turn.session_id != session.id
+                or turn.engagement_id != project.id
+                or turn.status != ChatTurnStatus.WAITING_APPROVAL
+            ):
+                return None
+            return session, project
+
+        for approval in store.find_entities(
+            Approval,
+            {
+                "status": ApprovalStatus.PENDING.value,
+                "origin": ToolCallOrigin.CHAT.value,
+            },
+        ):
+            resolved = target(approval.chat_session_id, approval.chat_turn_id)
+            if not resolved:
+                continue
+            session, project = resolved
+            items.append(
+                ChatAttentionItem(
+                    kind="approval",
+                    action_id=approval.id,
+                    engagement_id=project.id,
+                    engagement_name=project.name,
+                    session_id=session.id,
+                    session_title=session.title,
+                    requested_at=approval.requested_at,
+                )
+            )
+
+        for interaction in store.find_entities(
+            HarnessInteraction,
+            {
+                "status": HarnessInteractionStatus.PENDING.value,
+                "origin": HarnessTurnOrigin.CHAT.value,
+            },
+        ):
+            if not interaction.chat_session_id:
+                continue
+            try:
+                harness_turn = store.get(HarnessTurn, interaction.harness_turn_id)
+            except NotFoundError:
+                continue
+            resolved = target(interaction.chat_session_id, harness_turn.chat_turn_id)
+            if not resolved:
+                continue
+            session, project = resolved
+            items.append(
+                ChatAttentionItem(
+                    kind="question",
+                    action_id=interaction.id,
+                    engagement_id=project.id,
+                    engagement_name=project.name,
+                    session_id=session.id,
+                    session_title=session.title,
+                    requested_at=interaction.created_at,
+                )
+            )
+
+        items.sort(key=lambda item: (item.requested_at, item.action_id), reverse=True)
+        unchanged = conditional(
+            request, response, content_etag("chat-attention", items)
+        )
+        return unchanged or items
 
     @app.get(
         f"{API_PREFIX}/chat/control-assistant/session",

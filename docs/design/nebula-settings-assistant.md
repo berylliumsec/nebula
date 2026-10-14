@@ -4,6 +4,12 @@ Entry: the persistent assistant icon in the shared shell opens one movable,
 hideable control conversation. Closing the window preserves its Core transcript.
 The operator may open Settings from a catalog result without losing the draft.
 
+The installed iPhone app presents project agent conversations directly. It does
+not mount this Settings assistant or its destination and mutation tools. The
+app can choose among already configured agent runtimes and routes its App
+connection action to native settings. Full Nebula in a browser retains this
+Settings assistant and the complete destination catalog.
+
 | Journey | Observable invariant | Authority | Test layer |
 | --- | --- | --- | --- |
 | Discover and open | Icon is reachable on every route and at phone widths | Shell React state | Component and browser |
