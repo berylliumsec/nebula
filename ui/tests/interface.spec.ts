@@ -14383,6 +14383,13 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await page.getByRole("button", {name: "Start new chat"}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
   await expect(composer).toBeVisible();
+  const withSideTab = new URL(page.url());
+  withSideTab.searchParams.append("panel", "terminal:1:shell-probe");
+  withSideTab.searchParams.set("panelTab", "shell-probe");
+  await page.goto(withSideTab.toString());
+  await expect(page.locator("#side-tool-panel")).toHaveCount(0);
+  await page.getByRole("button", {name: "Start new chat"}).click();
+  await expect(composer).toBeVisible();
   const send = page.getByRole("button", {name: "Send message"});
   await expect(send).toBeVisible();
   const sendBounds = await send.evaluate(element => {
