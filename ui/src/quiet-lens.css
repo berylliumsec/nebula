@@ -393,6 +393,14 @@
     margin-left: 36px;
     margin-right: 12px;
   }
+  /* The installed assistant has no side lens to reserve space for. */
+  :root[data-theme="quiet-lens"] .assistant-only-shell .sessions-page .chat-scroll {
+    padding-inline: 16px;
+  }
+  :root[data-theme="quiet-lens"] .assistant-only-shell .sessions-page .chat-composer {
+    width: calc(100% - 24px);
+    margin-inline: 12px;
+  }
 }
 
 @media (hover: none), (pointer: coarse) {

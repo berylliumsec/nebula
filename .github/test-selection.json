@@ -1,42 +1,52 @@
 {
-  "change_digest": "21b588a7fe34381c54b9196af5ffa36f9c331b09ab10a51a2f833bcb4fdd58c6",
-  "reviewed_by": "Codex navigation and loading efficiency review",
-  "reason": "The change narrows the Workbench conversation list to a recent indexed page, keeps older history and full search available, mounts Terminal and Code only when selected, isolates mission events and snapshots from general workspace consumers, stops mission selection and mutation from bootstrapping the project again, and clears previous-project identities on a switch. The focused Python tests cover Core ordering and SQLite migration; selecting the migration test also triggers the existing PostgreSQL migration job, which checks the widened Alembic revision column needed to reach the new index. Frontend files cover URL identity, revision reconciliation, event ownership, mission controls, snapshot display, recovery, and component behavior. Seven browser runs cover the new loading journey in desktop Chromium and emulated mobile Chromium/WebKit at 320, 390, and 430 px. Three real-Core journeys cover durable conversation switching, project selection after production LAN reload, and mission recovery. A separate disposable seeded production build is used for operator dogfooding. Two additional production-LAN Core browser runs seed 101 conversations and verify an older deep link restores after a delayed exact-session read and a recent-page response, on desktop and narrow viewports.",
-  "exclusions": "Full suites, unrelated providers, browser automation, native desktop and iOS tests, release packaging, and physical-device testing are outside this selection. The mocked browser journey verifies request bounds and navigation presentation; real-Core tests and the disposable LAN Core verify durable behavior separately.",
+  "change_digest": "bcd6c130f58b00862fc46a96ba0ea75a2e694a39661526754f3738840aefae6c",
+  "reviewed_by": "Codex focused Butler phase 1 capability gateway, settings, chat controls, and iPhone layout review",
+  "reason": "Butler uses a four-tool Core capability gateway shared by provider and harness turns; search, paging, and describe reveal selected-project actions on demand. Python coverage exercises project scoping, revision and schema validation, read/change separation, chat fork/delete/retry, chat/goal/mission/approval controls, and the advertised catalog. Frontend coverage exercises Butler identity, own settings, Voice labels, and project-bound action receipts. Selected real-Core LAN browser journeys cover small-context direct requests, discovery-driven mission creation, settings persistence, Core settings/help/navigation, and the centered phone assistant shell across desktop/mobile Chromium and WebKit.",
+  "exclusions": "No native iOS or Rust source changed, so native tests are excluded. Browser and notes control remain deferred by the user. Generic provider, harness, streaming, unrelated pages and full suites are excluded. The harness integration selection is one exact test from its large shared file; the Settings runtime integration selection is one exact test. A physical iPhone check remains a separate acceptance gate.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 84,
+    "python": 31,
+    "frontend": 42,
     "native": 0,
-    "playwright": 12
+    "playwright": 28
   },
   "python": [
-    "tests/v3/test_chat_session_recent_page.py",
-    "tests/v3/test_migrations.py::test_sqlite_upgrade_downgrade_and_immutable_operation_events"
+    "tests/v3/test_control_assistant_work.py",
+    "tests/v3/test_butler_capabilities.py",
+    "tests/v3/test_settings_assistant_tools.py::test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant",
+    "tests/v3/test_harnesses.py::test_butler_harness_has_scoped_capability_gateway_and_isolated_session"
   ],
   "frontend": [
-    "ui/src/resourceRoutes.test.ts",
-    "ui/src/api/client.chatSessionPage.test.ts",
-    "ui/src/components/SideNav.test.tsx",
-    "ui/src/pages/chatSessionList.test.ts",
-    "ui/src/pages/AgentsPage.test.tsx",
-    "ui/src/pages/OverviewPage.test.tsx",
-    "ui/src/state/WorkspaceContext.recovery.test.tsx",
-    "ui/src/components/MissionControls.test.tsx",
-    "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx"
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/NebulaVoice.test.tsx",
+    "ui/src/api/client.assistantConfig.test.ts",
+    "ui/src/components/nebulaAssistantActions.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:navigation-loading/desktop",
-    "entry:navigation-loading/mobile-chromium-small",
-    "entry:navigation-loading/mobile-chromium-ledger-390",
-    "entry:navigation-loading/mobile-chromium-wide",
-    "entry:navigation-loading/mobile-webkit-small",
-    "entry:navigation-loading/mobile-webkit",
-    "entry:navigation-loading/mobile-webkit-wide",
-    "entry:workbench-navigation-core/assistant-real-desktop",
-    "entry:project-switcher-search/real-core",
-    "entry:mission-restart-recovery-core/real-core",
-    "entry:navigation-deeplink/desktop",
-    "entry:navigation-deeplink/narrow"
+    "entry:control-assistant-work/assistant-real-desktop",
+    "entry:control-assistant-work/assistant-real-compact",
+    "entry:control-assistant-work/assistant-real-chromium-320",
+    "entry:control-assistant-work/assistant-real-chromium-390",
+    "entry:control-assistant-work/assistant-real-chromium-430",
+    "entry:control-assistant-work/assistant-real-webkit-320",
+    "entry:control-assistant-work/assistant-real-webkit-390",
+    "entry:control-assistant-work/assistant-real-webkit-430",
+    "entry:assistant-direct-request/assistant-real-desktop",
+    "entry:assistant-direct-request/assistant-real-chromium-390",
+    "entry:assistant-direct-request/assistant-real-webkit-390",
+    "entry:ios-assistant-only/desktop",
+    "entry:ios-assistant-only/compact",
+    "entry:ios-assistant-only/mobile-chromium-small",
+    "entry:ios-assistant-only/mobile-chromium",
+    "entry:ios-assistant-only/mobile-chromium-wide",
+    "entry:ios-assistant-only/mobile-webkit-small",
+    "entry:ios-assistant-only/mobile-webkit",
+    "entry:ios-assistant-only/mobile-webkit-wide",
+    "entry:ios-assistant-only/browser-chromium-landscape",
+    "entry:ios-assistant-only/browser-webkit-landscape",
+    "entry:ios-assistant-only/assistant-real-desktop",
+    "entry:ios-assistant-only/assistant-real-chromium-390",
+    "entry:ios-assistant-only/assistant-real-webkit-390",
+    "entry:nebula-settings-assistant/assistant-real-desktop"
   ]
 }
