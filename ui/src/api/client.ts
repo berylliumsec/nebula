@@ -9414,6 +9414,35 @@ export class ApiClient {
     ).then((value) => value ? mapChatSession(value) : undefined);
   }
 
+  getOrCreateControlAssistantSession(body: {
+    engagementId: string;
+    backend: "provider" | "harness";
+    providerId?: string;
+    harnessProfileId?: string;
+    model?: string;
+    mcpServerIds?: string[];
+    harnessReasoningEffort?: string;
+    harnessServiceTier?: string;
+    harnessCyberAccessProgram?: "automatic" | "standard" | "daybreakBlue" | "daybreakRed";
+    allowCloudToolResults?: boolean;
+  }, signal?: AbortSignal): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>("chat/control-assistant/session", {
+      method: "POST", signal,
+      body: JSON.stringify({
+        engagement_id: body.engagementId,
+        backend: body.backend,
+        provider_id: body.providerId,
+        harness_profile_id: body.harnessProfileId,
+        model: body.model,
+        mcp_server_ids: body.mcpServerIds,
+        harness_reasoning_effort: body.harnessReasoningEffort,
+        harness_service_tier: body.harnessServiceTier,
+        harness_cyber_access_program: body.harnessCyberAccessProgram,
+        allow_cloud_tool_results: body.allowCloudToolResults,
+      }),
+    }).then(mapChatSession);
+  }
+
   startVoiceSession(engagementId: string, sdp: string, signal?: AbortSignal): Promise<{ session_id: string; sdp: string }> {
     return this.request("voice/session", {
       method: "POST", signal,

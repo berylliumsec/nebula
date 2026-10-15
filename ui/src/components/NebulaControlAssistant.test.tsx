@@ -12,6 +12,11 @@ vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: vi.fn(),
 }));
 
+const savedButler = {
+  id: "control", engagementId: "project", backend: "harness" as const,
+  harnessProfileId: "local", model: "model", isControlAssistant: true,
+};
+
 describe("NebulaControlAssistant", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -23,7 +28,7 @@ describe("NebulaControlAssistant", () => {
     const secure = window.isSecureContext;
     Object.defineProperty(window, "isSecureContext", { configurable: true, value: false });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), getVoiceWorkRoster: vi.fn().mockResolvedValue({ project: { id: "project", name: "Project" }, chats: [], missions: [], more_chats: false, more_missions: false }) },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), getVoiceWorkRoster: vi.fn().mockResolvedValue({ project: { id: "project", name: "Project" }, chats: [], missions: [], more_chats: false, more_missions: false }) },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -45,7 +50,7 @@ describe("NebulaControlAssistant", () => {
       message: { id: "answer", role: "assistant", content: "One mission is running." },
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -92,7 +97,7 @@ describe("NebulaControlAssistant", () => {
       return {sessionId: "control", revision, settings: currentConfig};
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: {getControlAssistantSession: vi.fn().mockResolvedValue(saved), getChatAssistantConfig, updateChatAssistantConfig,
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),getControlAssistantSession: vi.fn().mockResolvedValue(saved), getChatAssistantConfig, updateChatAssistantConfig,
         listChatMessages: vi.fn().mockResolvedValue([]), streamChat},
       engagement: {id: "project", name: "Project"}, providers: [],
       harnesses: [{id: "local", name: "Local", kind: "codex_app_server", enabled: true, healthy: true, localOnly: true,
@@ -127,12 +132,22 @@ describe("NebulaControlAssistant", () => {
 
   it("lets Butler choose first-turn settings before a saved conversation exists", async () => {
     const user = userEvent.setup();
+    let config = {
+      backend: "harness" as const, profileId: "local", model: "model",
+      harnessReasoningEffort: undefined as string | undefined,
+      harnessCyberAccessProgram: "automatic" as string,
+    };
+    const getChatAssistantConfig = vi.fn().mockImplementation(async () => ({ sessionId: "control", revision: 1, settings: config }));
+    const updateChatAssistantConfig = vi.fn().mockImplementation(async (_id: string, _revision: number, patch: Record<string, unknown>) => {
+      config = { ...config, ...patch } as typeof config;
+    });
     const streamChat = vi.fn().mockResolvedValue({
       sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
       message: {id: "answer", role: "assistant", content: "Ready."},
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: {getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat},
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null),
+        getChatAssistantConfig, updateChatAssistantConfig, streamChat },
       engagement: {id: "project", name: "Project"}, providers: [],
       harnesses: [{id: "local", name: "Local", kind: "codex_app_server", enabled: true, healthy: true,
         localOnly: true, permitsSensitiveData: true, models: ["model"], defaultModel: "model",
@@ -146,6 +161,8 @@ describe("NebulaControlAssistant", () => {
     await user.selectOptions(screen.getByRole("combobox", {name: "Butler cyber access"}), "daybreakBlue");
     await user.click(screen.getByRole("button", {name: "Save"}));
     expect(screen.getByText("Saved for Butler’s first message.")).toBeInTheDocument();
+    expect(updateChatAssistantConfig).toHaveBeenCalledWith("control", 1,
+      { harnessReasoningEffort: "high", harnessCyberAccessProgram: "daybreakBlue" });
     await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Start work{enter}");
     await waitFor(() => expect(streamChat).toHaveBeenCalledWith(expect.objectContaining({
       controlAssistant: true, harnessReasoningEffort: "high", harnessCyberAccessProgram: "daybreakBlue",
@@ -163,7 +180,7 @@ describe("NebulaControlAssistant", () => {
     const getControlAssistantSession = vi.fn().mockReturnValue(pendingSession);
     const getChatAssistantConfig = vi.fn().mockResolvedValue({sessionId: "control", revision: 2, settings: saved.assistantConfig});
     vi.mocked(useWorkspace).mockReturnValue({
-      api: {getControlAssistantSession, getChatAssistantConfig, listChatMessages: vi.fn().mockResolvedValue([])},
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),getControlAssistantSession, getChatAssistantConfig, listChatMessages: vi.fn().mockResolvedValue([])},
       engagement: {id: "project", name: "Project"},
       providers: [{id: "local-provider", name: "Local provider", enabled: true, state: "healthy", healthy: true,
         local: true, permitsSensitiveData: true, models: ["model"], defaultModel: "model"}],
@@ -190,7 +207,7 @@ describe("NebulaControlAssistant", () => {
       message: {id: "answer", role: "assistant", content: "Ready."},
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: {getControlAssistantSession: vi.fn().mockResolvedValue(saved),
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),getControlAssistantSession: vi.fn().mockResolvedValue(saved),
         getChatAssistantConfig: vi.fn().mockResolvedValue({sessionId: "control", revision: 2,
           settings: {...saved.assistantConfig, harnessCyberAccessProgram: "automatic"}}),
         listChatMessages: vi.fn().mockResolvedValue([]), streamChat},
@@ -206,6 +223,73 @@ describe("NebulaControlAssistant", () => {
       reasoningEffort: "high", harnessCyberAccessProgram: undefined,
       harnessReasoningEffort: undefined, harnessServiceTier: undefined, harnessMode: undefined,
     }), expect.any(Function), expect.any(AbortSignal)));
+  });
+
+  it("uses the same saved Butler chat for successive voice questions", async () => {
+    class VoiceChannel extends EventTarget {
+      readyState = "open";
+      send() {}
+      close() { this.readyState = "closed"; }
+      emit(event: Record<string, unknown>) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) })); }
+    }
+    class VoicePeer extends EventTarget {
+      static latest: VoicePeer;
+      channel = new VoiceChannel();
+      iceGatheringState = "complete";
+      localDescription = { sdp: "v=0\r\nvoice-offer\r\n" };
+      constructor() { super(); VoicePeer.latest = this; }
+      createDataChannel() { return this.channel; }
+      addTrack() { return {}; }
+      async createOffer() { return { type: "offer", sdp: this.localDescription.sdp }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() {}
+      close() {}
+    }
+    const originalSecure = window.isSecureContext;
+    const originalDevices = navigator.mediaDevices;
+    Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue({
+      getTracks: () => [{ stop: vi.fn() }], getAudioTracks: () => [{ enabled: true }],
+    }) } });
+    vi.stubGlobal("RTCPeerConnection", VoicePeer);
+    const saved = { id: "control", engagementId: "project", backend: "harness", harnessProfileId: "local", model: "model" };
+    // Initial panel restore can still be pending when Voice starts. The first
+    // spoken turn must adopt Core's already-saved conversation on its own.
+    const getControlAssistantSession = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(saved);
+    const getOrCreateControlAssistantSession = vi.fn().mockResolvedValue({ ...saved, isControlAssistant: true });
+    const streamChat = vi.fn().mockResolvedValue({ sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+      message: { id: "answer", role: "assistant", content: "I remember." } });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession, getOrCreateControlAssistantSession, streamChat, startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live", sdp: "answer" }),
+        getVoiceWorkRoster: vi.fn().mockResolvedValue({ project: { id: "project", name: "Project" }, chats: [], missions: [], more_chats: false, more_missions: false }) },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      const user = userEvent.setup();
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", { name: "Open Butler" }));
+      await user.click(await screen.findByRole("button", { name: "Start Butler Voice" }));
+      await waitFor(() => expect(VoicePeer.latest).toBeDefined());
+      VoicePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "Remember blue.", start_ms: 100, end_ms: 600 });
+      VoicePeer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "first", target: "client" } });
+      await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+      VoicePeer.latest.channel.emit({ type: "session.output_transcript.delta", delta: "I remember.", start_ms: 900, end_ms: 1_200 });
+      VoicePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "What color?", start_ms: 2_000, end_ms: 2_500 });
+      VoicePeer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 2_700, delegation: { id: "second", target: "client" } });
+      await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+      expect(streamChat.mock.calls[0][0]).toMatchObject({ sessionId: "control", messages: [{ role: "user", content: "Remember blue." }] });
+      expect(streamChat.mock.calls[1][0]).toMatchObject({ sessionId: "control", messages: [{ role: "user", content: "What color?" }] });
+      expect(streamChat.mock.calls[0][0].contextAttachments).toBeUndefined();
+      expect(streamChat.mock.calls[1][0].contextAttachments).toBeUndefined();
+      expect(getControlAssistantSession).toHaveBeenCalledWith("project");
+      expect(getOrCreateControlAssistantSession).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.defineProperty(window, "isSecureContext", { configurable: true, value: originalSecure });
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: originalDevices });
+      vi.unstubAllGlobals();
+    }
   });
 
   it("shows a durable chat link from a successful work receipt when the model omits it", async () => {
@@ -225,7 +309,7 @@ describe("NebulaControlAssistant", () => {
         message: { id: "answer", role: "assistant", content: "I started it." } };
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession, listChatMessages, streamChat },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession, listChatMessages, streamChat },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -316,7 +400,7 @@ describe("NebulaControlAssistant", () => {
       message: { id: "answer", role: "assistant", content: "I checked the mission." },
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -391,7 +475,7 @@ describe("NebulaControlAssistant", () => {
         message: { id: "answer", role: "assistant", content: "Applying Zero Dark on this device." } };
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession, listChatMessages, streamChat },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession, listChatMessages, streamChat },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -426,7 +510,7 @@ describe("NebulaControlAssistant", () => {
         message: { role: "assistant", content: "I requested the Host mode change." } };
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getAutomationPolicy, updateAutomationPolicy },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getAutomationPolicy, updateAutomationPolicy },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -462,7 +546,7 @@ describe("NebulaControlAssistant", () => {
         message: { role: "assistant", content: "Applying the scope." } };
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, request },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, request },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -491,7 +575,7 @@ describe("NebulaControlAssistant", () => {
         message: { role: "assistant", content: "Starting the browser." } };
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, request, startHeadlessSecuritySession, getHeadlessSecuritySession },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, request, startHeadlessSecuritySession, getHeadlessSecuritySession },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -551,7 +635,7 @@ describe("NebulaControlAssistant", () => {
         message: { role: "assistant", content: "Opening the Projects list." } };
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -584,7 +668,7 @@ describe("NebulaControlAssistant", () => {
       message: { role: "assistant", content: "Done" },
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -610,7 +694,7 @@ describe("NebulaControlAssistant", () => {
       message: { role: "assistant", content: "Docker can edit the linked project workspace. [Open Project Policy](/settings#engagement-policy-settings) to review Host mode." },
     });
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
       engagement: { id: "project", name: "Project" }, providers: [],
       harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
@@ -639,7 +723,7 @@ describe("NebulaControlAssistant", () => {
     const getAutomationPolicy = vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(saved);
     const updateAutomationPolicy = vi.fn().mockResolvedValue(saved);
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), getAutomationPolicy, updateAutomationPolicy },
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), getAutomationPolicy, updateAutomationPolicy },
       engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
     } as unknown as ReturnType<typeof useWorkspace>);
     const onOpenSetting = vi.fn();
@@ -669,7 +753,7 @@ describe("NebulaControlAssistant", () => {
     const user = userEvent.setup();
     const updateAutomationPolicy = vi.fn();
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null),
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null),
         getAutomationPolicy: vi.fn().mockResolvedValue({ executionMode: "docker", revision: 3 }), updateAutomationPolicy },
       engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
     } as unknown as ReturnType<typeof useWorkspace>);
@@ -686,7 +770,7 @@ describe("NebulaControlAssistant", () => {
     const user = userEvent.setup();
     const updateAutomationPolicy = vi.fn();
     vi.mocked(useWorkspace).mockReturnValue({
-      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null),
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null),
         getAutomationPolicy: vi.fn().mockResolvedValue({ executionMode: "host" }), updateAutomationPolicy },
       engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
     } as unknown as ReturnType<typeof useWorkspace>);

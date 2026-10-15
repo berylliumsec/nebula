@@ -10,7 +10,7 @@
 .identity small { display: block; min-width: 0; max-width: 32vw; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .exit, .controls button, .workHeader button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-overlay); }
 .exit { padding: 0 14px; flex-shrink: 0; }
-.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-height: 0; margin: auto; align-items: center; }
+.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-height: max-content; margin: auto; align-items: center; }
 .center { grid-area: 1 / 1; justify-self: center; display: flex; flex-direction: column; align-items: center; justify-content: center; width: min(680px, 100%); min-width: 0; min-height: 500px; padding: 24px 0; text-align: center; }
 .orb { position: relative; width: clamp(150px, 25vw, 260px); aspect-ratio: 1 / 1.18; border-radius: 49% 51% 46% 54% / 43% 45% 55% 57%; background: radial-gradient(ellipse at 70% 28%, color-mix(in srgb, var(--voice-accent) 54%, white), transparent 52%), radial-gradient(ellipse at 23% 72%, var(--voice-accent), transparent 60%), radial-gradient(ellipse at 55% 55%, color-mix(in srgb, var(--voice-accent) 20%, var(--surface-overlay)), var(--surface-overlay) 76%); box-shadow: inset -12px -20px 40px color-mix(in srgb, var(--voice-accent) 15%, transparent), inset 12px 12px 26px color-mix(in srgb, white 12%, transparent), 0 0 20px color-mix(in srgb, var(--voice-accent) 30%, transparent), 0 0 100px color-mix(in srgb, var(--voice-accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--voice-accent) 54%, white); scale: var(--voice-scale, 1); translate: 0 var(--voice-rise, 0px); transition: scale 80ms ease-out, translate 80ms ease-out; animation: breathe 4s ease-in-out infinite; }
 .orb > div { position: absolute; inset: 15%; border-radius: 44% 56% 62% 38% / 49% 57% 43% 51%; border: 1px solid color-mix(in srgb, var(--voice-accent) 38%, transparent); transform: rotate(-18deg); }
@@ -20,15 +20,25 @@
 .controls button { padding: 0 14px; }
 .speakerPanel { width: min(520px, 100%); margin-top: 12px; padding: 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-overlay); text-align: left; }
 .speakerPanel p { margin: 0 0 10px; color: var(--muted); font-size: .86rem; }
+.panelStatus { display: flex; align-items: flex-start; gap: 8px; }
+.panelStatus p { flex: 1; min-width: 0; }
+.panelStatus button { flex: 0 0 44px; width: 44px; height: 44px; border: 0; border-radius: 999px; background: transparent; }
+.panelStatus button:hover { background: var(--surface-hover); }
 .speakerPanel label { display: grid; gap: 6px; color: var(--muted); font-size: .82rem; }
 .speakerPanel select { width: 100%; min-height: 44px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--canvas); color: var(--text); }
 .speakerActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .speakerActions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 44px; min-height: 44px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--canvas); color: var(--text); }
 .error { max-width: 52ch; margin: 14px 0; color: var(--red); overflow-wrap: anywhere; }
 .captions { display: grid; width: min(600px, 100%); gap: 8px; margin-top: 22px; text-align: left; }
-.captions p { min-width: 0; min-height: 3em; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-overlay); overflow-wrap: anywhere; }
-.captions small { display: block; margin-bottom: 4px; color: var(--muted); }
-.delegated { max-width: 100%; color: var(--muted); overflow-wrap: anywhere; }
+.captionCard { min-width: 0; padding: 8px 12px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-overlay); overflow-wrap: anywhere; }
+.captionHead { display: flex; align-items: center; justify-content: space-between; min-height: 18px; }
+.captionHead small { color: var(--muted); }
+.captionHead button { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; margin: -7px -8px -3px 0; border: 0; border-radius: 9px; background: transparent; }
+.captionHead button:hover { background: var(--surface-hover); }
+.captionCard p { margin: 4px 0 0; line-height: 1.4; }
+.captionPreview { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.captionFull { max-height: min(240px, 30dvh); overflow: auto; white-space: pre-wrap; }
+.delegated { display: -webkit-box; overflow: hidden; max-width: min(520px, 100%); margin: 10px 0 0; color: var(--muted); font-size: .85rem; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .work { grid-area: 1 / 1; justify-self: end; align-self: center; width: clamp(280px, 24vw, 360px); max-height: min(680px, 76dvh); margin-right: clamp(0px, 2vw, 40px); overflow: auto; padding: 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-overlay); }
 .workHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px 8px; }
 .workHeader h2 { margin: 0; font-size: 1rem; }
@@ -50,7 +60,7 @@
 .detail > strong, .detail > small { display: block; }
 .detail > small { color: var(--muted); }
 .detail p { max-height: 110px; overflow: auto; margin: 10px 0 0; font-size: .85rem; }
-.footer { display: flex; justify-content: center; align-items: center; gap: 9px; padding-top: 12px; color: var(--muted); font-size: .8rem; text-align: center; }
+.footer { display: flex; flex: 0 0 auto; justify-content: center; align-items: center; gap: 9px; padding-top: 12px; color: var(--muted); font-size: .8rem; text-align: center; }
 @keyframes breathe { 50% { transform: scale(1.035) rotate(2deg); } }
 @media (prefers-reduced-motion: reduce) { .orb { animation: none; scale: 1; translate: 0; transition: none; } }
 @media (max-width: 1500px) {

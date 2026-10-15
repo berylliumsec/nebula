@@ -77,6 +77,54 @@ describe("Butler Voice", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("keeps captions on the latest exchange and persists prior direct speech as its own Butler turn", async () => {
+    const onDelegate = vi.fn().mockResolvedValue("You said blue.");
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer" }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} initialMicrophone={Promise.resolve(microphone)} onDelegate={onDelegate} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    await act(async () => {
+      FakePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "My favorite color is blue.", start_ms: 100, end_ms: 700 });
+      FakePeer.latest.channel.emit({ type: "session.output_transcript.delta", delta: "Okay.", start_ms: 750, end_ms: 900 });
+      FakePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "What did I say?", start_ms: 2_000, end_ms: 2_600 });
+      FakePeer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 2_800, delegation: { id: "follow_up", target: "client" } });
+    });
+    await waitFor(() => expect(onDelegate.mock.calls).toEqual([
+      ["My favorite color is blue."], ["What did I say?"],
+    ]), { timeout: 3_000 });
+    expect(screen.getByText("What did I say?")).toBeVisible();
+    expect(screen.queryByText(/My favorite color is blue\.What did I say/)).not.toBeInTheDocument();
+  });
+
+  it("saves speech captured while an earlier delegation runs even without another Live delegation", async () => {
+    let finishFirst: (value: string) => void = () => {};
+    const first = new Promise<string>((resolve) => { finishFirst = resolve; });
+    const onDelegate = vi.fn().mockImplementationOnce(() => first).mockResolvedValue("The second turn is saved.");
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer" }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} initialMicrophone={Promise.resolve(microphone)} onDelegate={onDelegate} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    await act(async () => {
+      FakePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "Remember this first.", start_ms: 100, end_ms: 600 });
+      FakePeer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 800, delegation: { id: "first", target: "client" } });
+    });
+    await waitFor(() => expect(onDelegate).toHaveBeenCalledWith("Remember this first."), { timeout: 3_000 });
+    await act(async () => FakePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "And remember this second.", start_ms: 2_000, end_ms: 2_500 }));
+    await act(async () => finishFirst("The first turn is saved."));
+    await waitFor(() => expect(onDelegate.mock.calls).toEqual([
+      ["Remember this first."], ["And remember this second."],
+    ]), { timeout: 4_000 });
+    await act(async () => FakePeer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 2_700, delegation: { id: "late_second", target: "client" } }));
+    await waitFor(() => expect(FakePeer.latest.channel.sent).toEqual(expect.arrayContaining([
+      expect.objectContaining({ delegation_id: "late_second", content: "The second turn is saved." }),
+    ])), { timeout: 3_000 });
+    expect(onDelegate).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the full-screen mode visible when microphone access needs HTTPS", async () => {
     Object.defineProperty(window, "isSecureContext", { configurable: true, value: false });
     const api = { getVoiceWorkRoster: vi.fn().mockResolvedValue({ ...roster, chats: [], missions: [] }) } as unknown as ApiClient;
@@ -111,6 +159,53 @@ describe("Butler Voice", () => {
     expect(screen.getByText("Hello there.")).toBeVisible();
     expect(screen.getByRole("group", { name: "Speaker audio" })).toHaveTextContent("no speaker stream arrived");
     expect(screen.getByRole("button", { name: "Reconnect voice" })).toBeVisible();
+  });
+
+  it("keeps live captions visible while long transcripts and input settings collapse independently", async () => {
+    const user = userEvent.setup();
+    let finishDelegation: (value: string) => void = () => undefined;
+    const onDelegate = vi.fn().mockImplementation(() => new Promise<string>((resolve) => { finishDelegation = resolve; }));
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer" }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} initialMicrophone={Promise.resolve(microphone)} onDelegate={onDelegate} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    await act(async () => FakePeer.latest.channel.emit({ type: "session.started" }));
+    const input = screen.getByRole("button", { name: "Microphone input" });
+    await user.click(input);
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("group", { name: "Microphone input" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Collapse input settings" }));
+    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("group", { name: "Microphone input" })).not.toBeInTheDocument();
+
+    const caller = "First part of an extended request that no longer needs the whole screen. ".repeat(3) + "Please check the active goal now.";
+    const assistant = "Earlier response detail that should be available on demand. ".repeat(3) + "I am checking the active goal.";
+    await act(async () => {
+      FakePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: caller, start_ms: 1000, end_ms: 1700 });
+      FakePeer.latest.channel.emit({ type: "session.output_transcript.delta", delta: assistant });
+    });
+    const callerToggle = screen.getByRole("button", { name: "Show full You transcript" });
+    const assistantToggle = screen.getByRole("button", { name: "Show full Nebula transcript" });
+    expect(callerToggle).toHaveAttribute("aria-expanded", "false");
+    expect(assistantToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText(/Please check the active goal now/)).toBeVisible();
+    expect(screen.getByText(/I am checking the active goal/)).toBeVisible();
+    expect(screen.queryByText(/^First part of an extended request/)).not.toBeInTheDocument();
+    await user.click(callerToggle);
+    expect(screen.getByText(/^First part of an extended request/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Collapse your transcript" })).toHaveAttribute("aria-expanded", "true");
+    expect(assistantToggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(screen.getByRole("button", { name: "Collapse your transcript" }));
+    expect(screen.queryByText(/^First part of an extended request/)).not.toBeInTheDocument();
+    expect(screen.getByText("Speaking")).toBeVisible();
+    await act(async () => FakePeer.latest.channel.emit({ type: "session.delegation.created", offset_ms: 1900, delegation: { id: "delegation_1", target: "client" } }));
+    const workStatus = await screen.findByText(/^Checking:/, {}, { timeout: 3000 });
+    expect(onDelegate).toHaveBeenCalledWith(caller);
+    expect(workStatus.compareDocumentPosition(screen.getByLabelText("Voice transcript")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => finishDelegation("Checked the goal."));
   });
 
   it("binds the remote audio track and starts playback independently of captions", async () => {

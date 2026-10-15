@@ -11,7 +11,7 @@ import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeCon
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
-import { REASONING_EFFORTS, type ChatAssistantConfig, type ChatMessage, type ReasoningEffort } from "../api/types";
+import { REASONING_EFFORTS, type ChatAssistantConfig, type ChatMessage } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
@@ -68,7 +68,6 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const abort = useRef<AbortController | undefined>(undefined);
   const activeTurn = useRef<{ turnId?: string; harnessTurnId?: string }>({});
-  const voiceSessionId = useRef<string | undefined>(undefined);
   const input = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -82,10 +81,41 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const { overview: attentionOverview, refresh: refreshAttention } = useButlerOverview(engagement ? api : undefined, engagement?.id ?? "", coreState);
   const attentionCount = attentionOverview?.summary.openIncidents ?? 0;
 
+  const getSavedSessionForTurn = async () => {
+    if (!api || !engagement || !runtime) throw new Error("Choose a project and a healthy model runtime to direct work.");
+    const options = assistantTurnOptions(runtime, harnesses);
+    const selectedProfile = runtime.kind === "provider"
+      ? providers.find((item) => item.id === runtime.id)
+      : harnesses.find((item) => item.id === runtime.id);
+    const cloudConsent = Boolean(selectedProfile
+      && !("local" in selectedProfile ? selectedProfile.local : selectedProfile.localOnly)
+      && selectedProfile.permitsSensitiveData);
+    const session = await api.getOrCreateControlAssistantSession({
+      engagementId: engagement.id,
+      backend: runtime.kind,
+      providerId: runtime.kind === "provider" ? runtime.id : undefined,
+      harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
+      model: options.model,
+      harnessReasoningEffort: options.harnessReasoningEffort,
+      harnessServiceTier: options.harnessServiceTier,
+      allowCloudToolResults: cloudConsent,
+    });
+    if (session.engagementId !== engagement.id || !session.isControlAssistant) {
+      throw new Error("Core returned a conversation outside this project's Butler. Retry after reconnecting.");
+    }
+    const config = typeof api.getChatAssistantConfig === "function"
+      ? (await api.getChatAssistantConfig(session.id)).settings
+      : session.assistantConfig;
+    setSessionId(session.id);
+    setSessionConfig(config);
+    const runtimeId = session.backend === "provider" ? session.providerId : session.harnessProfileId;
+    if (runtimeId && session.model) setSessionRuntime({ kind: session.backend, id: runtimeId, model: session.model });
+    return { session, config };
+  };
+
   useEffect(() => () => { abort.current?.abort(); }, [engagement?.id]);
 
   useEffect(() => {
-    voiceSessionId.current = undefined;
     setSessionId(undefined);
     setSessionRuntime(undefined);
     setSessionConfig(undefined);
@@ -104,7 +134,6 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       if (!current || !session || session.engagementId !== engagement?.id) return;
       localStorage.setItem(storageKey, session.id);
       setSessionId(session.id);
-      voiceSessionId.current = session.id;
       setSessionConfig(session.assistantConfig);
       if (typeof api.getChatAssistantConfig === "function") {
         void api.getChatAssistantConfig(session.id).then((saved) => {
@@ -216,29 +245,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSettingsError("");
     setSettingsStatus("");
     try {
-      if (!sessionId) {
-        setSessionConfig({
-          backend: selectedSettingsRuntime.kind, profileId: selectedSettingsRuntime.id, model: selectedSettingsRuntime.model,
-          reasoningEffort: selectedSettingsRuntime.kind === "provider" ? effortDraft as ReasoningEffort || undefined : undefined,
-          harnessReasoningEffort: selectedSettingsRuntime.kind === "harness" ? effortDraft || undefined : undefined,
-          harnessCyberAccessProgram: selectedSettingsRuntime.kind === "harness" && cyberChoices.length ? cyberDraft : undefined,
-          mcpServerIds: [], hookIds: [], includeKnowledge: true, allowCloudKnowledge: false,
-          toolsEnabled: false, allowSubagents: false, allowAgentMessaging: false,
-        });
-        setSettingsStatus("Saved for Butler’s first message.");
-        return;
-      }
-      const current = settingsRevision === undefined ? await api.getChatAssistantConfig(sessionId) : { revision: settingsRevision };
+      const targetSessionId = sessionId ?? (await getSavedSessionForTurn()).session.id;
+      const current = settingsRevision === undefined || !sessionId
+        ? await api.getChatAssistantConfig(targetSessionId)
+        : { revision: settingsRevision };
       const patch = selectedSettingsRuntime.kind === "provider"
         ? { reasoningEffort: effortDraft || null }
         : { harnessReasoningEffort: effortDraft || null, ...(cyberChoices.length ? { harnessCyberAccessProgram: cyberDraft } : {}) };
-      await api.updateChatAssistantConfig(sessionId, current.revision, patch);
-      const saved = await api.getChatAssistantConfig(sessionId);
+      await api.updateChatAssistantConfig(targetSessionId, current.revision, patch);
+      const saved = await api.getChatAssistantConfig(targetSessionId);
       setSessionConfig(saved.settings);
       setSettingsRevision(saved.revision);
       setEffortDraft(saved.settings.backend === "provider" ? saved.settings.reasoningEffort ?? "" : saved.settings.harnessReasoningEffort ?? "");
       setCyberDraft(saved.settings.harnessCyberAccessProgram ?? "automatic");
-      setSettingsStatus("Saved. Applies to Butler’s next message.");
+      setSettingsStatus(sessionId ? "Saved. Applies to Butler’s next message." : "Saved for Butler’s first message.");
     } catch (caught) {
       void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_save_failed", message: "Butler settings could not be saved.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
       setSettingsError(caught instanceof Error ? caught.message : "Could not save Butler settings. Reload and retry.");
@@ -553,24 +573,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       return;
     }
     if (!api || !engagement || !runtime) return;
-    let effectiveSessionId = sessionId;
-    let effectiveConfig = sessionConfig;
-    if (sessionId) {
-      try {
-        const latest = await api.getControlAssistantSession(engagement.id);
-        if (latest?.id === sessionId) {
-          effectiveSessionId = latest.id;
-          effectiveConfig = latest.assistantConfig;
-          if (typeof api.getChatAssistantConfig === "function") {
-            effectiveConfig = (await api.getChatAssistantConfig(latest.id)).settings;
-          }
-          setSessionConfig(effectiveConfig);
-        }
-      } catch (caught) {
-        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_refresh_failed", message: "The assistant's next-turn settings could not be refreshed.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
-        setError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry after reconnecting.");
-        return;
-      }
+    let effectiveSessionId: string;
+    let effectiveConfig: ChatAssistantConfig | undefined;
+    try {
+      const saved = await getSavedSessionForTurn();
+      effectiveSessionId = saved.session.id;
+      effectiveConfig = saved.config;
+    } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_refresh_failed", message: "The assistant's next-turn settings could not be refreshed.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
+      setError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry after reconnecting.");
+      return;
     }
     const selectedRuntime = effectiveConfig
       ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
@@ -684,7 +696,6 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const microphone = window.isSecureContext && navigator.mediaDevices?.getUserMedia
       ? navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
       : undefined;
-    voiceSessionId.current = sessionId;
     setVoiceStart({ microphone });
     setOpen(true);
     setHidden(true);
@@ -692,18 +703,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   const delegateVoice = async (prompt: string): Promise<string | undefined> => {
     if (!api || !engagement || !runtime) throw new Error("Choose a project and a healthy model runtime to direct work.");
-    const effectiveSessionId = voiceSessionId.current;
-    let effectiveConfig = sessionConfig;
-    if (effectiveSessionId) {
-      const latest = await api.getControlAssistantSession(engagement.id);
-      if (latest?.id === effectiveSessionId) {
-        effectiveConfig = latest.assistantConfig;
-        if (typeof api.getChatAssistantConfig === "function") {
-          effectiveConfig = (await api.getChatAssistantConfig(latest.id)).settings;
-        }
-        setSessionConfig(effectiveConfig);
-      }
-    }
+    const saved = await getSavedSessionForTurn();
+    const effectiveSessionId = saved.session.id;
+    const effectiveConfig = saved.config;
     const selectedRuntime = effectiveConfig
       ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
       : runtime;
@@ -759,7 +761,6 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     });
     await actionQueue;
     if (result?.sessionId && storageKey) {
-      voiceSessionId.current = result.sessionId;
       writeStorage(storageKey, result.sessionId);
       setSessionId(result.sessionId);
     }
