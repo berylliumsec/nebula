@@ -14,6 +14,12 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        # Alembic creates version_num as VARCHAR(32), but this and the next
+        # existing revision IDs are longer. Widen before Alembic records 0019.
+        op.execute(
+            "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)"
+        )
     entities = sa.Table("entities", sa.MetaData(), autoload_with=bind)
     existing = set(
         bind.execute(
