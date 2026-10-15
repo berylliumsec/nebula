@@ -1,26 +1,20 @@
 {
-  "change_digest": "08cb67083a138df9fc313ab1313cf75dfb2f2a5390ec8ad19fbcb7499f6f45e5",
-  "reviewed_by": "Codex installed iPhone Butler menu review",
-  "reason": "Keep the installed iPhone Butler conversation menu fully inside the visual viewport. The selected existing shell journey checks keyboard opening and dismissal at desktop and the 320, 390, and 430 px mobile boundaries in Chromium and WebKit. The selected real-Core LAN journey checks a touch action, saved chat reload, and menu reopening against the production bundle in both mobile engines.",
-  "exclusions": "No Core, provider, or native source changes; Python, frontend unit, and native tests do not exercise this CSS geometry. Landscape projects use a wide viewport where the compact phone menu is not rendered. Other workflows and full suites are excluded.",
+  "change_digest": "79e75bd1a010998d744169393ecf67a6c40dcdbeb8967b49c4b607cb248b1e4a",
+  "reviewed_by": "Codex release smoke navigation review",
+  "reason": "The release Core smoke timed out because the desktop navigation handle reveals its menu on hover before Playwright can complete a click. Use the documented hover interaction for fine pointers and click for touch. The exact release smoke verifies pairing, project creation, chat, and reload on production LAN Core; the project-switch journey exercises the touch branch in mobile Chromium and WebKit.",
+  "exclusions": "Only a Playwright navigation helper changes. Python, frontend unit, and native tests cannot exercise the pointer race. Other journeys, viewports, and full suites are excluded because the product UI and Core are unchanged.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 3
   },
   "python": [],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:ios-assistant-only/desktop",
-    "entry:ios-assistant-only/mobile-chromium-small",
-    "entry:ios-assistant-only/mobile-chromium",
-    "entry:ios-assistant-only/mobile-chromium-wide",
-    "entry:ios-assistant-only/mobile-webkit-small",
-    "entry:ios-assistant-only/mobile-webkit",
-    "entry:ios-assistant-only/mobile-webkit-wide",
-    "entry:ios-assistant-only/assistant-real-chromium-390",
-    "entry:ios-assistant-only/assistant-real-webkit-390"
+    "entry:release-core-smoke/real-core",
+    "entry:release-core-project-switch/assistant-real-chromium-390",
+    "entry:release-core-project-switch/assistant-real-webkit-390"
   ]
 }
