@@ -46,6 +46,8 @@ vi.mock("../state/ChromeContext", () => ({
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => workspace,
+  useWorkspaceEvents: () => workspace.events,
+  useWorkspaceMissions: () => ({ run: workspace.run, runs: workspace.runs, selectMission: workspace.selectMission, streamState: "closed" }),
 }));
 
 describe("mission activity", () => {

@@ -35,6 +35,7 @@ let engagementId = "engagement-1";
 let providers: Array<Record<string, unknown>> = [];
 
 vi.mock("../state/WorkspaceContext", () => ({
+  useWorkspaceMissions: () => ({ run: undefined }),
   useWorkspace: () => ({
     api,
     coreState: "online",

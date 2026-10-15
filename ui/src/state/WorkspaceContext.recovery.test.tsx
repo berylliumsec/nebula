@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect } from "react";
-import { WorkspaceProvider, useWorkspace } from "./WorkspaceContext";
+import { WorkspaceProvider, useWorkspace, useWorkspaceEvents, useWorkspaceMissions } from "./WorkspaceContext";
 
-const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined, errors: [] as string[] }));
+const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined, coreCommits: 0, errors: [] as string[] }));
 vi.mock("../api/runtime", () => ({ resolveApiRuntime: async () => ({ state: "ready", baseUrl: "http://core/api/v1" }) }));
 vi.mock("../api/client", () => ({ ApiClient: class {
   baseUrl = "http://core/api/v1";
@@ -20,23 +20,31 @@ vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn(), setCoreDiagnost
 const run = (id = "run-1", completedTasks = 2) => ({ id, engagementId: "project", title: id, status: "running", completedTasks, totalTasks: 5, updatedAt: "2026-09-09T12:00:00Z" });
 function Probe() {
   const value = useWorkspace();
+  const events = useWorkspaceEvents();
+  const missions = useWorkspaceMissions();
   useLayoutEffect(() => { fixture.onCommit?.(); });
   return <><output data-testid="state">{JSON.stringify({
     workspace: value.workspaceState, status: value.resourceStatus,
     library: value.libraryItems, harnesses: value.harnesses, assets: value.assets,
-    run: value.run, runs: value.runs, events: value.events,
+    run: missions.run, runs: missions.runs, events,
     approvals: value.approvals, evidence: value.evidence, engagement: value.engagement?.id,
     observations: value.observations,
   })}</output>{(["library", "harnesses", "activity", "evidence"] as const).map((resource) =>
     <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}
   <button onClick={() => value.selectEngagement("project-b")}>Select project B</button>
   <button onClick={() => value.selectEngagement("project")}>Select project A</button>
+  <button onClick={() => missions.selectMission("run-2")}>Select mission 2</button>
   <button onClick={value.reconnect}>Retry Core</button>
   <button onClick={() => void value.resolveApproval(value.approvals[0]?.id ?? "", { decision: "approve" }).catch((error: Error) => fixture.errors.push(error.message))}>Approve first</button></>;
 }
 const state = () => JSON.parse(screen.getByTestId("state").textContent!);
+function CoreOnlyProbe() {
+  useWorkspace();
+  useLayoutEffect(() => { fixture.coreCommits += 1; });
+  return null;
+}
 const mount = async () => {
-  render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+  render(<WorkspaceProvider><Probe /><CoreOnlyProbe /></WorkspaceProvider>);
   await waitFor(() => expect(["ready", "degraded"]).toContain(state().workspace));
 };
 
@@ -44,6 +52,7 @@ beforeEach(() => {
   fixture.onCommit = undefined;
   fixture.streams.length = 0;
   fixture.errors.length = 0;
+  fixture.coreCommits = 0;
   vi.restoreAllMocks();
   localStorage.clear();
   window.history.replaceState({}, "", "/");
@@ -136,6 +145,26 @@ describe("workspace resource recovery", () => {
     expect(state().assets).toEqual([]);
   });
 
+  it("switches missions and their event streams without reloading the project", async () => {
+    localStorage.setItem("nebula.mission", "run-1");
+    fixture.methods.listRuns.mockResolvedValue({ items: [run("run-1"), run("run-2")] });
+    fixture.methods.listAssets.mockResolvedValue({ items: [{ id: "asset-1" }] });
+    await mount();
+    await waitFor(() => expect(state().run?.id).toBe("run-1"));
+    await waitFor(() => expect(fixture.streams.at(-1)?.options.cursor.runId).toBe("run-1"));
+    const listCalls = fixture.methods.listRuns.mock.calls.length;
+    const assetCalls = fixture.methods.listAssets.mock.calls.length;
+
+    fireEvent.click(screen.getByText("Select mission 2"));
+    await waitFor(() => expect(state().run?.id).toBe("run-2"));
+    await waitFor(() => expect(fixture.streams.at(-1)?.options.cursor.runId).toBe("run-2"));
+    expect(state().assets).toEqual([{ id: "asset-1" }]);
+    expect(fixture.methods.listRuns).toHaveBeenCalledTimes(listCalls);
+    expect(fixture.methods.listAssets).toHaveBeenCalledTimes(assetCalls);
+    expect(fixture.methods.health).toHaveBeenCalledTimes(1);
+    expect(fixture.methods.listEngagements).toHaveBeenCalledTimes(1);
+  });
+
   it("does not let a queued catalog-health effect overwrite observed connection loss", async () => {
     await mount();
     fixture.methods.listLibraryItems.mockResolvedValue({items: [{id: "refreshed"}]});
@@ -221,8 +250,23 @@ describe("workspace resource recovery", () => {
 
 describe("mission snapshot and replay integration", () => {
   const completion = { id: "event", runId: "run-1", kind: "task.completed", sequence: 3, occurredAt: "2026-09-09T11:00:00Z", payload: {} };
+  it("keeps unrelated workspace consumers stable during event and mission updates", async () => {
+    await mount();
+    await waitFor(() => expect(fixture.streams).toHaveLength(1));
+    const before = fixture.coreCommits;
+    const stream = fixture.streams[0];
+    act(() => stream.options.onEvent({ ...completion, kind: "tool.output" }));
+    expect(state().events).toHaveLength(1);
+    expect(fixture.coreCommits).toBe(before);
+    fixture.methods.listRuns.mockResolvedValue({ items: [run("run-1", 3)] });
+    await act(async () => stream.options.onReplayComplete());
+    await waitFor(() => expect(state().run.completedTasks).toBe(3));
+    expect(fixture.coreCommits).toBe(before);
+  });
+
   it("keeps historical replay out of snapshot counters and refreshes on live progress", async () => {
     await mount();
+    await waitFor(() => expect(fixture.streams).toHaveLength(1));
     const stream = fixture.streams.at(-1)!;
     act(() => stream.options.onEvent(completion));
     expect(state().run.completedTasks).toBe(2);
@@ -242,6 +286,7 @@ describe("mission snapshot and replay integration", () => {
 
   it("refetches when another event arrives during a snapshot request", async () => {
     await mount();
+    await waitFor(() => expect(fixture.streams).toHaveLength(1));
     const stream = fixture.streams.at(-1)!;
     let finish!: (value: unknown) => void;
     fixture.methods.listRuns.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));

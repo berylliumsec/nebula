@@ -12,6 +12,7 @@
     {"name": "notebooks", "patterns": ["ui/src/components/NotebookPanel*", "ui/src/components/notebook.css", "src/nebula/v3/notebooks.py", "src/nebula/v3/notebook_mcp.py", "packaging/notebook/**"], "areas": ["notebooks"]},
     {"name": "notebook-file-index", "patterns": ["src/nebula/v3/notebook_file_index.py", "ui/src/components/NotebookFileIndexSettings*", "docs/notebook-file-index.md"], "areas": ["notebook-file-index"]},
     {"name": "conversation-progress", "patterns": ["src/nebula/v3/chat.py", "src/nebula/v3/chat_subagents.py", "ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatProgressContent*", "ui/src/pages/chatMessageReconciliation*", "ui/src/components/ActivityLedger*", "ui/src/components/activityLedgerModel.ts", "ui/src/components/CallbackWaitingStatus*", "ui/src/components/AssistantMarkdown.tsx", "ui/src/api/client.ts", "ui/src/api/types.ts"], "areas": ["conversation-progress", "chat-switching-scroll"]},
+    {"name": "navigation-loading", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatSessionList.ts", "ui/src/components/SideNav.tsx", "ui/src/state/WorkspaceContext.tsx", "src/nebula/v3/storage.py", "src/nebula/v3/api.py"], "areas": ["navigation-loading"]},
     {"name": "provider-reasoning", "patterns": ["src/nebula/v3/providers.py", "src/nebula/v3/chat.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["provider-reasoning"]},
     {"name": "runtime-usage", "patterns": ["src/nebula/v3/runtime_usage.py", "ui/src/components/RuntimeUsagePanel*", "ui/src/settingsCatalog.ts"], "areas": ["runtime-usage"]},
     {"name": "chat-subagents", "patterns": ["ui/src/components/chat-subagents/*", "ui/src/chat-subagents.css", "src/nebula/v3/chat_subagents.py"], "areas": ["chat-subagents", "chat-subagent-result-collapse", "chat-subagent-result-real-core"]},
@@ -910,6 +911,15 @@
       {"area":"conversation-switch-performance","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"conversation switching commits URL identity","runtime":"mock","shard":"1/1"},
       {"area":"conversation-switch-performance","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching commits URL identity","runtime":"mock","shard":"1/1"},
       {"area":"conversation-switch-performance","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade conversation switching restores durable Core history promptly","runtime":"real-core","shard":"1/1"}
+    ],
+    "navigation-loading": [
+      {"area":"navigation-loading","project":"desktop","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
+      {"area":"navigation-loading","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
+      {"area":"navigation-loading","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
+      {"area":"navigation-loading","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
+      {"area":"navigation-loading","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
+      {"area":"navigation-loading","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
+      {"area":"navigation-loading","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"}
     ],
     "chat-history-performance": [
       {"area":"chat-history-performance","project":"desktop","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},

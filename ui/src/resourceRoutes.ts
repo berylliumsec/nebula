@@ -60,3 +60,14 @@ export function replaceProjectInPath(pathname: string, projectId: string): strin
     ? pathname.replace(/^\/projects\/[^/]+/, projectRoot(projectId))
     : projectRoot(projectId);
 }
+
+/** Keep the operator's section while dropping identities owned by the old project. */
+export function projectSwitchDestination(pathname: string, search: string, projectId: string): string {
+  const section = /^\/projects\/[^/]+\/(workbench|work|assets|evidence|sources|results|findings|reports)(?:\/|$)/.exec(pathname)?.[1] as ProjectSurface | undefined;
+  if (!section) return projectRoot(projectId);
+  const target = projectSurface(projectId, section);
+  if (section !== "workbench") return target;
+  const view = new URLSearchParams(search).get("view");
+  const views = new Set(["chat", "code", "terminal", "browser", "missions", "activity", "workspace", "notes", "notebook"]);
+  return view && views.has(view) ? `${target}?view=${encodeURIComponent(view)}` : target;
+}

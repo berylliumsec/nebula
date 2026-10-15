@@ -99,11 +99,6 @@ interface WorkspaceContextValue {
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
   engagement?: EngagementSummary;
-  run?: AgentRunSummary;
-  runs: AgentRunSummary[];
-  selectMission: (id: string) => void;
-  streamState: StreamState;
-  events: RunEvent[];
   approvals: ApprovalSummary[];
   assets: AssetSummary[];
   findings: FindingSummary[];
@@ -157,6 +152,14 @@ interface WorkspaceContextValue {
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(undefined);
+interface WorkspaceMissionsValue {
+  run?: AgentRunSummary;
+  runs: AgentRunSummary[];
+  selectMission: (id: string) => void;
+  streamState: StreamState;
+}
+const WorkspaceMissionsContext = createContext<WorkspaceMissionsValue | undefined>(undefined);
+const WorkspaceEventsContext = createContext<RunEvent[] | undefined>(undefined);
 
 const ENGAGEMENT_STORAGE_KEY = "nebula.engagement";
 
@@ -170,6 +173,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [api, setApi] = useState<ApiClient>();
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("starting");
   const coreState: CoreState = workspaceState === "starting" ? "checking" : workspaceState === "failed" ? "offline" : "online";
+  const workspaceAvailable = workspaceState === "ready" || workspaceState === "degraded";
   const [coreError, setCoreError] = useState<string>();
   const [health, setHealth] = useState<HealthResponse>();
   const [setupStatus, setSetupStatus] = useState<SetupStatus>();
@@ -193,10 +197,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [attempt, setAttempt] = useState(0);
+  const [streamAttempt, setStreamAttempt] = useState(0);
   const [selectedEngagementId, setSelectedEngagementId] = useState(() => (
     projectIdFromPath(window.location.pathname) ?? readStorage(ENGAGEMENT_STORAGE_KEY) ?? ""
   ));
   const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || readStorage("nebula.mission") || "");
+  const selectedMissionIdRef = useRef(selectedMissionId);
+  selectedMissionIdRef.current = selectedMissionId;
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
   const bootstrappedAttempt = useRef<number | undefined>(undefined);
   const connectionLost = useRef(false);
@@ -241,7 +248,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    let eventStream: NebulaEventStream | undefined;
 
     void (async () => {
       const switching = bootstrappedAttempt.current === attempt && api !== undefined;
@@ -403,8 +409,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           const [runResult, approvalResult, assetResult, findingResult, evidenceResult, , knowledgeResult, reportResult] = detailResults;
           if (runResult.status === "fulfilled") {
             setRuns(runResult.value.items);
-            nextRun = runResult.value.items.find((item) => item.id === selectedMissionId)
+            nextRun = runResult.value.items.find((item) => item.id === selectedMissionIdRef.current)
               ?? runResult.value.items[runResult.value.items.length - 1];
+            setSelectedMissionId(nextRun?.id ?? "");
             const requestedMissionId = missionIdFromUrl();
             if (nextRun && requestedMissionId !== nextRun.id) writeMissionIdToUrl(nextRun.id);
             if (!nextRun && requestedMissionId) writeMissionIdToUrl("");
@@ -425,79 +432,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           : nextHealth?.status === "degraded" ? "Nebula Core reported limited availability." : undefined);
         setEvents([]);
 
-        if (nextRun) {
-          // Events populate the timeline, never increment a snapshot that may
-          // already include them. Refresh authoritative state after replay and
-          // coalesce subsequent event bursts, including events arriving in-flight.
-          let refreshing = false;
-          let refreshPending = false;
-          let replaying = true;
-          const refreshMissions = async () => {
-            refreshPending = true;
-            if (refreshing) return;
-            refreshing = true;
-            try {
-              while (active && refreshPending) {
-                refreshPending = false;
-                const page = await nextApi.listRuns(nextEngagement!.id, controller.signal);
-                if (!active) return;
-                setRuns(page.items);
-                setRun(page.items.find((item) => item.id === nextRun!.id));
-                setResourceStatus((current) => ({ ...current, activity: { state: page.items.length ? "ready" : "empty" } }));
-              }
-            } catch (error) {
-              if (active) {
-                void logCaughtDiagnostic("interface.workspace.mission_refresh_failed", "Mission state could not be refreshed from Core.", error, "workspace_context");
-                setResourceStatus((current) => ({ ...current, activity: { state: "failed", error } }));
-              }
-            } finally {
-              refreshing = false;
-            }
-          };
-          eventStream = new NebulaEventStream({
-            apiBaseUrl: nextApi.baseUrl,
-            token: nextApi.getToken(),
-            cursor: {
-              after: 0,
-              engagementId: nextEngagement?.id,
-              runId: nextRun.id,
-            },
-            onStateChange: (state) => {
-              if (state === "connecting" || state === "reconnecting") replaying = true;
-              setStreamState(state);
-            },
-            onReplayComplete: () => {
-              replaying = false;
-              void refreshMissions();
-            },
-            onEvent: (event) => {
-              setEvents((current) => [event, ...current].slice(0, 100));
-              if (!replaying && /^(run|task|stage|approval)\.|^harness\.usage$/.test(event.kind)) void refreshMissions();
-              if (!nextEngagement) return;
-              if (event.kind === "approval.requested" || event.kind === "approval.resolved") {
-                void nextApi.listApprovals(nextEngagement.id, controller.signal)
-                  .then((page) => { if (active) setApprovals(page.items); })
-                  .catch((caughtError) => {
-                    void logCaughtDiagnostic("interface.workspace_context.caught_failure_01", "A handled interface operation failed.", caughtError, "workspace_context"); /* The event remains visible if the authoritative refresh fails. */ });
-              }
-              if (event.kind === "finding.created" || event.kind === "finding.updated") {
-                void nextApi.listFindings(nextEngagement.id, controller.signal)
-                  .then((page) => { if (active) setFindings(page.items); })
-                  .catch((caughtError) => {
-                    void logCaughtDiagnostic("interface.workspace_context.caught_failure_02", "A handled interface operation failed.", caughtError, "workspace_context"); /* Preserve the last loaded finding list until the next refresh. */ });
-              }
-              if (event.kind === "evidence.created") {
-                void nextApi.listEvidence(nextEngagement.id, controller.signal)
-                  .then((page) => { if (active) setEvidence(page.items); })
-                  .catch((caughtError) => {
-                    void logCaughtDiagnostic("interface.workspace_context.caught_failure_03", "A handled interface operation failed.", caughtError, "workspace_context"); /* Preserve the last loaded evidence list until the next refresh. */ });
-              }
-            },
-          });
-          eventStream.connect();
-        } else {
-          setStreamState("unsupported");
-        }
       } catch (error) {
         void logCaughtDiagnostic("interface.workspace_context.caught_failure_04", "A handled interface operation failed.", error, "workspace_context");
         if (active) {
@@ -511,9 +445,94 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return () => {
       active = false;
       controller.abort();
-      eventStream?.disconnect();
     };
-  }, [attempt, selectedEngagementId, selectedMissionId]);
+  }, [attempt, selectedEngagementId]);
+
+  // A mission change only replays that mission's events. It does not discard
+  // project data or repeat the Core/catalog bootstrap.
+  useEffect(() => {
+    if (!api || !engagement || !run || run.engagementId !== engagement.id || !workspaceAvailable) {
+      setStreamState("unsupported");
+      return;
+    }
+    const controller = new AbortController();
+    const projectId = engagement.id;
+    const runId = run.id;
+    let refreshing = false;
+    let refreshPending = false;
+    let replaying = true;
+    const refreshMissions = async () => {
+      refreshPending = true;
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        while (!controller.signal.aborted && refreshPending) {
+          refreshPending = false;
+          const page = await api.listRuns(projectId, controller.signal);
+          if (controller.signal.aborted) return;
+          setRuns((current) => sameJson(current, page.items) ? current : page.items);
+          const selected = page.items.find((item) => item.id === runId);
+          setRun((current) => sameJson(current, selected) ? current : selected);
+          const activityState = page.items.length ? "ready" : "empty";
+          setResourceStatus((current) => current.activity.state === activityState
+            ? current : { ...current, activity: { state: activityState } });
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          void logCaughtDiagnostic("interface.workspace.mission_refresh_failed", "Mission state could not be refreshed from Core.", error, "workspace_context");
+          setResourceStatus((current) => ({ ...current, activity: { state: "failed", error } }));
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    const eventStream = new NebulaEventStream({
+      apiBaseUrl: api.baseUrl,
+      token: api.getToken(),
+      cursor: { after: 0, engagementId: projectId, runId },
+      onStateChange: (state) => {
+        if (state === "connecting" || state === "reconnecting") replaying = true;
+        setStreamState(state);
+      },
+      onReplayComplete: () => { replaying = false; void refreshMissions(); },
+      onEvent: (event) => {
+        setEvents((current) => [event, ...current].slice(0, 100));
+        if (!replaying && /^(run|task|stage|approval)\.|^harness\.usage$/.test(event.kind)) void refreshMissions();
+        if (event.kind === "approval.requested" || event.kind === "approval.resolved") {
+          void api.listApprovals(projectId, controller.signal)
+            .then((page) => { if (!controller.signal.aborted) setApprovals(page.items); })
+            .catch((caughtError) => {
+              if (!controller.signal.aborted) void logCaughtDiagnostic("interface.workspace_context.caught_failure_01", "A handled interface operation failed.", caughtError, "workspace_context");
+            });
+        }
+        if (event.kind === "finding.created" || event.kind === "finding.updated") {
+          void api.listFindings(projectId, controller.signal)
+            .then((page) => { if (!controller.signal.aborted) setFindings(page.items); })
+            .catch((caughtError) => {
+              if (!controller.signal.aborted) void logCaughtDiagnostic("interface.workspace_context.caught_failure_02", "A handled interface operation failed.", caughtError, "workspace_context");
+            });
+        }
+        if (event.kind === "evidence.created") {
+          void api.listEvidence(projectId, controller.signal)
+            .then((page) => { if (!controller.signal.aborted) setEvidence(page.items); })
+            .catch((caughtError) => {
+              if (!controller.signal.aborted) void logCaughtDiagnostic("interface.workspace_context.caught_failure_03", "A handled interface operation failed.", caughtError, "workspace_context");
+            });
+        }
+      },
+    });
+    eventStream.connect();
+    return () => { controller.abort(); eventStream.disconnect(); };
+  }, [api, engagement?.id, run?.id, streamAttempt, workspaceAvailable]);
+
+  useEffect(() => {
+    if (!selectedMissionId) return;
+    const selected = runs.find((item) => item.id === selectedMissionId);
+    if (selected && selected.id !== run?.id) {
+      setRun(selected);
+      setEvents([]);
+    }
+  }, [selectedMissionId, runs, run?.id]);
 
   const selectMission = useCallback((id: string) => {
     if (!id || id === selectedMissionId) return;
@@ -581,10 +600,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         if (resource === "activity") {
           const value = await api.listRuns(engagement.id);
           setRuns(value.items);
-          setRun(value.items.find((item) => item.id === selectedMissionId) ?? value.items[value.items.length - 1]);
+          setRun(value.items.find((item) => item.id === selectedMissionIdRef.current) ?? value.items[value.items.length - 1]);
           count = value.items.length;
-          // Reconnect with the selected identity and fresh replay cursor.
-          setAttempt((value) => value + 1);
+          // Reconnect the selected event stream without reloading project data.
+          setStreamAttempt((value) => value + 1);
         }
         else if (resource === "approvals") { const value = await api.listApprovals(engagement.id); setApprovals(value.items); count = value.items.length; }
         else if (resource === "assets") { const value = await api.listAssets(engagement.id); setAssets(value.items); count = value.items.length; }
@@ -600,7 +619,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       setResourceStatus((current) => ({ ...current, [resource]: { state: "failed", error } }));
       throw error;
     }
-  }, [api, engagement, selectedMissionId]);
+  }, [api, engagement]);
 
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;
@@ -875,7 +894,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setSelectedMissionId(created.id);
     setRuns((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     setRun(created);
-    setAttempt((value) => value + 1);
+    setResourceStatus((current) => current.activity.state === "ready" ? current : { ...current, activity: { state: "ready" } });
     return created;
   }, [api, coreState]);
 
@@ -886,7 +905,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     const updated = await api.stopRun(id, request);
     setRuns((current) => current.map((item) => item.id === id ? updated : item));
     setRun(updated);
-    setAttempt((value) => value + 1);
+    setStreamAttempt((value) => value + 1);
     return updated;
   }, [api, coreState]);
 
@@ -901,7 +920,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setRuns((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     setRun(created);
     setEvents([]);
-    setAttempt((value) => value + 1);
+    setResourceStatus((current) => current.activity.state === "ready" ? current : { ...current, activity: { state: "ready" } });
     return created;
   }, [api, coreState]);
 
@@ -911,7 +930,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     }
     await api.deleteRun(id);
     setRuns((current) => current.filter((item) => item.id !== id));
-    if (selectedMissionId === id) {
+    if (selectedMissionIdRef.current === id) {
       removeStorage("nebula.mission");
       writeMissionIdToUrl("");
       setSelectedMissionId("");
@@ -919,8 +938,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setRun((current) => current?.id === id ? undefined : current);
     setEvents([]);
     setApprovals((current) => current.filter((approval) => approval.runId !== id));
-    setAttempt((value) => value + 1);
-  }, [api, coreState, selectedMissionId]);
+    setStreamAttempt((value) => value + 1);
+  }, [api, coreState]);
 
   const createOperatorProfile = useCallback(async (request: OperatorProfileCreateRequest) => {
     if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to create an operator profile.");
@@ -1077,11 +1096,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       operatorProfiles,
       activeOperator: operatorProfiles.find((profile) => profile.active),
       engagement,
-      run,
-      runs,
-      selectMission,
-      streamState,
-      events,
       approvals,
       assets,
       findings,
@@ -1145,7 +1159,6 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       engagement,
       engagements,
       operatorProfiles,
-      events,
       findings,
       evidence,
       observations,
@@ -1198,19 +1211,28 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       applyProviderToolSharing,
       reverifyProvider,
       resolveApproval,
-      run,
-      runs,
-      selectMission,
       runtime,
-      streamState,
     ],
   );
 
-  return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+  const missions = useMemo(() => ({ run, runs, selectMission, streamState }), [run, runs, selectMission, streamState]);
+  return <WorkspaceContext.Provider value={value}><WorkspaceMissionsContext.Provider value={missions}><WorkspaceEventsContext.Provider value={events}>{children}</WorkspaceEventsContext.Provider></WorkspaceMissionsContext.Provider></WorkspaceContext.Provider>;
 }
 
 export function useWorkspace(): WorkspaceContextValue {
   const context = useContext(WorkspaceContext);
   if (!context) throw new Error("useWorkspace must be used inside WorkspaceProvider");
   return context;
+}
+
+export function useWorkspaceMissions(): WorkspaceMissionsValue {
+  const missions = useContext(WorkspaceMissionsContext);
+  if (!missions) throw new Error("useWorkspaceMissions must be used inside WorkspaceProvider");
+  return missions;
+}
+
+export function useWorkspaceEvents(): RunEvent[] {
+  const events = useContext(WorkspaceEventsContext);
+  if (!events) throw new Error("useWorkspaceEvents must be used inside WorkspaceProvider");
+  return events;
 }

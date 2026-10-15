@@ -19,7 +19,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { AssistantMarkdown } from "../components/AssistantMarkdown";
 import { PageHeader } from "../components/PageHeader";
 import { DeleteMissionButton, NewMissionButton, RetryMissionButton, StopMissionButton } from "../components/MissionControls";
-import { useWorkspace } from "../state/WorkspaceContext";
+import { useWorkspace, useWorkspaceEvents, useWorkspaceMissions } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { MissionPromotionDialog } from "../components/MissionPromotionDialog";
@@ -64,7 +64,9 @@ function MissionLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) {
 
 export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const { setActivityOpen } = useChrome();
-  const { api, approvals, events, previewMode, run, runs = [], selectMission = () => undefined, streamState = "closed" } = useWorkspace();
+  const { api, approvals, previewMode } = useWorkspace();
+  const { run, runs, selectMission, streamState } = useWorkspaceMissions();
+  const events = useWorkspaceEvents();
   const [steeringText, setSteeringText] = useState("");
   const [steering, setSteering] = useState(false);
   const [steeringError, setSteeringError] = useState<string>();

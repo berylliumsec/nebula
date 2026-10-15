@@ -5,7 +5,7 @@ import { providerModelVerification } from "../api/providerCapabilities";
 import { rememberToolSharing, sharesToolResultsAlways, type ToolSharingRuntime } from "../api/toolSharingConsent";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import type { HarnessProfile, HarnessSessionSummary, McpServerProfile } from "../api/types";
-import { useWorkspace } from "../state/WorkspaceContext";
+import { useWorkspace, useWorkspaceMissions } from "../state/WorkspaceContext";
 import { ModalSurface, useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
@@ -470,7 +470,8 @@ const terminalStatuses = new Set(["failed", "complete", "cancelled", "interrupte
 
 export function StopMissionButton({ className = "button secondary" }: { className?: string }) {
   const confirm = useConfirmation();
-  const { previewMode, run, stopMission } = useWorkspace();
+  const { previewMode, stopMission } = useWorkspace();
+  const { run } = useWorkspaceMissions();
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string>();
   const disabled = previewMode || !run || terminalStatuses.has(run.status) || run.status === "cancelling";
@@ -497,7 +498,8 @@ export function StopMissionButton({ className = "button secondary" }: { classNam
 
 export function DeleteMissionButton({ className = "button quiet danger" }: { className?: string }) {
   const confirm = useConfirmation();
-  const { deleteMission, previewMode, run } = useWorkspace();
+  const { deleteMission, previewMode } = useWorkspace();
+  const { run } = useWorkspaceMissions();
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>();
   const disabled = previewMode || !run || !terminalStatuses.has(run.status);
@@ -524,7 +526,8 @@ export function DeleteMissionButton({ className = "button quiet danger" }: { cla
 
 export function RetryMissionButton({ className = "button secondary" }: { className?: string }) {
   const confirm = useConfirmation();
-  const { previewMode, retryMission, run } = useWorkspace();
+  const { previewMode, retryMission } = useWorkspace();
+  const { run } = useWorkspaceMissions();
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string>();
   const eligible = Boolean(run && terminalStatuses.has(run.status));

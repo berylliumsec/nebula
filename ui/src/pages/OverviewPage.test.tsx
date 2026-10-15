@@ -15,21 +15,24 @@ vi.mock("../state/ThemeContext", () => ({
 }));
 
 vi.mock("../state/WorkspaceContext", () => ({
+  useWorkspaceMissions: () => ({ run: {
+    id: "run-1", title: "Network review", status: "complete", completedTasks: 1, totalTasks: 1, spentUsd: 0.0000375,
+  } }),
+  useWorkspaceEvents: () => [{
+    id: "event-markdown",
+    sequence: 7,
+    kind: "task.completed",
+    actor: "Nebula Core",
+    occurredAt: "2026-07-14T12:00:00Z",
+    summary: "**Analyst-Facing Result**\n\n- Scan prepared\n- Target: `192.168.1.1`",
+    payload: {},
+  }],
   useWorkspace: () => ({
     api: undefined,
     approvals: [],
     assets: [],
     coreState: "offline",
     engagement: { id: "project-1", name: "Markdown project" },
-    events: [{
-      id: "event-markdown",
-      sequence: 7,
-      kind: "task.completed",
-      actor: "Nebula Core",
-      occurredAt: "2026-07-14T12:00:00Z",
-      summary: "**Analyst-Facing Result**\n\n- Scan prepared\n- Target: `192.168.1.1`",
-      payload: {},
-    }],
     findings: [],
     health: { runner: "unavailable" },
     previewMode: false,

@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import type { ApprovalDecisionRequest, RunEventKind } from "../api/types";
-import { useWorkspace } from "../state/WorkspaceContext";
+import { useWorkspace, useWorkspaceEvents, useWorkspaceMissions } from "../state/WorkspaceContext";
 import { ModalSurface } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { ResourceActionMenu } from "./ResourceActionMenu";
@@ -49,7 +49,9 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
   const [editingId, setEditingId] = useState<string>();
   const [editedArguments, setEditedArguments] = useState("");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string>();
-  const { engagement, events, approvals, previewMode, resolveApproval, streamState } = useWorkspace();
+  const { engagement, approvals, previewMode, resolveApproval } = useWorkspace();
+  const { streamState } = useWorkspaceMissions();
+  const events = useWorkspaceEvents();
   const selectedApproval = approvals.find((approval) => approval.id === selectedApprovalId);
 
   const decide = async (id: string, request: ApprovalDecisionRequest) => {
