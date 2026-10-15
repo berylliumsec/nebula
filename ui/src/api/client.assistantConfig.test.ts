@@ -21,6 +21,7 @@ it("maps saved next-turn settings and sends a revision-guarded settings change",
   const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", token: "test-token", fetch: fetchMock});
   const current = await client.getChatSession("control");
   expect(current.isControlAssistant).toBe(true);
+  expect(current.title).toBe("Butler");
   expect(current.assistantConfig).toMatchObject({harnessServiceTier: "fast", mcpServerIds: ["notebook"], allowAgentMessaging: true});
   const updated = await client.updateChatAssistantConfig("control", 4, {harnessServiceTier: "default"});
   expect(updated.settings.harnessServiceTier).toBe("default");
