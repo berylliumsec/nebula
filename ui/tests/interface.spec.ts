@@ -2245,11 +2245,17 @@ reloadTest("stabilization Nebula Voice stays active until explicit exit", async 
     }
     Object.defineProperty(window, "RTCPeerConnection", { configurable: true, value: Peer });
   });
-  await page.route("**/api/v1/voice/session", route => route.fulfill({ status: 200, json: { session_id: "live-test", sdp: "answer" } }));
+  let rejectReconnect = false;
+  await page.route("**/api/v1/voice/session", route => rejectReconnect
+    ? route.fulfill({ status: 503, json: { detail: "GPT-Live needs a direct OpenAI API key." } })
+    : route.fulfill({ status: 200, json: { session_id: "live-test", sdp: "answer" } }));
   await page.route(/\/api\/v1\/voice\/work(?:\/.*)?\?/, route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chats/chat-voice")) return route.fulfill({ status: 200, json: { id: "chat-voice", title: "Surface review", url: "/chat", recent_messages: [{ role: "assistant", content: "Reviewing current scope" }] } });
-    return route.fulfill({ status: 200, json: { project: { id: "scratch-project", name: "Scratch Project" }, chats: [{ id: "chat-voice", title: "Surface review", backend: "harness", model: "fixture", state: "working", url: "/chat" }], missions: [{ id: "mission-voice", name: "Audit scope", status: "running", backend: "harness", updated_at: "now", url: "/mission" }], attention: [{ kind: "approval", action_id: "approval-voice", owner_kind: "chat", owner_id: "chat-voice", owner: "Code agent", summary: "write_file", url: "/chat" }], more_chats: false, more_missions: false } });
+    return route.fulfill({ status: 200, json: { project: { id: "scratch-project", name: "Scratch Project" }, chats: [
+      { id: "chat-voice", title: "Surface review", backend: "harness", model: "fixture", state: "working", url: "/chat" },
+      ...[2, 3, 4].map(index => ({ id: `chat-${index}`, title: `Research agent ${index}`, backend: "harness", model: "fixture", state: "ready", url: "/chat" })),
+    ], missions: [{ id: "mission-voice", name: "Audit scope", status: "running", backend: "harness", updated_at: "now", url: "/mission" }], attention: [{ kind: "approval", action_id: "approval-voice", owner_kind: "chat", owner_id: "chat-voice", owner: "Code agent", summary: "write_file", url: "/chat" }], more_chats: false, more_missions: false } });
   });
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("button", { name: "Open Nebula assistant" }).click();
@@ -2265,9 +2271,21 @@ reloadTest("stabilization Nebula Voice stays active until explicit exit", async 
   await voice.getByRole("button", { name: "Speaker output" }).click();
   await expect(voice.getByRole("group", { name: "Speaker audio" })).toContainText("No speaker stream is connected");
   await expect(voice.getByRole("button", { name: "Reconnect voice" })).toBeVisible();
+  await voice.evaluate(element => { element.scrollTop = 0; });
   const orb = await voice.getByTestId("voice-orb").boundingBox();
   expect(orb).toBeTruthy();
   expect(Math.abs(orb!.x + orb!.width / 2 - page.viewportSize()!.width / 2)).toBeLessThanOrEqual(12);
+  if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
+    const exit = await voice.getByRole("button", { name: "Exit voice mode" }).boundingBox();
+    expect(orb!.y).toBeGreaterThanOrEqual(exit!.y + exit!.height);
+    rejectReconnect = true;
+    await voice.getByRole("button", { name: "Reconnect voice" }).click();
+    await expect(voice.getByRole("alert")).toContainText("direct OpenAI API key");
+    await voice.evaluate(element => { element.scrollTop = 0; });
+    const errorOrb = await voice.getByTestId("voice-orb").boundingBox();
+    const errorExit = await voice.getByRole("button", { name: "Exit voice mode" }).boundingBox();
+    expect(errorOrb!.y).toBeGreaterThanOrEqual(errorExit!.y + errorExit!.height);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const close = voice.getByRole("button", { name: "Exit voice mode" });
   const rect = await close.boundingBox();
@@ -14460,7 +14478,22 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await page.getByRole("button", {name: "Open Nebula assistant"}).click();
   const controlAssistant = page.getByRole("dialog", {name: "Nebula assistant"});
   await expect(controlAssistant).toBeVisible();
-  await expect(controlAssistant.getByRole("button", {name: "Start Nebula Voice"})).toBeVisible();
+  const startVoice = controlAssistant.getByRole("button", {name: "Start Nebula Voice"});
+  await expect(startVoice).toBeVisible();
+  if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
+    const button = await startVoice.boundingBox();
+    const panel = await controlAssistant.boundingBox();
+    const composer = controlAssistant.getByRole("textbox", {name: "Ask Nebula a question"});
+    const composerBox = await composer.boundingBox();
+    const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
+    expect(button!.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 48);
+    expect(button!.height).toBeGreaterThanOrEqual(48);
+    expect(button!.y).toBeGreaterThanOrEqual(panel!.y + 44);
+    expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(visualBottom + 1);
+    await expect(composer).not.toBeFocused();
+    await expect(controlAssistant.getByRole("button", {name: "Move Nebula assistant"})).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
   await controlAssistant.getByRole("button", {name: "Close Nebula assistant"}).click();
   await page.getByRole("button", {name: "Start new chat"}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
