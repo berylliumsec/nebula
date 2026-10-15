@@ -6352,6 +6352,66 @@ test("assistant upgrade control assistant starts project work on production LAN 
   ]);
 });
 
+test("assistant upgrade Butler saved table stays readable after reload on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    expect(projects.length).toBeGreaterThan(0);
+    const projectId = projects[0].id;
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+
+    // Seed only this disposable Core: the regression is the rendering of a
+    // durable Butler answer, so no provider request or research agent is needed.
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const sessionId = "butler-mobile-table-fixture";
+    const answer = "| Goal | What its assistants are checking |\n| --- | --- |\n| Sample Project | One is checking the next task and its owner. |\n| Documentation | One is checking the draft for open questions. |";
+    const seeded = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ChatMessage, ChatSession",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "project_id, session_id = sys.argv[2:]",
+      "store.create(ChatSession(id=session_id, engagement_id=project_id, title='Butler', provider_profile_id='fixture-provider', model='fixture-model', metadata={'control_assistant': True, 'message_count': 1, 'last_sequence': 1}))",
+      "store.create(ChatMessage(id='butler-mobile-table-answer', engagement_id=project_id, session_id=session_id, sequence=1, role='assistant', content=sys.stdin.read()))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId, sessionId], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, input: answer, timeout: 30_000,
+    });
+    expect(seeded.status, seeded.error?.message ?? seeded.stderr).toBe(0);
+
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler table LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const butler = page.getByRole("dialog", {name: "Butler"});
+    const goal = butler.getByRole("region", {name: "Butler response table"}).getByRole("cell", {name: "Sample Project"});
+    const check = async () => {
+      await expect(goal).toBeVisible();
+      await expect.poll(() => goal.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(80);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    };
+    await check();
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await check();
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    await testInfo.attach("butler-table-mobile", {body: await butler.screenshot(), contentType: "image/png"});
+    await testInfo.attach("butler-table-production-lan", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!]}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test.describe("Butler Voice saved conversation", () => {
   // The temporary Core owns real HTTPS, cookies, chat storage, and history.
   // Only WebRTC and the upstream Live session exchange are synthetic.
