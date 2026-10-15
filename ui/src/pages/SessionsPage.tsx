@@ -4655,7 +4655,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         setSessions(current => current.some(existing => existing.id === item.id) ? current : [item, ...current]);
       }
     }).catch((error) => {
-      if (!controller.signal.aborted) setChatError(error instanceof Error ? error.message : "Could not open this conversation.");
+      if (!controller.signal.aborted) {
+        void logCaughtDiagnostic("interface.sessions_page.requested_chat_load_failed", "The requested conversation could not be opened.", error, "sessions_page");
+        setChatError(error instanceof Error ? error.message : "Could not open this conversation.");
+      }
     });
     return () => controller.abort();
   }, [api, engagement?.id, requestedSessionId, sessions]);

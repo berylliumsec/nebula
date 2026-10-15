@@ -442,6 +442,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           setSessionConfig(effectiveConfig);
         }
       } catch (caught) {
+        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_refresh_failed", message: "The assistant's next-turn settings could not be refreshed.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
         setError(caught instanceof Error ? caught.message : "Could not load Nebula assistant settings. Retry after reconnecting.");
         return;
       }

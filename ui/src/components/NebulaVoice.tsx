@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Code2, Info, Play, Radio, RefreshCw, Target, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { VoiceWorkDetail, VoiceWorkRoster } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import styles from "./NebulaVoice.module.css";
 
 type Phase = "connecting" | "listening" | "speaking" | "reconnecting" | "error" | "closing";
@@ -96,8 +97,9 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       if (!mounted.current) return;
       setMicrophoneDevices(devices.filter((device) => device.kind === "audioinput" && device.deviceId !== "default")
         .map((device, index) => ({ id: device.deviceId, label: device.label || `Microphone ${index + 1}` })));
-    } catch {
-      if (mounted.current) setMicrophoneMessage("Chrome could not list microphones. Check this site's microphone permission.");
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.microphones_unavailable", "Microphone devices could not be listed.", caught, "voice-input");
+      if (mounted.current) setMicrophoneMessage("This browser could not list microphones. Check this site's microphone permission.");
     }
   }, []);
 
@@ -107,7 +109,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       if (!mounted.current) return;
       setWork(next);
       setWorkError("");
-    } catch {
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.work_roster_failed", "Project work could not be refreshed in Voice.", caught, "voice-work");
       if (mounted.current) setWorkError("Work status is unavailable. Retry to refresh it.");
     }
   }, [api, project.id]);
@@ -123,7 +126,9 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       meter.source.disconnect();
       meter.analyser.disconnect();
       meter.silence.disconnect();
-      void meter.context.close().catch(() => {});
+      void meter.context.close().catch((caught) => {
+        logCaughtDiagnostic("interface.voice.meter_close_failed", "The microphone level meter could not close cleanly.", caught, "voice-input");
+      });
     }
     orb.current?.style.setProperty("--voice-scale", "1");
     orb.current?.style.setProperty("--voice-rise", "0px");
@@ -162,11 +167,17 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         orb.current?.style.setProperty("--voice-rise", `${(-level * 8).toFixed(1)}px`);
         meter.frame = window.requestAnimationFrame(tick);
       };
-      void context.resume().catch(() => {});
+      void context.resume().catch((caught) => {
+        logCaughtDiagnostic("interface.voice.meter_resume_failed", "The microphone level meter could not start.", caught, "voice-input");
+        if (mounted.current) setMicrophoneMessage("Voice is connected, but microphone animation is unavailable on this device.");
+      });
       meter.frame = window.requestAnimationFrame(tick);
-    } catch {
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.meter_setup_failed", "The microphone level meter could not be created.", caught, "voice-input");
       // Voice remains usable if a browser cannot expose microphone levels.
-      void created?.close().catch(() => {});
+      void created?.close().catch((closeError) => {
+        logCaughtDiagnostic("interface.voice.meter_close_failed", "The microphone level meter could not close cleanly.", closeError, "voice-input");
+      });
     }
   }, []);
 
@@ -204,6 +215,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       setDelegatedStatus(result ? "Nebula responded" : "Needs retry");
       void refreshWork();
     } catch (caught) {
+      logCaughtDiagnostic("interface.voice.delegation_failed", "The spoken request could not be delegated to Nebula assistant.", caught, "voice-work");
       if (!mounted.current || closing.current || attempt !== generation.current) return;
       const message = caught instanceof Error ? caught.message : "The request failed.";
       sendEvent({ type: "session.commentary.append", event_id: `voice_failed_${crypto.randomUUID()}`, delegation_id: id,
@@ -279,7 +291,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       } }));
       if (!mounted.current || attempt !== generation.current) { microphone.getTracks().forEach((track) => track.stop()); return; }
       const inputTrack = microphone.getAudioTracks()[0];
-      if (!inputTrack) throw new Error("Chrome did not return a microphone track. Choose another input and reconnect.");
+      if (!inputTrack) throw new Error("This browser did not return a microphone track. Choose another input and reconnect.");
       setMicrophoneLabel(inputTrack.label || "Active microphone");
       setMicrophoneDeviceId(selectedDeviceId || "default");
       setMicrophoneMessage("");
@@ -291,7 +303,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       inputTrack.addEventListener?.("mute", () => {
         if (attempt !== generation.current || !mounted.current) return;
         setMicrophonePanelOpen(true);
-        setMicrophoneMessage("Chrome is receiving no sound from this microphone. Choose another input if it stays silent.");
+        setMicrophoneMessage("No sound is reaching Nebula from this microphone. Choose another input if it stays silent.");
       });
       startMicrophoneMeter(microphone);
       void refreshMicrophones();
@@ -300,7 +312,10 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
           if (!mounted.current || attempt !== generation.current) return;
           setSpeakerDevices(devices.filter((device) => device.kind === "audiooutput" && device.deviceId !== "default")
             .map((device, index) => ({ id: device.deviceId, label: device.label || `Speaker ${index + 1}` })));
-        }).catch(() => {});
+        }).catch((caught) => {
+          logCaughtDiagnostic("interface.voice.speakers_unavailable", "Speaker devices could not be listed.", caught, "voice-output");
+          if (mounted.current && attempt === generation.current) setSpeakerMessage("This browser could not list speakers. Check this device's sound output.");
+        });
       }
       const peer = new RTCPeerConnection();
       const channel = peer.createDataChannel("oai-events");
@@ -314,10 +329,11 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         audio.current.muted = false;
         audio.current.volume = 1;
         setSpeakerMessage("");
-        void audio.current.play().then(() => setPlaybackBlocked(false)).catch(() => {
+        void audio.current.play().then(() => setPlaybackBlocked(false)).catch((caught) => {
+          logCaughtDiagnostic("interface.voice.playback_blocked", "Voice speaker playback could not start automatically.", caught, "voice-output");
           setPlaybackBlocked(true);
           setSpeakerPanelOpen(true);
-          setSpeakerMessage("Chrome blocked speaker playback. Select Play audio to hear Nebula.");
+          setSpeakerMessage("This browser blocked speaker playback. Select Play audio to hear Nebula.");
         });
       });
       peer.addEventListener("connectionstatechange", () => {
@@ -329,7 +345,10 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       channel.addEventListener("message", ({ data }) => {
         if (attempt !== generation.current) return;
         try { handleEvent(JSON.parse(String(data)) as VoiceEvent); }
-        catch { setError("A voice event could not be read. Reconnect if conversation stops."); }
+        catch (caught) {
+          logCaughtDiagnostic("interface.voice.event_invalid", "A voice event could not be read.", caught, "voice-connection");
+          setError("A voice event could not be read. Reconnect if conversation stops.");
+        }
       });
       channel.addEventListener("close", () => {
         if (connection.current !== current || attempt !== generation.current || closing.current) return;
@@ -348,6 +367,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       projectAtConnection.current = project.id;
       await peer.setRemoteDescription({ type: "answer", sdp: result.sdp });
     } catch (caught) {
+      logCaughtDiagnostic("interface.voice.connection_failed", "The voice connection could not start.", caught, "voice-connection");
       if (attempt !== generation.current || !mounted.current) return;
       release();
       setPhase("error");
@@ -401,7 +421,11 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     setDetailError("");
     void api.getVoiceWorkDetail(project.id, selected.kind, selected.id, controller.signal)
       .then(setDetail)
-      .catch(() => { if (!controller.signal.aborted) setDetailError("This work item could not be loaded. Refresh its status and try again."); });
+      .catch((caught) => {
+        if (controller.signal.aborted) return;
+        logCaughtDiagnostic("interface.voice.work_detail_failed", "A project work item could not be loaded in Voice.", caught, "voice-work");
+        setDetailError("This work item could not be loaded. Refresh its status and try again.");
+      });
     return () => controller.abort();
   }, [api, project.id, selected]);
 
@@ -439,9 +463,10 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     try {
       await element.play();
       setPlaybackBlocked(false);
-    } catch {
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.playback_retry_failed", "Voice speaker playback could not be restarted.", caught, "voice-output");
       setPlaybackBlocked(true);
-      setSpeakerMessage("Chrome blocked speaker playback. Allow sound for this site, then select Play audio.");
+      setSpeakerMessage("This browser blocked speaker playback. Allow sound for this site, then select Play audio.");
       return;
     }
     if (typeof active.peer.getStats !== "function") {
@@ -460,11 +485,12 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         energy += stat.totalAudioEnergy ?? 0;
       });
       setSpeakerMessage(energy > 0
-        ? "Voice audio reached Chrome. If silent, choose the right speaker or check system volume."
+        ? "Voice audio reached this device. If silent, choose the right speaker or check system volume."
         : packets > 0
           ? "Speaker audio is connected. Ask Nebula to speak again, or choose another output."
           : "No speaker audio packets have arrived yet. Select Reconnect voice and try again.");
-    } catch {
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.speaker_stats_failed", "Voice speaker statistics could not be read.", caught, "voice-output");
       setSpeakerMessage("Speaker playback started. If silent, check this device's sound output and volume.");
     }
   };
@@ -476,8 +502,9 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       await element.setSinkId(id);
       setSpeakerDeviceId(id);
       await inspectSpeaker();
-    } catch {
-      setSpeakerMessage("Chrome could not use that speaker. Choose another output or check system sound settings.");
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.speaker_selection_failed", "The selected speaker could not be used.", caught, "voice-output");
+      setSpeakerMessage("This browser could not use that speaker. Choose another output or check system sound settings.");
     }
   };
 
