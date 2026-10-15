@@ -2056,7 +2056,11 @@ class ControlAssistantWork:
         }
 
     async def message_chat(
-        self, project_id: str, arguments: dict[str, Any]
+        self,
+        project_id: str,
+        arguments: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         session = self._messageable_chat(project_id, arguments.get("session_id"))
         text = _text(arguments.get("text"), "text", 20000)
@@ -2143,7 +2147,13 @@ class ControlAssistantWork:
             stream=True,
         )
         queue = self.queue.get(session.id)
-        key = f"control:{uuid4()}"
+        # Proactive Butler actions reuse a stable private key on recovery. The
+        # ordinary operator-facing capability still gets a fresh key per call.
+        key = (
+            _text(idempotency_key, "idempotency_key", 200)
+            if idempotency_key is not None
+            else f"control:{uuid4()}"
+        )
         saved = self.queue.write(
             session.id,
             QueueWrite(

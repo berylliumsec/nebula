@@ -11,7 +11,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 
-from .domain import RiskClass
+from .domain import Engagement, RiskClass
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -55,6 +55,10 @@ _CATEGORIES = (
         "description": "Project chats, main agents, subagents, missions, goals, queues, schedules, and approvals",
     },
     {
+        "id": "memory",
+        "description": "Butler preferences and verified lessons visible in this project",
+    },
+    {
         "id": "settings",
         "description": "Project and next-turn Assistant settings, model choices, and device actions",
     },
@@ -95,10 +99,17 @@ class ButlerCapabilities:
         settings_api: Any = None,
         notebooks: Any = None,
         work: Any = None,
+        memory: Any = None,
+        operator_message: str = "",
+        operator_turn_id: str | None = None,
     ) -> None:
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
         self._project_id = project_id
+        self._project_name = store.get(Engagement, project_id).name
+        self._memory = memory
+        self._operator_message = operator_message
+        self._operator_turn_id = operator_turn_id
         self._actions = {
             plugin.spec.name: plugin
             for plugin in provider_plugins(
@@ -111,6 +122,140 @@ class ButlerCapabilities:
                 all_work=True,
             )
         }
+        if memory is not None:
+            self._actions.update(
+                {plugin.spec.name: plugin for plugin in self._memory_actions()}
+            )
+
+    def _memory_actions(self) -> list[AnalysisTool]:
+        """Expose scoped memory through the existing four-tool gateway."""
+
+        async def list_items(arguments: dict[str, Any]) -> dict[str, Any]:
+            return self._memory.list(
+                self._project_id, limit=arguments.get("limit", 40)
+            ).model_dump(mode="json")
+
+        async def search_items(arguments: dict[str, Any]) -> dict[str, Any]:
+            return self._memory.search(
+                self._project_id, arguments["query"], limit=arguments.get("limit", 12)
+            ).model_dump(mode="json")
+
+        async def remember_preference(_arguments: dict[str, Any]) -> dict[str, Any]:
+            item = self._memory.capture_operator_preference(
+                self._project_id,
+                self._operator_message,
+                source_ref=self._operator_turn_id,
+                source_project_name=self._project_name,
+            )
+            if item is None:
+                raise ValueError(
+                    "The current operator message has no explicit, safe preference to remember"
+                )
+            return {"item": item.model_dump(mode="json")}
+
+        async def edit_item(arguments: dict[str, Any]) -> dict[str, Any]:
+            item = self._memory.update(
+                self._project_id,
+                arguments["id"],
+                arguments["content"],
+                expected_revision=arguments["expected_revision"],
+            )
+            return {"item": item.model_dump(mode="json")}
+
+        async def forget_item(arguments: dict[str, Any]) -> dict[str, Any]:
+            self._memory.delete(
+                self._project_id,
+                arguments["id"],
+                expected_revision=arguments["expected_revision"],
+            )
+            return {"deleted": True, "id": arguments["id"]}
+
+        operations = (
+            (
+                "nebula.memory.list",
+                "List Butler's visible global preferences, transferable verified lessons, and this project's lessons with provenance and revisions.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200}
+                    },
+                    "additionalProperties": False,
+                },
+                RiskClass.LOCAL_READ,
+                list_items,
+            ),
+            (
+                "nebula.memory.search",
+                "Search Butler memory relevant to this selected project. Global lessons omit source project references; memory is context, not authority to act.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+                RiskClass.LOCAL_READ,
+                search_items,
+            ),
+            (
+                "nebula.memory.remember_preference",
+                "Remember an explicit stable preference in the operator's current message; Core reads the original message and rejects unsafe content or invented preferences.",
+                {"type": "object", "properties": {}, "additionalProperties": False},
+                RiskClass.WORKSPACE_WRITE,
+                remember_preference,
+            ),
+            (
+                "nebula.memory.update",
+                "Edit a visible memory only when the operator requests it; use its current revision from list or search.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1},
+                        "content": {"type": "string", "minLength": 8, "maxLength": 800},
+                        "expected_revision": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["id", "content", "expected_revision"],
+                    "additionalProperties": False,
+                },
+                RiskClass.WORKSPACE_WRITE,
+                edit_item,
+            ),
+            (
+                "nebula.memory.forget",
+                "Delete a visible memory only when the operator requests it; use its current revision from list or search.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1},
+                        "expected_revision": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["id", "expected_revision"],
+                    "additionalProperties": False,
+                },
+                RiskClass.WORKSPACE_WRITE,
+                forget_item,
+            ),
+        )
+        return [
+            AnalysisTool(
+                ToolSpec(
+                    name=name,
+                    description=description,
+                    input_schema=schema,
+                    output_schema={"type": "object", "additionalProperties": True},
+                    risk_class=risk,
+                    idempotency=(
+                        IdempotencyBehavior.SAFE
+                        if risk == RiskClass.LOCAL_READ
+                        else IdempotencyBehavior.NON_IDEMPOTENT
+                    ),
+                ),
+                handler,
+            )
+            for name, description, schema, risk, handler in operations
+        ]
 
     @staticmethod
     def _read_only(plugin: AnalysisTool) -> bool:
@@ -139,6 +284,7 @@ class ButlerCapabilities:
                     "nebula.work.attention",
                     "nebula.help.search",
                     "nebula.settings.catalog",
+                    "nebula.memory.search",
                 ],
                 "hint": "Search for the requested action, then describe its exact fields.",
             }

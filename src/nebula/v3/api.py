@@ -112,6 +112,16 @@ from .browser_companion import (
     CompanionCredentialCreate,
     CompanionFileCreate,
 )
+from .butler_memory import (
+    ButlerMemoryEditRequest,
+    ButlerMemoryItem,
+    ButlerMemoryList,
+    ButlerMemorySearchRequest,
+    ButlerMemoryService,
+    MemoryConflictError,
+    MemoryNotFoundError,
+    UnsafeMemoryError,
+)
 from .browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
     BrowserAutomationToolPlatform,
@@ -272,7 +282,7 @@ from .credentials import (
     CredentialVaultLockedError,
     VaultState,
 )
-from .runtime_usage import RuntimeUsageResponse, RuntimeUsageService
+from .runtime_usage import HarnessQuotaRead, RuntimeUsageResponse, RuntimeUsageService
 from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
     ENTITY_MODEL_BY_KIND,
@@ -506,6 +516,7 @@ from .providers import (
     ToolDefinition,
     provider_from_profile,
 )
+from .provider_credits import OpenRouterCreditSnapshot
 from .reporting import ReportRenderError, ReportRenderService
 from .report_signoff import ReportSignoffRequest, sign_off_report
 from .setup import (
@@ -676,6 +687,15 @@ CUSTOM_RESOURCES = {
     # restore authority (paired-device sessions, browser leases, commands and
     # proxy rules) that only the dedicated routes grant.
     "chat_goals",
+    "butler_goal_watches",
+    "butler_project_states",
+    "butler_incidents",
+    "butler_decisions",
+    "butler_authority_policies",
+    "butler_actions",
+    "butler_agent_reports",
+    "butler_account_credits",
+    "butler_harness_quotas",
     "chat_goal_usage_charges",
     "chat_subagents",
     "chat_schedules",
@@ -1724,8 +1744,10 @@ def create_app(
     knowledge_url_fetcher: Callable[[str], FetchedUrlDocument] | None = None,
     allow_insecure_device_pairing: bool = False,
     openrouter_directory_transport: httpx.AsyncBaseTransport | None = None,
+    openrouter_credit_transport: httpx.AsyncBaseTransport | None = None,
     runtime_usage_transport: httpx.AsyncBaseTransport | None = None,
     ssh_environment_service: SshEnvironmentService | None = None,
+    butler_memory_service: ButlerMemoryService | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -2000,6 +2022,28 @@ def create_app(
     runtime_usage = RuntimeUsageService(
         store, credentials, transport=runtime_usage_transport
     )
+    from .butler_harness_resources import HarnessQuotaObserver
+
+    harness_quota_observer = HarnessQuotaObserver(store, runtime_usage)
+    harness_runtime.bind_quota_observers(
+        harness_quota_observer.submit_snapshot,
+        harness_quota_observer.schedule_read,
+        harness_quota_observer.submit_rate_limit,
+    )
+    if butler_memory_service is None:
+        core_db = store.database.engine.url.database
+        memory_root = (
+            Path(execution_data_root)
+            if execution_data_root is not None
+            else Path(core_db).parent
+            if core_db and core_db != ":memory:"
+            else Path(tempfile.mkdtemp(prefix="nebula-butler-memory-"))
+        )
+        butler_memory_service = ButlerMemoryService(
+            memory_root / "butler-memory.sqlite3",
+            index_path=memory_root / "butler-memory-index",
+            embedding_index=knowledge_index,
+        )
     if tool_platform is not None:
         harness_runtime.bind_tool_platform(tool_platform)
     if automation_tool_platform is not None:
@@ -2093,6 +2137,13 @@ def create_app(
         load_settings as load_web_search_settings,
     )
 
+    from .butler_resources import OpenRouterCreditObserver
+
+    openrouter_credit_observer = OpenRouterCreditObserver(
+        store, credentials, transport=openrouter_credit_transport
+    )
+    # Native mission AgentAttempt usage is signaled only after its write commits.
+    store.on_provider_usage_change(openrouter_credit_observer.schedule)
     provider_chat = ChatService(
         store,
         tool_suggestion_client=lambda: resolve_jev_client(store, credentials),
@@ -2104,7 +2155,9 @@ def create_app(
         artifact_store=artifact_store,
         workspace_resolver=native_workspace,
         managed_skill_root=managed_skill_root,
+        provider_usage_observer=openrouter_credit_observer.schedule,
     )
+    provider_chat.butler_memory = butler_memory_service
     if automation_runtime is not None:
         automation_runtime.bind_process_terminal_observer(
             provider_chat.continue_after_tool_callback
@@ -2131,6 +2184,14 @@ def create_app(
     )
 
     chat_queue = ChatQueueService(store, provider_chat, harness_runtime)
+    from .butler_oversight import ButlerOversightService, butler_router
+    from .butler_review import ProviderButlerReviewer
+
+    butler_oversight = ButlerOversightService(
+        store,
+        reviewer=ProviderButlerReviewer(store, provider_factory, harness_runtime),
+        memory_service=butler_memory_service,
+    )
     from .storage_integrations import StorageIntegrationService
 
     storage_integrations = StorageIntegrationService(
@@ -2445,6 +2506,18 @@ def create_app(
                     execution_ai.shutdown,
                 )
             await start_component(
+                "butler",
+                "openrouter-credits",
+                openrouter_credit_observer.startup,
+                openrouter_credit_observer.shutdown,
+            )
+            await start_component(
+                "butler",
+                "harness-quotas",
+                harness_quota_observer.startup,
+                harness_quota_observer.shutdown,
+            )
+            await start_component(
                 "chat",
                 "provider-runtime",
                 provider_chat.startup,
@@ -2489,6 +2562,12 @@ def create_app(
                 "runtime",
                 harness_runtime.startup,
                 harness_runtime.shutdown,
+            )
+            await start_component(
+                "butler",
+                "project-oversight",
+                butler_oversight.startup,
+                butler_oversight.shutdown,
             )
             await start_component(
                 "missions", "service", missions.startup, missions.shutdown
@@ -2560,12 +2639,25 @@ def create_app(
     control_assistant_work = ControlAssistantWork(
         store, provider_chat, chat_queue, harness_runtime, app, token
     )
+    from .butler_authority import ButlerAuthorityService
+
+    butler_authority = ButlerAuthorityService(
+        store, control_assistant_work, memory_service=butler_memory_service
+    )
+    butler_oversight.authority_service = butler_authority
     if tool_platform is not None:
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
         tool_platform.bind_control_assistant_work(control_assistant_work)
+        tool_platform.bind_butler_memory(butler_memory_service)
     harness_runtime.bind_settings_assistant_api(settings_assistant_api)
     harness_runtime.bind_control_assistant_work(control_assistant_work)
+    harness_runtime.bind_butler_memory(butler_memory_service)
     app.state.store = store
+    app.state.butler_oversight = butler_oversight
+    app.state.butler_authority = butler_authority
+    app.state.openrouter_credit_observer = openrouter_credit_observer
+    app.state.harness_quota_observer = harness_quota_observer
+    app.state.butler_memory_service = butler_memory_service
     app.state.control_assistant_work = control_assistant_work
     app.state.storage_integrations = storage_integrations
     app.state.application_model = application_model
@@ -4331,6 +4423,17 @@ def create_app(
 
         response.headers["Cache-Control"] = "no-store"
         return await runtime_usage.read(refresh=refresh)
+
+    @app.post(
+        f"{API_PREFIX}/harnesses/{{profile_id}}/quota/refresh",
+        response_model=HarnessQuotaRead,
+        tags=["harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def refresh_harness_quota(profile_id: str) -> HarnessQuotaRead:
+        """Check authoritative account windows and retain project observations."""
+
+        return await harness_quota_observer.refresh(profile_id, force=True)
 
     @app.post(
         f"{API_PREFIX}/harnesses/{{profile_id}}/health",
@@ -7018,7 +7121,20 @@ def create_app(
     async def sign_off_saved_report(
         report_id: str, request: ReportSignoffRequest
     ) -> Report:
-        return sign_off_report(store, report_id, request)
+        signed = sign_off_report(store, report_id, request)
+        try:
+            butler_memory_service.capture_signed_report(store, signed)
+        except (
+            Exception
+        ) as exc:  # diagnostic-expected: signed Core record remains authoritative
+            record_caught_exception(
+                "butler-memory",
+                "butler_memory.signed_report_capture_failed",
+                "The report was signed, but Butler could not retain its verified lesson.",
+                exc,
+                stage="capture",
+            )
+        return signed
 
     @app.post(
         f"{API_PREFIX}/reports/{{report_id}}/renders",
@@ -10056,6 +10172,23 @@ def create_app(
         return health.model_copy(update={"provider_revision": stored.revision})
 
     @app.post(
+        f"{API_PREFIX}/providers/{{provider_id}}/openrouter/credits/refresh",
+        response_model=OpenRouterCreditSnapshot,
+        tags=["providers"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def refresh_openrouter_credits(provider_id: str) -> OpenRouterCreditSnapshot:
+        """Check account credits with the separate OpenRouter management key."""
+
+        profile = store.get(ProviderProfile, provider_id)
+        if profile.provider_type != ProviderFlavor.OPENROUTER.value:
+            raise HTTPException(
+                status_code=422,
+                detail="account credits are available only for OpenRouter profiles",
+            )
+        return await openrouter_credit_observer.refresh(provider_id, force=True)
+
+    @app.post(
         f"{API_PREFIX}/providers/{{provider_id}}/capabilities/verify",
         response_model=ProviderCapabilityVerifyResponse,
         tags=["providers"],
@@ -10199,6 +10332,9 @@ def create_app(
             store.get(ChatSession, request.session_id) if request.session_id else None
         )
         request = isolate_settings_assistant_request(request, scoped_chat)
+        butler_request = request.control_assistant or bool(
+            scoped_chat and scoped_chat.metadata.get("control_assistant") is True
+        )
         if request.session_id:
             selected_chat = store.get(ChatSession, request.session_id)
             if selected_chat.metadata.get("side_chat") is True:
@@ -10300,6 +10436,37 @@ def create_app(
                 allow_agent_messaging=request.allow_agent_messaging,
                 control_assistant=request.control_assistant,
             )
+            if butler_request:
+                try:
+                    project_name = store.get(Engagement, engagement_id).name
+                    butler_memory_service.capture_operator_preference(
+                        engagement_id,
+                        prompt,
+                        source_ref=chat_turn.id,
+                        source_project_name=project_name,
+                    )
+                    butler_memory_service.capture_operator_lesson(
+                        engagement_id,
+                        prompt,
+                        source_ref=chat_turn.id,
+                        source_project_name=project_name,
+                    )
+                    butler_memory_service.capture_operator_decision(
+                        engagement_id,
+                        prompt,
+                        source_ref=chat_turn.id,
+                        source_project_name=project_name,
+                    )
+                except (
+                    Exception
+                ) as exc:  # diagnostic-expected: memory is advisory to chat
+                    record_caught_exception(
+                        "butler-memory",
+                        "butler_memory.capture_failed",
+                        "Butler could not retain this memory; the chat turn continues.",
+                        exc,
+                        stage="capture",
+                    )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)
             harness_runtime.start_chat_turn(harness_turn.id)
@@ -10595,11 +10762,50 @@ def create_app(
         service = chat_service()
         prepared = await service.prepare_async(request)
         if not request.stream:
-            return await service.complete(prepared)
-
-        turn_id = (
-            service.start_provider_turn(prepared) if prepared.turn is not None else None
+            result = await service.complete(prepared)
+            accepted_turn_id = result.turn_id
+        else:
+            accepted_turn_id = (
+                service.start_provider_turn(prepared)
+                if prepared.turn is not None
+                else None
+            )
+        preference_source_ref = accepted_turn_id or (
+            result.session_id if not request.stream else None
         )
+        if butler_request and prepared.engagement_id and preference_source_ref:
+            try:
+                project_name = store.get(Engagement, prepared.engagement_id).name
+                butler_memory_service.capture_operator_preference(
+                    prepared.engagement_id,
+                    request.messages[-1].content,
+                    source_ref=preference_source_ref,
+                    source_project_name=project_name,
+                )
+                butler_memory_service.capture_operator_lesson(
+                    prepared.engagement_id,
+                    request.messages[-1].content,
+                    source_ref=preference_source_ref,
+                    source_project_name=project_name,
+                )
+                butler_memory_service.capture_operator_decision(
+                    prepared.engagement_id,
+                    request.messages[-1].content,
+                    source_ref=preference_source_ref,
+                    source_project_name=project_name,
+                )
+            except Exception as exc:  # diagnostic-expected: memory is advisory to chat
+                record_caught_exception(
+                    "butler-memory",
+                    "butler_memory.capture_failed",
+                    "Butler could not retain this memory; the chat turn continues.",
+                    exc,
+                    stage="capture",
+                )
+        if not request.stream:
+            return result
+
+        turn_id = accepted_turn_id
 
         async def event_stream() -> Any:
             started_at = time.monotonic()
@@ -11312,6 +11518,18 @@ def create_app(
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
+    app.include_router(
+        butler_router(butler_oversight),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+    from .butler_authority import authority_router
+
+    app.include_router(
+        authority_router(butler_authority),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
     from .chat_results import results_router
 
     app.include_router(
@@ -11528,6 +11746,77 @@ def create_app(
             ),
             None,
         )
+
+    @app.get(
+        f"{API_PREFIX}/butler/memory",
+        response_model=ButlerMemoryList,
+        tags=["butler-memory"],
+        dependencies=[Depends(require_auth)],
+    )
+    def list_butler_memory(
+        engagement_id: str,
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> ButlerMemoryList:
+        store.get(Engagement, engagement_id)
+        return butler_memory_service.list(engagement_id, limit=limit)
+
+    @app.post(
+        f"{API_PREFIX}/butler/memory/search",
+        response_model=ButlerMemoryList,
+        tags=["butler-memory"],
+        dependencies=[Depends(require_auth)],
+    )
+    def search_butler_memory(request: ButlerMemorySearchRequest) -> ButlerMemoryList:
+        store.get(Engagement, request.engagement_id)
+        return butler_memory_service.search(
+            request.engagement_id, request.query, limit=request.limit
+        )
+
+    @app.patch(
+        f"{API_PREFIX}/butler/memory/{{item_id}}",
+        tags=["butler-memory"],
+        response_model=ButlerMemoryItem,
+        dependencies=[Depends(require_auth)],
+    )
+    def edit_butler_memory(
+        item_id: str, request: ButlerMemoryEditRequest
+    ) -> ButlerMemoryItem:
+        store.get(Engagement, request.engagement_id)
+        try:
+            return butler_memory_service.update(
+                request.engagement_id,
+                item_id,
+                request.content,
+                expected_revision=request.expected_revision,
+            )
+        except MemoryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except MemoryConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except UnsafeMemoryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/butler/memory/{{item_id}}",
+        tags=["butler-memory"],
+        status_code=204,
+        dependencies=[Depends(require_auth)],
+    )
+    def delete_butler_memory(
+        item_id: str,
+        engagement_id: str,
+        expected_revision: int = Query(ge=1),
+    ) -> Response:
+        store.get(Engagement, engagement_id)
+        try:
+            butler_memory_service.delete(
+                engagement_id, item_id, expected_revision=expected_revision
+            )
+        except MemoryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except MemoryConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Response(status_code=204)
 
     def _live_api_key() -> str:
         # An OpenAI-compatible or custom endpoint must not have its credential
@@ -13919,6 +14208,13 @@ def create_app(
             append_only=resource in APPEND_ONLY_RESOURCES,
             delete_archived_project=delete_archived_project,
             actor_id=active_operator_id,
+            after_write=(
+                openrouter_credit_observer.schedule
+                if model is ProviderProfile
+                else harness_quota_observer.schedule_read
+                if model is HarnessProfile
+                else None
+            ),
         )
     _assert_unique_api_operations(app)
 
@@ -14732,6 +15028,7 @@ def _register_crud_routes(
     read_only: bool = False,
     append_only: bool = False,
     after_create: Callable[[Entity], Any] | None = None,
+    after_write: Callable[[str], Any] | None = None,
     delete_archived_project: Callable[[Engagement], Any] | None = None,
     actor_id: Callable[[], str],
 ) -> None:
@@ -14822,6 +15119,8 @@ def _register_crud_routes(
             )
             if after_create is not None:
                 after_create(created)
+            if after_write is not None:
+                after_write(created.id)
             return created
 
         create_entity.__name__ = f"create_{resource.replace('-', '_')}"
@@ -14983,9 +15282,12 @@ def _register_crud_routes(
                 return relation_service.replace_legacy_entity(
                     current, entity, expected_revision=expected_revision
                 )
-            return store.replace(
+            saved = store.replace(
                 model, entity_id, entity, expected_revision=expected_revision
             )
+            if after_write is not None:
+                after_write(saved.id)
+            return saved
 
         replace_entity.__name__ = f"replace_{resource.replace('-', '_')}"
         replace_entity.__annotations__["entity"] = model
@@ -15063,12 +15365,15 @@ def _register_crud_routes(
                 return relation_service.replace_legacy_entity(
                     current, candidate, expected_revision=expected_revision
                 )
-            return store.update(
+            saved = store.update(
                 model,
                 entity_id,
                 changes,
                 expected_revision=expected_revision,
             )
+            if after_write is not None:
+                after_write(saved.id)
+            return saved
 
         patch_entity.__name__ = f"patch_{resource.replace('-', '_')}"
         patch_entity.__annotations__["return"] = model
