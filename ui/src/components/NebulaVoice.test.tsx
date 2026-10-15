@@ -37,7 +37,7 @@ const roster = {
   more_chats: false, more_missions: false,
 };
 
-describe("Nebula Voice", () => {
+describe("Butler Voice", () => {
   beforeEach(() => {
     vi.stubGlobal("RTCPeerConnection", FakePeer);
     Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
@@ -58,7 +58,7 @@ describe("Nebula Voice", () => {
     await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledWith("project", "v=0\r\nclient-offer"));
     await act(async () => FakePeer.latest.channel.emit({ type: "session.started" }));
     expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Listening");
-    expect(screen.getByRole("dialog", { name: "Nebula Voice" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Butler Voice" })).toBeVisible();
     expect(screen.getByText("Surface review")).toBeVisible();
     expect(screen.getByText("1 needs attention")).toBeVisible();
     expect(screen.getByText("write_file")).toBeVisible();
@@ -83,7 +83,7 @@ describe("Nebula Voice", () => {
     const onExit = vi.fn();
     render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={vi.fn()} onExit={onExit} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("trusted HTTPS address");
-    expect(screen.getByRole("dialog", { name: "Nebula Voice" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Butler Voice" })).toBeVisible();
     expect(onExit).not.toHaveBeenCalled();
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
   });

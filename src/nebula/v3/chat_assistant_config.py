@@ -153,7 +153,7 @@ def update_chat_assistant_config(
             "control_assistant"
         ) is True and not provider_profile.tools_verified_for(model):
             raise ValueError(
-                "Nebula assistant needs a provider model verified for tools"
+                "Butler needs a provider model verified for tools"
             )
         if selected["tools_enabled"] and not provider_profile.tools_verified_for(model):
             raise ValueError("this provider model is not verified for command tools")

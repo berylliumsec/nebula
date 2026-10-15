@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatStreamEvent, HarnessProfile } from "../api/types";
-import { assistantTurnOptions, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
+import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
   it("maps explicit device-theme commands to bounded values without taking over questions", () => {
@@ -56,6 +56,23 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({ ...event, capability: "nebula.settings.set_project_scope",
       receipt: { state: "pending_browser_apply", client_action: { kind: "project_scope", changes: { mode: "allow_all", unknown: true } } } })).toBeUndefined();
     expect(settingClientAction({ ...event, receipt: { state: "pending_browser_apply", client_action: { kind: "device_theme", theme: "unlisted" } } })).toBeUndefined();
+  });
+  it("uses the gateway's exact operation and selected-project receipt for work and browser actions", () => {
+    const missionId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const base: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.work.start_mission", butler_project_id: "selected", run_id: missionId},
+    };
+    expect(assistantWorkReceipt(base, "selected")?.url).toBe(`/projects/selected/workbench?view=missions&mission=${missionId}`);
+    expect(assistantWorkReceipt(base, "other")).toBeUndefined();
+    const browser = {...base, receipt: {
+      butler_operation: "nebula.settings.open", butler_project_id: "selected",
+      state: "pending_browser_apply", client_action: {kind: "open_setting", setting_id: "appearance"},
+    }};
+    expect(settingClientAction(browser, "selected")).toMatchObject({kind: "open_setting", setting: {id: "settings.appearance"}});
+    expect(settingClientAction(browser, "other")).toBeUndefined();
+    expect(settingClientAction({...browser, receipt: {...browser.receipt, butler_operation: "nebula.work.start_chat"}}, "selected")).toBeUndefined();
   });
   it("recognizes explicit project mode changes without treating questions as commands", () => {
     expect(projectModeChange("open project policy and change from dockermode to host mode"))
