@@ -29,10 +29,14 @@ from .domain import (
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     EngagementStatus,
     NebulaModel,
     OperationEvent,
+    ToolCall,
+    ToolCallStatus,
     utc_now,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -127,6 +131,54 @@ class ButlerAuthorityService:
             project_id,
             self.store.find_entity(ButlerAuthorityPolicy, "engagement_id", project_id),
         )
+
+    def _repeat_still_current(
+        self, project_id: str, goal: ChatGoal, event_payload: ButlerEventPayload
+    ) -> bool:
+        refs = [ref for ref in event_payload.evidence_refs if ref.kind == "tool_call"]
+        if len(refs) != 3 or any(ref.project_id != project_id for ref in refs):
+            return False
+        try:
+            last = self.store.get(ToolCall, refs[-1].id)
+        except NotFoundError:
+            return False
+        if (
+            last.engagement_id != project_id
+            or last.chat_session_id != goal.session_id
+            or last.status != ToolCallStatus.FAILED
+        ):
+            return False
+        # The event is durable historical evidence. A later different, active,
+        # or successful tool call means the exact repeat is no longer current.
+        for call in self.store.list_session_entities(
+            ToolCall, goal.session_id, newest_first=True, limit=50
+        ):
+            if call.id == last.id:
+                return True
+            if (
+                call.engagement_id != project_id
+                or call.status != ToolCallStatus.FAILED
+                or call.tool_name != last.tool_name
+                or call.arguments != last.arguments
+                or call.risk_class != last.risk_class
+                or (
+                    isinstance(call.result, dict)
+                    and call.result.get("side_effects") == "unknown"
+                )
+                or not call.chat_turn_id
+            ):
+                return False
+            try:
+                turn = self.store.get(ChatTurn, call.chat_turn_id)
+            except NotFoundError:
+                return False
+            if (
+                turn.engagement_id != project_id
+                or turn.goal_id != goal.id
+                or turn.status != ChatTurnStatus.COMPLETE
+            ):
+                return False
+        return False
 
     def write(self, project_id: str, request: AuthorityWrite) -> dict:
         project = self.store.get(Engagement, project_id)
@@ -266,6 +318,25 @@ class ButlerAuthorityService:
         ):
             kind = "request_parent_plan_reassessment"
         elif (
+            event.event_type == "goal.read_only_tool_failures_repeated"
+            and decision.choice == "steer"
+            and payload.verification_state == "core_observed"
+            and payload.metrics.get("attempts") == 3
+            and payload.metrics.get("goal_revision") == goal.revision
+            and len(decision.why_now.strip()) >= 20
+            and any(
+                ref.get("kind") == "tool_call"
+                and ref.get("project_id") == project_id
+                and any(
+                    source.kind == "tool_call" and source.id == ref.get("id")
+                    for source in payload.evidence_refs
+                )
+                for ref in decision.evidence_refs
+            )
+            and self._repeat_still_current(project_id, goal, payload)
+        ):
+            kind = "request_parent_plan_reassessment"
+        elif (
             event.event_type == "agent.attention_reported"
             and decision.choice == "steer"
             and payload.verification_state == "agent_reported"
@@ -308,7 +379,9 @@ class ButlerAuthorityService:
                 "Ask the parent main agent for a progress checkpoint."
                 if kind == "request_parent_status"
                 else (
-                    "Ask the parent main agent to reassess the changed goal plan."
+                    "Ask the parent main agent to reassess the repeated read-only tool failure."
+                    if event.event_type == "goal.read_only_tool_failures_repeated"
+                    else "Ask the parent main agent to reassess the changed goal plan."
                     if kind == "request_parent_plan_reassessment"
                     else "Pause the main goal after an urgent agent-reported machine blocker."
                 )
@@ -690,14 +763,25 @@ class ButlerAuthorityService:
                         "Keep the work within its existing objective and approval boundaries."
                     )
                 else:
-                    text = (
-                        f"Butler reviewed a saved plan change for {subject} (goal {goal.id}). "
-                        "Before continuing, compare the current plan with the existing "
-                        "objective and evidence. If a step is repeating without new evidence, "
-                        "stop that step and choose one bounded alternative. Report the revised "
-                        "next step and checkpoint to Core. Route any child guidance through "
-                        "the parent main agent and keep existing approval boundaries."
-                    )
+                    if decision.source_event_type == "goal.read_only_tool_failures_repeated":
+                        text = (
+                            f"Butler observed that the same read-only tool invocation for {subject} "
+                            f"(goal {goal.id}) failed in three separate completed turns. "
+                            "Inspect the saved tool outcomes before repeating that exact call. "
+                            "Choose a bounded alternative or explain why another attempt is warranted, "
+                            "then report the next checkpoint to Core. This does not establish that "
+                            "the wider goal failed. Route any child guidance through the parent main "
+                            "agent and keep existing approval boundaries."
+                        )
+                    else:
+                        text = (
+                            f"Butler reviewed a saved plan change for {subject} (goal {goal.id}). "
+                            "Before continuing, compare the current plan with the existing "
+                            "objective and evidence. If a step is repeating without new evidence, "
+                            "stop that step and choose one bounded alternative. Report the revised "
+                            "next step and checkpoint to Core. Route any child guidance through "
+                            "the parent main agent and keep existing approval boundaries."
+                        )
                 await self.work.message_chat(
                     action.engagement_id,
                     {"session_id": target, "text": text, "delivery": "next"},

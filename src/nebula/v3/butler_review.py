@@ -59,6 +59,7 @@ MEANINGFUL_EVENTS = frozenset(
         "goal.progress_overdue",
         "goal.plan_changed",
         "goal.blocked",
+        "goal.read_only_tool_failures_repeated",
     }
 )
 REVIEW_INTERVAL = timedelta(seconds=30)
@@ -809,14 +810,20 @@ async def review_pending(
                 break
             later_payload = ButlerEventPayload.model_validate(later.payload)
             if (
-                candidate.event_type == "agent.attention_reported"
+                candidate.event_type in {
+                    "agent.attention_reported",
+                    "goal.read_only_tool_failures_repeated",
+                }
                 or candidate_payload.metrics.get("precedent_recheck") is True
                 or later_payload.metrics.get("precedent_recheck") is True
             ):
                 break
             candidate = later
             candidate_payload = later_payload
-            if candidate.event_type == "agent.attention_reported":
+            if candidate.event_type in {
+                "agent.attention_reported",
+                "goal.read_only_tool_failures_repeated",
+            }:
                 break
         if (
             candidate_payload.metrics.get("precedent_recheck") is not True

@@ -156,6 +156,7 @@ def test_meaningful_event_filter_is_narrow():
         "goal.progress_overdue",
         "goal.plan_changed",
         "goal.blocked",
+        "goal.read_only_tool_failures_repeated",
     }
     assert is_meaningful_event(type("Event", (), {"event_type": "goal.blocked"})())
     assert not is_meaningful_event(

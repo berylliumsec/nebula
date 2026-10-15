@@ -90,6 +90,7 @@ class ButlerEvidenceRef(NebulaModel):
         "goal",
         "chat_turn",
         "harness_turn",
+        "tool_call",
         "artifact",
         "resource",
         "agent_report",

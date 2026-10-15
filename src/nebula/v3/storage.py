@@ -427,13 +427,22 @@ class StoreTransaction:
         goal_transition = model.entity_kind == "chat_goals" and (
             previous_status != updated.status.value
         )
+        completed_goal_turn = (
+            model.entity_kind == "chat_turns"
+            and previous_status != "complete"
+            and updated.status.value == "complete"
+            and updated.backend.value == "provider"
+            and updated.goal_id is not None
+        )
         before_goal = None
-        if goal_transition:
+        if goal_transition or completed_goal_turn:
             from .butler_oversight import project_stream_id
-            from .domain import ChatGoal
 
-            before_goal = ChatGoal.model_validate(row.payload)
             self.lock_operation_stream(project_stream_id(updated.engagement_id))
+            if goal_transition:
+                from .domain import ChatGoal
+
+                before_goal = ChatGoal.model_validate(row.payload)
         result = self.session.execute(
             update(EntityRow)
             .where(
@@ -471,6 +480,10 @@ class StoreTransaction:
 
             assert before_goal is not None
             record_goal_transition(self, before_goal, updated)
+        if completed_goal_turn:
+            from .butler_tool_failures import record_completed_provider_turn
+
+            record_completed_provider_turn(self, updated)
         if (
             model.entity_kind == "agent_attempts"
             and isinstance(previous_tokens, int)
