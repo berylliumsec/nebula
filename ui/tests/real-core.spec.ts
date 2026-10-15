@@ -8100,14 +8100,14 @@ async function pairRealCoreBrowser(page: Page, core: RealCore, name: string, opt
   await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
   await page.getByLabel("Device name").fill(name);
   await page.getByRole("button", { name: "Pair device" }).click();
-  if (options.requireReady === false) {
-    // Usage remains reachable when this disposable Core has no terminal runner.
-    await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0);
-  } else {
+  // Redeeming a pair calls location.replace("/"). Wait for that navigation
+  // to finish before a test opens its project URL on the same page.
+  await expect(page).toHaveURL(`${core.origin}/`, { timeout: 20_000 });
+  await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20_000 });
+  if (options.requireReady !== false) {
     // The compact Workbench may start on Terminal with its Core chip inside
     // the navigation lens. Pairing is complete once the shell mounts; Core's
     // health endpoint supplies the server-readiness assertion.
-    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20_000 });
     const health = await page.request.get(`${core.origin}/api/v1/health`, {
       headers: { Authorization: `Bearer ${core.token}` },
     });
