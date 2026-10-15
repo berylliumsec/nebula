@@ -388,6 +388,7 @@ class ButlerRecoveryAgent:
                         output = await plugin._handler(call.arguments)
                         is_error = False
                     except Exception as exc:
+                        # diagnostic-expected: the tool error is saved in the recovery case and returned to Butler.
                         output = {"error": str(exc)[:500], "type": type(exc).__name__}
                         is_error = True
                     rendered = json.dumps(output, ensure_ascii=False, default=str)
@@ -710,6 +711,7 @@ class ButlerRecoveryService:
         try:
             queue = self.store.get(ChatQueue, "chat-queue-" + case.target_session_id)
         except NotFoundError:
+            # diagnostic-expected: the case records the missing queue as an uncertain outcome.
             return self._update_case(
                 case,
                 status="uncertain",
@@ -749,6 +751,7 @@ class ButlerRecoveryService:
                 try:
                     original = self.store.get(ToolCall, case.source_tool_call_id)
                 except NotFoundError:
+                    # diagnostic-expected: the case records missing retry evidence as uncertain.
                     return self._update_case(
                         case,
                         status="uncertain",
@@ -826,6 +829,7 @@ class ButlerRecoveryService:
         try:
             summary, backend, profile_id, model, turn_id = await self.agent.run(case)
         except Exception as exc:
+            # diagnostic-expected: the case records the investigation failure for operator review.
             current = self.store.get(ButlerRecoveryCase, case.id)
             uncertain = any(
                 step.get("status") in {"uncertain", "running"} for step in current.steps

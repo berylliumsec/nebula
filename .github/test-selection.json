@@ -1,5 +1,5 @@
 {
-  "change_digest": "de6a7aded0aa3a08a82dca719cad2b8c0d0072a24b028091ec83d4d555f9b3de",
+  "change_digest": "f5448100cb2a1189896456da5c68eba1ef35ed1b3c6f4612b29d0d4b93ac3252",
   "reviewed_by": "Codex focused Butler Act recovery review",
   "reason": "Butler adds per-project Act authority, Core-observed immediate subagent failure and periodic recovery cases, bounded capability use, parent-only work routing, exact-task queue and child-result verification, and an Oversight status surface. The shared provider tool broker and harness gateway record failure signals, so selected Core tests cover both paths, isolated background harness authority, event deduplication, policy boundaries, crash handling, and verification. UI tests cover policy saving and case display. The selected real-Core production LAN journey covers authority changes, reload, touch geometry, and accessibility on desktop and mobile browser engines.",
   "exclusions": "Full suites and unrelated Python/UI modules are excluded. No native app source changed, so native tests are excluded. The browser journey uses a deterministic local model stub; a real harness-to-provider automatic repair and physical iPhone are separate acceptance evidence, not inferred from this selection.",
