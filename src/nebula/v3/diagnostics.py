@@ -66,6 +66,7 @@ FEATURE_FILES: dict[str, str] = {
     "chat": "chat.log",
     "knowledge": "knowledge.log",
     "harnesses": "harnesses.log",
+    "butler": "butler.log",
     "missions": "missions.log",
     "runtime": "runtime.log",
     "debugger": "debugger.log",
