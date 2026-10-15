@@ -5,6 +5,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+import nebula.v3.butler_recovery as recovery_module
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_authority import policy_id
 from nebula.v3.butler_oversight import project_state_id, project_stream_id
@@ -18,6 +19,7 @@ from nebula.v3.domain import (
     ButlerGoalWatch,
     ButlerProjectState,
     ButlerRecoveryCase,
+    ChatBackend,
     ChatGoalStatus,
     ChatQueue,
     ChatSession,
@@ -657,3 +659,124 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
     assert len(work.targets) == 1
     assert work.targets[0][:2] == (project.id, parent.id)
     assert work.targets[0][2].startswith("recovery:" + cases[0].id)
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_status"),
+    [
+        ("nebula.work.goals", "resolved"),
+        ("nebula.work.set_chat_settings", "needs_attention"),
+    ],
+)
+def test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease(
+    tmp_path, monkeypatch, operation, expected_status
+):
+    store, project, _, _, policy, worker_id = _setup(tmp_path)
+    state = store.get(ButlerProjectState, project_state_id(project.id))
+    store.update(
+        ButlerProjectState,
+        state.id,
+        {"lease_expires_at": utc_now() + timedelta(seconds=30)},
+        expected_revision=state.revision,
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.periodic_check",
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="observed",
+            summary="Check project work",
+        )
+    )
+
+    class Agent:
+        async def run(self, claimed):
+            assert claimed.id == case.id
+            await asyncio.sleep(0.05)
+            current = store.get(ButlerRecoveryCase, case.id)
+            store.update(
+                ButlerRecoveryCase,
+                case.id,
+                {
+                    "steps": [
+                        {
+                            "id": "observed-step",
+                            "operation": operation,
+                            "status": "applied",
+                        }
+                    ]
+                },
+                expected_revision=current.revision,
+            )
+            return "Live Core checked", ChatBackend.PROVIDER, "provider", "model", None
+
+    monkeypatch.setattr(recovery_module, "LEASE_RENEW_INTERVAL_SECONDS", 0.01)
+    asyncio.run(
+        ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id)
+    )
+    settled = store.get(ButlerRecoveryCase, case.id)
+    assert settled.status == expected_status
+    renewed = store.get(ButlerProjectState, state.id)
+    assert renewed.lease_expires_at > utc_now() + timedelta(seconds=45)
+
+
+def test_interrupted_read_only_investigation_can_replay(tmp_path):
+    store, project, _, _, policy, _ = _setup(tmp_path)
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.periodic_check",
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="investigating",
+            summary="Check project work",
+            started_at=utc_now() - timedelta(minutes=2),
+            steps=[
+                {"id": "read", "operation": "nebula.work.goals", "status": "applied"}
+            ],
+        )
+    )
+    recovery = ButlerRecoveryService(store)
+    assert recovery.recover_interrupted_cases(project.id) == 1
+    assert store.get(ButlerRecoveryCase, case.id).status == "observed"
+
+
+def test_lost_project_lease_cancels_investigation(tmp_path, monkeypatch):
+    store, project, _, _, policy, worker_id = _setup(tmp_path)
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.periodic_check",
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="observed",
+            summary="Check project work",
+        )
+    )
+    cancelled = False
+
+    class Agent:
+        async def run(self, claimed):
+            nonlocal cancelled
+            assert claimed.id == case.id
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+
+    recovery = ButlerRecoveryService(store, Agent())
+    monkeypatch.setattr(recovery_module, "LEASE_RENEW_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(recovery, "_renew_project_lease", lambda *_: False)
+    asyncio.run(recovery.process_project(project.id, worker_id))
+    assert cancelled
+    settled = store.get(ButlerRecoveryCase, case.id)
+    assert settled.status == "needs_attention"
+    assert "could not finish the investigation" in settled.outcome

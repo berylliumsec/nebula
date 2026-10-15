@@ -131,3 +131,19 @@ exact files, collected counts, exclusions, and diff digest in
 `.github/test-selection.json` before running tests. Physical iPhone Voice is a
 separate acceptance gate; the background worker must also function with the UI
 closed.
+
+## Act investigation lifecycle
+
+When a running goal makes a scheduled check due, Core owns the project lease,
+records the case, and lets Butler inspect the selected project's current work.
+The model investigation has a three-minute ceiling; Core renews its 60-second
+lease while it runs and cancels the investigation if that lease is lost. No
+background action can be treated as verified solely because a tool returned.
+
+A periodic check that only reads live Core state can resolve when the model
+finishes. A saved change without a confirmed downstream result needs attention;
+a change whose side effects are unclear remains uncertain. After a restart,
+read-only steps can be replayed, while a possible write is held for review.
+The focused Core tests cover these outcomes, lease renewal and loss, and the
+existing parent-only retry path. The live acceptance check must observe a
+scheduled Act case on production Core with the UI closed.

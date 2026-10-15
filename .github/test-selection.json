@@ -1,27 +1,18 @@
 {
-  "change_digest": "e10d9ff9332b26d57bbd049d2aa6d60f25903d42ec5cb3b5866a8f09872c1e67",
-  "reviewed_by": "Codex focused Butler Act recovery review",
-  "reason": "Butler adds per-project Act authority, Core-observed immediate subagent failure and periodic recovery cases, bounded capability use, parent-only work routing, exact-task queue and child-result verification, and an Oversight status surface. The shared provider tool broker and harness gateway record failure signals, so selected Core tests cover both paths, isolated background harness authority, event deduplication, policy boundaries, crash handling, and verification. UI tests cover policy saving and case display. The selected real-Core production LAN journey covers authority changes, reload, touch geometry, and accessibility on desktop and mobile browser engines.",
-  "exclusions": "Full suites and unrelated Python/UI modules are excluded. No native app source changed, so native tests are excluded. The browser journey uses a deterministic local model stub; a real harness-to-provider automatic repair and physical iPhone are separate acceptance evidence, not inferred from this selection.",
+  "change_digest": "702e875f3e0986d68eb2fe581c80f3989ef6c068fca01f9d63f34f49608e642e",
+  "reviewed_by": "Codex focused Butler Act lifecycle review",
+  "reason": "The follow-up changes only Butler Act investigation timing, project-lease renewal/loss, and read-versus-write case outcomes. The selected recovery file exercises scheduled checks, interrupted read-only replay, lease loss, existing parent-only repair, and Core evidence receipts. Live production acceptance separately observes the next scheduled Act case against the deployed harness.",
+  "exclusions": "Full suites and unrelated Python modules are excluded. No frontend, native, or browser code changed, so those test layers are excluded from this follow-up. A physical iPhone and UI flows were covered separately or remain distinct acceptance evidence, not inferred from this Python selection.",
   "expected_tests": {
-    "python": 24,
-    "frontend": 25,
+    "python": 12,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_recovery.py",
-    "tests/v3/test_butler_capabilities.py",
-    "tests/v3/test_butler_authority.py"
+    "tests/v3/test_butler_recovery.py"
   ],
-  "frontend": [
-    "ui/src/api/butlerOverview.test.ts",
-    "ui/src/components/ButlerOversight.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:butler-oversight/assistant-real-desktop",
-    "entry:butler-oversight/assistant-real-chromium-390",
-    "entry:butler-oversight/assistant-real-webkit-390"
-  ]
+  "playwright": []
 }
