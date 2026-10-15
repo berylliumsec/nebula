@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Bot, GripHorizontal, Minimize2, Send, Settings2, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -121,6 +121,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   useEffect(() => {
     if (!open || hidden) return;
+    if (window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches) return;
     input.current?.focus();
   }, [open, hidden]);
 
@@ -137,8 +138,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   };
 
   useEffect(() => {
-    if (!open) return;
-    const clamp = () => { const rect = panel.current?.getBoundingClientRect(); if (rect) move(rect.left, rect.top); };
+    if (!open || hidden) return;
+    const clamp = () => {
+      panel.current?.style.setProperty("--panel-visual-height", `${window.visualViewport?.height ?? window.innerHeight}px`);
+      if (window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches) return;
+      const rect = panel.current?.getBoundingClientRect();
+      if (rect) move(rect.left, rect.top);
+    };
+    clamp();
     window.addEventListener("resize", clamp);
     window.visualViewport?.addEventListener("resize", clamp);
     window.visualViewport?.addEventListener("scroll", clamp);
@@ -649,14 +656,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
     [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up", "settings.network-scope", "settings.automation-runtime"]);
-  const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Nebula assistant" style={{ left: position.x, top: position.y }} hidden={hidden}>
+  const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Nebula assistant" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
     <div className={styles.header}>
-      <button className="icon-button subtle" type="button" aria-label="Move Nebula assistant" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
-      <strong>Nebula assistant</strong><small>{engagement?.name ?? "Choose a project"}</small>
-      <button className="icon-button subtle" type="button" aria-label="Start Nebula Voice" title="Start Nebula Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} /></button>
-      <button className="icon-button subtle" type="button" aria-label="Hide Nebula assistant" title="Hide assistant" onClick={() => setHidden(true)}><Minimize2 size={18} /></button>
-      <button className="icon-button subtle" type="button" aria-label="Nebula assistant settings" title={sessionId ? "Open Nebula assistant settings" : "Send a message to create Nebula assistant settings"} disabled={!sessionId || !engagement} onClick={() => { if (!sessionId || !engagement) return; setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}><Settings2 size={18} /></button>
-      <button className="icon-button subtle" type="button" aria-label="Close Nebula assistant" title="Close assistant; keep history" onClick={() => { setOpen(false); setHidden(false); }}><X size={18} /></button>
+      <button className={`icon-button subtle ${styles.dragButton}`} type="button" aria-label="Move Nebula assistant" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
+      <div className={styles.identity}><strong>Nebula assistant</strong><small>{engagement?.name ?? "Choose a project"}</small></div>
+      <button className={`icon-button subtle ${styles.voiceButton}`} type="button" aria-label="Start Nebula Voice" title="Start Nebula Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} /><span className={styles.voiceLabel}>Start Voice</span></button>
+      <button className={`icon-button subtle ${styles.hideButton}`} type="button" aria-label="Hide Nebula assistant" title="Hide assistant" onClick={() => setHidden(true)}><Minimize2 size={18} /></button>
+      <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Nebula assistant settings" title={sessionId ? "Open Nebula assistant settings" : "Send a message to create Nebula assistant settings"} disabled={!sessionId || !engagement} onClick={() => { if (!sessionId || !engagement) return; setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}><Settings2 size={18} /></button>
+      <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Nebula assistant" title="Close assistant; keep history" onClick={() => { setOpen(false); setHidden(false); }}><X size={18} /></button>
     </div>
     <div className={styles.body}>
       <div ref={transcript} className={styles.transcript} role="log" aria-label="Nebula assistant conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children, ...props }) => {
