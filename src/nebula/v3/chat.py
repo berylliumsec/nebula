@@ -73,6 +73,7 @@ from .chat_turn_ledger import (
 )
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
+from .butler_reporting_tools import REPORT_TOOL_NAMES, report_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
 from .conversation_search import CONVERSATION_SEARCH_TOOL_NAME, conversation_search_spec
@@ -2626,6 +2627,7 @@ class ChatService:
         managed_skill_root: Path | None = None,
         worker_id: str | None = None,
         tool_suggestion_client: Callable[[], JevClient | None] | None = None,
+        provider_usage_observer: Callable[[str], None] | None = None,
     ) -> None:
         self.store = store
         self.work = WorkService(store)
@@ -2641,6 +2643,7 @@ class ChatService:
         self.provider_factory = provider_factory or provider_from_profile
         self.operator_id = operator_id or (lambda: "system")
         self.knowledge_index = knowledge_index
+        self.butler_memory: Any = None
         self._embedding_warmup: threading.Thread | None = None
         # Embedded passages of archived conversation, reused across turns.
         self._conversation_vectors = VectorCache()
@@ -2648,6 +2651,7 @@ class ChatService:
         self.workspace_resolver = workspace_resolver or self._workspace_unavailable
         self.managed_skill_root = managed_skill_root
         self.worker_id = worker_id or f"core-worker-{uuid4()}"
+        self.provider_usage_observer = provider_usage_observer
         self.turn_ledger = ChatTurnLedger(store.database)
         # Sealed reasoning parts by id; they are write-once, so a copy stays
         # valid. Recovery passes read turns off the event loop too.
@@ -5653,6 +5657,10 @@ class ChatService:
                 "acting on the operator's decision. Cite sources for product claims, and report the "
                 "saved ID, status, and link when available. Say when a fact cannot be verified."
             )
+            if self.butler_memory is not None and engagement_id is not None:
+                instructions += self.butler_memory.turn_context(
+                    engagement_id, request.messages[-1].content
+                )
         else:
             instructions += (
                 "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
@@ -5800,6 +5808,14 @@ class ChatService:
             if selected
         ]
         tools_enabled = bool(tool_families)
+        if goal is not None and tools_enabled:
+            instructions += (
+                "\n\nAt meaningful goal checkpoints, use report_progress to give Core "
+                "the changed work, evidence, completion criterion, and next step. "
+                "If a machine is down or unreachable, use report_attention promptly. "
+                "These are attributed observations, not verified findings; continue "
+                "the goal work after reporting."
+            )
         knowledge_search = False
         if tools_enabled:
             if engagement_id is None:
@@ -5850,6 +5866,9 @@ class ChatService:
                         include_oci=False,
                         allow_empty=True,
                         settings_assistant=settings_only,
+                        operator_message=(
+                            request.messages[-1].content if settings_only else ""
+                        ),
                     )
                     if (
                         mcp_profiles
@@ -6004,6 +6023,17 @@ class ChatService:
                             scope=tool_components.scope if tool_components else None,
                         ),
                     )
+                if goal is not None:
+                    assert tool_components is not None
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        report_components(
+                            self.store,
+                            engagement_id=goal.engagement_id,
+                            workspace=Path(tool_components.workspace),
+                            scope=tool_components.scope,
+                        ),
+                    )
                 if tool_components is not None:
                     # Any turn with tools can outgrow its window, so any can
                     # keep working notes. They write only this conversation's
@@ -6067,7 +6097,8 @@ class ChatService:
                             frozenset({"skill.read_resource"})
                             if skill_resources_selected
                             else frozenset()
-                        ),
+                        )
+                        | (REPORT_TOOL_NAMES if goal is not None else frozenset()),
                     )
                 except InvalidToolArguments as exc:
                     raise ChatConfigurationError(str(exc)) from exc
@@ -6076,7 +6107,10 @@ class ChatService:
             deferred_specs = (
                 deferrable_specs(
                     tool_components.specs,
-                    always_loaded=tool_components.scope.always_loaded_tools,
+                    always_loaded=[
+                        *tool_components.scope.always_loaded_tools,
+                        *(REPORT_TOOL_NAMES if goal is not None else ()),
+                    ],
                     always_loaded_sources=[f"mcp:{item.id}" for item in mcp_profiles],
                 )
                 if on_demand_enabled(tool_components.scope)
@@ -11078,7 +11112,25 @@ class ChatService:
                     exc,
                     stage="subagent-usage",
                 )
+        # Routing steps can consume credits before a turn reaches its final
+        # answer. The observer coalesces this with the final persisted check.
+        self._schedule_provider_usage_check(updated.provider_profile_id)
         return updated
+
+    def _schedule_provider_usage_check(self, provider_profile_id: str | None) -> None:
+        if provider_profile_id is None or self.provider_usage_observer is None:
+            return
+        try:
+            # A failed optional account check cannot fail a model response.
+            self.provider_usage_observer(provider_profile_id)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.openrouter_credit_check_schedule_failed",
+                "OpenRouter credit check could not be scheduled after provider use.",
+                exc,
+                stage="provider-usage",
+            )
 
     def _reasoning_changes(
         self, turn: ChatTurn, addition: str
@@ -16274,9 +16326,13 @@ class ChatService:
                 raise ChatHistoryConflict(
                     "conversation changed while the reply was being saved; retry the message"
                 ) from last_error
+            # The exchange is committed before an account check starts. This
+            # also covers ordinary completions that never create a ChatTurn.
+            self._schedule_provider_usage_check(prepared.provider_profile.id)
             return
         entities.extend(messages)
         self.store.create_many(entities)
+        self._schedule_provider_usage_check(prepared.provider_profile.id)
 
     @staticmethod
     def _turn_context_calibration(

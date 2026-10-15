@@ -4052,6 +4052,7 @@ class ButlerProjectState(Entity):
     engagement_id: str = Field(min_length=1, max_length=200)
     last_event_sequence: int = Field(default=0, ge=0)
     last_review_sequence: int = Field(default=0, ge=0)
+    last_action_event_sequence: int = Field(default=0, ge=0)
     last_review_requested_at: datetime | None = None
     lease_owner: str | None = Field(default=None, max_length=200)
     lease_expires_at: datetime | None = None
@@ -4110,6 +4111,8 @@ class ButlerDecision(Entity):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     cost_usd: float | None = Field(default=None, ge=0)
+    precedent_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    lesson_candidate: str | None = Field(default=None, max_length=280)
     reviewed_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
@@ -4121,6 +4124,52 @@ class ButlerDecision(Entity):
         if self.choice == "escalate" and not self.why_now:
             raise ValueError("escalation requires a reason to notify now")
         return self
+
+
+class ButlerAuthorityPolicy(Entity):
+    """Operator-selected, project-scoped standing Butler authority."""
+
+    entity_kind: ClassVar[str] = "butler_authority_policies"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    authority: Literal["watch", "steer", "delegate"] = "watch"
+    delegate_actions: list[Literal["pause_urgent_machine_blocker"]] = Field(
+        default_factory=list, max_length=1
+    )
+
+    @model_validator(mode="after")
+    def grants_require_delegate(self) -> "ButlerAuthorityPolicy":
+        if self.authority != "delegate" and self.delegate_actions:
+            raise ValueError("delegated actions require Delegate authority")
+        if len(self.delegate_actions) != len(set(self.delegate_actions)):
+            raise ValueError("delegated actions must be unique")
+        return self
+
+
+class ButlerAction(Entity):
+    """Durable action intent and outcome; only Core's dispatcher may write it."""
+
+    entity_kind: ClassVar[str] = "butler_actions"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    decision_id: str = Field(min_length=1, max_length=200)
+    source_event_id: str = Field(min_length=1, max_length=200)
+    goal_id: str = Field(min_length=1, max_length=200)
+    source_session_id: str = Field(min_length=1, max_length=200)
+    target_session_id: str | None = Field(default=None, max_length=200)
+    action_type: Literal[
+        "request_parent_status",
+        "request_parent_plan_reassessment",
+        "pause_urgent_machine_blocker",
+    ]
+    status: Literal[
+        "planned", "dispatching", "dispatched", "applied", "uncertain", "cancelled"
+    ] = "planned"
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    report_id: str | None = Field(default=None, max_length=200)
+    verification_state: str = Field(min_length=1, max_length=80)
+    summary: str = Field(min_length=1, max_length=500)
+    outcome: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 class ButlerAgentReport(Entity):
@@ -5400,6 +5449,8 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerProjectState,
     ButlerIncident,
     ButlerDecision,
+    ButlerAuthorityPolicy,
+    ButlerAction,
     ButlerAgentReport,
     ButlerAccountCredit,
     ButlerHarnessQuota,

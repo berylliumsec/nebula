@@ -28,6 +28,7 @@ from .domain import (
     RunBackend,
 )
 from .harnesses import CodexAppServerAdapter
+from .harness_quota import HarnessQuotaSnapshot, codex_quota_snapshots
 from .storage import NebulaStore
 
 
@@ -65,6 +66,17 @@ class VendorUsage(BaseModel):
     balances: list[UsageBalance] = Field(default_factory=list)
     windows: list[UsageWindow] = Field(default_factory=list)
     ordinary_usage_allowed: bool | None = None
+    quota_snapshots: list[HarnessQuotaSnapshot] = Field(default_factory=list)
+
+
+class HarnessQuotaRead(BaseModel):
+    """A profile-scoped numeric read; unavailable never means zero remaining."""
+
+    profile_id: str
+    state: Literal["available", "unavailable", "error"]
+    detail: str
+    checked_at: datetime | None = None
+    snapshots: list[HarnessQuotaSnapshot] = Field(default_factory=list)
 
 
 class RuntimeUsageItem(BaseModel):
@@ -174,7 +186,11 @@ def _codex_window(label: str, value: Any) -> UsageWindow | None:
     if not isinstance(value, dict):
         return None
     percent = value.get("usedPercent")
-    if isinstance(percent, bool) or not isinstance(percent, int) or percent < 0:
+    if (
+        isinstance(percent, bool)
+        or not isinstance(percent, int)
+        or not 0 <= percent <= 100
+    ):
         return None
     duration = value.get("windowDurationMins")
     reset = value.get("resetsAt")
@@ -239,14 +255,16 @@ def parse_codex_usage(payload: Any) -> VendorUsage:
                 )
             )
     allowed = payload.get("ordinaryUsageAllowed")
+    checked_at = datetime.now(timezone.utc)
     return VendorUsage(
         state="available",
         source="Codex account",
         detail="Account rate-limit windows and credits reported by Codex. Resets do not guarantee access.",
-        checked_at=datetime.now(timezone.utc),
+        checked_at=checked_at,
         balances=balances,
         windows=windows,
         ordinary_usage_allowed=allowed if isinstance(allowed, bool) else None,
+        quota_snapshots=codex_quota_snapshots(payload, observed_at=checked_at),
     )
 
 
@@ -419,6 +437,31 @@ class RuntimeUsageService:
             )
         self._cache[key] = (time.monotonic(), value)
         return value
+
+    async def read_harness_quota(
+        self, profile_id: str, *, refresh: bool = False
+    ) -> HarnessQuotaRead:
+        """Read one harness profile without scanning unrelated provider accounts."""
+
+        profile = self.store.get(HarnessProfile, profile_id)
+        vendor = await self._vendor(profile, refresh=refresh)
+        state = (
+            "unavailable"
+            if vendor.state == "available" and not vendor.quota_snapshots
+            else vendor.state
+        )
+        detail = (
+            "The harness did not report a numeric quota window."
+            if state == "unavailable" and vendor.state == "available"
+            else vendor.detail
+        )
+        return HarnessQuotaRead(
+            profile_id=profile.id,
+            state=state,
+            detail=detail,
+            checked_at=vendor.checked_at,
+            snapshots=vendor.quota_snapshots,
+        )
 
     async def read(self, *, refresh: bool = False) -> RuntimeUsageResponse:
         providers = list(self.store.iter_readable_entities(ProviderProfile))
