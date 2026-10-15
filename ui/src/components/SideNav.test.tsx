@@ -36,6 +36,11 @@ function CurrentPath() {
   return <output aria-label="Current path">{useLocation().pathname}</output>;
 }
 
+function CurrentLocation() {
+  const location = useLocation();
+  return <output aria-label="Current location">{location.pathname + location.search}</output>;
+}
+
 function renderSideNav(route: string, variant: "standard" | "zero" = "standard") {
   render(<MemoryRouter initialEntries={[route]}><DialogProvider>
     <SideNav collapsed={false} open={false} setOpen={vi.fn()} onNavigate={vi.fn()} variant={variant} />
@@ -109,6 +114,21 @@ function SwitcherHarness() {
 }
 
 describe("SideNav project switcher", () => {
+  it("keeps the current view without carrying a chat or mission to another project", async () => {
+    workspace.engagements = [project, { id: "project-2", name: "Second Project", status: "active" }];
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=chat&session=old-chat&mission=old-run&sideChat=old-side"]}><DialogProvider><SwitcherHarness /><CurrentLocation /></DialogProvider></MemoryRouter>);
+    await userEvent.click(screen.getByRole("button", { name: "Switch project" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Project switcher" })).getByText("Second Project").closest("button")!);
+    expect(screen.getByRole("status", { name: "Current location" })).toHaveTextContent("/projects/project-2/workbench?view=chat");
+  });
+
+  it("keeps the selected conversation when the operator chooses the current project", async () => {
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=chat&session=current-chat"]}><DialogProvider><SwitcherHarness /><CurrentLocation /></DialogProvider></MemoryRouter>);
+    await userEvent.click(screen.getByRole("button", { name: "Switch project" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Project switcher" })).getByText("Scratch Project").closest("button")!);
+    expect(screen.getByRole("status", { name: "Current location" })).toHaveTextContent("/projects/project-1/workbench?view=chat&session=current-chat");
+  });
+
   it("moves focus into the switcher and hands it back to the trigger on Escape", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter initialEntries={["/projects/project-1/workbench"]}><DialogProvider><SwitcherHarness /></DialogProvider></MemoryRouter>);

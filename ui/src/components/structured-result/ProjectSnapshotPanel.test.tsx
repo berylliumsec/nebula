@@ -14,7 +14,7 @@ const workspace = vi.hoisted(() => ({ current: {
   run: { title: "Review perimeter", status: "running", completedTasks: 2, totalTasks: 4, spentUsd: 0.00125 },
   approvals: [{ id: "approval-1" }],
 } }));
-vi.mock("../../state/WorkspaceContext", () => ({ useWorkspace: () => workspace.current }));
+vi.mock("../../state/WorkspaceContext", () => ({ useWorkspace: () => workspace.current, useWorkspaceMissions: () => ({ run: workspace.current.run }) }));
 
 const viewport = { left: 0, top: 0, width: 1280, height: 800 };
 

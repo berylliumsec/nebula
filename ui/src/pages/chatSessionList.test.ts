@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatSessionSummary } from "../api/types";
-import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
+import { hasRecentPendingTitle, mergeRecentListedSessions, reconcileListedSessions } from "./chatSessionList";
 
 function session(id: string, revision: number, overrides: Partial<ChatSessionSummary> = {}): ChatSessionSummary {
   return {
@@ -45,6 +45,20 @@ describe("reconcileListedSessions", () => {
     ];
 
     expect(reconcileListedSessions(current, listed).map((item) => item.id)).toEqual(["created", "kept"]);
+  });
+});
+
+describe("mergeRecentListedSessions", () => {
+  it("keeps an older loaded page while refreshing recent revisions", () => {
+    const older = session("older", 1, { updatedAt: "2026-09-19T10:00:00Z" });
+    const current = session("recent", 4, { title: "Saved locally" });
+    const stale = session("recent", 3, { title: "Stale list" });
+    expect(mergeRecentListedSessions([older, current], [stale]).map(item => [item.id, item.title]))
+      .toEqual([["recent", "Saved locally"], ["older", "older"]]);
+  });
+
+  it("uses an exhaustive recent page to remove a deleted conversation", () => {
+    expect(mergeRecentListedSessions([session("deleted", 2)], [], true)).toEqual([]);
   });
 });
 

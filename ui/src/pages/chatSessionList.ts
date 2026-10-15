@@ -19,6 +19,17 @@ export function reconcileListedSessions(current: ChatSessionSummary[], listed: C
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
+/** Refresh the recent page without discarding older pages the operator loaded. */
+export function mergeRecentListedSessions(current: ChatSessionSummary[], recent: ChatSessionSummary[], exhaustive = false): ChatSessionSummary[] {
+  if (exhaustive) return reconcileListedSessions(current, recent);
+  const merged = new Map(current.map((session) => [session.id, session]));
+  for (const session of recent) {
+    const existing = merged.get(session.id);
+    if (!existing || existing.revision <= session.revision) merged.set(session.id, session);
+  }
+  return [...merged.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
 /** A durable first message may still be waiting on Core's optional naming task. */
 export function hasRecentPendingTitle(sessions: ChatSessionSummary[], now = Date.now()): boolean {
   return sessions.some((session) =>

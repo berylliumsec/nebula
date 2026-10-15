@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { projectRoot, projectSurface, resourcePath } from "../../resourceRoutes";
 import { currentProjectWorkItem, type ProjectWorkItem, type ProjectWorkUpdate } from "../../projectWorkProgress";
 import { ProjectSummaryCards } from "../ProjectSummaryCards";
-import { useWorkspace } from "../../state/WorkspaceContext";
+import { useWorkspace, useWorkspaceMissions } from "../../state/WorkspaceContext";
 import { IconAction } from "../IconAction";
 import {
   arrowDirection,
@@ -114,7 +114,8 @@ function FloatingProjectSnapshot({
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
   const gesture = useRef<Gesture | undefined>(undefined);
-  const { api, engagement, assets, findings, run, approvals } = useWorkspace();
+  const { api, engagement, assets, findings, approvals } = useWorkspace();
+  const { run } = useWorkspaceMissions();
   const [currentWork, setCurrentWork] = useState<CurrentWork | null>(null);
   const [workLoading, setWorkLoading] = useState(true);
   const [workError, setWorkError] = useState<string>();

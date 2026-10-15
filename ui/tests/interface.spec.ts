@@ -3675,6 +3675,62 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
   await page.screenshot({path: testInfo.outputPath("conversations-sidebar.png")});
 });
 
+reloadTest("conversation switching loads recent history before older conversations and leaves Terminal idle", async ({ page }) => {
+  test.setTimeout(60_000);
+  const rows = Array.from({ length: 105 }, (_, index) => ({
+    ...entity, id: `history-${index}`, engagement_id: "scratch-project", title: `History ${index}`,
+    backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {},
+    created_at: new Date(Date.parse(entity.created_at) - index * 60_000).toISOString(),
+    updated_at: new Date(Date.parse(entity.updated_at) - index * 60_000).toISOString(),
+  }));
+  const recentOffsets: number[] = [];
+  let fullReads = 0;
+  let terminalBootstrapReads = 0;
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/chat-sessions") && request.method() === "GET") {
+      if (url.searchParams.get("recent_first") === "true") {
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        recentOffsets.push(offset);
+        await route.fulfill({ json: rows.slice(offset, offset + 100) });
+      } else {
+        fullReads += 1;
+        await route.fulfill({ json: rows });
+      }
+      return;
+    }
+    if (/\/container-terminal\/(capabilities|recover)$|\/container-terminals\/recover$/.test(url.pathname)) terminalBootstrapReads += 1;
+    await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  // React's development StrictMode may mount the route twice; both reads must
+  // stay bounded to the first page.
+  expect(recentOffsets.length).toBeGreaterThanOrEqual(1);
+  expect(recentOffsets.length).toBeLessThanOrEqual(2);
+  expect(recentOffsets.every(offset => offset === 0)).toBe(true);
+  expect(fullReads).toBe(0);
+  expect(terminalBootstrapReads).toBe(0);
+
+  const show = (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations";
+  await page.getByRole("button", { name: show, exact: true }).click();
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  await expect(sidebar.getByRole("button", { name: "Load older conversations" })).toBeVisible();
+  const oldest = sidebar.locator('.session-select[data-session-id="history-104"]');
+  await expect(oldest).toHaveCount(0);
+  await sidebar.getByRole("searchbox", { name: "Search conversations" }).fill("History 104");
+  await expect(oldest).toBeVisible();
+  expect(fullReads).toBe(1);
+
+  await page.reload();
+  await expect.poll(async () => await sidebar.isVisible() || await page.getByRole("button", { name: show, exact: true }).isVisible()).toBe(true);
+  if (!await sidebar.isVisible()) await page.getByRole("button", { name: show, exact: true }).click();
+  await sidebar.getByRole("button", { name: "Load older conversations" }).click();
+  await expect(oldest).toBeAttached();
+  expect(recentOffsets).toContain(100);
+  expect(terminalBootstrapReads).toBe(0);
+});
+
 reloadTest("assistant upgrade nests subagents beneath a collapsed main conversation", async ({ page }, testInfo) => {
   const parent = { ...entity, id: "sidebar-parent", engagement_id: "scratch-project", title: "Main investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
   const childA = { ...entity, id: "sidebar-child-a", engagement_id: "scratch-project", title: "Subagent · API mapping", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "deepseek/deepseek-flash-latest-with-a-deliberately-long-provider-model-identifier", metadata: { subagent_id: "sub-a" } };

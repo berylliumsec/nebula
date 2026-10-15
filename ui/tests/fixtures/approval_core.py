@@ -446,6 +446,7 @@ if __name__ == "__main__":
             "sidebar",
             "agent_messaging",
             "goal",
+            "navigation",
         ],
         default="single",
     )
@@ -491,6 +492,27 @@ if __name__ == "__main__":
                         metadata=metadata,
                     )
                 )
+    if args.scenario == "navigation" and scratch_id:
+        store.create(
+            ProviderProfile(
+                id="navigation-provider",
+                name="Navigation fixture",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["fixture"],
+                enabled=False,
+            )
+        )
+        for index in range(101):
+            store.create(
+                ChatSession(
+                    id="navigation-older" if index == 0 else f"navigation-recent-{index}",
+                    engagement_id=scratch_id,
+                    title="Older pinned context" if index == 0 else f"Recent context {index}",
+                    provider_profile_id="navigation-provider",
+                    model="fixture",
+                )
+            )
     artifacts = ArtifactStore(args.root / "artifacts")
     adapter = InertAdapter()
     if args.scenario == "daybreak":

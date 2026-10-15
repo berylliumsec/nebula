@@ -40,7 +40,7 @@ import { ChatResults } from "../components/ChatResults";
 import { ProjectSnapshotPanel } from "../components/structured-result";
 import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentPostedResult, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentEffortField, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
-import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
+import { hasRecentPendingTitle, mergeRecentListedSessions, reconcileListedSessions } from "./chatSessionList";
 import { nextSideChatNumber, sideChatForConversation, sideChatsForConversation, sideChatTabLabel } from "./sideChatSelection";
 import { appendSideToolTab, clearSideToolTabs, removeSideToolTab, sideToolLabel, sideToolTabs, type SideToolKind, type SideToolTab } from "./sidePanelTabs";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
@@ -1402,6 +1402,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [updateSearchParams]);
 
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [sessionNextOffset, setSessionNextOffset] = useState<number>();
+  const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
+  const [loadingAllSessions, setLoadingAllSessions] = useState(false);
+  const fullListProjectRef = useRef("");
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
   const [sessionId, setSessionId] = useState("");
@@ -1417,6 +1421,16 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const sideChats = useMemo(() => !embeddedSideChat && sideChatLookup?.engagementId === engagement?.id && sideChatLookup?.parentId === sessionId
     ? sideChatsForConversation(sideChatLookup.items, sessionId) : [], [embeddedSideChat, engagement?.id, sessionId, sideChatLookup]);
   const sidePanelOpen = !shellOnly && view === "chat" && Boolean(sideChatId || activeToolTab);
+  const [mountedTerminalProjectId, setMountedTerminalProjectId] = useState<string>();
+  const [mountedEditorProjectId, setMountedEditorProjectId] = useState<string>();
+  const terminalRequested = view === "terminal" || (view === "chat" && chatTerminalOpen && !sidePanelOpen && !sideView && !compact);
+  const editorRequested = view === "code" || sideView === "code";
+  useEffect(() => {
+    if (engagement && terminalRequested) setMountedTerminalProjectId(engagement.id);
+  }, [engagement?.id, terminalRequested]);
+  useEffect(() => {
+    if (engagement && editorRequested) setMountedEditorProjectId(engagement.id);
+  }, [engagement?.id, editorRequested]);
   useEffect(() => {
     const selected = sessions.find(session => session.id === sessionId);
     const parent = selected?.isSubagent ? sessions.find(session => session.id === selected.parentSessionId) : undefined;
@@ -2691,32 +2705,66 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return () => controller.abort();
   }, [api, coreState, embeddedSideChat, engagement]);
 
+  const sideRequestedSessionId = embeddedSideChat ? requestedSessionId : "";
   useEffect(() => {
     if (!api || coreState !== "online" || !engagement) {
       setSessions([]);
+      setSessionNextOffset(undefined);
       return;
     }
     const controller = new AbortController();
+    const projectId = engagement.id;
+    fullListProjectRef.current = "";
+    setSessions([]);
+    setSessionNextOffset(undefined);
     void (async () => {
-      if (!embeddedSideChat) return (await api.listChatSessions(engagement.id, controller.signal, true)).items;
-      if (!requestedSessionId) return [];
+      if (!embeddedSideChat) return api.listChatSessionsPage(projectId, 0, controller.signal, true);
+      if (!sideRequestedSessionId) return { items: [], nextOffset: undefined };
       // The focused pane needs its own durable session, not a second copy of
       // the project's conversation catalog. This also survives a refresh.
-      const side = await api.getChatSession(requestedSessionId, controller.signal);
-      if (!side.isSideChat || side.engagementId !== engagement.id) {
+      const side = await api.getChatSession(sideRequestedSessionId, controller.signal);
+      if (!side.isSideChat || side.engagementId !== projectId) {
         if (!controller.signal.aborted) onSideChatUnavailable?.();
-        return [];
+        return { items: [], nextOffset: undefined };
       }
-      return [side];
+      return { items: [side], nextOffset: undefined };
     })()
-      .then((items) => { if (!controller.signal.aborted) setSessions(items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))); })
+      .then((page) => {
+        if (controller.signal.aborted || activeEngagementIdRef.current !== projectId || fullListProjectRef.current === projectId) return;
+        setSessions((current) => embeddedSideChat
+          ? page.items
+          : mergeRecentListedSessions(current.filter(item => item.engagementId === projectId), page.items, !page.nextOffset));
+        setSessionNextOffset(page.nextOffset);
+      })
       .catch((error) => {
         if (embeddedSideChat && !controller.signal.aborted && error instanceof ApiError && error.status === 404) { onSideChatUnavailable?.(); return; }
         void logCaughtDiagnostic("interface.sessions_page.caught_failure_05", "A handled interface operation failed.", error, "sessions_page");
         if (!controller.signal.aborted) setChatError(error instanceof Error ? error.message : "Could not load conversations.");
       });
     return () => controller.abort();
-  }, [api, coreState, engagement, embeddedSideChat, requestedSessionId]);
+  }, [api, coreState, engagement?.id, embeddedSideChat, sideRequestedSessionId]);
+
+  const searchingAllConversations = Boolean(sessionQuery.trim());
+  useEffect(() => {
+    if (!searchingAllConversations || embeddedSideChat || !api || coreState !== "online" || !engagement
+      || (!conversationPanelOpen && !mobileListOpen) || fullListProjectRef.current === engagement.id) return;
+    const controller = new AbortController();
+    const projectId = engagement.id;
+    setLoadingAllSessions(true);
+    void api.listChatSessions(projectId, controller.signal, true).then((page) => {
+      if (controller.signal.aborted || activeEngagementIdRef.current !== projectId) return;
+      fullListProjectRef.current = projectId;
+      setSessions((current) => reconcileListedSessions(current, page.items));
+      setSessionNextOffset(undefined);
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      void logCaughtDiagnostic("interface.sessions_page.conversation_search_failed", "Conversation search could not load saved history.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not search all conversations. Try again.");
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoadingAllSessions(false);
+    });
+    return () => controller.abort();
+  }, [api, coreState, engagement?.id, embeddedSideChat, searchingAllConversations, conversationPanelOpen, mobileListOpen]);
 
   useEffect(() => {
     if (embeddedSideChat || !api || !engagement || !sessionId
@@ -2812,14 +2860,32 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const requestedEngagementId = engagement.id;
     const selectionGeneration = sessionSelectionGenerationRef.current;
     const listed = embeddedSideChat
-      ? requestedSessionId ? [await api.getChatSession(requestedSessionId)] : []
-      : (await api.listChatSessions(requestedEngagementId, undefined, true)).items;
+      ? { items: requestedSessionId ? [await api.getChatSession(requestedSessionId)] : [], nextOffset: undefined }
+      : await api.listChatSessionsPage(requestedEngagementId, 0, undefined, true);
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
     // A read that started before a save may answer after it; keep the newer copy.
-    setSessions((current) => reconcileListedSessions(current, listed));
+    setSessions((current) => mergeRecentListedSessions(current, listed.items, !listed.nextOffset));
+    if (fullListProjectRef.current !== requestedEngagementId) setSessionNextOffset((current) => current === undefined ? listed.nextOffset : current);
     if (selectedId && sessionSelectionGenerationRef.current === selectionGeneration) {
       setSessionId(selectedId);
       openSessionChatView(selectedId, true);
+    }
+  };
+
+  const loadOlderConversations = async () => {
+    if (!api || !engagement || sessionNextOffset === undefined || loadingOlderSessions) return;
+    const projectId = engagement.id;
+    setLoadingOlderSessions(true);
+    try {
+      const page = await api.listChatSessionsPage(projectId, sessionNextOffset, undefined, true);
+      if (activeEngagementIdRef.current !== projectId) return;
+      setSessions((current) => mergeRecentListedSessions(current, page.items));
+      setSessionNextOffset(page.nextOffset);
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.older_conversations_failed", "Older conversations could not be loaded.", error, "sessions_page");
+      if (activeEngagementIdRef.current === projectId) setChatError(error instanceof Error ? error.message : "Could not load older conversations. Try again.");
+    } finally {
+      setLoadingOlderSessions(false);
     }
   };
 
@@ -2918,10 +2984,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       immediate: false,
       read: async (signal): Promise<PollOutcome> => {
         try {
-          const page = await api.listChatSessions(requestedEngagementId, signal, true);
+          const page = await api.listChatSessionsPage(requestedEngagementId, 0, signal, true);
           if (signal.aborted || activeEngagementIdRef.current !== requestedEngagementId) return "stop";
           setSessions(current => {
-            const next = reconcileListedSessions(current, page.items);
+            const next = mergeRecentListedSessions(current, page.items, !page.nextOffset);
             return sameJson(current, next) ? current : next;
           });
           return Object.values(sessionActivityReadRef.current?.value ?? {}).includes("working") ? "active" : "idle";
@@ -3036,16 +3102,24 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
 
   const deleteAllConversations = async () => {
-    if (!api || deletingSessionId || deletingAllSessions || !sessions.length || sending || pendingResponse) return;
-    const targets = [...sessions];
+    if (!api || !engagement || deletingSessionId || deletingAllSessions || !sessions.length || sending || pendingResponse) return;
+    setDeletingAllSessions(true);
+    let targets: ChatSessionSummary[];
+    try {
+      targets = (await api.listChatSessions(engagement.id, undefined, true)).items;
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.bulk_delete_list_failed", "The complete conversation list could not be loaded for deletion.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not check all saved conversations. Try again.");
+      setDeletingAllSessions(false);
+      return;
+    }
     const approved = await confirm({
       title: "Delete all conversations?",
       message: `This permanently deletes all ${targets.length} saved conversation${targets.length === 1 ? "" : "s"}, including every message and saved working memory.`,
       confirmLabel: "Delete all conversations",
       tone: "danger",
     });
-    if (!approved) return;
-    setDeletingAllSessions(true);
+    if (!approved) { setDeletingAllSessions(false); return; }
     setChatError(undefined);
     const results = await Promise.allSettled(targets.map((session) => api.deleteChatSession(session.id)));
     const failures = targets.flatMap((session, index) => {
@@ -3069,6 +3143,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         const page = await api.listChatSessions(engagement.id, undefined, true);
         authoritativeSessions = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         setSessions(authoritativeSessions);
+        fullListProjectRef.current = engagement.id;
+        setSessionNextOffset(undefined);
       } else {
         setSessions((current) => current.filter((session) => !deletedIds.has(session.id)));
       }
@@ -3538,9 +3614,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         return await run(activeSession!);
       } catch (error) {
         if (!(error instanceof ApiError && error.status === 409)) throw error;
-        const page = await api.listChatSessions(engagementIdForSwitch, undefined, true);
-        const latest = page.items.find((item) => item.id === sessionIdForSwitch);
-        if (!latest) throw error;
+        const latest = await api.getChatSession(sessionIdForSwitch);
+        if (latest.engagementId !== engagementIdForSwitch) throw error;
         activeSession = latest;
         setSessions((items) => items.map((item) => item.id === latest.id ? latest : item));
         return run(latest);
@@ -4628,7 +4703,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (embeddedSideChat || !api || !engagement || !requestedSessionId) return;
     const controller = new AbortController();
     void api.getChatSession(requestedSessionId, controller.signal).then((selected) => {
-      if (controller.signal.aborted || !selected.isSideChat || !selected.parentSessionId || selected.engagementId !== engagement.id) return;
+      if (controller.signal.aborted || selected.engagementId !== engagement.id) return;
+      if (!selected.isSideChat) {
+        // The exact lookup also restores deep links outside the recent page.
+        // The initial page merges with this result regardless of answer order.
+        setSessions(current => mergeRecentListedSessions(current.filter(item => item.engagementId === engagement.id), [selected]));
+        return;
+      }
+      if (!selected.parentSessionId) return;
       updateSearchParams(params => {
         if (params.get("session") !== selected.id) return;
         params.set("view", "chat");
@@ -4642,26 +4724,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     });
     return () => controller.abort();
   }, [api, embeddedSideChat, engagement?.id, requestedSessionId, updateSearchParams]);
-
-  const missingRequestedSessionRef = useRef("");
-  useEffect(() => {
-    if (!api || !engagement || !requestedSessionId || sessions.some(item => item.id === requestedSessionId)) return;
-    const key = `${engagement.id}:${requestedSessionId}`;
-    if (missingRequestedSessionRef.current === key) return;
-    missingRequestedSessionRef.current = key;
-    const controller = new AbortController();
-    void api.getChatSession(requestedSessionId, controller.signal).then((item) => {
-      if (!controller.signal.aborted && item.engagementId === engagement.id && !item.isSideChat) {
-        setSessions(current => current.some(existing => existing.id === item.id) ? current : [item, ...current]);
-      }
-    }).catch((error) => {
-      if (!controller.signal.aborted) {
-        void logCaughtDiagnostic("interface.sessions_page.requested_chat_load_failed", "The requested conversation could not be opened.", error, "sessions_page");
-        setChatError(error instanceof Error ? error.message : "Could not open this conversation.");
-      }
-    });
-    return () => controller.abort();
-  }, [api, engagement?.id, requestedSessionId, sessions]);
 
   useEffect(() => {
     const pendingNavigation = pendingSessionNavigationRef.current;
@@ -4692,12 +4754,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setChatError(undefined);
     let summary: ChatSessionSummary | undefined;
     try {
-      // The attached conversation may be newer than the loaded list; refresh
-      // it first so the selection below can find its runtime.
-      const page = await api.listChatSessions(engagement.id, undefined, true);
-      const ordered = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-      setSessions(ordered);
-      summary = ordered.find((session) => session.id === id);
+      // A linked conversation is an exact identity, even if it is older than
+      // the current sidebar page.
+      summary = await api.getChatSession(id);
+      if (summary.engagementId !== engagement.id || summary.isSideChat) throw new Error("The conversation does not belong to this project.");
+      setSessions((current) => mergeRecentListedSessions(current, [summary!]));
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_11", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not open the execution conversation.");
@@ -6744,7 +6805,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     </section>;
   }
 
-  const renderCodeEditor = (chatSideVisible: boolean, sideCodeVisible: boolean, tab?: SideToolTab) => api && engagement && <Suspense fallback={<LoadingSurface label="Loading code editor" />}><CodeEditorPanel key={`${engagement.id}:${sessionId || activeEditorDraftKey}${tab ? `:${tab.id}` : ""}`} active={view === "code" || (chatSideVisible && sideView === "code") || sideCodeVisible || (tab !== undefined && activeToolId === tab.id)} api={api} engagementId={engagement.id} editorSessionKey={tab ? `${sessionId || editorDraftSessionKey}:${tab.id}` : sessionId || editorDraftSessionKey} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get(tab ? `panelFile.${tab.id}` : "openFile") ?? undefined} initialOpenLine={Number(searchParams.get(tab ? `panelLine.${tab.id}` : "openLine")) || undefined} initialOpenRequest={tab?.id ?? searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => { if (tab) addToolTab("terminal"); else setView("terminal"); }} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>;
+  const renderCodeEditor = (chatSideVisible: boolean, sideCodeVisible: boolean, tab?: SideToolTab) => api && engagement && (tab || editorRequested || mountedEditorProjectId === engagement.id) && <Suspense fallback={<LoadingSurface label="Loading code editor" />}><CodeEditorPanel key={`${engagement.id}:${sessionId || activeEditorDraftKey}${tab ? `:${tab.id}` : ""}`} active={view === "code" || (chatSideVisible && sideView === "code") || sideCodeVisible || (tab !== undefined && activeToolId === tab.id)} api={api} engagementId={engagement.id} editorSessionKey={tab ? `${sessionId || editorDraftSessionKey}:${tab.id}` : sessionId || editorDraftSessionKey} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get(tab ? `panelFile.${tab.id}` : "openFile") ?? undefined} initialOpenLine={Number(searchParams.get(tab ? `panelLine.${tab.id}` : "openLine")) || undefined} initialOpenRequest={tab?.id ?? searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => { if (tab) addToolTab("terminal"); else setView("terminal"); }} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>;
 
   const renderSideToolContent = (tab: SideToolTab) => {
     if (!api || !engagement) return null;
@@ -6786,7 +6847,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         {view === "chat" && ((!shellOnly && conversationPanelOpen) || mobileListOpen) && <aside ref={(element) => { conversationPanelSize.panelRef.current = element; }} className="session-list" id="workbench-conversations" aria-label="Conversations" style={conversationPanelSize.panelStyle}>
           {conversationPanelSize.resizeHandle}
           {compact && mobileListOpen && <MobileDrawerProject onNavigate={() => setMobileListOpen(false)} />}
-          <header><div><span>Conversations</span><strong>{sessionQuery ? `${sidebarConversations.matchCount} of ${savedConversations.length}` : `${savedConversations.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!savedConversations.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
+          <header><div><span>Conversations</span><strong>{sessionQuery ? `${sidebarConversations.matchCount} of ${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""}` : `${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!savedConversations.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
           <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
           <nav>
@@ -6849,7 +6910,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 }}
               ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button>{!shellOnly && session.backend === "harness" && <button type="button" role="menuitem" disabled={sending || session.id !== sessionId} title={session.id !== sessionId ? "Open this conversation to continue it as a mission" : undefined} onClick={() => { setSessionActionsId(undefined); void continueAsMission(); }} data-guide="continue-mission"><Bot size={15} /> Continue as mission</button>}<button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button type="button" role="menuitem" onClick={() => void setConversationArchived(session, !session.archivedAt)}>{session.archivedAt ? <><ArchiveRestore size={15} /> Unarchive</> : <><Archive size={15} /> Archive</>}</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
             })}</section>)}
-            {sessionQuery && !sidebarConversations.matchCount && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
+            {loadingAllSessions && <p role="status">Searching saved conversations…</p>}
+            {sessionQuery && !loadingAllSessions && !sidebarConversations.matchCount && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
+            {!sessionQuery && sessionNextOffset !== undefined && <button className="button quiet" type="button" disabled={loadingOlderSessions} onClick={() => void loadOlderConversations()}>{loadingOlderSessions ? "Loading older conversations…" : "Load older conversations"}</button>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
           {compact && mobileListOpen && <MobileDrawerFooter onNavigate={() => setMobileListOpen(false)} />}
@@ -6912,7 +6975,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             {shellOnly && <NebulaAssistantLauncherButton />}
           </header>}
 
-          {!shellOnly && api && engagement && <div ref={(element) => { chatTerminalSize.panelRef.current = element; }} id="chat-side-terminal" aria-label={chatTerminalVisible ? "Terminal beside chat" : undefined} role={chatTerminalVisible ? "region" : undefined} style={chatTerminalVisible ? chatTerminalSize.panelStyle : undefined} className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen && view === "terminal" ? " assistant-open" : ""}${chatTerminalVisible ? " chat-side-terminal" : ""}`} hidden={view !== "terminal" && !chatTerminalVisible}>
+          {!shellOnly && api && engagement && (terminalRequested || mountedTerminalProjectId === engagement.id) && <div ref={(element) => { chatTerminalSize.panelRef.current = element; }} id="chat-side-terminal" aria-label={chatTerminalVisible ? "Terminal beside chat" : undefined} role={chatTerminalVisible ? "region" : undefined} style={chatTerminalVisible ? chatTerminalSize.panelStyle : undefined} className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen && view === "terminal" ? " assistant-open" : ""}${chatTerminalVisible ? " chat-side-terminal" : ""}`} hidden={view !== "terminal" && !chatTerminalVisible}>
             {chatTerminalVisible && !companionExpanded && chatTerminalSize.resizeHandle}
             <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" />{chatTerminalVisible ? <><button className="button quiet managed-browser-icon" type="button" aria-label={companionExpanded ? "Return Terminal to side" : "Expand Terminal in chat"} title={companionExpanded ? "Return Terminal to side" : "Expand Terminal in chat"} aria-expanded={companionExpanded} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}</button><button className="button quiet managed-browser-icon" type="button" aria-label="Hide terminal" title="Hide terminal" onClick={() => { setCompanionExpanded(false); setChatTerminalOpen(false); }}><X size={16} aria-hidden="true" /></button></> : <button className={`button quiet managed-browser-icon${compact ? " mobile-ask-button" : ""}`} type="button" aria-label={compact ? "Ask Assistant" : "Assistant"} title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}>{compact ? <><Sparkles size={15} aria-hidden="true" /><span>Ask</span></> : <PanelRight size={18} aria-hidden="true" />}</button>}</header>
             <Suspense fallback={<LoadingSurface label="Loading terminal" />}><ContainerTerminalPanel toolbarHost={terminalToolbarHost} active={view === "terminal" || chatTerminalVisible} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>

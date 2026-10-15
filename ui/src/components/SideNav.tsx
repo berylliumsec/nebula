@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction, type F
 import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Plus, Search, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItemForPath, navigationItems } from "../navigation";
-import { canonicalNavigationPath, projectSurface, replaceProjectInPath } from "../resourceRoutes";
+import { canonicalNavigationPath, projectSurface, projectSwitchDestination } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { HostFolderPicker } from "./HostFolderPicker";
@@ -204,7 +204,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
           </div>}
           {!creating && <div className="engagement-options">
             {visibleProjects.map((item) => <div className="project-switcher-row" key={item.id}>
-              {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { const target = /^\/projects\/[^/]+\/work\//.test(location.pathname) ? projectSurface(item.id, "work") : replaceProjectInPath(location.pathname, item.id); navigate(target + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
+              {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { if (item.id !== engagement?.id) navigate(projectSwitchDestination(location.pathname, location.search, item.id)); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
               <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`${showArchived ? "Restore" : "Remove"} project ${item.name}`} title={showArchived ? "Restore project" : "Remove project"} onClick={(event) => void changeArchived(item.id, item.name, !showArchived, event.currentTarget)}>{showArchived ? <RotateCcw size={16} aria-hidden="true" /> : <Archive size={16} aria-hidden="true" />}</button>
               {showArchived && <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`Delete project ${item.name}`} title="Delete permanently" onClick={() => void deleteArchived(item.id, item.name)}><Trash2 size={16} aria-hidden="true" /></button>}
             </div>)}
