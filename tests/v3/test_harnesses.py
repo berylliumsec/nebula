@@ -2650,7 +2650,7 @@ def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
     asyncio.run(scenario())
 
 
-def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_session(
+def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
     tmp_path,
 ):
     store, engagement, profile, _, _, runtime = _runtime(tmp_path)
@@ -2683,37 +2683,25 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
     session = store.get(HarnessSession, turn.harness_session_id)
     assert chat.metadata["control_assistant"] is True
     assert session.metadata["control_assistant"] is True
-    assert session.metadata["command_runtime_enabled"] is False
+    assert session.metadata["command_runtime_enabled"] is (
+        "command_runtime_snapshot" in session.metadata
+    )
     assert session.metadata[
         "native_capabilities"
     ] == HarnessNativeCapabilities().model_dump(mode="json")
     assert chat_turn.tools_enabled is True
-    assert "You are the Nebula product assistant" in turn.prompt
-    assert "call nebula.help.project_context before answering" in turn.prompt
-    assert (
-        "Call only nebula.help, nebula.settings, and nebula.navigate tools"
-        in turn.prompt
-    )
+    assert "You are Butler, the second-in-command" in turn.prompt
+    assert "nebula.capabilities.search" in turn.prompt
     assert turn.metadata["knowledge_access"] is False
     assert {
-        item["name"] for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+        item["name"]
+        for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+        if item["name"].startswith("nebula.")
     } == {
-        "nebula.navigate.open",
-        "nebula.help.search",
-        "nebula.help.project_context",
-        "nebula.settings.catalog",
-        "nebula.settings.api_schema",
-        "nebula.settings.api_request",
-        "nebula.settings.open",
-        "nebula.settings.set_device_theme",
-        "nebula.settings.set_project_mode",
-        "nebula.settings.set_project_scope",
-        "nebula.settings.headless_session",
-        "nebula.settings.notebook",
-        "nebula.settings.set_notebook",
-        "nebula.settings.set_post_tool",
-        "nebula.settings.models",
-        "nebula.settings.set_default_model",
+        "nebula.capabilities.search",
+        "nebula.capabilities.describe",
+        "nebula.capabilities.read",
+        "nebula.capabilities.change",
     }
     session = store.update(
         HarnessSession,
@@ -2730,7 +2718,7 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
             tool_name="use_tool",
             arguments={
                 "rawInput": {
-                    "tool_name": f"nebula__{harness_module._portable_gateway_tool_name('nebula.settings.catalog')}"
+                    "tool_name": f"nebula__{harness_module._portable_gateway_tool_name('nebula.capabilities.search')}"
                 }
             },
         )
@@ -2766,30 +2754,19 @@ def test_settings_assistant_harness_has_only_settings_tools_and_an_isolated_sess
         restricted, profile, execution_mode="host", reason="execution_mode_changed"
     )
     assert host_session.metadata["control_assistant"] is True
-    assert host_session.metadata["command_runtime_enabled"] is False
+    assert host_session.metadata["command_runtime_enabled"] is True
     assert host_session.metadata[
         "native_capabilities"
     ] == HarnessNativeCapabilities().model_dump(mode="json")
     assert {
         item["name"]
         for item in runtime._gateway_catalog(host_session, turn=turn)["tools"]
+        if item["name"].startswith("nebula.")
     } == {
-        "nebula.navigate.open",
-        "nebula.help.search",
-        "nebula.help.project_context",
-        "nebula.settings.catalog",
-        "nebula.settings.api_schema",
-        "nebula.settings.api_request",
-        "nebula.settings.open",
-        "nebula.settings.set_device_theme",
-        "nebula.settings.set_project_mode",
-        "nebula.settings.set_project_scope",
-        "nebula.settings.headless_session",
-        "nebula.settings.notebook",
-        "nebula.settings.set_notebook",
-        "nebula.settings.set_post_tool",
-        "nebula.settings.models",
-        "nebula.settings.set_default_model",
+        "nebula.capabilities.search",
+        "nebula.capabilities.describe",
+        "nebula.capabilities.read",
+        "nebula.capabilities.change",
     }
     with pytest.raises(Exception, match="settings assistant"):
         runtime.prepare_chat(

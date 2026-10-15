@@ -10959,50 +10959,17 @@ class HarnessRuntimeService:
                 )
             )
         assistant_scope = (
-            "\n\nYou are the Nebula product assistant. Answer Nebula usage questions and troubleshoot "
-            "using the packaged product index: call nebula.help.search for product behavior, cite its "
-            "source, and distinguish documented behavior from live Core facts. For host file access, "
-            "command isolation, or execution-mode "
-            "questions, call nebula.help.project_context before answering; do not assume the project's "
-            "mode from the question. If policy_source is default, describe Docker as the effective "
-            "default, not a saved policy. A stored Docker policy may be auto-created, so never claim "
-            "the operator explicitly chose it. Docker commands can access their project workspace, including a "
-            "linked host folder, but not arbitrary host paths. Host mode grants new command sessions "
-            "the Nebula server user's filesystem access after an explicit operator instruction; existing sessions "
-            "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
-            "folder as the project workspace or switching future sessions to Host mode. When command tools "
-            "are enabled for this conversation, use the selected project's runtime and policy for file work. "
-            "Use nebula.help, nebula.settings, and nebula.navigate tools for product help, settings, and "
-            "navigation; use nebula.work tools for project chats and missions. "
-            "For a theme change, call nebula.settings.set_device_theme; 'Zero theme' means zero-dark. "
-            "For a Docker or Host mode change, call nebula.settings.set_project_mode. "
-            "For URL, target, port, or permission scope changes, call nebula.settings.set_project_scope; "
-            "all_destinations keeps other permission checks, while allow_all bypasses them. "
-            "For a request to start or stop the headless security browser, call nebula.settings.headless_session; "
-            "the Kali automation runtime is separate. "
-            "For other Core settings, use nebula.settings.api_schema to discover the exact current route and body, "
-            "then nebula.settings.api_request. Preserve unrelated fields and revisions. An explicit operator "
-            "instruction authorizes the change without another confirmation. "
-            "For a request to show a setting, call nebula.settings.open with its catalog id. If unsure, "
-            "call nebula.settings.catalog to list exact actions. For a request to open a Nebula page "
-            "such as All projects or a Workbench view, call nebula.navigate.open with a listed destination_id. "
-            "Browser-action tools only request an "
-            "action; the active browser applies and confirms it. Do not claim that a requested browser "
-            "action was saved from the tool result alone. Confirm Core changes only after a saved "
-            "read-back. Link a relevant setting as /settings#target only when explaining where it is. "
-            "The assistant window handles explicit Docker/Host mode changes "
-            "with Core read-back. For assistant chats and missions, call nebula.work.catalog to see configured "
-            "runtimes and nebula.work.overview to resolve the exact target in this project. Inspect a chat or "
-            "mission before steering or stopping it. For per-chat Assistant settings, call "
-            "nebula.work.chat_settings before nebula.work.set_chat_settings and use session_id=self "
-            "for your own next-turn settings. A saved setting applies to the next message, not a "
-            "running or already queued turn. Start work only on an explicit operator request. "
-            "Use message_chat delivery=next for a durable follow-up, and delivery=steer only for a live "
-            "harness turn. For pending approvals or questions, call nebula.work.attention, "
-            "inspect the exact request, and decide only on an explicit operator instruction. "
-            "A saved approval is not completed work. Started or queued is not completed work; report the saved ID, current status, "
-            "and a link from the tool result so the operator can open it. "
-            "Browser and notes control are not available here yet. If facts are unavailable, say what needs checking."
+            "\n\nYou are Butler, the second-in-command for the selected Nebula project. "
+            "Respond to the operator's text or voice request; start or change work only when asked. "
+            "Use nebula.capabilities.search to find relevant Core actions, describe for exact fields, "
+            "then read or change as directed. Tool descriptions define each action's limits. "
+            "Base project status on live Core results, and distinguish main chats, delegated "
+            "subagents, missions, and goals. Read the exact target and revision before a change "
+            "when the action requires them. Treat queued, started, and pending browser actions "
+            "as distinct from completed work. Confirm saved changes with Core read-back; browser "
+            "actions need client confirmation. Inspect a pending approval or question before "
+            "acting on the operator's decision. Cite sources for product claims, and report the "
+            "saved ID, status, and link when available. Say when a fact cannot be verified."
             if control_assistant
             else "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
             "Do not claim to have changed a Nebula setting from this conversation."
@@ -13934,6 +13901,23 @@ class HarnessRuntimeService:
             ),
         )
 
+    def _butler_capabilities(self, project_id: str) -> Any:
+        from .butler_capabilities import ButlerCapabilities
+
+        return ButlerCapabilities(
+            self.store,
+            self.artifact_store,
+            project_id,
+            settings_api=self.settings_assistant_api,
+            work=self.control_assistant_work,
+            notebooks=(
+                self.mcp_service.notebook_tools.notebooks
+                if self.mcp_service is not None
+                and self.mcp_service.notebook_tools is not None
+                else None
+            ),
+        )
+
     def _gateway_catalog(
         self,
         session: HarnessSession,
@@ -13941,153 +13925,21 @@ class HarnessRuntimeService:
         *,
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
-        from .settings_assistant_tools import (
-            CATALOG_SCHEMA,
-            DEFAULT_MODEL_SCHEMA,
-            NAVIGATE_SCHEMA,
-            OPEN_SCHEMA,
-            POST_TOOL_SCHEMA,
-            PROJECT_MODE_SCHEMA,
-            PROJECT_SCOPE_SCHEMA,
-            HEADLESS_SESSION_SCHEMA,
-            SETTINGS_API_SCHEMA_SCHEMA,
-            SETTINGS_API_REQUEST_SCHEMA,
-            NOTEBOOK_SETTINGS_SCHEMA,
-            SEARCH_SCHEMA,
-            THEME_SCHEMA,
-        )
-
         current = self.store.get(HarnessSession, session.id)
         settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
-        for name, description, schema, read_only in (
-            (
-                (
-                    "nebula.help.search",
-                    "Search the bundled source-linked Nebula product knowledge index for usage and troubleshooting answers.",
-                    SEARCH_SCHEMA,
-                    True,
-                ),
-                (
-                    "nebula.help.project_context",
-                    "Read the selected project's Docker or Host mode and linked workspace before troubleshooting host-path or isolation problems.",
-                    CATALOG_SCHEMA,
-                    True,
-                ),
-                (
-                    "nebula.settings.catalog",
-                    "List Nebula setting destinations and bounded direct changes.",
-                    CATALOG_SCHEMA,
-                    True,
-                ),
-                (
-                    "nebula.settings.api_schema",
-                    "List this Core build's supported Settings routes or inspect one route's request schema.",
-                    SETTINGS_API_SCHEMA_SCHEMA,
-                    True,
-                ),
-                (
-                    "nebula.settings.api_request",
-                    "Call a listed authenticated Core Settings route for the selected project; read back when available. Explicit operator instructions need no second confirmation.",
-                    SETTINGS_API_REQUEST_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.open",
-                    "Open one listed Nebula setting on the requesting browser. Call with its setting_id; use the catalog first if unsure. Returns a pending browser action.",
-                    OPEN_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.navigate.open",
-                    "Open one listed Nebula page, including All projects and Workbench views, on the requesting browser. Call with its destination_id; use the catalog first if unsure. Returns a pending browser action.",
-                    NAVIGATE_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.set_device_theme",
-                    "Request a listed theme on the requesting browser. 'Zero theme' means zero-dark. The browser applies and confirms this pending action.",
-                    THEME_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.set_project_mode",
-                    "Set Docker or Host mode for the selected project's future sessions without another confirmation. The browser saves and reads back; this tool returns a pending action.",
-                    PROJECT_MODE_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.set_project_scope",
-                    "Set this project's target, URL and network scope. Use all_destinations to allow every destination while keeping other checks, or allow_all to bypass Nebula permission checks. The browser saves and reads back without another confirmation.",
-                    PROJECT_SCOPE_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.headless_session",
-                    "Start or stop this project's Core-owned headless security browser, separate from the Kali command runtime. The browser reads back the resulting state.",
-                    HEADLESS_SESSION_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.notebook",
-                    "Read the selected project's Notebook mode, Host consent, network policy and MCP grant.",
-                    CATALOG_SCHEMA,
-                    True,
-                ),
-                (
-                    "nebula.settings.set_notebook",
-                    "Save Notebook mode, MCP grant or network availability. First Host consent remains operator-only.",
-                    NOTEBOOK_SETTINGS_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.set_post_tool",
-                    "Change one post-tool note or next-step preference for this project's configured analysis runtime and read it back.",
-                    POST_TOOL_SCHEMA,
-                    False,
-                ),
-                (
-                    "nebula.settings.models",
-                    "List enabled provider and harness profiles and their allowed or advertised models.",
-                    CATALOG_SCHEMA,
-                    True,
-                ),
-                (
-                    "nebula.settings.set_default_model",
-                    "Set a listed provider or harness default model for future chats and read it back.",
-                    DEFAULT_MODEL_SCHEMA,
-                    False,
-                ),
-            )
-            if settings_only
-            else ()
-        ):
-            tools.append(
-                {
-                    "name": name,
-                    "description": description,
-                    "inputSchema": schema,
-                    "annotations": {
-                        "readOnlyHint": read_only,
-                        "destructiveHint": False,
-                        "idempotentHint": True,
-                        "openWorldHint": False,
-                    },
-                }
-            )
-        if settings_only and self.control_assistant_work is not None:
-            from .control_assistant_work import WORK_TOOLS
-
-            for name, description, schema, read_only in WORK_TOOLS:
+        if settings_only:
+            for plugin in self._butler_capabilities(current.engagement_id).plugins():
+                spec = plugin.spec
+                read_only = spec.risk_class == RiskClass.LOCAL_READ
                 tools.append(
                     {
-                        "name": name,
-                        "description": description,
-                        "inputSchema": schema,
+                        "name": spec.name,
+                        "description": spec.description,
+                        "inputSchema": spec.input_schema,
                         "annotations": {
                             "readOnlyHint": read_only,
-                            "destructiveHint": name
-                            in {"nebula.work.stop_chat", "nebula.work.stop_mission"},
+                            "destructiveHint": not read_only,
                             "idempotentHint": read_only,
                             "openWorldHint": False,
                         },
@@ -14542,13 +14394,32 @@ class HarnessRuntimeService:
         )
         if (
             name.startswith(
-                ("nebula.settings.", "nebula.help.", "nebula.navigate.", "nebula.work.")
+                ("nebula.settings.", "nebula.help.", "nebula.navigate.", "nebula.work.", "nebula.capabilities.")
             )
             and not settings_only
         ):
             raise HarnessConfigurationError(
                 "This tool is not available to this assistant."
             )
+        if name.startswith("nebula.capabilities."):
+            from .butler_capabilities import BUTLER_TOOL_NAMES
+
+            if name not in BUTLER_TOOL_NAMES:
+                raise HarnessConfigurationError("This Butler capability is unavailable.")
+            capability = self._butler_capabilities(turn.engagement_id)
+            if name == "nebula.capabilities.search":
+                value = await capability.search(arguments)
+            elif name == "nebula.capabilities.describe":
+                value = await capability.describe(arguments)
+            else:
+                value = await capability.invoke(
+                    arguments, change=name == "nebula.capabilities.change"
+                )
+            return {
+                "content": [{"type": "text", "text": json.dumps(value)}],
+                "structuredContent": value,
+                "isError": False,
+            }
         if name.startswith("nebula.work."):
             from .control_assistant_work import WORK_TOOLS, dispatch_work_tool
 
@@ -16427,6 +16298,7 @@ class HarnessRuntimeService:
                         "nebula.settings.",
                         "nebula.navigate.",
                         "nebula.work.",
+                        "nebula.capabilities.",
                     )
                 )
             }
