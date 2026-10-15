@@ -1,0 +1,124 @@
+<!doctype html>
+<!--
+  README illustration source. The Northstar API Review project and its work are
+  fictional. Labels, control placement, orb treatment, and palette follow the
+  current Butler Voice surface; this is not a recording of a live agent turn.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Butler Voice sample project</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #080d11;
+      --surface: #172229;
+      --surface-hover: #203039;
+      --text: #e4e9ec;
+      --muted: #a5b0b8;
+      --border: #3a4952;
+      --blue: #b3c7d4;
+      --green: #92b2a2;
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 1200px; height: 675px; margin: 0; overflow: hidden; }
+    body { font: 16px/1.35 Inter, "Segoe UI", Arial, sans-serif; background: var(--canvas); color: var(--text); }
+    .screen { position: relative; width: 1200px; height: 675px; overflow: hidden; background: radial-gradient(ellipse 490px 390px at 43% 44%, #b3c7d40e, transparent 85%), var(--canvas); }
+    .header { position: absolute; inset: 0 0 auto; height: 76px; display: flex; align-items: center; justify-content: space-between; padding: 0 30px; }
+    .identity { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
+    .identity strong { font-size: 23px; letter-spacing: -.045em; }
+    .identity strong span { color: var(--muted); font-weight: 400; }
+    .identity small { color: var(--muted); font-size: 14px; }
+    .exit, .control, .refresh { display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); }
+    .exit { min-width: 154px; height: 43px; padding: 0 14px; font-size: 13px; }
+    svg { display: block; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+    .exit svg, .control svg, .refresh svg { width: 18px; height: 18px; }
+    .center { position: absolute; left: 265px; top: 90px; width: 670px; height: 520px; display: flex; align-items: center; flex-direction: column; }
+    .orb-wrap { position: relative; height: 230px; width: 270px; display: grid; place-items: center; }
+    .orb-glow { position: absolute; width: 250px; height: 215px; border-radius: 50%; background: radial-gradient(ellipse, #b3c7d42c, transparent 70%); filter: blur(16px); opacity: .7; }
+    .orb { position: relative; width: 184px; height: 218px; border: 1px solid #d3dfe6; border-radius: 49% 51% 46% 54% / 43% 45% 55% 57%; background: radial-gradient(ellipse at 70% 28%, #e4edf1a8, transparent 52%), radial-gradient(ellipse at 23% 72%, #b3c7d4, transparent 60%), radial-gradient(ellipse at 55% 55%, #3b4c55, #172229 76%); box-shadow: inset -12px -20px 40px #b3c7d426, inset 12px 12px 26px #ffffff20, 0 0 20px #b3c7d44d, 0 0 85px #b3c7d429; transform-origin: center 62%; }
+    .orb::after { content: ""; position: absolute; inset: 15%; border: 1px solid #b3c7d463; border-radius: 44% 56% 62% 38% / 49% 57% 43% 51%; transform: rotate(-18deg); }
+    .phase { margin-top: 4px; color: var(--muted); font-size: 17px; }
+    .controls { display: flex; gap: 9px; margin-top: 11px; }
+    .control { height: 43px; min-width: 46px; padding: 0 13px; font-size: 14px; }
+    .captions { position: absolute; left: 18px; right: 18px; top: 332px; display: grid; gap: 8px; }
+    .caption { min-height: 64px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); padding: 9px 13px 11px; }
+    .caption:nth-child(2) { min-height: 77px; }
+    .caption small { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
+    .caption p { min-height: 20px; margin: 0; font-size: 17px; line-height: 1.42; }
+    .caption .placeholder { color: var(--muted); }
+    .work { position: absolute; right: 27px; top: 116px; width: 335px; min-height: 300px; padding: 15px; border: 1px solid var(--border); border-radius: 17px; background: var(--surface); }
+    .work-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; }
+    .work-head strong { font-size: 16px; }
+    .refresh { width: 39px; height: 39px; background: transparent; }
+    .work-card { display: flex; align-items: center; gap: 12px; min-height: 67px; margin-top: 9px; padding: 10px 12px; border: 1px solid #4a5962; border-radius: 12px; background: #203039; }
+    .work-card > svg { flex: 0 0 auto; width: 24px; height: 24px; color: var(--blue); }
+    .work-card strong, .work-card small { display: block; }
+    .work-card strong { overflow: hidden; max-width: 235px; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
+    .work-card small { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    #new-work { opacity: 0; transform: translateY(12px); border-color: #657b86; }
+    #new-work svg { color: var(--green); }
+    .footer { position: absolute; left: 0; right: 0; bottom: 18px; display: flex; justify-content: center; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .footer svg { width: 16px; height: 16px; }
+    .sample { position: absolute; left: 30px; bottom: 18px; color: #8d9ba4; font-size: 11px; letter-spacing: .04em; }
+    .divider { position: absolute; left: 794px; top: 106px; height: 320px; width: 1px; background: linear-gradient(transparent, #35464f 20%, #35464f 80%, transparent); opacity: .5; }
+  </style>
+</head>
+<body>
+  <div class="screen" id="screen">
+    <header class="header">
+      <div class="identity"><strong>Butler <span>Voice</span></strong><small>Northstar API Review</small></div>
+      <div class="exit"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>Exit voice mode</div>
+    </header>
+    <div class="divider"></div>
+    <main class="center">
+      <div class="orb-wrap"><div class="orb-glow" id="glow"></div><div class="orb" id="orb"></div></div>
+      <div class="phase" id="phase">Listening</div>
+      <div class="controls">
+        <div class="control" aria-label="Microphone on"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5m-4 0h8"/></svg></div>
+        <div class="control"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5m-4 0h8"/></svg>Input</div>
+        <div class="control"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5ZM15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg>Speaker</div>
+      </div>
+      <div class="captions">
+        <div class="caption"><small>You</small><p id="you" class="placeholder">Speak to ask about this project or direct its work.</p></div>
+        <div class="caption"><small>Nebula</small><p id="reply" class="placeholder">Ready for a conversation.</p></div>
+      </div>
+    </main>
+    <aside class="work">
+      <div class="work-head"><strong>Project work</strong><div class="refresh"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.5 9A7 7 0 0 1 18 6l2 1M4 17l2 1a7 7 0 0 0 12.5-3"/></svg></div></div>
+      <div class="work-card"><svg viewBox="0 0 24 24"><path d="m8 8-4 4 4 4m8-8 4 4-4 4M14 4l-4 16"/></svg><span><strong>API surface mapping</strong><small>Working · Codex</small></span></div>
+      <div class="work-card"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg><span><strong>Scope review</strong><small>Running mission</small></span></div>
+      <div class="work-card" id="new-work"><svg viewBox="0 0 24 24"><path d="m8 8-4 4 4 4m8-8 4 4-4 4M14 4l-4 16"/></svg><span><strong>Authentication review</strong><small>Working · Codex</small></span></div>
+    </aside>
+    <div class="sample">ILLUSTRATIVE SAMPLE PROJECT</div>
+    <footer class="footer"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M4.9 4.9a10 10 0 0 0 0 14.2m14.2-14.2a10 10 0 0 1 0 14.2M7.8 7.8a6 6 0 0 0 0 8.4m8.4-8.4a6 6 0 0 1 0 8.4"/></svg>Keep talking. Voice stays on until you exit.</footer>
+  </div>
+  <script>
+    const request = "Start an assistant to review authentication flows.";
+    const answer = "Done. Authentication review is working alongside API surface mapping.";
+    const between = (value, start, end) => Math.max(0, Math.min(1, (value - start) / (end - start)));
+    window.renderFrame = (t) => {
+      const talking = t >= 0.7 && t < 3.2;
+      const responding = t >= 4.25 && t < 6.85;
+      const level = talking ? (Math.sin(t * 18) ** 2 * .065 + Math.sin(t * 33) ** 2 * .035) : responding ? (Math.sin(t * 13) ** 2 * .03) : 0;
+      const amplitude = Math.round(level * 25) / 25;
+      document.getElementById("orb").style.transform = `translateY(${-amplitude * 75}px) scale(${1 + amplitude})`;
+      document.getElementById("glow").style.opacity = String(.56 + amplitude * 3.3);
+      document.getElementById("phase").textContent = t >= 3.2 && t < 4.25 ? "Checking project work" : responding ? "Speaking" : "Listening";
+      const heard = document.getElementById("you");
+      heard.textContent = t < .7 ? "Speak to ask about this project or direct its work." : request.slice(0, Math.round(request.length * between(t, .7, 3.1)));
+      heard.className = t < .7 ? "placeholder" : "";
+      const reply = document.getElementById("reply");
+      reply.textContent = t < 4.25 ? "Ready for a conversation." : answer.slice(0, Math.round(answer.length * between(t, 4.25, 5.8)));
+      reply.className = t < 4.25 ? "placeholder" : "";
+      const card = document.getElementById("new-work");
+      const reveal = between(t, 5.3, 5.9);
+      card.style.opacity = String(reveal);
+      card.style.transform = `translateY(${(1 - reveal) * 12}px)`;
+      document.getElementById("screen").style.opacity = String(between(t, 0, .3) * (1 - between(t, 6.65, 6.95)));
+    };
+    window.renderFrame(0);
+  </script>
+</body>
+</html>

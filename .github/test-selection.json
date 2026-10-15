@@ -1,17 +1,15 @@
 {
-  "change_digest": "702e875f3e0986d68eb2fe581c80f3989ef6c068fca01f9d63f34f49608e642e",
-  "reviewed_by": "Codex focused Butler Act lifecycle review",
-  "reason": "The follow-up changes only Butler Act investigation timing, project-lease renewal/loss, and read-versus-write case outcomes. The selected recovery file exercises scheduled checks, interrupted read-only replay, lease loss, existing parent-only repair, and Core evidence receipts. Live production acceptance separately observes the next scheduled Act case against the deployed harness.",
-  "exclusions": "Full suites and unrelated Python modules are excluded. No frontend, native, or browser code changed, so those test layers are excluded from this follow-up. A physical iPhone and UI flows were covered separately or remain distinct acceptance evidence, not inferred from this Python selection.",
+  "change_digest": "593a6a3e08810a6e626ce9515e0e81850e476d1ba0aa4b9c7706c3ececb4bd8b",
+  "reviewed_by": "Codex Butler Voice README media review",
+  "reason": "This change embeds a silent illustrative Butler Voice GIF in the README, provides a reduced-motion still image, and adds the deterministic media rendering source. It does not change product UI, Core, API, mobile, or browser behavior. The generated assets and README references are checked directly.",
+  "exclusions": "No Python, frontend runtime, native, or Playwright tests exercise README media or this offline illustration generator, so all four test layers are omitted. Full suites and unrelated workflows are excluded. Asset dimensions, frame count, file size, README paths, and the diff are verified separately.",
   "expected_tests": {
-    "python": 12,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [
-    "tests/v3/test_butler_recovery.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": []

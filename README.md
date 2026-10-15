@@ -27,6 +27,13 @@ First, I would like to thank Almighty God, who is the source of all knowledge. W
 
 Select the Nebula logo in the header or mobile navigation to open Butler, then use chat or Voice. With a configured model or harness, Butler can answer questions, review the selected project's chats and goals, start or steer work, and manage settings and approvals. It shows delegated work separately from main agents; to redirect a child, ask Butler to guide its parent agent.
 
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/images/butler-voice-sample.png">
+  <img src="docs/images/butler-voice-sample.gif" width="100%" alt="Butler Voice in an illustrative Northstar API Review project: the listening orb moves as an operator asks it to start an authentication review, then Butler replies and the new assistant appears in Project work.">
+</picture>
+
+<p><sub>Illustrative sample project. This GIF is silent; Butler speaks in an active Voice session.</sub></p>
+
 When a goal starts, Butler watches its supported progress events even if the panel is closed. The project can grant Watch, Steer, or specific Delegate actions. GPT-Live listens and speaks in Voice mode; the Core Butler runs the tools, owns the saved conversation and context compaction, and continues oversight while Voice is off. Voice does not yet speak unsolicited alerts. Separately, Butler checks relevant precedent before acting and keeps durable, selective memory of useful preferences, decisions, and lessons across projects. Open Memory in the Butler panel whenever you want to review, edit, or delete an entry.
 
 A fresh Core data directory starts with empty Butler memory. Its SQLite records stay in that data directory across app updates, and the Chroma search index can be rebuilt from them.
