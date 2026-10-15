@@ -24,6 +24,10 @@
 .butlerWorkspace > :last-child { border-top: 0; }
 .transcript { max-height: min(380px, 45dvh); overflow: auto; overflow-wrap: anywhere; }
 .transcript pre { max-width: 100%; overflow: auto; }
+.tableScroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.tableScroll table { width: 100%; border-collapse: collapse; overflow-wrap: normal; }
+.tableScroll th, .tableScroll td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.tableScroll th:first-child, .tableScroll td:first-child { min-width: 7rem; }
 .question { margin: 12px 0; color: var(--muted); }
 .answer { line-height: 1.6; }
 .quickActions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
