@@ -38,7 +38,9 @@ When a goal starts, Butler watches its supported progress events even if the pan
 
 A fresh Core data directory starts with empty Butler memory. Its SQLite records stay in that data directory across app updates, and the Chroma search index can be rebuilt from them.
 
-<img src="docs/images/nebula-butler-architecture.svg" width="620" alt="Nebula architecture: a host runs Nebula, with optional independent Mercury controls. Butler directs main agents, which coordinate subagents. Operator-provided skills, hooks, and software extend agent work.">
+<p align="center">
+  <img src="docs/images/nebula-butler-architecture.svg" width="620" alt="Nebula architecture: a host runs Nebula, with optional independent Mercury controls. Butler directs main agents, which coordinate subagents. Operator-provided skills, hooks, and software extend agent work.">
+</p>
 
 ## Work
 

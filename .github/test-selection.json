@@ -1,8 +1,8 @@
 {
-  "change_digest": "593a6a3e08810a6e626ce9515e0e81850e476d1ba0aa4b9c7706c3ececb4bd8b",
-  "reviewed_by": "Codex Butler Voice README media review",
-  "reason": "This change embeds a silent illustrative Butler Voice GIF in the README, provides a reduced-motion still image, and adds the deterministic media rendering source. It does not change product UI, Core, API, mobile, or browser behavior. The generated assets and README references are checked directly.",
-  "exclusions": "No Python, frontend runtime, native, or Playwright tests exercise README media or this offline illustration generator, so all four test layers are omitted. Full suites and unrelated workflows are excluded. Asset dimensions, frame count, file size, README paths, and the diff are verified separately.",
+  "change_digest": "1c1a013abcd39c57414962a38596d11ba418165ac898587f32a0017f05a05c22",
+  "reviewed_by": "Codex Butler README image alignment review",
+  "reason": "This change centers the existing Butler architecture SVG beneath the full-width Voice GIF in the README. The image and product runtime are unchanged; the README markup and diff are checked directly.",
+  "exclusions": "No Python, frontend runtime, native, or Playwright tests exercise README image alignment, so all four test layers are omitted. Full suites and unrelated workflows are excluded. The centered markup and image path are verified directly.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
