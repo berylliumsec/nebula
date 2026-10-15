@@ -170,6 +170,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setSessionConfig(config);
         setSettingsRevision(saved.revision);
       } catch (caught) {
+        void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.settings_open_failed", message: "Butler settings could not be loaded.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
         setSettingsError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry by reopening settings.");
       } finally { setSettingsBusy(false); }
     }
@@ -207,13 +208,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setCyberDraft(saved.settings.harnessCyberAccessProgram ?? "automatic");
       setSettingsStatus("Saved. Applies to Butler’s next message.");
     } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_save_failed", message: "Butler settings could not be saved.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
       setSettingsError(caught instanceof Error ? caught.message : "Could not save Butler settings. Reload and retry.");
       if (sessionId) {
         try {
           const saved = await api.getChatAssistantConfig(sessionId);
           setSessionConfig(saved.settings);
           setSettingsRevision(saved.revision);
-        } catch { /* Keep the actionable save error visible. */ }
+        } catch (refreshError) {
+          // Preserve the save error in the panel, while retaining the refresh failure in diagnostics.
+          void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.settings_refresh_after_save_failed", message: "Butler settings could not be refreshed after a failed save.", outcome: "failure", stage: "settings", retryable: true, exception: refreshError });
+        }
       }
     } finally { setSettingsBusy(false); }
   };
