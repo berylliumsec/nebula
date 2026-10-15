@@ -7,13 +7,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
+from nebula.v3.chat import ChatCompletionRequest, ChatRequestMessage
+from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES
 from nebula.v3.control_assistant_work import WORK_TOOLS, dispatch_work_tool
 from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
     ChatBackend,
+    ChatGoal,
+    ChatMessage,
+    ChatQueue,
+    ChatRole,
     ChatSession,
+    ChatSubagent,
     ChatTurn,
     Engagement,
     HarnessCapabilities,
@@ -26,6 +33,7 @@ from nebula.v3.domain import (
     HarnessInteractionKind,
     HarnessTurn,
     HarnessTurnOrigin,
+    HarnessTurnStatus,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
@@ -41,7 +49,7 @@ from nebula.v3.providers import (
     ProviderHealth,
     ProviderKind,
 )
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import NebulaStore, NotFoundError
 
 
 def _app(tmp_path):
@@ -68,12 +76,36 @@ def test_work_tools_are_bound_to_control_assistant_and_not_ordinary_chat(tmp_pat
     )
     ordinary = runtime.chat_components(**common)
     control = runtime.chat_components(**common, settings_assistant=True)
-    expected = {name for name, *_ in WORK_TOOLS}
+    expected = BUTLER_TOOL_NAMES
     assert not expected.intersection(ordinary.specs)
     assert expected.issubset(control.specs)
+    assert "nebula.work.manage" not in control.specs
     assert app.state.control_assistant_work.catalog(project.id)["scope"].startswith(
         "selected project"
     )
+
+
+def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(tmp_path):
+    store, app, runtime = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    work = app.state.control_assistant_work
+    names = {name for name, *_ in WORK_TOOLS}
+    assert "nebula.work.manage" in names
+    assert "nebula.work.goals" not in names
+    descriptor = asyncio.run(dispatch_work_tool(
+        work, project.id, "nebula.work.catalog", {"operation": "nebula.work.goals"}
+    ))
+    assert descriptor["name"] == "nebula.work.goals"
+    assert descriptor["read_only"] is True
+    assert asyncio.run(dispatch_work_tool(
+        work, project.id, "nebula.work.manage",
+        {"operation": "nebula.work.goals", "arguments": {}}
+    )) == work.goals_overview(project.id, 0)
+    with pytest.raises(ValueError, match="managed operation"):
+        asyncio.run(dispatch_work_tool(
+            work, project.id, "nebula.work.manage",
+            {"operation": "nebula.work.start_mission", "arguments": {}},
+        ))
 
 
 def test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_not(
@@ -111,7 +143,7 @@ def test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_no
         mcp_server_ids=[],
         control_assistant=True,
     )
-    expected = {name for name, *_ in WORK_TOOLS}
+    expected = BUTLER_TOOL_NAMES
     ordinary = harness._gateway_catalog(
         store.get(HarnessSession, ordinary_turn.harness_session_id), turn=ordinary_turn
     )
@@ -120,6 +152,7 @@ def test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_no
     )
     assert not expected.intersection(item["name"] for item in ordinary["tools"])
     assert expected.issubset(item["name"] for item in control["tools"])
+    assert not any(item["name"].startswith("nebula.work.") for item in control["tools"])
 
 
 def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path):
@@ -174,6 +207,421 @@ def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path
             work.chat_detail(selected.id, target)
     with pytest.raises(ValueError, match="this project's work roster"):
         work.mission_detail(selected.id, foreign_run.id)
+
+
+def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    parent = store.create(ChatSession(
+        engagement_id=project.id, title="Main researcher",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    child = store.create(ChatSession(
+        engagement_id=project.id, title="Subagent · files",
+        provider_profile_id=provider.id, model="model-a",
+        parent_session_id=parent.id, metadata={"subagent_id": "child-1"},
+    ))
+    record = store.create(ChatSubagent(
+        id="child-1", engagement_id=project.id,
+        parent_session_id=parent.id, parent_turn_id="parent-turn",
+        child_session_id=child.id, name="Files", task="Inspect files",
+    ))
+    goal_child = store.create(ChatSession(
+        engagement_id=project.id, title="Goal child",
+        provider_profile_id=provider.id, model="model-a",
+        parent_session_id=parent.id,
+        metadata={"delegated_from_goal_id": "parent-goal"},
+    ))
+    store.create(ChatGoal(
+        id="parent-goal", engagement_id=project.id, session_id=parent.id,
+        objective="Review project", completion_criteria=["Report ready"],
+    ))
+    store.create(ChatGoal(
+        engagement_id=project.id, session_id=goal_child.id,
+        parent_goal_id="parent-goal", objective="Review child topic",
+        completion_criteria=["Child report ready"],
+    ))
+    work = app.state.control_assistant_work
+    overview = work.overview(project.id)
+    assert [item["id"] for item in overview["chats"]] == [parent.id]
+    assert overview["chats"][0]["goal"]["status"] == "draft"
+    assert overview["subagents"][0]["id"] == record.id
+    assert overview["subagents"][0]["parent_session_id"] == parent.id
+    assert work.chat_detail(project.id, child.id)["kind"] == "subagent"
+    assert work.chat_detail(project.id, goal_child.id)["kind"] == "goal_child"
+    assert work.subagent_detail(project.id, record.id)["view"]["status"] == "running"
+    assert {item["kind"] for item in work.goals_overview(project.id)["goals"]} == {
+        "main", "goal_child",
+    }
+
+
+def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    source = store.create(ChatSession(
+        engagement_id=selected.id, title="Research",
+        provider_profile_id=profile.id, model="model-a",
+    ))
+    message = store.create(ChatMessage(
+        engagement_id=selected.id, session_id=source.id,
+        sequence=1, role=ChatRole.USER, content="Investigate the issue",
+    ))
+    deletable = store.create(ChatSession(
+        engagement_id=selected.id, title="Old work",
+        provider_profile_id=profile.id, model="model-a",
+    ))
+    foreign = store.create(ChatSession(
+        engagement_id=other.id, title="Other work",
+        provider_profile_id=profile.id, model="model-a",
+    ))
+    work = app.state.control_assistant_work
+
+    async def scenario():
+        with pytest.raises(ValueError, match="this project's work roster"):
+            await work.fork_chat(selected.id, {
+                "session_id": foreign.id, "expected_revision": foreign.revision,
+                "through_message_id": message.id,
+            })
+        with pytest.raises(ValueError, match="saved transcript"):
+            await work.fork_chat(selected.id, {
+                "session_id": source.id, "expected_revision": source.revision,
+                "through_message_id": "invented",
+            })
+        fork = await dispatch_work_tool(work, selected.id, "nebula.work.fork_chat", {
+            "session_id": source.id, "expected_revision": source.revision,
+            "through_message_id": message.id,
+        })
+        assert fork["parent_session_id"] == source.id
+        assert work.chat_detail(selected.id, fork["session_id"])["kind"] == "main"
+        assert work.chat_detail(selected.id, source.id)["recent_messages"][0]["id"] == message.id
+        with pytest.raises(ValueError, match="title changed"):
+            await work.delete_chat(selected.id, {
+                "session_id": deletable.id, "expected_revision": deletable.revision,
+                "confirm_title": "Wrong title",
+            })
+        with pytest.raises(ValueError, match="chat changed"):
+            await work.delete_chat(selected.id, {
+                "session_id": deletable.id, "expected_revision": deletable.revision + 1,
+                "confirm_title": deletable.title,
+            })
+        deleted = await dispatch_work_tool(work, selected.id, "nebula.work.delete_chat", {
+            "session_id": deletable.id, "expected_revision": deletable.revision,
+            "confirm_title": deletable.title,
+        })
+        assert deleted["deleted"] is True
+        with pytest.raises(NotFoundError):
+            store.get(ChatSession, deletable.id)
+
+    asyncio.run(scenario())
+
+
+def test_retry_chat_turn_reads_exact_target_and_reuses_saved_retry(tmp_path, monkeypatch):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    source = store.create(ChatSession(
+        engagement_id=selected.id, title="Failed chat",
+        backend=ChatBackend.HARNESS, model="model-a",
+        harness_profile_id="harness-profile", harness_session_id="harness-session",
+    ))
+    turn = store.create(HarnessTurn(
+        engagement_id=selected.id, harness_session_id="harness-session",
+        origin=HarnessTurnOrigin.CHAT, chat_session_id=source.id,
+        chat_turn_id="chat-turn", prompt="Try the task",
+        status=HarnessTurnStatus.FAILED,
+    ))
+    work = app.state.control_assistant_work
+    assert work.chat_detail(selected.id, source.id)["recent_harness_turns"][0]["id"] == turn.id
+    requests = []
+
+    async def fake_request(method, path, body, **kwargs):
+        requests.append((method, path, body))
+        replacement = store.create(HarnessTurn(
+            engagement_id=selected.id, harness_session_id="harness-session",
+            origin=HarnessTurnOrigin.CHAT, chat_session_id=source.id,
+            chat_turn_id="retry-chat-turn", prompt="Try the task",
+            status=HarnessTurnStatus.QUEUED,
+            metadata={"retry_of_turn_id": turn.id},
+        ))
+        return {"id": replacement.id}
+
+    monkeypatch.setattr(work, "_request", fake_request)
+
+    async def scenario():
+        with pytest.raises(ValueError, match="this project's work roster"):
+            await work.retry_chat_turn(other.id, {
+                "session_id": source.id, "turn_id": turn.id,
+                "expected_revision": turn.revision,
+            })
+        with pytest.raises(ValueError, match="chat turn changed"):
+            await work.retry_chat_turn(selected.id, {
+                "session_id": source.id, "turn_id": turn.id,
+                "expected_revision": turn.revision + 1,
+            })
+        started = await dispatch_work_tool(
+            work, selected.id, "nebula.work.retry_chat_turn", {
+                "session_id": source.id, "turn_id": turn.id,
+                "expected_revision": turn.revision,
+            },
+        )
+        reused = await dispatch_work_tool(
+            work, selected.id, "nebula.work.retry_chat_turn", {
+                "session_id": source.id, "turn_id": turn.id,
+                "expected_revision": turn.revision,
+            },
+        )
+        assert started["turn_id"] == reused["turn_id"]
+        assert reused["retry_of_turn_id"] == turn.id
+        assert reused["status"] == "queued"
+        assert len(requests) == 1
+
+    asyncio.run(scenario())
+
+
+def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    chat = store.create(ChatSession(
+        engagement_id=selected.id, title="Goal chat",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    foreign = store.create(ChatSession(
+        engagement_id=other.id, title="Foreign chat",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    work = app.state.control_assistant_work
+    async def scenario():
+        created = await dispatch_work_tool(work, selected.id, "nebula.work.create_goal", {
+            "session_id": chat.id, "objective": "Inspect code",
+            "completion_criteria": ["Evidence retained"], "plan": ["Read", "Report"],
+        })
+        revision = created["goal"]["revision"]
+        updated = await dispatch_work_tool(work, selected.id, "nebula.work.update_goal", {
+            "session_id": chat.id, "expected_revision": revision,
+            "objective": "Inspect code and summarize",
+        })
+        assert updated["goal"]["completion_criteria"] == ["Evidence retained"]
+        with pytest.raises(ValueError, match="goal changed"):
+            await dispatch_work_tool(work, selected.id, "nebula.work.goal_action", {
+                "session_id": chat.id, "expected_revision": revision, "action": "cancel",
+            })
+        cancelled = await dispatch_work_tool(work, selected.id, "nebula.work.goal_action", {
+            "session_id": chat.id,
+            "expected_revision": updated["goal"]["revision"], "action": "cancel",
+        })
+        assert cancelled["goal"]["status"] == "cancelled"
+        assert work.goals_overview(selected.id)["goals"][0]["status"] == "cancelled"
+        with pytest.raises(ValueError, match="this project's work roster"):
+            await dispatch_work_tool(work, selected.id, "nebula.work.create_goal", {
+                "session_id": foreign.id, "objective": "Wrong project",
+                "completion_criteria": ["No"],
+            })
+    asyncio.run(scenario())
+
+
+def test_new_goal_conversation_is_draft_until_explicit_start(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    work = app.state.control_assistant_work
+
+    async def scenario():
+        created = await dispatch_work_tool(
+            work, project.id, "nebula.work.create_goal_conversation", {
+                "backend": "provider", "profile_id": provider.id,
+                "model": "model-a", "objective": "Map the files",
+                "completion_criteria": ["Report saved"],
+            },
+        )
+        assert created["kind"] == "main"
+        assert created["goal"]["status"] == "draft"
+        assert work.overview(project.id)["chats"][0]["id"] == created["session_id"]
+        assert work.goals_overview(project.id)["goals"][0]["status"] == "draft"
+
+    asyncio.run(scenario())
+
+
+def test_goal_child_creation_keeps_lineage_and_project_scope(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    parent = store.create(ChatSession(
+        engagement_id=selected.id, title="Parent",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    store.create(ChatGoal(
+        engagement_id=selected.id, session_id=parent.id,
+        objective="Investigate", completion_criteria=["Report ready"],
+        status="running", child_budget=1,
+    ))
+    work = app.state.control_assistant_work
+
+    async def scenario():
+        with pytest.raises(ValueError, match="this project's work roster"):
+            await dispatch_work_tool(work, other.id, "nebula.work.create_goal_child", {
+                "session_id": parent.id, "objective": "Wrong project",
+                "completion_criteria": ["No"],
+            })
+        created = await dispatch_work_tool(work, selected.id, "nebula.work.create_goal_child", {
+            "session_id": parent.id, "objective": "Review one component",
+            "completion_criteria": ["Findings saved"],
+        })
+        assert created["kind"] == "goal_child"
+        assert created["goal"]["status"] == "draft"
+        assert store.get(ChatSession, created["session_id"]).parent_session_id == parent.id
+        assert work.goal_detail(selected.id, parent.id)["children"][0]["session_id"] == created["session_id"]
+        assert work.overview(selected.id)["chats"][0]["id"] == parent.id
+
+    asyncio.run(scenario())
+
+
+def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_targets(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    chat = store.create(ChatSession(
+        engagement_id=selected.id, title="Recurring review",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    foreign = store.create(ChatSession(
+        engagement_id=other.id, title="Foreign",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    work = app.state.control_assistant_work
+    assert work.schedule_detail(selected.id, chat.id)["schedule"] is None
+
+    async def scenario():
+        created = await dispatch_work_tool(work, selected.id, "nebula.work.create_schedule", {
+            "session_id": chat.id, "interval_seconds": 3600,
+        })
+        assert created["schedule"]["enabled"] is True
+        assert created["schedule"]["next_run_at"]
+        paused = await dispatch_work_tool(work, selected.id, "nebula.work.set_schedule", {
+            "session_id": chat.id, "expected_revision": created["schedule"]["revision"],
+            "enabled": False,
+        })
+        assert paused["schedule"]["enabled"] is False
+        with pytest.raises(ValueError, match="schedule changed"):
+            await dispatch_work_tool(work, selected.id, "nebula.work.set_schedule", {
+                "session_id": chat.id, "expected_revision": created["schedule"]["revision"],
+                "enabled": True,
+            })
+        with pytest.raises(ValueError, match="this project's work roster"):
+            work.schedule_detail(selected.id, foreign.id)
+
+    asyncio.run(scenario())
+
+
+def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    parent = store.create(ChatSession(
+        engagement_id=selected.id, title="Main",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    child = store.create(ChatSession(
+        engagement_id=selected.id, title="Subagent · review",
+        provider_profile_id=provider.id, model="model-a",
+        parent_session_id=parent.id, metadata={"subagent_id": "sub-1"},
+    ))
+    record = store.create(ChatSubagent(
+        id="sub-1", engagement_id=selected.id,
+        parent_session_id=parent.id, parent_turn_id="parent-turn",
+        child_session_id=child.id, name="Review", task="Read the code",
+    ))
+    work = app.state.control_assistant_work
+
+    async def scenario():
+        with pytest.raises(ValueError, match="this project's work roster"):
+            await work.stop_subagent(other.id, record.id)
+        stopped = await dispatch_work_tool(work, selected.id, "nebula.work.stop_subagent", {
+            "subagent_id": record.id,
+        })
+        assert stopped["status"] == "stopped"
+        assert work.subagents_overview(selected.id, {})["subagents"][0]["status"] == "stopped"
+
+    asyncio.run(scenario())
+
+
+def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True,
+        model_allowlist=["model-a"],
+    ))
+    chat = store.create(ChatSession(
+        engagement_id=selected.id, title="Queued chat",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    foreign = store.create(ChatSession(
+        engagement_id=other.id, title="Foreign chat",
+        provider_profile_id=provider.id, model="model-a",
+    ))
+    work = app.state.control_assistant_work
+    request = ChatCompletionRequest(
+        engagement_id=selected.id, session_id=chat.id,
+        provider_id=provider.id, model="model-a",
+        messages=[ChatRequestMessage(role="user", content="First wording")],
+    )
+    queue = store.create(ChatQueue(
+        id="chat-queue-" + chat.id, engagement_id=selected.id,
+        session_id=chat.id, paused=True,
+        items=[{
+            "id": "follow-up-1", "key": "key-1", "status": "queued",
+            "original_request": request.model_dump(mode="json"),
+            "request": request.model_dump(mode="json"),
+        }],
+    ))
+    assert work.queue_detail(selected.id, chat.id)["paused"] is True
+    resumed = work.queue_action(selected.id, {
+        "session_id": chat.id, "expected_revision": queue.revision, "action": "resume",
+    })
+    assert resumed["paused"] is False
+    edited = work.queue_action(selected.id, {
+        "session_id": chat.id, "expected_revision": resumed["revision"],
+        "action": "edit", "item_id": "follow-up-1", "text": "Revised wording",
+    })
+    assert edited["items"][0]["text"] == "Revised wording"
+    assert store.get(ChatQueue, queue.id).items[0]["request"]["messages"][0]["content"] == "Revised wording"
+    with pytest.raises(ValueError, match="queue changed"):
+        work.queue_action(selected.id, {
+            "session_id": chat.id, "expected_revision": queue.revision,
+            "action": "pause",
+        })
+    with pytest.raises(ValueError, match="this project's work roster"):
+        work.queue_detail(selected.id, foreign.id)
 
 
 def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
