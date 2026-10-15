@@ -2811,6 +2811,10 @@ class ProviderProfile(Entity):
     enabled: bool = True
     is_local: bool = False
     secret_ref: str | None = None
+    # OpenRouter account-credit checks require an administrative key that must
+    # never be used for model inference. Keep its reference separate from the
+    # ordinary provider credential.
+    openrouter_management_secret_ref: str | None = None
     model_allowlist: list[str] = Field(default_factory=list)
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     capability_verifications: dict[str, ProviderCapabilityVerification] = Field(
@@ -2819,7 +2823,7 @@ class ProviderProfile(Entity):
     privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("secret_ref")
+    @field_validator("secret_ref", "openrouter_management_secret_ref")
     @classmethod
     def secret_must_be_an_environment_reference(cls, value: str | None) -> str | None:
         if value is not None and not re.fullmatch(
@@ -2840,6 +2844,13 @@ class ProviderProfile(Entity):
 
     @model_validator(mode="after")
     def provider_policy_is_coherent(self) -> "ProviderProfile":
+        if self.openrouter_management_secret_ref is not None:
+            if self.provider_type != "openrouter":
+                raise ValueError("management credentials require an OpenRouter profile")
+            if self.openrouter_management_secret_ref == self.secret_ref:
+                raise ValueError(
+                    "OpenRouter management and inference credentials must be separate"
+                )
         if self.privacy.local_only and not self.is_local:
             raise ValueError("a local-only provider profile must be marked local")
         default_model = self.metadata.get("default_model")
@@ -4012,6 +4023,155 @@ class ChatGoal(Entity):
                 0.0, ((now or utc_now()) - self.active_since).total_seconds()
             )
         return elapsed
+
+
+class ButlerGoalWatch(Entity):
+    """Core's durable oversight state for one started conversation goal."""
+
+    entity_kind: ClassVar[str] = "butler_goal_watches"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    goal_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    parent_goal_id: str | None = Field(default=None, max_length=200)
+    status: ChatGoalStatus
+    progress_due_at: datetime | None = None
+    deadline_generation: int = Field(default=0, ge=0)
+    overdue_emitted_generation: int | None = Field(default=None, ge=0)
+    last_progress_at: datetime | None = None
+    closed_at: datetime | None = None
+    report_capability: Literal["validated", "turn_output_only", "unavailable"] = (
+        "unavailable"
+    )
+    coverage_reason: str = Field(max_length=500)
+
+
+class ButlerProjectState(Entity):
+    """The replay cursor and lease for one project's oversight worker."""
+
+    entity_kind: ClassVar[str] = "butler_project_states"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    last_event_sequence: int = Field(default=0, ge=0)
+    last_review_sequence: int = Field(default=0, ge=0)
+    last_review_requested_at: datetime | None = None
+    lease_owner: str | None = Field(default=None, max_length=200)
+    lease_expires_at: datetime | None = None
+
+
+class ButlerIncident(Entity):
+    """One project-scoped concern keyed by the underlying problem."""
+
+    entity_kind: ClassVar[str] = "butler_incidents"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    incident_key: str = Field(min_length=1, max_length=300)
+    status: Literal["open", "acknowledged", "resolved"] = "open"
+    source: str = Field(min_length=1, max_length=80)
+    verification_state: str = Field(min_length=1, max_length=80)
+    summary: str = Field(min_length=1, max_length=1000)
+    impact: str = Field(default="", max_length=1000)
+    next_action: str = Field(default="", max_length=1000)
+    evidence_refs: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    evidence_summary: list[str] = Field(default_factory=list, max_length=8)
+    goal_ids: list[str] = Field(default_factory=list, max_length=100)
+    session_ids: list[str] = Field(default_factory=list, max_length=100)
+    observed_at: datetime = Field(default_factory=utc_now)
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+    @field_validator("evidence_summary")
+    @classmethod
+    def evidence_summary_is_bounded(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() or len(value) > 300 for value in values):
+            raise ValueError("incident evidence summaries require 1 to 300 characters")
+        return values
+
+
+class ButlerDecision(Entity):
+    """A cited semantic assessment; it never grants or performs an action."""
+
+    entity_kind: ClassVar[str] = "butler_decisions"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    source_event_id: str = Field(min_length=1, max_length=200)
+    source_sequence: int = Field(ge=1)
+    source_event_type: str = Field(min_length=1, max_length=100)
+    goal_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    actor_role: Literal["main_agent", "subagent"]
+    status: Literal["reviewed", "unavailable"]
+    choice: Literal["observe", "ask", "steer", "escalate", "unavailable"]
+    summary: str = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=1, max_length=900)
+    impact: str = Field(default="", max_length=500)
+    next_action: str = Field(default="", max_length=500)
+    why_now: str = Field(default="", max_length=500)
+    evidence_refs: list[dict[str, str]] = Field(default_factory=list, max_length=8)
+    source_verification_state: str = Field(min_length=1, max_length=80)
+    model_provider_id: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=500)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+    reviewed_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def outcome_is_coherent(self) -> "ButlerDecision":
+        if (self.status == "unavailable") != (self.choice == "unavailable"):
+            raise ValueError("unavailable review must use the unavailable choice")
+        if self.status == "reviewed" and not self.evidence_refs:
+            raise ValueError("a semantic decision requires cited evidence")
+        if self.choice == "escalate" and not self.why_now:
+            raise ValueError("escalation requires a reason to notify now")
+        return self
+
+
+class ButlerAgentReport(Entity):
+    """One schema-checked agent claim bound to Core's owning chat turn."""
+
+    entity_kind: ClassVar[str] = "butler_agent_reports"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    goal_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    turn_id: str = Field(min_length=1, max_length=200)
+    report_type: Literal["progress", "attention"]
+    source: Literal["provider_tool", "harness_adapter"]
+    actor_role: Literal["main_agent", "subagent"]
+    idempotency_key: str = Field(min_length=1, max_length=300)
+    details: dict[str, Any]
+    evidence_refs: list[dict[str, str]] = Field(default_factory=list, max_length=10)
+    reported_at: datetime = Field(default_factory=utc_now)
+
+
+class ButlerAccountCredit(Entity):
+    """Latest observed OpenRouter account balance for one watched project."""
+
+    entity_kind: ClassVar[str] = "butler_account_credits"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    account_key: str = Field(min_length=1, max_length=100)
+    provider_id: str = Field(min_length=1, max_length=200)
+    provider_ids: list[str] = Field(default_factory=list, max_length=100)
+    observation_key: str = Field(min_length=1, max_length=100)
+    total_credits_usd: float
+    total_usage_usd: float
+    remaining_usd: float
+    observed_at: datetime
+    threshold_state: Literal["above", "at_or_below"]
+
+
+class ButlerHarnessQuota(Entity):
+    """Latest authoritative percentage for one project harness quota window."""
+
+    entity_kind: ClassVar[str] = "butler_harness_quotas"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    harness_profile_id: str = Field(min_length=1, max_length=200)
+    window_id: str = Field(min_length=1, max_length=160)
+    window_label: str = Field(min_length=1, max_length=160)
+    window_instance: str = Field(min_length=1, max_length=100)
+    observation_key: str = Field(min_length=1, max_length=100)
+    source: str = Field(min_length=1, max_length=100)
+    used_percent: float = Field(ge=0, le=100)
+    remaining_percent: float = Field(ge=0, le=100)
+    observed_at: datetime
+    resets_at: datetime | None = None
+    threshold_state: Literal["above", "at_or_below"]
 
 
 class ChatGoalUsageCharge(Entity):
@@ -5236,6 +5396,13 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ScopeImport,
     ChatSession,
     ChatGoal,
+    ButlerGoalWatch,
+    ButlerProjectState,
+    ButlerIncident,
+    ButlerDecision,
+    ButlerAgentReport,
+    ButlerAccountCredit,
+    ButlerHarnessQuota,
     ChatGoalUsageCharge,
     ChatBookmark,
     ChatWorkingNotes,
