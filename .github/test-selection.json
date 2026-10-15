@@ -1,28 +1,25 @@
 {
-  "change_digest": "ba85137d178d3f77b1d4ce3bb17455f230c73fcc7d002c12f7445e8b32ecf80d",
-  "reviewed_by": "Codex scoped Butler mobile table review",
-  "reason": "Butler renders Core-saved Markdown replies in a narrow panel. The component tests cover transcript interaction, eight selected assistant popup browser cases cover table readability, local horizontal scrolling, and reload across desktop Chromium and six mobile Chromium/WebKit widths, and one disposable LAN Core WebKit case verifies the durable message path.",
-  "exclusions": "No Python, native, provider, harness, or unrelated UI tests: only the Butler reply renderer and CSS change. Full suites are excluded. Physical iPhone testing remains an operator acceptance gate.",
+  "change_digest": "3cb920f34fc14d3ab3682e5ca27fcde11fcbc2e745758e6be7ee0523b4fe8e4b",
+  "reviewed_by": "Codex focused Butler semantic memory review",
+  "reason": "Butler now selects durable memories with its model and saves them through a provenance-checked Core capability. Python memory tests cover the gateway, source validation, selected-project scope, persistence, and next-turn recall. The two touched UI component files cover an open Memory panel refreshing after a Butler turn and Voice delegation to the saved Butler session. Three selected production LAN real-Core cases cover model tool save, the visible Memory list, reload, and desktop/mobile browser behavior.",
+  "exclusions": "No native tests or unrelated Python and UI modules changed. Full suites are excluded. Physical iPhone microphone and live GPT-Live/Codex model judgment are separate operator acceptance gates; the selected tests exercise the delegated chat path with a deterministic model stub.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 27,
+    "python": 13,
+    "frontend": 34,
     "native": 0,
-    "playwright": 17
+    "playwright": 3
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_butler_memory.py"
+  ],
   "frontend": [
+    "ui/src/components/ButlerMemory.test.tsx",
     "ui/src/components/NebulaControlAssistant.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:ask-nebula-popup/desktop",
-    "entry:ask-nebula-popup/compact",
-    "entry:ask-nebula-popup/mobile-chromium-small",
-    "entry:ask-nebula-popup/mobile-chromium-ledger-390",
-    "entry:ask-nebula-popup/mobile-chromium-wide",
-    "entry:ask-nebula-popup/mobile-webkit-small",
-    "entry:ask-nebula-popup/mobile-webkit",
-    "entry:ask-nebula-popup/mobile-webkit-wide",
-    "entry:butler-response-table/assistant-real-webkit-390"
+    "entry:control-assistant-work/assistant-real-desktop",
+    "entry:control-assistant-work/assistant-real-chromium-390",
+    "entry:control-assistant-work/assistant-real-webkit-390"
   ]
 }
