@@ -9786,7 +9786,10 @@ class HarnessRuntimeService:
                         else {}
                     ),
                     **(
-                        {"command_runtime_enabled": False, "browser_runtime_enabled": False}
+                        {
+                            "command_runtime_enabled": False,
+                            "browser_runtime_enabled": False,
+                        }
                         if butler_recovery_case_id is not None
                         else {}
                     ),
