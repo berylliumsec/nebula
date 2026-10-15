@@ -24,3 +24,31 @@ the bundled product knowledge index, and verify that Core synchronizes its curre
 source digest into the Chroma product-help collection. Add a focused regression
 check so the assistant can discover and use the feature or setting. Do not call a
 browser action saved until Core or the device reports the observed result.
+
+## Coordinate Core deployments with Butler
+
+Before restarting or replacing a running Core, enumerate the projects it serves
+and contact Butler in each project with active assistant or mission work. Find or
+create its project-scoped conversation through authenticated `GET` or `POST`
+`/api/v1/chat/control-assistant/session`, then send the deployment request through
+`POST /api/v1/chat/completions` with `control_assistant: true`. Ask Butler
+to wind down active main agents, pause running Core-owned goals and queued
+continuations it can safely pause, and report the exact projects, parent chats,
+goals, missions, and queues it changed. Butler coordinates with parent agents;
+it does not message their children directly. Keep that inventory in the
+deployment record, including which items were already paused beforehand.
+
+Wait for Butler's turn to finish, then read the authoritative Core state and
+verify the pause results before restarting. Recheck for newly active work at the
+restart boundary. If a native harness goal, mission, or in-flight turn has no
+safe pause control, let it reach a safe stopping point or defer deployment and
+report the blocker. Do not silently substitute stop, cancel, or approval for
+pause, and do not treat Butler's acknowledgement alone as proof of state change.
+
+After the new or restored Core passes deployment health checks, contact the same
+project Butler sessions and ask it to resume only the exact work it paused for
+this deployment. Have Butler read fresh state and revisions first, then verify the
+result in Core. Preserve work that was paused before the deployment; leave work
+blocked by an approval, limit, or uncertain effect paused and report it for
+operator resolution. Never put Core authentication secrets in the deployment
+record or PR.
