@@ -4442,6 +4442,10 @@ class CodexAppServerAdapter(HarnessAdapter):
                 native_capabilities,
                 gateway_tools=request.gateway_tools,
             )
+            trusted_butler_gateway = (
+                managed_gateway
+                and request.session.metadata.get("control_assistant") is True
+            )
             sandbox = (
                 "danger-full-access"
                 if _unrestricted_harness_session(request.session)
@@ -4482,6 +4486,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                             "config": _codex_thread_config(
                                 effective_mcp,
                                 native_capabilities=native_capabilities,
+                                trusted_butler_gateway=trusted_butler_gateway,
                             ),
                             "developerInstructions": developer_instructions,
                             # Nebula never reads thread.turns, and a long history
@@ -4515,6 +4520,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                         "config": _codex_thread_config(
                             effective_mcp,
                             native_capabilities=native_capabilities,
+                            trusted_butler_gateway=trusted_butler_gateway,
                         ),
                         "developerInstructions": developer_instructions,
                         **(
@@ -4794,6 +4800,7 @@ def _codex_thread_config(
     config: dict[str, dict[str, Any]],
     *,
     native_capabilities: HarnessNativeCapabilities | None = None,
+    trusted_butler_gateway: bool = False,
 ) -> dict[str, Any]:
     """Convert the gateway config to the app-server per-thread config shape."""
 
@@ -4806,6 +4813,14 @@ def _codex_thread_config(
             "tool_timeout_sec": item["tool_timeout_seconds"],
             "default_tools_approval_mode": "auto",
         }
+        if name == "nebula" and trusted_butler_gateway:
+            # Butler's change gateway is in-process and delegates to Core's
+            # project-scoped handlers. Codex's separate MCP prompt cannot be
+            # answered when the project deliberately uses no tool prompts.
+            # Keep the override on this one tool, not on arbitrary MCP tools.
+            values["tools"] = {
+                "nebula.capabilities.change": {"approval_mode": "approve"}
+            }
         if item["transport"] == McpTransport.STDIO.value:
             values.update(
                 command=item["command"],

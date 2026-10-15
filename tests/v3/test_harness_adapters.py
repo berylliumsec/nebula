@@ -1153,7 +1153,11 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
     asyncio.run(scenario())
 
 
-def test_codex_project_never_policy_auto_approves_native_and_gateway_tools(tmp_path):
+@pytest.mark.parametrize("control_assistant", [False, True])
+@pytest.mark.parametrize("resumed", [False, True])
+def test_codex_project_never_policy_keeps_butler_change_callable(
+    tmp_path, control_assistant: bool, resumed: bool
+):
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
         profile = HarnessProfile(
@@ -1168,7 +1172,11 @@ def test_codex_project_never_policy_auto_approves_native_and_gateway_tools(tmp_p
             engagement_id="eng-never",
             harness_profile_id=profile.id,
             model="gpt-test",
-            metadata={"approval_policy": "never"},
+            external_session_id="thread-fixture" if resumed else None,
+            metadata={
+                "approval_policy": "never",
+                "control_assistant": control_assistant,
+            },
         )
 
         connection = await FixtureCodexAdapter(rpc).open(
@@ -1191,10 +1199,20 @@ def test_codex_project_never_policy_auto_approves_native_and_gateway_tools(tmp_p
             )
         )
 
-        thread_start = next(
-            params for method, params in rpc.calls if method == "thread/start"
+        thread_request = next(
+            params
+            for method, params in rpc.calls
+            if method == ("thread/resume" if resumed else "thread/start")
         )
-        assert thread_start["approvalPolicy"] == "never"
+        assert thread_request["approvalPolicy"] == "never"
+        gateway = thread_request["config"]["mcp_servers"]["nebula"]
+        assert gateway["default_tools_approval_mode"] == "auto"
+        if control_assistant:
+            assert gateway["tools"] == {
+                "nebula.capabilities.change": {"approval_mode": "approve"}
+            }
+        else:
+            assert "tools" not in gateway
         assert connection.approval_policy == "never"
         await connection.close()
 
