@@ -4742,6 +4742,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   useEffect(() => {
     if ((view !== "chat" && view !== "browser") || !api || !engagement || requestedSessionId || sessionId || conversationOpen || !sessions.length) return;
+    // A Butler work link can change the URL before this queued effect runs.
+    // Only auto-select a recent chat while the URL still names a chat view.
+    const currentView = sessionViewFromParam(latestSearchParams().get("view"));
+    if (currentView !== "chat" && currentView !== "browser") return;
     const newest = sessions[0];
     const initial = newest.isSubagent && newest.parentSessionId
       ? sessions.find(session => session.id === newest.parentSessionId && !session.isSubagent) ?? newest
