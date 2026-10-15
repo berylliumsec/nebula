@@ -1,25 +1,27 @@
 {
-  "change_digest": "3cb920f34fc14d3ab3682e5ca27fcde11fcbc2e745758e6be7ee0523b4fe8e4b",
-  "reviewed_by": "Codex focused Butler semantic memory review",
-  "reason": "Butler now selects durable memories with its model and saves them through a provenance-checked Core capability. Python memory tests cover the gateway, source validation, selected-project scope, persistence, and next-turn recall. The two touched UI component files cover an open Memory panel refreshing after a Butler turn and Voice delegation to the saved Butler session. Three selected production LAN real-Core cases cover model tool save, the visible Memory list, reload, and desktop/mobile browser behavior.",
-  "exclusions": "No native tests or unrelated Python and UI modules changed. Full suites are excluded. Physical iPhone microphone and live GPT-Live/Codex model judgment are separate operator acceptance gates; the selected tests exercise the delegated chat path with a deterministic model stub.",
+  "change_digest": "a5a768ca65e8a85f6746ea30a0245d07542787789b56652c6532becf06757f8e",
+  "reviewed_by": "Codex focused Butler Act recovery review",
+  "reason": "Butler adds per-project Act authority, Core-observed immediate subagent failure and periodic recovery cases, bounded capability use, parent-only work routing, exact-task queue and child-result verification, and an Oversight status surface. The shared provider tool broker and harness gateway record failure signals, so selected Core tests cover both paths, isolated background harness authority, event deduplication, policy boundaries, crash handling, and verification. UI tests cover policy saving and case display. The selected real-Core production LAN journey covers authority changes, reload, touch geometry, and accessibility on desktop and mobile browser engines.",
+  "exclusions": "Full suites and unrelated Python/UI modules are excluded. No native app source changed, so native tests are excluded. The browser journey uses a deterministic local model stub; a real harness-to-provider automatic repair and physical iPhone are separate acceptance evidence, not inferred from this selection.",
   "expected_tests": {
-    "python": 13,
-    "frontend": 34,
+    "python": 24,
+    "frontend": 25,
     "native": 0,
     "playwright": 3
   },
   "python": [
-    "tests/v3/test_butler_memory.py"
+    "tests/v3/test_butler_recovery.py",
+    "tests/v3/test_butler_capabilities.py",
+    "tests/v3/test_butler_authority.py"
   ],
   "frontend": [
-    "ui/src/components/ButlerMemory.test.tsx",
-    "ui/src/components/NebulaControlAssistant.test.tsx"
+    "ui/src/api/butlerOverview.test.ts",
+    "ui/src/components/ButlerOversight.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:control-assistant-work/assistant-real-desktop",
-    "entry:control-assistant-work/assistant-real-chromium-390",
-    "entry:control-assistant-work/assistant-real-webkit-390"
+    "entry:butler-oversight/assistant-real-desktop",
+    "entry:butler-oversight/assistant-real-chromium-390",
+    "entry:butler-oversight/assistant-real-webkit-390"
   ]
 }

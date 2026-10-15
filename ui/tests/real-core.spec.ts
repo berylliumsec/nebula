@@ -6723,6 +6723,12 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     const delegateResponse = await api.get(`engagements/${projectId}/butler/authority`);
     expect(delegateResponse.ok(), await delegateResponse.text()).toBe(true);
     expect(await delegateResponse.json()).toMatchObject({authority: "delegate", delegate_actions: ["pause_urgent_machine_blocker"]});
+    await authoritySelect.selectOption("act");
+    await oversight.getByRole("button", {name: "Save authority"}).click();
+    await expect(oversight.getByText("Authority saved for this project.")).toBeVisible();
+    const actResponse = await api.get(`engagements/${projectId}/butler/authority`);
+    expect(actResponse.ok(), await actResponse.text()).toBe(true);
+    expect(await actResponse.json()).toMatchObject({authority: "act", delegate_actions: ["pause_urgent_machine_blocker"]});
     await page.reload();
     await openNebulaAssistantFromShell(page);
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
@@ -6731,7 +6737,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     await expect(restored.getByText("SSH timed out.")).toBeVisible();
     await expect(restored.getByRole("heading", {name: /Needs attention/})).toContainText("1 acknowledged");
     await restored.locator("summary").filter({hasText: "Oversight settings"}).click();
-    await expect(restored.getByRole("combobox", {name: "Butler authority"})).toHaveValue("delegate");
+    await expect(restored.getByRole("combobox", {name: "Butler authority"})).toHaveValue("act");
     await expect(restored.getByRole("checkbox", {name: /Allow urgent pause of a running main goal/})).toBeChecked();
     const offeredTools = stub.requests.flatMap(item => Array.isArray(item.tools) ? item.tools as Array<{function?: {name?: string}}> : []);
     expect(offeredTools.some(tool => tool.function?.name === "report_attention")).toBe(true);
