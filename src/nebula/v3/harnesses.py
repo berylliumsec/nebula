@@ -95,6 +95,7 @@ from .chat_subagents import (
 from .chat_agent_messages import AgentMessageService
 from .work import WorkCheckIn, WorkCreate, WorkService
 from .automation_runtime import AutomationRuntimeUnavailable
+from .butler_memory import BUTLER_MEMORY_INSTRUCTION
 from .credentials import CredentialError, CredentialStore
 from .artifacts import ArtifactStore
 from .domain import (
@@ -11023,6 +11024,7 @@ class HarnessRuntimeService:
             "Do not claim to have changed a Nebula setting from this conversation."
         )
         if control_assistant and self.butler_memory is not None:
+            assistant_scope += "\n\n" + BUTLER_MEMORY_INSTRUCTION
             assistant_scope += self.butler_memory.turn_context(
                 engagement_id, clean_prompt
             )
