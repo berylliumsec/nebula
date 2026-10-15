@@ -11546,7 +11546,14 @@ def create_app(
                     continue
             try:
                 return credentials.resolve(profile.secret_ref).get_secret_value()
-            except CredentialError:
+            except CredentialError as caught_error:
+                record_caught_exception(
+                    "api",
+                    "api.voice.openai_credential_unavailable",
+                    "An enabled OpenAI provider credential could not be used for Voice.",
+                    caught_error,
+                    stage="voice-credential",
+                )
                 continue
         key = os.environ.get("OPENAI_API_KEY", "").strip()
         if key:

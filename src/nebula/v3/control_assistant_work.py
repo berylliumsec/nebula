@@ -628,6 +628,7 @@ class ControlAssistantWork:
             try:
                 _, title, url = self._approval(project_id, approval.id)
             except (NotFoundError, ValueError):
+                # diagnostic-expected: a pending item can become stale or leave this project between list and lookup.
                 continue
             items.append(
                 {
@@ -656,6 +657,7 @@ class ControlAssistantWork:
             try:
                 _, title, url = self._question(project_id, question.id)
             except (NotFoundError, ValueError):
+                # diagnostic-expected: a pending item can become stale or leave this project between list and lookup.
                 continue
             items.append(
                 {
