@@ -20,6 +20,14 @@ from .domain import NebulaModel, ProviderProfile, utc_now
 
 OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 _MAX_CREDIT_VALUE = Decimal("1000000000000")
+OpenRouterCreditUnavailableReason = Literal[
+    "management_credential_missing",
+    "management_credential_unavailable",
+    "management_credential_rejected",
+    "provider_disabled",
+    "upstream_unavailable",
+    "invalid_upstream_response",
+]
 
 
 class OpenRouterCreditSnapshot(NebulaModel):
@@ -30,17 +38,7 @@ class OpenRouterCreditSnapshot(NebulaModel):
     total_credits_usd: float | None = None
     total_usage_usd: float | None = None
     remaining_usd: float | None = None
-    reason_code: (
-        Literal[
-            "management_credential_missing",
-            "management_credential_unavailable",
-            "management_credential_rejected",
-            "provider_disabled",
-            "upstream_unavailable",
-            "invalid_upstream_response",
-        ]
-        | None
-    ) = None
+    reason_code: OpenRouterCreditUnavailableReason | None = None
 
     @model_validator(mode="after")
     def complete_when_observed(self) -> "OpenRouterCreditSnapshot":
@@ -90,7 +88,9 @@ async def read_openrouter_credits(
         raise ValueError("account credits are available only for OpenRouter profiles")
     checked_at = utc_now()
 
-    def unavailable(reason: str) -> OpenRouterCreditSnapshot:
+    def unavailable(
+        reason: OpenRouterCreditUnavailableReason,
+    ) -> OpenRouterCreditSnapshot:
         return OpenRouterCreditSnapshot(
             provider_id=profile.id,
             status="unavailable",

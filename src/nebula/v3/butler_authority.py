@@ -8,7 +8,7 @@ text. Action bodies are fixed Core templates and go through phase-1 controls.
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from fastapi import APIRouter, HTTPException
 from pydantic import Field, model_validator
@@ -31,6 +31,7 @@ from .domain import (
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
+    Entity,
     Engagement,
     EngagementStatus,
     NebulaModel,
@@ -100,7 +101,10 @@ def authority_view(project_id: str, policy: ButlerAuthorityPolicy | None) -> dic
     }
 
 
-def _entity(transaction: Any, model: type, entity_id: str):
+EntityT = TypeVar("EntityT", bound=Entity)
+
+
+def _entity(transaction: Any, model: type[EntityT], entity_id: str) -> EntityT | None:
     from .database import EntityRow
 
     row = transaction.session.get(EntityRow, entity_id)
@@ -296,7 +300,14 @@ class ButlerAuthorityService:
             or goal.status != ChatGoalStatus.RUNNING
         ):
             return None
-        kind: str | None = None
+        kind: (
+            Literal[
+                "request_parent_status",
+                "request_parent_plan_reassessment",
+                "pause_urgent_machine_blocker",
+            ]
+            | None
+        ) = None
         report_id: str | None = None
         if (
             event.event_type == "goal.progress_overdue"

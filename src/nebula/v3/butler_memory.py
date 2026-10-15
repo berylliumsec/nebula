@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -278,10 +279,11 @@ class ButlerMemoryService:
             return False
 
     def _embed(self, texts: list[str]) -> list[list[float]] | None:
-        if not self._embedding_ready():
+        source = self.embedding_index
+        if source is None or not self._embedding_ready():
             return None
         try:
-            return self.embedding_index.embed(texts)
+            return source.embed(texts)
         except Exception as exc:
             self._vector_error = True
             record_diagnostic(
@@ -991,7 +993,7 @@ class ButlerMemoryService:
                 stage="memory_vector_write",
             )
 
-    def _sync_index(self, rows: list[sqlite3.Row]) -> None:
+    def _sync_index(self, rows: Sequence[sqlite3.Row]) -> None:
         if not self._embedding_ready():
             return
         collection = self._vector_collection()

@@ -134,17 +134,21 @@ def record_completed_provider_turn(
             return False
     if len({turn.id for turn in turns[:3]}) != 3:
         return False
-    if any(
-        older.completed_at > newer.started_at
-        for newer, older in zip(calls[:2], calls[1:3], strict=True)
-    ):
-        return False
+    for newer, older in zip(calls[:2], calls[1:3], strict=True):
+        if (
+            newer.started_at is None
+            or older.completed_at is None
+            or older.completed_at > newer.started_at
+        ):
+            return False
     # The fourth matching call means an earlier completion already crossed the
     # threshold and emitted the one incident for this contiguous streak.
     if len(calls) == 4 and _same_failed_read(calls[3], goal, turns[3]):
         if (
             calls[3].tool_name == first.tool_name
             and calls[3].arguments == first.arguments
+            and calls[3].completed_at is not None
+            and calls[2].started_at is not None
             and calls[3].completed_at <= calls[2].started_at
             and turns[3].id not in {turn.id for turn in turns[:3]}
         ):

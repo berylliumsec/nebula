@@ -290,7 +290,15 @@ def record_harness_quota(
                         engagement_id=engagement_id,
                         harness_profile_id=profile_id,
                         window_id=snapshot.window_id,
-                        **values,
+                        window_label=snapshot.window_label,
+                        window_instance=instance,
+                        observation_key=observation_key,
+                        source=snapshot.source,
+                        used_percent=snapshot.used_percent,
+                        remaining_percent=snapshot.remaining_percent,
+                        observed_at=snapshot.observed_at,
+                        resets_at=snapshot.resets_at,
+                        threshold_state="at_or_below" if low else "above",
                     )
                 )
             else:

@@ -58,8 +58,10 @@ from .event_history import (
     EventHistoryPurger,
 )
 from .domain import (
+    AgentAttempt,
     AgentRun,
     Artifact,
+    ChatGoal,
     ChatMessage,
     ChatTurn,
     ENTITY_MODEL_BY_KIND,
@@ -424,24 +426,31 @@ class StoreTransaction:
             # such; otherwise the change itself is invalid.
             _row_to_entity(row, model)
             raise
-        goal_transition = model.entity_kind == "chat_goals" and (
-            previous_status != updated.status.value
+        updated_goal = updated if isinstance(updated, ChatGoal) else None
+        updated_turn = updated if isinstance(updated, ChatTurn) else None
+        goal_transition = (
+            updated_goal is not None and previous_status != updated_goal.status.value
         )
         completed_goal_turn = (
-            model.entity_kind == "chat_turns"
+            updated_turn is not None
             and previous_status != "complete"
-            and updated.status.value == "complete"
-            and updated.backend.value == "provider"
-            and updated.goal_id is not None
+            and updated_turn.status.value == "complete"
+            and updated_turn.backend.value == "provider"
+            and updated_turn.goal_id is not None
         )
         before_goal = None
-        if goal_transition or completed_goal_turn:
+        transition_subject: ChatGoal | ChatTurn | None = None
+        if goal_transition:
+            transition_subject = updated_goal
+        elif completed_goal_turn:
+            transition_subject = updated_turn
+        if transition_subject is not None:
             from .butler_oversight import project_stream_id
 
-            self.lock_operation_stream(project_stream_id(updated.engagement_id))
+            self.lock_operation_stream(
+                project_stream_id(transition_subject.engagement_id)
+            )
             if goal_transition:
-                from .domain import ChatGoal
-
                 before_goal = ChatGoal.model_validate(row.payload)
         result = self.session.execute(
             update(EntityRow)
@@ -475,17 +484,17 @@ class StoreTransaction:
             and previous_title != payload.get("title")
         ):
             self.chat_activity_changed = True
-        if goal_transition:
+        if goal_transition and updated_goal is not None:
             from .butler_oversight import record_goal_transition
 
             assert before_goal is not None
-            record_goal_transition(self, before_goal, updated)
-        if completed_goal_turn:
+            record_goal_transition(self, before_goal, updated_goal)
+        if completed_goal_turn and updated_turn is not None:
             from .butler_tool_failures import record_completed_provider_turn
 
-            record_completed_provider_turn(self, updated)
+            record_completed_provider_turn(self, updated_turn)
         if (
-            model.entity_kind == "agent_attempts"
+            isinstance(updated, AgentAttempt)
             and isinstance(previous_tokens, int)
             and updated.tokens_used > previous_tokens
         ):
@@ -676,9 +685,9 @@ class NebulaStore:
                         stage="storage",
                     )
         for engagement_id in transaction.oversight_projects_changed:
-            for listener in self._oversight_listeners:
+            for oversight_listener in self._oversight_listeners:
                 try:
-                    listener(engagement_id)
+                    oversight_listener(engagement_id)
                 except Exception as exc:
                     record_caught_exception(
                         "storage",
@@ -688,9 +697,9 @@ class NebulaStore:
                         stage="storage",
                     )
         for profile_id in transaction.provider_usage_profiles_changed:
-            for listener in self._provider_usage_listeners:
+            for provider_usage_listener in self._provider_usage_listeners:
                 try:
-                    listener(profile_id)
+                    provider_usage_listener(profile_id)
                 except Exception as exc:
                     record_caught_exception(
                         "storage",

@@ -338,7 +338,7 @@ def build_review_packet(
         goal = store.get(ChatGoal, payload.goal_id)
         session = store.get(ChatSession, payload.session_id)
     except NotFoundError:
-        if payload.actor_role not in {"main_agent", "subagent"}:
+        if payload.actor_role == "core":
             raise ConflictError("review event has no project-bound actor") from None
         refs = [
             ButlerEvidenceRef(kind="goal", id=payload.goal_id, project_id=project_id),

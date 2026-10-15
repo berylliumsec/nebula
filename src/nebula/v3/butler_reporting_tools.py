@@ -128,6 +128,7 @@ class ButlerReportBroker:
                 "goal reports require a Core-owned assistant turn",
                 rule="butler.goal_report_turn",
             )
+        body: GoalProgressReport | GoalAttentionReport
         if invocation.tool_name == "report_progress":
             body = GoalProgressReport.model_validate(invocation.arguments)
         elif invocation.tool_name == "report_attention":

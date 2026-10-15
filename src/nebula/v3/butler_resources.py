@@ -159,7 +159,13 @@ def record_openrouter_credit(
 ) -> int:
     """Commit each affected project's balance, event, and threshold transition."""
 
-    if snapshot.status != "observed" or snapshot.observed_at is None:
+    if (
+        snapshot.status != "observed"
+        or snapshot.observed_at is None
+        or snapshot.total_credits_usd is None
+        or snapshot.total_usage_usd is None
+        or snapshot.remaining_usd is None
+    ):
         return 0
     key = account_key(management_ref)
     observation_key = _hash(
@@ -209,7 +215,14 @@ def record_openrouter_credit(
                         id=state_id,
                         engagement_id=engagement_id,
                         account_key=key,
-                        **state_values,
+                        provider_id=provider_id,
+                        provider_ids=provider_ids,
+                        observation_key=observation_key,
+                        total_credits_usd=snapshot.total_credits_usd,
+                        total_usage_usd=snapshot.total_usage_usd,
+                        remaining_usd=snapshot.remaining_usd,
+                        observed_at=snapshot.observed_at,
+                        threshold_state="at_or_below" if low else "above",
                     )
                 )
             else:

@@ -13,7 +13,7 @@ import ipaddress
 import re
 from contextlib import suppress
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeVar
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -38,6 +38,7 @@ from .domain import (
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
+    Entity,
     Engagement,
     HarnessTurn,
     HarnessProfile,
@@ -49,6 +50,7 @@ from .domain import (
 from .storage import ConflictError, NebulaStore, NotFoundError
 
 if TYPE_CHECKING:
+    from .butler_authority import ButlerAuthorityService
     from .butler_memory import ButlerMemoryService
     from .butler_review import ButlerReviewer
     from .storage import StoreTransaction
@@ -228,7 +230,12 @@ def normalize_machine(value: str) -> str:
     return candidate
 
 
-def _entity_in_transaction(transaction: StoreTransaction, model: type, entity_id: str):
+EntityT = TypeVar("EntityT", bound=Entity)
+
+
+def _entity_in_transaction(
+    transaction: StoreTransaction, model: type[EntityT], entity_id: str
+) -> EntityT | None:
     row = transaction.session.get(EntityRow, entity_id)
     if row is None:
         return None
@@ -477,17 +484,17 @@ def _report_evidence(
     project_id: str,
     references: list[ReportEvidenceRef],
 ) -> list[ButlerEvidenceRef]:
-    kinds = {
-        "goal": ChatGoal,
-        "chat_turn": ChatTurn,
-        "harness_turn": HarnessTurn,
-        "artifact": Artifact,
-    }
     resolved: list[ButlerEvidenceRef] = []
     for reference in references:
-        record = _entity_in_transaction(
-            transaction, kinds[reference.kind], reference.id
-        )
+        record: ChatGoal | ChatTurn | HarnessTurn | Artifact | None
+        if reference.kind == "goal":
+            record = _entity_in_transaction(transaction, ChatGoal, reference.id)
+        elif reference.kind == "chat_turn":
+            record = _entity_in_transaction(transaction, ChatTurn, reference.id)
+        elif reference.kind == "harness_turn":
+            record = _entity_in_transaction(transaction, HarnessTurn, reference.id)
+        else:
+            record = _entity_in_transaction(transaction, Artifact, reference.id)
         if record is None or record.engagement_id != project_id:
             raise ConflictError(
                 "report evidence is missing or belongs to another project"
@@ -623,7 +630,9 @@ def ingest_agent_report(
 
     if not idempotency_key or len(idempotency_key) > 300:
         raise ValueError("a bounded report idempotency key is required")
-    report_type = "progress" if isinstance(body, GoalProgressReport) else "attention"
+    report_type: Literal["progress", "attention"] = (
+        "progress" if isinstance(body, GoalProgressReport) else "attention"
+    )
     report_id = _stable_id("butler-report", f"{turn_id}\0{idempotency_key}")
     details = body.model_dump(mode="json")
     with store.transaction(immediate=True) as transaction:
@@ -863,7 +872,7 @@ class ButlerOversightService:
         self.store = store
         self.reviewer = reviewer
         self.memory_service = memory_service
-        self.authority_service = None
+        self.authority_service: ButlerAuthorityService | None = None
         self.worker_id = f"butler-worker-{uuid4()}"
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -1464,31 +1473,33 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                     else "unknown",
                 }
             )
-        for resource in quota_states:
+        for quota in quota_states:
             try:
-                profile = service.store.get(HarnessProfile, resource.harness_profile_id)
-                available = profile.enabled
+                harness_profile = service.store.get(
+                    HarnessProfile, quota.harness_profile_id
+                )
+                available = harness_profile.enabled
             except NotFoundError:
                 # diagnostic-expected: a removed harness is shown as unavailable.
-                profile = None
+                harness_profile = None
                 available = False
             resources.append(
                 {
                     "kind": "harness_quota",
-                    "harness_profile_id": resource.harness_profile_id,
-                    "harness_name": profile.name if profile else "Harness quota",
+                    "harness_profile_id": quota.harness_profile_id,
+                    "harness_name": harness_profile.name
+                    if harness_profile
+                    else "Harness quota",
                     "status": "observed" if available else "unavailable",
-                    "remaining_percent": resource.remaining_percent
-                    if available
-                    else None,
-                    "observed_at": resource.observed_at if available else None,
-                    "threshold_state": resource.threshold_state
+                    "remaining_percent": quota.remaining_percent if available else None,
+                    "observed_at": quota.observed_at if available else None,
+                    "threshold_state": quota.threshold_state
                     if available
                     else "unknown",
-                    "window_id": resource.window_id,
-                    "window_label": resource.window_label,
-                    "resets_at": resource.resets_at if available else None,
-                    "source": resource.source,
+                    "window_id": quota.window_id,
+                    "window_label": quota.window_label,
+                    "resets_at": quota.resets_at if available else None,
+                    "source": quota.source,
                 }
             )
         state = service.store.find_entity(

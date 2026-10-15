@@ -83,7 +83,7 @@ def reserve_butler_session(
         bypass_permissions=bool(scope and scope.bypass_permissions),
     )
     with store.transaction() as transaction:
-        dialect = transaction.session.bind.dialect.name
+        dialect = transaction.session.get_bind().dialect.name
         if dialect == "sqlite":
             transaction.session.execute(text("BEGIN IMMEDIATE"))
         elif dialect == "postgresql":
@@ -109,29 +109,32 @@ def reserve_butler_session(
 
         if request.backend == ChatBackend.PROVIDER:
             assert request.provider_id is not None
-            profile = store.get(ProviderProfile, request.provider_id)
-            if not profile.enabled:
+            provider_profile = store.get(ProviderProfile, request.provider_id)
+            if not provider_profile.enabled:
                 raise ChatConfigurationError(
                     f"provider {request.provider_id!r} is disabled"
                 )
             model = (
                 request.model
-                or profile.metadata.get("default_model")
-                or next(iter(profile.model_allowlist), None)
+                or provider_profile.metadata.get("default_model")
+                or next(iter(provider_profile.model_allowlist), None)
             )
             if not isinstance(model, str) or not model:
                 raise ChatConfigurationError(
                     "Butler requires an explicit model or provider default model"
                 )
-            if profile.model_allowlist and model not in profile.model_allowlist:
+            if (
+                provider_profile.model_allowlist
+                and model not in provider_profile.model_allowlist
+            ):
                 raise ChatConfigurationError(
-                    f"model {model!r} is not allowed by provider {profile.id!r}"
+                    f"model {model!r} is not allowed by provider {provider_profile.id!r}"
                 )
             chat = ChatSession(
                 engagement_id=request.engagement_id,
                 title="Butler",
                 backend=ChatBackend.PROVIDER,
-                provider_profile_id=profile.id,
+                provider_profile_id=provider_profile.id,
                 model=model,
                 metadata={
                     "control_assistant": True,
@@ -140,16 +143,16 @@ def reserve_butler_session(
             )
         else:
             assert request.harness_profile_id is not None
-            profile = store.get(HarnessProfile, request.harness_profile_id)
+            harness_profile = store.get(HarnessProfile, request.harness_profile_id)
             harness_runtime._validate_harness_privacy(
                 request.engagement_id,
-                profile,
+                harness_profile,
                 request.mcp_server_ids,
                 allow_remote_mcp=request.allow_cloud_tool_results,
             )
             session = harness_runtime.create_session(
                 engagement_id=request.engagement_id,
-                profile_id=profile.id,
+                profile_id=harness_profile.id,
                 model=request.model,
                 mcp_server_ids=request.mcp_server_ids,
                 reasoning_effort=request.harness_reasoning_effort,
@@ -166,7 +169,7 @@ def reserve_butler_session(
                 engagement_id=request.engagement_id,
                 title="Butler",
                 backend=ChatBackend.HARNESS,
-                harness_profile_id=profile.id,
+                harness_profile_id=harness_profile.id,
                 harness_session_id=session.id,
                 model=session.model,
                 metadata={
