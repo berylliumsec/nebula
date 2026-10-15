@@ -1,5 +1,4 @@
 import { createContext, useContext } from "react";
-import { Bot } from "lucide-react";
 
 export interface NebulaAssistantLauncherState {
   opened: boolean;
@@ -14,6 +13,6 @@ export function NebulaAssistantLauncherButton({ mobile = false }: { mobile?: boo
   const label = assistant.visible ? "Toggle Butler" : assistant.opened ? "Show Butler" : "Open Butler";
   return <button className={mobile ? undefined : "icon-button toolbar-button nebula-assistant-trigger"} type="button" aria-label={label}
     aria-expanded={assistant.visible} aria-controls="nebula-assistant-panel" title="Butler" onClick={assistant.toggle}>
-    <Bot size={mobile ? 21 : 19} aria-hidden="true" />{mobile && <span>Butler</span>}
+    <img className="nebula-assistant-mark" src="/nebula-logo.svg" width="18" height="29" alt="" aria-hidden="true" />{mobile && <span>Butler</span>}
   </button>;
 }

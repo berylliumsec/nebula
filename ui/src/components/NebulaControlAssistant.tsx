@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Bot, GripHorizontal, Minimize2, Send, Settings2, Square, X } from "lucide-react";
+import { GripHorizontal, Minimize2, Send, Settings2, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
@@ -797,7 +797,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, toggle: () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } } }}>
     {children}
-    {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Butler" : "Open Butler"} title="Butler" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}
+    {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Butler" : "Open Butler"} title="Butler" onClick={() => { setOpen(true); setHidden(false); }}><img src="/nebula-logo.svg" width="22" height="36" alt="" aria-hidden="true" /></button> : null}
     {panelContent && createPortal(panelContent, document.body)}
     {voiceStart && api && engagement && createPortal(<NebulaVoice api={api} project={{ id: engagement.id, name: engagement.name }} initialMicrophone={voiceStart.microphone} onDelegate={delegateVoice} onExit={() => { setVoiceStart(undefined); setHidden(false); }} />, document.body)}
   </NebulaAssistantLauncherContext.Provider>;

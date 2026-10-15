@@ -21,11 +21,13 @@ First, I would like to thank Almighty God, who is the source of all knowledge. W
 - **Operator-controlled automation.** Set scope, approvals, and budgets for assistant and mission actions.
 - **Evidence through reporting.** Preserve hashed artifacts and execution provenance, link evidence to findings, and export reports or engagement bundles.
 
-## Nebula assistant
+## Butler
 
-<img src="docs/images/nebula-assistant-icon.svg" alt="Nebula assistant bot icon" width="36" height="36">
+<img src="ui/public/nebula-logo.svg" alt="Nebula logo used to open Butler" width="23" height="36">
 
-Find the bot icon in Nebula's upper-right corner. It helps you find and open settings or pages; with a connected model or harness, you can ask questions about Nebula and troubleshoot setup or workflow issues.
+Select the Nebula logo in the upper-right corner to open Butler. With a configured model or harness, Butler can answer questions, review the selected project's chats and goals, start or steer work, and manage settings and approvals. It shows delegated work separately from main agents; to redirect a child, ask Butler to guide its parent agent.
+
+![Nebula architecture: optional Mercury protects hosts; Butler coordinates agents inside Nebula's execution shell, alongside operator-provided skills, hooks, and software.](docs/images/nebula-butler-architecture.svg)
 
 ## Work
 

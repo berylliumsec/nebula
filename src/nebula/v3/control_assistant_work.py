@@ -44,6 +44,8 @@ from .domain import (
     ChatSubagent,
     Engagement,
     HarnessProfile,
+    HarnessKind,
+    HarnessSession,
     HarnessInteraction,
     HarnessInteractionStatus,
     HarnessTurnOrigin,
@@ -57,7 +59,7 @@ from .domain import (
     Task,
     ToolCallOrigin,
 )
-from .harnesses import HarnessRuntimeService
+from .harnesses import HarnessRuntimeService, _session_native_capabilities
 from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
@@ -331,11 +333,20 @@ SUBAGENT_TARGET_SCHEMA: dict[str, Any] = {
     "properties": {"subagent_id": {"type": "string", "minLength": 1, "maxLength": 200}},
     "required": ["subagent_id"],
 }
+NATIVE_SUBAGENT_TARGET_SCHEMA: dict[str, Any] = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "turn_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+    "required": ["turn_id", "task_id"],
+}
 SUBAGENT_LIST_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
     "properties": {
         **PAGE_SCHEMA["properties"],
         "parent_session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "native_turn_offset": {"type": "integer", "minimum": 0},
     },
 }
 QUEUE_ACTION_SCHEMA: dict[str, Any] = {
@@ -437,6 +448,59 @@ class ControlAssistantWork:
         ):
             raise ValueError("choose an assistant chat from this project's work roster")
         return chat
+
+    def _non_subagent_chat(self, project_id: str, session_id: Any) -> ChatSession:
+        session = self._chat(project_id, session_id)
+        if is_subagent_session(session):
+            raise ValueError(
+                "this is a delegated subagent; use subagent controls on its parent"
+            )
+        return session
+
+    def _messageable_chat(self, project_id: str, session_id: Any) -> ChatSession:
+        session = self._non_subagent_chat(project_id, session_id)
+        if _chat_kind(session) == "goal_child":
+            raise ValueError(
+                "this is a child goal chat; message its parent main agent instead"
+            )
+        return session
+
+    def _main_ancestor(self, project_id: str, session: ChatSession) -> ChatSession | None:
+        current = session
+        seen: set[str] = set()
+        while _chat_kind(current) != "main":
+            if not current.parent_session_id or current.id in seen:
+                return None
+            seen.add(current.id)
+            try:
+                current = self._chat(project_id, current.parent_session_id)
+            except ValueError:  # diagnostic-expected: stale or private lineage has no message target
+                return None
+        return current
+
+    def _message_via(self, project_id: str, session: ChatSession) -> dict[str, Any]:
+        main = self._main_ancestor(project_id, session)
+        return {
+            "message_via_session_id": main.id if main else None,
+            "message_via_url": _chat_url(project_id, main.id) if main else None,
+        }
+
+    def _native_goal(self, session: ChatSession) -> dict[str, Any] | None:
+        if session.backend != ChatBackend.HARNESS or not session.harness_session_id:
+            return None
+        try:
+            snapshot = self.harness.session_activity(session.harness_session_id).goal
+        except NotFoundError:  # diagnostic-expected: old chat may lack its harness session
+            return None
+        if snapshot is None:
+            return None
+        return {
+            **snapshot.model_dump(mode="json"),
+            "source": "native_harness",
+            "session_id": session.id,
+            "control_supported": False,
+            "control_reason": "The harness owns this goal; Butler can guide or stop its chat turn.",
+        }
 
     def _settings_chat(self, project_id: str, session_id: Any) -> ChatSession:
         target = _text(session_id, "session_id", 200)
@@ -619,42 +683,7 @@ class ControlAssistantWork:
         return {
             "project_id": project_id,
             "runtimes": model_choices(self.store),
-            "actions": [
-                "nebula.work.overview",
-                "nebula.work.chat",
-                "nebula.work.goals",
-                "nebula.work.goal",
-                "nebula.work.create_goal",
-                "nebula.work.create_goal_conversation",
-                "nebula.work.update_goal",
-                "nebula.work.goal_action",
-                "nebula.work.create_goal_child",
-                "nebula.work.subagents",
-                "nebula.work.subagent",
-                "nebula.work.stop_subagent",
-                "nebula.work.stop_subagents",
-                "nebula.work.queue",
-                "nebula.work.queue_action",
-                "nebula.work.schedule",
-                "nebula.work.create_schedule",
-                "nebula.work.set_schedule",
-                "nebula.work.chat_settings",
-                "nebula.work.set_chat_settings",
-                "nebula.work.mission",
-                "nebula.work.start_chat",
-                "nebula.work.message_chat",
-                "nebula.work.stop_chat",
-                "nebula.work.start_mission",
-                "nebula.work.steer_mission",
-                "nebula.work.stop_mission",
-                "nebula.work.attention",
-                "nebula.work.approval",
-                "nebula.work.decide_approval",
-                "nebula.work.question",
-                "nebula.work.answer_question",
-                "nebula.work.update_chat",
-                "nebula.work.retry_mission",
-            ],
+            "actions": [name for name, *_ in _ALL_WORK_TOOLS if name != "nebula.work.catalog"],
             "managed_tool": "nebula.work.manage",
             "scope": "selected project; browser and notes control are not included",
         }
@@ -680,6 +709,7 @@ class ControlAssistantWork:
         subagents = self.store.find_entities(
             ChatSubagent, {}, engagement_id=project_id, newest_first=True, limit=31
         )
+        native_subagents = self._native_subagents_overview(project_id, {})
         runs = self.store.find_entities(
             AgentRun,
             {},
@@ -698,6 +728,7 @@ class ControlAssistantWork:
                     "state": "working" if item.id in pending else "idle",
                     "kind": "main",
                     "goal": self._goal_summary(item.id),
+                    "native_harness_goal": self._native_goal(item),
                     "archived": isinstance(item.metadata.get("archived_at"), str),
                     "turn_id": pending[item.id].id if item.id in pending else None,
                     "url": _chat_url(project_id, item.id),
@@ -706,6 +737,8 @@ class ControlAssistantWork:
             ],
             "subagents": [self._subagent_summary(item) for item in subagents[:30]],
             "more_subagents": len(subagents) > 30,
+            "native_subagents": native_subagents["native_subagents"],
+            "next_native_turn_offset": native_subagents["next_native_turn_offset"],
             "missions": [
                 {
                     "id": item.id,
@@ -743,9 +776,15 @@ class ControlAssistantWork:
             "model": session.model,
             "kind": _chat_kind(session),
             "parent_session_id": session.parent_session_id,
+            "parent_url": (
+                _chat_url(project_id, session.parent_session_id)
+                if session.parent_session_id else None
+            ),
+            **self._message_via(project_id, session),
             "subagent_id": session.metadata.get("subagent_id"),
             "delegated_from_goal_id": session.metadata.get("delegated_from_goal_id"),
             "goal": self._goal_summary(session.id),
+            "native_harness_goal": self._native_goal(session),
             "revision": session.revision,
             "archived": isinstance(session.metadata.get("archived_at"), str),
             "pending_turn": {
@@ -814,25 +853,79 @@ class ControlAssistantWork:
                 "title": session.title,
                 "kind": _chat_kind(session),
                 "parent_session_id": session.parent_session_id,
+                "parent_url": (
+                    _chat_url(project_id, session.parent_session_id)
+                    if session.parent_session_id else None
+                ),
+                **self._message_via(project_id, session),
                 "url": _chat_url(project_id, session.id),
                 **(self._goal_summary(session.id) or {}),
             })
+        harness_chats = self.store.find_entities(
+            ChatSession, {"backend": ChatBackend.HARNESS},
+            engagement_id=project_id, newest_first=True, offset=offset, limit=31,
+        )
+        native_goals = []
+        for session in harness_chats[:30]:
+            try:
+                self._chat(project_id, session.id)
+            except ValueError:  # diagnostic-expected: private chats are not work targets
+                continue
+            snapshot = self._native_goal(session)
+            if snapshot is not None:
+                native_goals.append({
+                    "title": session.title,
+                    "kind": _chat_kind(session),
+                    "parent_session_id": session.parent_session_id,
+                    **self._message_via(project_id, session),
+                    "url": _chat_url(project_id, session.id),
+                    **snapshot,
+                })
         return {
             "project_id": project_id,
             "goals": items,
             "next_offset": offset + 30 if len(goals) > 30 else None,
+            "native_harness_goals": native_goals,
+            "next_native_offset": offset + 30 if len(harness_chats) > 30 else None,
         }
 
     def goal_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
         session = self._chat(project_id, session_id)
-        goal = self.goals.read(session.id)
+        try:
+            goal = self.goals.read(session.id)
+        except NotFoundError:
+            snapshot = self._native_goal(session)
+            if snapshot is None:
+                raise
+            return {
+                "session_id": session.id,
+                "title": session.title,
+                "kind": _chat_kind(session),
+                "parent_session_id": session.parent_session_id,
+                "parent_url": (
+                    _chat_url(project_id, session.parent_session_id)
+                    if session.parent_session_id else None
+                ),
+                **self._message_via(project_id, session),
+                "url": _chat_url(project_id, session.id),
+                "goal": None,
+                "native_harness_goal": snapshot,
+                "children": [],
+            }
         children = self.goals.list_children(session.id)
         return {
             "session_id": session.id,
             "title": session.title,
             "kind": _chat_kind(session),
+            "parent_session_id": session.parent_session_id,
+            "parent_url": (
+                _chat_url(project_id, session.parent_session_id)
+                if session.parent_session_id else None
+            ),
+            **self._message_via(project_id, session),
             "url": _chat_url(project_id, session.id),
             "goal": goal.model_dump(mode="json"),
+            "native_harness_goal": self._native_goal(session),
             "children": [
                 {
                     "session_id": item.session_id,
@@ -955,7 +1048,7 @@ class ControlAssistantWork:
     async def create_schedule(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
         body = ScheduleCreate.model_validate({
             "interval_seconds": arguments.get("interval_seconds")
         })
@@ -968,7 +1061,7 @@ class ControlAssistantWork:
     async def set_schedule(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
         current = self.schedules.get(session.id)
         expected = arguments.get("expected_revision")
         if type(expected) is not int or expected != current.revision:
@@ -995,15 +1088,136 @@ class ControlAssistantWork:
         parent = self.store.get(ChatSession, record.parent_session_id)
         return {
             "id": record.id,
+            "source": "delegated_chat",
             "name": record.name,
             "task": record.task[:500],
             "status": view["status"],
             "parent_session_id": record.parent_session_id,
             "parent_title": parent.title,
             "parent_kind": _chat_kind(parent),
+            **self._message_via(record.engagement_id, parent),
             "child_session_id": record.child_session_id,
             "url": _chat_url(record.engagement_id, record.child_session_id),
             "revision": record.revision,
+        }
+
+    def _native_turn(self, project_id: str, turn_id: Any) -> HarnessTurn:
+        turn = self.store.get(HarnessTurn, _text(turn_id, "turn_id", 200))
+        if turn.engagement_id != project_id:
+            raise ValueError("choose a native subagent from this project's work roster")
+        if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_session_id:
+            self._chat(project_id, turn.chat_session_id)
+        elif turn.origin == HarnessTurnOrigin.MISSION and turn.run_id:
+            self._run(project_id, turn.run_id)
+        else:
+            raise ValueError("choose a chat or mission native subagent")
+        return turn
+
+    def _native_subagent_items(self, turn: HarnessTurn) -> list[dict[str, Any]]:
+        """Fold only durable native task events; provider subagents have their own rows."""
+
+        latest: dict[str, dict[str, Any]] = {}
+        cursor = 0
+        while True:
+            if turn.origin == HarnessTurnOrigin.CHAT:
+                rows = self.store.replay_operation_events(
+                    turn.id, after_sequence=cursor, limit=1000,
+                    event_types=("harness.item_upsert", "harness.item_started", "harness.item_completed"),
+                    payload_values={"item_kind": ("subagent",)},
+                )
+            else:
+                rows = self.store.replay_events(
+                    turn.run_id or "", after_sequence=cursor, limit=1000,
+                    event_type_prefix="harness.",
+                    payload_values={
+                        "harness_turn_id": (turn.id,),
+                        "item_kind": ("subagent",),
+                    },
+                )
+            if not rows:
+                break
+            for row in rows:
+                payload = row.payload if isinstance(row.payload, dict) else {}
+                task_id = payload.get("item_id")
+                if not isinstance(task_id, str) or not task_id:
+                    continue
+                latest[task_id] = payload
+            cursor = rows[-1].sequence
+            if len(rows) < 1000:
+                break
+        return [
+            self._native_subagent_summary(turn, task_id, payload)
+            for task_id, payload in latest.items()
+        ]
+
+    def _native_subagent_summary(
+        self, turn: HarnessTurn, task_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        activity = self.harness.session_activity(session.id)
+        status = str(payload.get("item_status") or "unknown")
+        can_stop = bool(
+            profile.kind == HarnessKind.CLAUDE_AGENT_SDK
+            and _session_native_capabilities(session, profile).subagents
+            and activity.live
+            and activity.turn_id == turn.id
+            and status in {"queued", "running", "streaming", "waiting_approval", "waiting_input"}
+        )
+        parent = (
+            self.store.get(ChatSession, turn.chat_session_id)
+            if turn.chat_session_id else None
+        )
+        title = str(payload.get("title") or "Native subagent")[:500]
+        return {
+            "id": f"native:{turn.id}:{task_id}",
+            "source": "native_harness",
+            "turn_id": turn.id,
+            "task_id": task_id,
+            "name": title,
+            "task": str(payload.get("summary") or title)[:500],
+            "status": status,
+            "parent_session_id": parent.id if parent else None,
+            "parent_title": parent.title if parent else None,
+            "parent_kind": _chat_kind(parent) if parent else "mission",
+            **(
+                self._message_via(turn.engagement_id, parent)
+                if parent else {"message_via_session_id": None, "message_via_url": None}
+            ),
+            "run_id": turn.run_id,
+            "url": (
+                _chat_url(turn.engagement_id, parent.id)
+                if parent else _mission_url(turn.engagement_id, turn.run_id or "")
+            ),
+            "can_stop": can_stop,
+            "can_message": False,
+        }
+
+    def _native_subagents_overview(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        native_offset = arguments.get("native_turn_offset", 0)
+        if type(native_offset) is not int or native_offset < 0:
+            raise ValueError("native_turn_offset must be a nonnegative integer")
+        parent_id = arguments.get("parent_session_id")
+        filters: dict[str, Any] = {}
+        if parent_id is not None:
+            parent = self._chat(project_id, parent_id)
+            filters["chat_session_id"] = parent.id
+        turns = self.store.find_entities(
+            HarnessTurn, filters, engagement_id=project_id,
+            newest_first=True, offset=native_offset, limit=31,
+        )
+        items: list[dict[str, Any]] = []
+        for turn in turns[:30]:
+            try:
+                self._native_turn(project_id, turn.id)
+            except ValueError:  # diagnostic-expected: private or unrelated turn
+                continue
+            items.extend(self._native_subagent_items(turn))
+        return {
+            "native_subagents": items,
+            "next_native_turn_offset": native_offset + 30 if len(turns) > 30 else None,
         }
 
     def subagents_overview(
@@ -1022,11 +1236,13 @@ class ControlAssistantWork:
             ChatSubagent, filters, engagement_id=project_id,
             newest_first=True, offset=offset, limit=31,
         )
+        native = self._native_subagents_overview(project_id, arguments)
         return {
             "project_id": project_id,
             "parent_session_id": parent_id,
             "subagents": [self._subagent_summary(item) for item in records[:30]],
             "next_offset": offset + 30 if len(records) > 30 else None,
+            **native,
         }
 
     def subagent_detail(self, project_id: str, subagent_id: Any) -> dict[str, Any]:
@@ -1036,6 +1252,32 @@ class ControlAssistantWork:
             "view": self.chat.subagents.view(record),
             "parent_url": _chat_url(project_id, record.parent_session_id),
         }
+
+    def native_subagent_detail(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        turn = self._native_turn(project_id, arguments.get("turn_id"))
+        task_id = _text(arguments.get("task_id"), "task_id", 500)
+        item = next(
+            (row for row in self._native_subagent_items(turn) if row["task_id"] == task_id),
+            None,
+        )
+        if item is None:
+            raise ValueError("choose a native subagent from this project's work roster")
+        return item
+
+    async def stop_native_subagent(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        item = self.native_subagent_detail(project_id, arguments)
+        if not item["can_stop"]:
+            raise ValueError("this native harness subagent cannot be stopped now")
+        await self._request(
+            "POST",
+            f"/api/v1/harness-turns/{quote(item['turn_id'], safe='')}/tasks/{quote(item['task_id'], safe='')}/stop",
+            {},
+        )
+        return self.native_subagent_detail(project_id, arguments)
 
     async def stop_subagent(
         self, project_id: str, subagent_id: Any
@@ -1060,7 +1302,7 @@ class ControlAssistantWork:
         return self.subagents_overview(project_id, {"parent_session_id": parent.id})
 
     def queue_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._chat(project_id, session_id)
+        session = self._messageable_chat(project_id, session_id)
         queue = self.queue.get(session.id)
         return {
             "session_id": session.id,
@@ -1086,7 +1328,7 @@ class ControlAssistantWork:
     def queue_action(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
         current = self.queue.get(session.id)
         revision = current.revision if self.queue.exists(session.id) else 0
         expected = arguments.get("expected_revision")
@@ -1439,7 +1681,7 @@ class ControlAssistantWork:
     async def retry_chat_turn(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
         turn = self.store.get(
             HarnessTurn, _text(arguments.get("turn_id"), "turn_id", 200)
         )
@@ -1698,7 +1940,7 @@ class ControlAssistantWork:
     async def message_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
         text = _text(arguments.get("text"), "text", 20000)
         delivery = arguments.get("delivery", "next")
         if delivery == "steer":
@@ -1805,7 +2047,7 @@ class ControlAssistantWork:
         }
 
     async def stop_chat(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._chat(project_id, session_id)
+        session = self._non_subagent_chat(project_id, session_id)
         pending = self.chat.pending_turn(session.id)
         if pending is None:
             return {"session_id": session.id, "status": "idle", "stopped": False}
@@ -1938,13 +2180,13 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.goals",
-        "List saved conversation goals and their actual Core status in this project. Use offset to page older goals.",
+        "List Core-owned conversation goals and separately labelled read-only native harness goal snapshots in this project. Use offset to page older goals.",
         PAGE_SCHEMA,
         True,
     ),
     (
         "nebula.work.goal",
-        "Read one listed chat's exact goal, progress, limits, children, revision, and blocked reason. Read before changing it.",
+        "Read one listed chat's Core-owned goal and any separate native harness goal snapshot. Native snapshots have no Butler goal_action control. Read before changing a Core goal.",
         CHAT_TARGET_SCHEMA,
         True,
     ),
@@ -1980,7 +2222,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.subagents",
-        "List delegated subagents separately from main chats, with parent, child, task, and current status. Filter by parent_session_id or page older entries with offset.",
+        "List delegated chat subagents and native harness subagents separately from main chats. Native tasks have turn_id and task_id, and only advertise supported controls. Filter by parent_session_id or page older entries with offset and native_turn_offset.",
         SUBAGENT_LIST_SCHEMA,
         True,
     ),
@@ -2000,6 +2242,18 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         "nebula.work.stop_subagents",
         "Stop all active subagents directly delegated by one listed chat after explicit operator instruction. Read subagents first.",
         CHAT_TARGET_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.native_subagent",
+        "Read one native harness subagent listed by subagents, using its exact turn_id and task_id. Its control capability depends on the harness and live turn.",
+        NATIVE_SUBAGENT_TARGET_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.stop_native_subagent",
+        "Stop one live native harness subagent only when native_subagent reports can_stop=true. This uses the harness's native task control, not delegated chat messaging.",
+        NATIVE_SUBAGENT_TARGET_SCHEMA,
         False,
     ),
     (
@@ -2058,7 +2312,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.message_chat",
-        "Send a durable next message to one listed assistant chat, or steer its active harness turn. Use delivery=next unless the operator wants live steering. A queued message is not a completed answer.",
+        "Send a durable next message to a main assistant chat, or steer its active harness turn. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer.",
         MESSAGE_CHAT_SCHEMA,
         False,
     ),
@@ -2208,6 +2462,10 @@ async def dispatch_work_tool(
         return await work.stop_subagent(project_id, arguments.get("subagent_id"))
     if name == "nebula.work.stop_subagents":
         return await work.stop_subagents(project_id, arguments.get("session_id"))
+    if name == "nebula.work.native_subagent":
+        return work.native_subagent_detail(project_id, arguments)
+    if name == "nebula.work.stop_native_subagent":
+        return await work.stop_native_subagent(project_id, arguments)
     if name == "nebula.work.queue":
         return work.queue_detail(project_id, arguments.get("session_id"))
     if name == "nebula.work.queue_action":
