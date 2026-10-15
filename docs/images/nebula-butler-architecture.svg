@@ -4,19 +4,19 @@
   <defs>
     <style>
       text { font-family: Arial, Helvetica, sans-serif; }
-      .title { fill: #f0f7f8; font-size: 27px; font-weight: 700; }
-      .label { fill: #e8f2f5; font-size: 23px; font-weight: 600; }
-      .detail { fill: #a9bdc7; font-size: 16px; }
-      .flow { fill: none; stroke: #99d5e2; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-      .card { fill: #11232e; stroke: #5d8797; stroke-width: 1.5; }
+      .title { fill: #e4edef; font-size: 26px; font-weight: 700; }
+      .label { fill: #d5e1e5; font-size: 21px; font-weight: 600; }
+      .detail { fill: #98adb5; font-size: 16px; }
+      .flow { fill: none; stroke: #729ba7; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+      .card { fill: #13232b; stroke: #466674; stroke-width: 1.2; }
     </style>
   </defs>
 
-  <rect width="720" height="460" rx="20" fill="#09151d"/>
+  <rect width="720" height="460" rx="20" fill="#0d161c"/>
 
   <path class="flow" d="M262 59h30m-6-5 6 5-6 5"/>
   <path class="flow" d="M380 94v33m-5-6 5 6 5-6"/>
-  <path d="M466 59h26" fill="none" stroke="#b9a1dc" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round"/>
+  <path d="M466 59h26" fill="none" stroke="#857797" stroke-width="1.5" stroke-dasharray="5 5" stroke-linecap="round"/>
 
   <rect class="card" x="32" y="24" width="230" height="70" rx="12"/>
   <text class="label" x="54" y="67">Internet / LAN</text>
@@ -24,13 +24,13 @@
   <rect class="card" x="294" y="24" width="172" height="70" rx="12"/>
   <text class="label" x="316" y="67">Host / OS</text>
 
-  <rect x="494" y="24" width="194" height="70" rx="12" fill="#171e30" stroke="#b9a1dc" stroke-width="1.5" stroke-dasharray="7 6"/>
-  <text x="512" y="55" fill="#e4d8f6" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Mercury</text>
-  <text x="597" y="54" fill="#bba5de" font-family="Arial, Helvetica, sans-serif" font-size="14">optional</text>
-  <text x="512" y="77" fill="#a9bdc7" font-family="Arial, Helvetica, sans-serif" font-size="14">Host + app controls</text>
+  <rect x="494" y="24" width="194" height="70" rx="12" fill="#1a202c" stroke="#857797" stroke-width="1.2" stroke-dasharray="7 6"/>
+  <text x="512" y="55" fill="#d2c6e0" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Mercury</text>
+  <text x="597" y="54" fill="#a99bbd" font-family="Arial, Helvetica, sans-serif" font-size="14">optional</text>
+  <text x="512" y="77" fill="#98adb5" font-family="Arial, Helvetica, sans-serif" font-size="14">Host + app controls</text>
 
-  <rect x="32" y="130" width="656" height="300" rx="16" fill="#0d202a" stroke="#78bccb" stroke-width="2"/>
-  <path d="M81 148c11 13 11 37 0 50-11-13-11-37 0-50z" fill="none" stroke="#b7dfe6" stroke-width="2.6"/>
+  <rect x="32" y="130" width="656" height="300" rx="16" fill="#101e25" stroke="#527d88" stroke-width="1.4"/>
+  <path d="M81 148c11 13 11 37 0 50-11-13-11-37 0-50z" fill="none" stroke="#95bbc4" stroke-width="2"/>
   <text class="title" x="111" y="181">Nebula</text>
   <text class="detail" x="545" y="180">Execution shell</text>
 
@@ -48,6 +48,6 @@
   <text class="label" x="519" y="270">Subagents</text>
 
   <rect class="card" x="57" y="339" width="606" height="62" rx="12"/>
-  <text x="80" y="365" fill="#a9bdc7" font-family="Arial, Helvetica, sans-serif" font-size="15">Operator-provided</text>
+  <text x="80" y="365" fill="#98adb5" font-family="Arial, Helvetica, sans-serif" font-size="15">Operator-provided</text>
   <text class="label" x="80" y="389">Skills · Hooks · Software</text>
 </svg>
