@@ -25,9 +25,11 @@ First, I would like to thank Almighty God, who is the source of all knowledge. W
 
 <img src="ui/public/nebula-logo.svg" alt="Nebula logo used to open Butler" width="23" height="36">
 
-Select the Nebula logo in the upper-right corner to open Butler. With a configured model or harness, Butler can answer questions, review the selected project's chats and goals, start or steer work, and manage settings and approvals. It shows delegated work separately from main agents; to redirect a child, ask Butler to guide its parent agent.
+Select the Nebula logo in the header or mobile navigation to open Butler, then use chat or Voice. With a configured model or harness, Butler can answer questions, review the selected project's chats and goals, start or steer work, and manage settings and approvals. It shows delegated work separately from main agents; to redirect a child, ask Butler to guide its parent agent.
 
-![Nebula architecture: optional Mercury protects hosts; Butler coordinates agents inside Nebula's execution shell, alongside operator-provided skills, hooks, and software.](docs/images/nebula-butler-architecture.svg)
+When a goal starts, Butler watches its supported progress events even if the panel is closed. The project can grant Watch, Steer, or specific Delegate actions. Butler's conversation uses the same saved history and context compaction as other assistants. Separately, it checks relevant precedent before acting and keeps durable, selective memory of useful preferences, decisions, and lessons across projects. Open Memory in the Butler panel whenever you want to review, edit, or delete an entry.
+
+![Nebula architecture: a host runs Nebula, with optional independent Mercury controls. Butler directs main agents, which coordinate subagents. Operator-provided skills, hooks, and software extend agent work.](docs/images/nebula-butler-architecture.svg)
 
 ## Work
 
