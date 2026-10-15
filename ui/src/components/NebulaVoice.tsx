@@ -215,7 +215,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       setDelegatedStatus(result ? "Nebula responded" : "Needs retry");
       void refreshWork();
     } catch (caught) {
-      logCaughtDiagnostic("interface.voice.delegation_failed", "The spoken request could not be delegated to Nebula assistant.", caught, "voice-work");
+      logCaughtDiagnostic("interface.voice.delegation_failed", "The spoken request could not be delegated to Butler.", caught, "voice-work");
       if (!mounted.current || closing.current || attempt !== generation.current) return;
       const message = caught instanceof Error ? caught.message : "The request failed.";
       sendEvent({ type: "session.commentary.append", event_id: `voice_failed_${crypto.randomUUID()}`, delegation_id: id,
@@ -510,7 +510,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
 
   const phaseLabel = phase === "connecting" ? "Connecting" : phase === "speaking" ? "Speaking" : phase === "listening" ? "Listening" : phase === "reconnecting" ? "Reconnecting" : phase === "closing" ? "Ending voice" : "Connection needs attention";
 
-  return <div ref={screen} className={styles.screen} role="dialog" aria-modal="true" aria-label="Nebula Voice" onKeyDown={(event) => {
+  return <div ref={screen} className={styles.screen} role="dialog" aria-modal="true" aria-label="Butler Voice" onKeyDown={(event) => {
     if (event.key === "Escape") { event.preventDefault(); exit(); }
     if (event.key !== "Tab") return;
     const focusables = [...(screen.current?.querySelectorAll<HTMLElement>("button:not(:disabled), select:not(:disabled)") ?? [])];
@@ -524,7 +524,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       setSpeakerMessage("Speaker playback failed. Select Play audio or reconnect voice.");
     }} />
     <div className={styles.header}>
-      <div className={styles.identity}><strong>Nebula <span>Voice</span></strong><small>{project.name}</small></div>
+      <div className={styles.identity}><strong>Butler <span>Voice</span></strong><small>{project.name}</small></div>
       <button ref={exitButton} className={styles.exit} type="button" title="Exit voice mode" aria-label="Exit voice mode" onClick={exit} disabled={phase === "closing"}><X size={20} aria-hidden="true" /><span>Exit voice mode</span></button>
     </div>
     <div className={styles.layout}>

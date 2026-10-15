@@ -1,72 +1,61 @@
-# Nebula assistant work controls
+# Butler phase 1: reactive project control
 
-Entry: open the persistent Nebula assistant in the shared browser shell with a
-project selected. The conversation remains separate from ordinary agent chats.
-An operator can ask what is running, start an assistant chat or mission, send
-guidance to an existing chat or mission, and stop work. The assistant uses Core
-owned tool calls, so a browser disconnect does not own the delegated work.
+Butler is the selected project's second-in-command. The operator opens its
+persistent text panel or full-screen Voice view and asks it to inspect or change
+work. It can act on that request while other chats and missions keep running in
+Core. Proactive monitoring and unsolicited actions belong to phase 2.
 
-| Journey step | Observable invariant | State authority | Test layer |
+## Capability contract
+
+The provider and harness receive the same four tools:
+
+1. `nebula.capabilities.search` finds a project action by intent and returns a
+   short description. An empty search lists categories.
+2. `nebula.capabilities.describe` returns one action's exact JSON schema and
+   whether it is a read or change.
+3. `nebula.capabilities.read` runs a described read against Core.
+4. `nebula.capabilities.change` runs a described change after an operator
+   request. Core's existing handler enforces project ownership, policy, and
+   revision checks.
+
+This keeps dozens of action schemas out of every model request. The registry
+contains the existing help, settings, navigation, chat, subagent, goal, queue,
+schedule, approval, and mission handlers. Ordinary chats do not receive these
+four tools. Each action description explains its effects and limitations; the
+short system prompt says how to discover and invoke an action, how to read back
+state, and how to report a pending action without calling it complete.
+
+For example, to direct a chat, Butler searches for chat actions, describes
+`nebula.work.overview` and `nebula.work.chat`, reads the project roster and
+target chat, then describes `nebula.work.message_chat` and calls change with
+the exact session ID and text. `delivery=next` queues a durable follow-up;
+`delivery=steer` guides an active harness turn. The returned status is reported
+as queued or active until a later Core read shows completion.
+
+## Operator journey and authorities
+
+| Step | Observable invariant | Authority | Focused evidence |
 | --- | --- | --- | --- |
-| Discover | The assistant names chats and missions as available work controls and can list configured runtimes | UI copy and Core catalog | Component and browser |
-| Select | The selected project is fixed by the control conversation; a named target is resolved from a bounded project roster | Core project and entity records | Unit and real Core |
-| Inspect | A bounded overview and detail read show current status, recent output, pending actions, and exact IDs without exposing credentials | Core sessions, turns, runs and queue | Unit and real Core |
-| Start | A new chat or mission uses an enabled, listed runtime and returns its saved identity and current status | Core chat or mission service | Real Core |
-| Guide | Sending to a chat queues a durable follow-up; live harness steering applies only to the selected active turn. Mission steering uses the existing mission API | Core queue and harness or mission service | Real Core |
-| Interrupt | Stop targets only the selected chat turn or mission, then reads back its state | Core turn or run | Real Core |
-| Refresh and reconnect | The work roster and control transcript return from Core; a queued message or active run is not recreated | Core database; browser owns only panel state | Real Core and browser |
-| Failure and retry | A failed or ambiguous action remains visible, identifies its target, and gives a safe next step | Core errors and tool result | Unit and browser |
-| Delete or revoke | No delete or revoke tool is included in this slice; existing product controls retain those transitions | Core | Not applicable: no delete action added |
+| Open | One Butler panel and a usable Voice button appear on desktop and phone; the phone composer and header are centered | Browser UI | Component, desktop and mobile browser |
+| Discover | Butler can find an action and its exact arguments without guessing IDs | Core capability registry | Python and real-Core model request |
+| Select | A named main chat, delegated subagent, goal child, or mission resolves within the selected project | Core records | Python and real-Core browser |
+| Inspect | Status, pending work, exact target, revision, and recent output come from Core | Core database | Python and real-Core browser |
+| Change | Start, message, steer, stop, fork, delete, retry, rename, archive, settings, goals, queues, schedules, and approval actions use existing Core paths | Core service and policy | Python and selected real-Core browser |
+| Read back | A saved change returns its durable ID, status, and link; queued, started, pending browser action, and completed remain distinct | Core and requesting browser | Python, component, real-Core browser |
+| Recover | A failed or stale action leaves prior state intact and gives the next valid step | Core errors and UI | Python, browser |
+| Reconnect | Butler history and delegated work are reloaded from Core without replaying mutations | Core database | Real-Core LAN browser |
 
-The initial tool boundary permits only typed `nebula.work.*` actions on the selected
-project. Ordinary chats do not receive these work tools. Browser and notes
-control are outside this slice. A read result is a
-snapshot, and a submitted message or started run is reported with its observed
-Core status, not as completed work. Non-idempotent starts are not retried by the
-assistant; each queued chat follow-up carries its own idempotency key.
+The URL owns navigation, Core owns project records and work execution, and the
+browser owns only panel presentation and device actions such as opening a page
+or changing its theme. Browser actions are pending until that browser applies
+and confirms them. A saved Assistant setting applies to the next message, not
+to a running or queued turn. Deleting a chat requires its exact saved title and
+revision; a retry returns a saved linked retry instead of starting duplicate
+work. Secret answers remain in the private chat or mission UI.
 
-Lifecycle: discover, select, inspect, start, guide, interrupt, refresh, reconnect,
-failure and retry are required. Background work is required and Core owned.
-Forking and deletion remain in their existing product workflows. The installed
-iPhone shell does not mount this assistant; browser phone layouts do.
-
-Planned verification: focused tool and service tests for authorization, project
-binding, roster, queue, start, steering, stop and read-back; provider and harness
-tool boundary tests; component tests for discoverability and browser action
-behavior; selected Playwright desktop Chromium and mobile Chromium/WebKit cases;
-production build and isolated real-Core LAN journey with synthetic data.
-
-## Per-chat assistant settings expansion
-
-Entry: an operator opens Nebula assistant settings from the persistent panel,
-or asks Nebula assistant to inspect or change another project chat's Assistant
-settings. The panel links to the same full chat settings controls used by
-ordinary conversations. A chat can be chosen from a named project roster; an
-opaque ID is not required. These choices affect the next message, not an
-already queued or running turn.
-
-| Journey step | Observable invariant | State authority | Test layer |
-| --- | --- | --- | --- |
-| Discover | Nebula assistant exposes its own Assistant settings and can list configurable project chats | UI and Core catalog | Component and browser |
-| Select | A named target resolves to one saved chat in the selected project; ambiguous names require clarification | Core ChatSession | Unit and real Core |
-| Inspect | The assistant reports the saved runtime, model, effort, speed, mode, cyber access, knowledge, skills, subagents, messaging, and MCP choices with availability reasons | Core chat, harness and capability catalogs | Unit and real Core |
-| Change | Every supplied choice is validated against the enabled profile and project catalog, saved with a revision guard, then read back | Core ChatSession and profile catalogs | Unit and real Core |
-| Use | The next visible UI turn uses those saved choices, while existing approvals and tool policies still govern execution | Core request, provider or harness session | Real Core and browser |
-| Refresh and reconnect | The same settings and chat identity return after reload; a stale UI value does not overwrite a newer Core change | Core ChatSession plus URL | Real Core and browser |
-| Failure and retry | A conflict or unsupported choice explains the valid next action and leaves the prior settings intact | Core error contract | Unit and browser |
-| Delete or revoke | Deleting a chat removes its settings; disabled profiles and MCP servers cannot be newly selected | Core ChatSession and catalogs | Real Core |
-
-The special product-control tools remain available only to the control
-conversation. General command, MCP, knowledge, skill, subagent and messaging
-capabilities are opt-in per conversation and run under their normal policy and
-approval path. A product-control tool's policy repair exception must not become
-a blanket permission bypass for general tools. The selected project binds every
-target and runtime; a cross-project chat or MCP server is never accepted.
-
-The URL owns full-chat navigation, Core owns saved conversation settings and
-transcripts, provider and harness sessions own actual execution, and React owns
-only unsent selections and panel presentation. Browser storage can restore an
-unsent first-turn preference but cannot override a saved Core choice. Discover,
-select, inspect, change, use, stream, interrupt, refresh, reconnect, failure and
-retry are required. Forking follows the existing chat workflow. Physical phone
-testing remains a separate gate from mobile browser emulation.
+The reactive phase includes main chats, subagents, missions, goals, approvals,
+questions, follow-up queues, schedules, and per-chat Assistant settings in the
+selected project. Managed Assistant browser automation and notes control are
+deferred. Physical iPhone microphone and speaker acceptance is a separate
+gate from mobile browser emulation. The installed iPhone shell mounts Butler;
+Voice requires a trusted HTTPS origin and a configured OpenAI Realtime key.

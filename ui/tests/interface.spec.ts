@@ -2202,7 +2202,7 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-reloadTest("stabilization Nebula Voice stays active until explicit exit", async ({ page }) => {
+reloadTest("stabilization Butler Voice stays active until explicit exit", async ({ page }) => {
   test.setTimeout(60_000);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   const provider = {
@@ -2258,9 +2258,9 @@ reloadTest("stabilization Nebula Voice stays active until explicit exit", async 
     ], missions: [{ id: "mission-voice", name: "Audit scope", status: "running", backend: "harness", updated_at: "now", url: "/mission" }], attention: [{ kind: "approval", action_id: "approval-voice", owner_kind: "chat", owner_id: "chat-voice", owner: "Code agent", summary: "write_file", url: "/chat" }], more_chats: false, more_missions: false } });
   });
   await openWorkspace(page, "/", "Workbench");
-  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  await page.getByRole("button", { name: "Start Nebula Voice" }).click();
-  const voice = page.getByRole("dialog", { name: "Nebula Voice" });
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  await page.getByRole("button", { name: "Start Butler Voice" }).click();
+  const voice = page.getByRole("dialog", { name: "Butler Voice" });
   await expect(voice).toBeVisible();
   await expect(voice.getByRole("status").filter({ hasText: "Listening" })).toBeVisible();
   await expect.poll(() => voice.getByTestId("voice-orb").evaluate(element => Number.parseFloat(getComputedStyle(element).scale))).toBeGreaterThan(1.02);
@@ -2291,13 +2291,13 @@ reloadTest("stabilization Nebula Voice stays active until explicit exit", async 
   const rect = await close.boundingBox();
   expectTouchTarget(rect?.width, "Voice exit width");
   expectTouchTarget(rect?.height, "Voice exit height");
-  const scan = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Nebula Voice"]').analyze();
+  const scan = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler Voice"]').analyze();
   expect(scan.violations).toEqual([]);
   await close.click();
   await expect(voice).toHaveCount(0);
 });
 
-reloadTest("stabilization Nebula assistant opens from every screen and changes this device theme", async ({ page }) => {
+reloadTest("stabilization Butler opens from every screen and changes this device theme", async ({ page }) => {
   let policyMode: "docker" | "host" = "docker";
   let savedRequest: Record<string, unknown> | undefined;
   await page.route("**/api/v1/engagements/scratch-project/automation-policy", async (route) => {
@@ -2314,15 +2314,15 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
     }) });
   });
   await openWorkspace(page, "/settings", "Settings");
-  const open = page.getByRole("button", { name: "Open Nebula assistant" });
+  const open = page.getByRole("button", { name: "Open Butler" });
   await expect(open).toBeVisible();
   const target = await open.boundingBox();
-  expectTouchTarget(target?.width, "Nebula assistant launcher width");
-  expectTouchTarget(target?.height, "Nebula assistant launcher height");
+  expectTouchTarget(target?.width, "Butler launcher width");
+  expectTouchTarget(target?.height, "Butler launcher height");
   await open.click();
-  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  const assistant = page.getByRole("dialog", { name: "Butler" });
   await expect(assistant).toBeVisible();
-  const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Nebula assistant"]').analyze();
+  const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler"]').analyze();
   expect(assistantA11y.violations).toEqual([]);
   await assistant.getByText("Settings I can help with").click();
   await assistant.getByRole("button", { name: "Light", exact: true }).click();
@@ -2331,16 +2331,16 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
     await assistant.getByRole("button", { name: label, exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
   }
-  await assistant.getByRole("button", { name: "Hide Nebula assistant" }).click();
-  await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+  await assistant.getByRole("button", { name: "Hide Butler" }).click();
+  await expect(page.getByRole("button", { name: "Show Butler" })).toBeVisible();
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  const reopenedAssistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  await expect(page.getByRole("button", { name: "Open Butler" })).toBeVisible();
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  const reopenedAssistant = page.getByRole("dialog", { name: "Butler" });
   await expect(reopenedAssistant).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("change to zero theme");
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Butler a question" }).fill("change to zero theme");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Butler a question" }).press("Enter");
   const appearanceLens = page.getByRole("dialog", { name: "Appearance and theme" });
   await expect(appearanceLens).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
@@ -2348,9 +2348,9 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   await expect(reopenedAssistant).toContainText("Changed this device to Zero Dark");
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
-  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("change it to the light theme");
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Butler a question" }).fill("change it to the light theme");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Butler a question" }).press("Enter");
   const lightLens = page.getByRole("dialog", { name: "Appearance and theme" });
   await expect(lightLens).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
@@ -2358,15 +2358,15 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   await expect(reopenedAssistant).toContainText("Changed this device to Light. The choice is saved in this browser.");
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("open MCP servers");
-  await reopenedAssistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Butler a question" }).fill("open MCP servers");
+  await reopenedAssistant.getByRole("textbox", { name: "Ask Butler a question" }).press("Enter");
   await expect(page.getByRole("dialog", { name: "MCP servers" })).toBeVisible();
   expect(new URL(page.url()).pathname).not.toBe("/settings");
   await page.getByRole("button", { name: "Close setting" }).click();
-  await page.getByRole("button", { name: "Show Nebula assistant" }).click();
-  await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("Scratch Project");
-  const modeComposer = page.getByRole("textbox", { name: "Ask Nebula a question" });
+  await page.getByRole("button", { name: "Show Butler" }).click();
+  await expect(page.getByRole("dialog", { name: "Butler" })).toContainText("Scratch Project");
+  const modeComposer = page.getByRole("textbox", { name: "Ask Butler a question" });
   await modeComposer.fill("open project policy and change from dockermode to host mode");
   await modeComposer.press("Enter");
   const policyLens = page.getByRole("dialog", { name: "Project policy and network scope" });
@@ -2378,10 +2378,10 @@ reloadTest("stabilization Nebula assistant opens from every screen and changes t
   await expect(policyLens.getByText("Scratch Project saved in Host mode for new sessions.")).toBeVisible();
   expect(savedRequest).toMatchObject({ execution_mode: "host", host_access_acknowledged: true, approval_policy: "always", expected_revision: 1 });
   await expect(policyLens).toHaveCount(0, { timeout: 5000 });
-  await expect(page.getByRole("dialog", { name: "Nebula assistant" })).toContainText("Scratch Project is now in Host mode for new sessions");
+  await expect(page.getByRole("dialog", { name: "Butler" })).toContainText("Scratch Project is now in Host mode for new sessions");
 });
 
-reloadTest("stabilization Nebula assistant applies a model-selected device-theme tool receipt", async ({ page }) => {
+reloadTest("stabilization Butler applies a model-selected device-theme tool receipt", async ({ page }) => {
   const provider = {
     ...entity, id: "provider-theme-action", name: "Theme action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
     enabled: true, is_local: true, secret_ref: null, model_allowlist: ["theme-action-model"], capabilities: { streaming: true, tools: true },
@@ -2409,10 +2409,10 @@ reloadTest("stabilization Nebula assistant applies a model-selected device-theme
   await page.evaluate(() => localStorage.setItem("nebula.theme", "light"));
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
-  await assistant.getByRole("textbox", { name: "Ask Nebula a question" }).fill("could you make the screen look like Nebula Zero?");
-  await assistant.getByRole("textbox", { name: "Ask Nebula a question" }).press("Enter");
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  const assistant = page.getByRole("dialog", { name: "Butler" });
+  await assistant.getByRole("textbox", { name: "Ask Butler a question" }).fill("could you make the screen look like Nebula Zero?");
+  await assistant.getByRole("textbox", { name: "Ask Butler a question" }).press("Enter");
   await expect.poll(() => requested).toBe(true);
   const appearance = page.getByRole("dialog", { name: "Appearance and theme" });
   await expect(appearance).toBeVisible();
@@ -2425,7 +2425,7 @@ reloadTest("stabilization Nebula assistant applies a model-selected device-theme
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
 });
 
-reloadTest("stabilization Nebula assistant follows a model-selected Projects navigation receipt", async ({ page }) => {
+reloadTest("stabilization Butler follows a model-selected Projects navigation receipt", async ({ page }) => {
   const provider = {
     ...entity, id: "provider-navigation-action", name: "Navigation action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
     enabled: true, is_local: true, secret_ref: null, model_allowlist: ["navigation-action-model"], capabilities: { streaming: true, tools: true },
@@ -2449,24 +2449,24 @@ reloadTest("stabilization Nebula assistant follows a model-selected Projects nav
     return route.fulfill({ status: 200, contentType: "text/event-stream", body: events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") });
   });
   await openWorkspace(page, "/settings", "Settings");
-  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
-  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
-  const composer = assistant.getByRole("textbox", { name: "Ask Nebula a question" });
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  const assistant = page.getByRole("dialog", { name: "Butler" });
+  const composer = assistant.getByRole("textbox", { name: "Ask Butler a question" });
   await composer.fill("Locate the place with everything I've built");
   await composer.press("Enter");
   await expect.poll(() => requested).toBe(true);
   await expect(page).toHaveURL(/\/projects$/);
   await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show Butler" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
 });
 
-reloadTest("stabilization Nebula assistant launcher stays in shared chrome without covering the Zero dock", async ({ page }) => {
+reloadTest("stabilization Butler launcher stays in shared chrome without covering the Zero dock", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/settings", "Settings");
   const topBar = page.locator(".top-bar");
-  const launcher = topBar.getByRole("button", { name: "Open Nebula assistant" });
+  const launcher = topBar.getByRole("button", { name: "Open Butler" });
   await expect(launcher).toBeVisible();
   expectTouchTarget((await launcher.boundingBox())?.width, "Assistant launcher width");
   expectTouchTarget((await launcher.boundingBox())?.height, "Assistant launcher height");
@@ -2477,24 +2477,24 @@ reloadTest("stabilization Nebula assistant launcher stays in shared chrome witho
     expect(assistant && gear && assistant.y + assistant.height < gear.y).toBe(true);
   }
   await launcher.click();
-  const assistant = page.getByRole("dialog", { name: "Nebula assistant" });
+  const assistant = page.getByRole("dialog", { name: "Butler" });
   await expect(assistant).toBeVisible();
-  await assistant.getByRole("button", { name: "Hide Nebula assistant" }).click();
-  await expect(topBar.getByRole("button", { name: "Show Nebula assistant" })).toBeVisible();
+  await assistant.getByRole("button", { name: "Hide Butler" }).click();
+  await expect(topBar.getByRole("button", { name: "Show Butler" })).toBeVisible();
 
   if ((page.viewportSize()?.width ?? 0) <= 760) {
     await openWorkspace(page, "/?view=chat", "Workbench");
     const mobileNav = page.getByRole("navigation", { name: "Mobile operator navigation" });
     await expect(mobileNav.getByRole("button")).toHaveCount(5);
-    const mobileLauncher = mobileNav.getByRole("button", { name: "Show Nebula assistant" });
+    const mobileLauncher = mobileNav.getByRole("button", { name: "Show Butler" });
     await expect(mobileLauncher).toBeVisible();
     expectTouchTarget((await mobileLauncher.boundingBox())?.width, "Mobile assistant launcher width");
     await mobileLauncher.click();
     await expect(assistant).toBeVisible();
-    await assistant.getByRole("button", { name: "Close Nebula assistant" }).click();
+    await assistant.getByRole("button", { name: "Close Butler" }).click();
     await mobileNav.getByRole("button", { name: "More workbench views" }).click();
     await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
-    await expect(page.locator(".sessions-page.full-screen .session-toolbar").getByRole("button", { name: "Open Nebula assistant" })).toBeVisible();
+    await expect(page.locator(".sessions-page.full-screen .session-toolbar").getByRole("button", { name: "Open Butler" })).toBeVisible();
   }
 });
 
@@ -14531,15 +14531,15 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await expect(page).toHaveURL(/\/projects\/scratch-project\/workbench\?view=chat/);
   await expect(page.getByRole("button", {name: "Open conversations"})).toBeVisible({timeout: 30_000});
   await expect(page.getByRole("button", {name: "Start new chat"})).toBeVisible();
-  await page.getByRole("button", {name: "Open Nebula assistant"}).click();
-  const controlAssistant = page.getByRole("dialog", {name: "Nebula assistant"});
+  await page.getByRole("button", {name: "Open Butler"}).click();
+  const controlAssistant = page.getByRole("dialog", {name: "Butler"});
   await expect(controlAssistant).toBeVisible();
-  const startVoice = controlAssistant.getByRole("button", {name: "Start Nebula Voice"});
+  const startVoice = controlAssistant.getByRole("button", {name: "Start Butler Voice"});
   await expect(startVoice).toBeVisible();
   if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
     const button = await startVoice.boundingBox();
     const panel = await controlAssistant.boundingBox();
-    const composer = controlAssistant.getByRole("textbox", {name: "Ask Nebula a question"});
+    const composer = controlAssistant.getByRole("textbox", {name: "Ask Butler a question"});
     const composerBox = await composer.boundingBox();
     const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
     expect(button!.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 48);
@@ -14547,10 +14547,10 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
     expect(button!.y).toBeGreaterThanOrEqual(panel!.y + 44);
     expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(visualBottom + 1);
     await expect(composer).not.toBeFocused();
-    await expect(controlAssistant.getByRole("button", {name: "Move Nebula assistant"})).toBeHidden();
+    await expect(controlAssistant.getByRole("button", {name: "Move Butler"})).toBeHidden();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
-  await controlAssistant.getByRole("button", {name: "Close Nebula assistant"}).click();
+  await controlAssistant.getByRole("button", {name: "Close Butler"}).click();
   await page.getByRole("button", {name: "Start new chat"}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
   await expect(composer).toBeVisible();
@@ -14561,6 +14561,33 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await expect(page.locator("#side-tool-panel")).toHaveCount(0);
   await page.getByRole("button", {name: "Start new chat"}).click();
   await expect(composer).toBeVisible();
+  await setTheme(page, "quiet-lens");
+  if (page.viewportSize()!.width <= 760) {
+    const geometry = await page.locator(".assistant-only-page").evaluate(root => {
+      const header = root.querySelector(".mobile-conversation-header")!;
+      const title = header.querySelector(".mobile-conversation-title")!;
+      const newChat = header.querySelector(".mobile-new-chat")!;
+      const input = root.querySelector(".chat-composer")!;
+      const scroll = root.querySelector(".chat-scroll")!;
+      const titleRect = title.getBoundingClientRect();
+      const newChatRect = newChat.getBoundingClientRect();
+      const inputRect = input.getBoundingClientRect();
+      const scrollStyle = getComputedStyle(scroll);
+      return {
+        viewportCenter: innerWidth / 2,
+        titleCenter: titleRect.left + titleRect.width / 2,
+        inputCenter: inputRect.left + inputRect.width / 2,
+        titleTop: titleRect.top,
+        newChatTop: newChatRect.top,
+        scrollLeft: parseFloat(scrollStyle.paddingLeft),
+        scrollRight: parseFloat(scrollStyle.paddingRight),
+      };
+    });
+    expect(Math.abs(geometry.titleCenter - geometry.viewportCenter)).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.inputCenter - geometry.viewportCenter)).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.newChatTop - geometry.titleTop)).toBeLessThanOrEqual(4);
+    expect(geometry.scrollLeft).toBe(geometry.scrollRight);
+  }
   const send = page.getByRole("button", {name: "Send message"});
   await expect(send).toBeVisible();
   const sendBounds = await send.evaluate(element => {

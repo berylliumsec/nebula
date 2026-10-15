@@ -151,6 +151,7 @@ body {
 .top-bar-page-actions:empty { display: none; }
 .top-bar-actions { flex: 0 0 auto; }
 .icon-button.nebula-assistant-trigger { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+.nebula-assistant-mark { display: block; flex: none; object-fit: contain; }
 .toolbar-page-actions .button { flex: 0 0 auto; min-width: 44px; min-height: 44px; white-space: nowrap; }
 .page-header-action-icon { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; }
 .page-header-action-icon svg { flex: 0 0 auto; }

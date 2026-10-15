@@ -9,6 +9,16 @@
 .identity small { min-width: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .voiceLabel { display: none; }
 .body { min-height: 160px; overflow: auto; padding: 12px 16px; }
+.ownSettings { border-bottom: 1px solid var(--border); padding: 2px 0 14px; margin-bottom: 12px; }
+.settingsHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.settingsHeading span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .8rem; }
+.ownSettings form { display: grid; gap: 10px; }
+.ownSettings label { display: grid; gap: 4px; min-width: 0; }
+.ownSettings select { box-sizing: border-box; width: 100%; min-height: 44px; }
+.ownSettings small { color: var(--muted); }
+.settingsActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settingsActions button { flex: 1 1 auto; }
+.ownSettings p { margin: 0; }
 .transcript { max-height: min(380px, 45dvh); overflow: auto; overflow-wrap: anywhere; }
 .transcript pre { max-width: 100%; overflow: auto; }
 .question { margin: 12px 0; color: var(--muted); }

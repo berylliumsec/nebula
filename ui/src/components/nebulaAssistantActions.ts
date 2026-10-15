@@ -16,13 +16,22 @@ export type SettingClientAction =
 
 export interface AssistantWorkReceipt { url: string; content: string }
 
+function butlerGatewayOperation(event: Extract<ChatStreamEvent, {type: "tool_completed"}>, projectId?: string): string | undefined {
+  const gateway = event.capability === "nebula.capabilities.change"
+    || event.capability === "nebula_capabilities_change"
+    || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (!gateway || !projectId || event.receipt?.butler_project_id !== projectId) return undefined;
+  return typeof event.receipt.butler_operation === "string" ? event.receipt.butler_operation : undefined;
+}
+
 /** Derive a project-local destination from a successful Core tool receipt. */
 export function assistantWorkReceipt(event: ChatStreamEvent, projectId: string): AssistantWorkReceipt | undefined {
   if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
-  const chat = event.capability === "nebula.work.start_chat" || event.capability === "nebula_work_start_chat"
-    || /^nebula_work_start_chat_[0-9a-f]{10,}$/.test(event.capability);
-  const mission = event.capability === "nebula.work.start_mission" || event.capability === "nebula_work_start_mission"
-    || /^nebula_work_start_mission_[0-9a-f]{10,}$/.test(event.capability);
+  const operation = butlerGatewayOperation(event, projectId) ?? event.capability;
+  const chat = ["nebula.work.start_chat", "nebula.work.create_goal_conversation", "nebula.work.create_goal_child", "nebula_work_start_chat"].includes(operation)
+    || /^nebula_work_start_chat_[0-9a-f]{10,}$/.test(operation);
+  const mission = ["nebula.work.start_mission", "nebula.work.retry_mission", "nebula_work_start_mission"].includes(operation)
+    || /^nebula_work_start_mission_[0-9a-f]{10,}$/.test(operation);
   if (!chat && !mission) return undefined;
   const id = event.receipt?.[chat ? "session_id" : "run_id"];
   if (typeof id !== "string" || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(id)) return undefined;
@@ -52,25 +61,29 @@ export function validScopeChanges(value: unknown): value is Record<string, unkno
 }
 
 /** Accept only a completed, scoped tool receipt as a browser action. */
-export function settingClientAction(event: ChatStreamEvent): SettingClientAction | undefined {
+export function settingClientAction(event: ChatStreamEvent, projectId?: string): SettingClientAction | undefined {
   if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
   const receipt = event.receipt;
   if (receipt?.state !== "pending_browser_apply") return undefined;
+  if ((event.capability === "nebula.capabilities.change" || event.capability === "nebula_capabilities_change"
+    || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability))
+    && !butlerGatewayOperation(event, projectId)) return undefined;
+  const operation = butlerGatewayOperation(event, projectId) ?? event.capability;
   const action = receipt.client_action;
   if (!action || typeof action !== "object" || Array.isArray(action)) return undefined;
   const value = action as Record<string, unknown>;
-  const themeTool = event.capability === "nebula.settings.set_device_theme"
-    || /^nebula_settings_set_device_theme_[0-9a-f]{10,}$/.test(event.capability);
-  const openTool = event.capability === "nebula.settings.open"
-    || /^nebula_settings_open_[0-9a-f]{10,}$/.test(event.capability);
-  const modeTool = event.capability === "nebula.settings.set_project_mode"
-    || /^nebula_settings_set_project_mode_[0-9a-f]{10,}$/.test(event.capability);
-  const scopeTool = event.capability === "nebula.settings.set_project_scope"
-    || /^nebula_settings_set_project_scope_[0-9a-f]{10,}$/.test(event.capability);
-  const headlessTool = event.capability === "nebula.settings.headless_session"
-    || /^nebula_settings_headless_session_[0-9a-f]{10,}$/.test(event.capability);
-  const navigateTool = event.capability === "nebula.navigate.open"
-    || /^nebula_navigate_open_[0-9a-f]{10,}$/.test(event.capability);
+  const themeTool = operation === "nebula.settings.set_device_theme"
+    || /^nebula_settings_set_device_theme_[0-9a-f]{10,}$/.test(operation);
+  const openTool = operation === "nebula.settings.open"
+    || /^nebula_settings_open_[0-9a-f]{10,}$/.test(operation);
+  const modeTool = operation === "nebula.settings.set_project_mode"
+    || /^nebula_settings_set_project_mode_[0-9a-f]{10,}$/.test(operation);
+  const scopeTool = operation === "nebula.settings.set_project_scope"
+    || /^nebula_settings_set_project_scope_[0-9a-f]{10,}$/.test(operation);
+  const headlessTool = operation === "nebula.settings.headless_session"
+    || /^nebula_settings_headless_session_[0-9a-f]{10,}$/.test(operation);
+  const navigateTool = operation === "nebula.navigate.open"
+    || /^nebula_navigate_open_[0-9a-f]{10,}$/.test(operation);
   if (themeTool && value.kind === "device_theme" && isThemePreference(value.theme)) {
     return { kind: "device_theme", theme: value.theme };
   }

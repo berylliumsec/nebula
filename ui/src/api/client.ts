@@ -3617,7 +3617,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
   return {
     id: value.id,
     engagementId: value.engagement_id,
-    title: value.title,
+    title: value.metadata?.control_assistant === true && value.title === "Nebula assistant" ? "Butler" : value.title,
     notebookPath: value.notebook_path ?? undefined,
     initialTitleState: typeof value.metadata?.initial_title_state === "string"
       ? value.metadata.initial_title_state as ChatSessionSummary["initialTitleState"] : undefined,

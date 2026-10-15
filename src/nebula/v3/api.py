@@ -10272,7 +10272,7 @@ def create_app(
                 profile_id=request.harness_profile_id or "",
                 model=request.model,
                 prompt=prompt,
-                title="Nebula assistant" if request.control_assistant else None,
+                title="Butler" if request.control_assistant else None,
                 content_blocks=request.messages[-1].content_blocks,
                 chat_session_id=request.session_id,
                 goal_id=request.goal_id,

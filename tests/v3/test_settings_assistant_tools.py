@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES
 from nebula.v3.chat import (
     ChatCompletionRequest,
     ChatHistoryConflict,
@@ -278,27 +279,8 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(
     )
     ordinary = runtime.chat_components(**common)
     settings = runtime.chat_components(**common, settings_assistant=True)
-    assert not any(
-        name.startswith(("nebula.settings.", "nebula.help.", "nebula.navigate."))
-        for name in ordinary.specs
-    )
-    assert set(settings.specs) == {
-        "nebula.navigate.open",
-        "nebula.help.search",
-        "nebula.help.project_context",
-        "nebula.settings.catalog",
-        "nebula.settings.open",
-        "nebula.settings.set_device_theme",
-        "nebula.settings.set_project_mode",
-        "nebula.settings.set_project_scope",
-        "nebula.settings.headless_session",
-        "nebula.settings.api_schema",
-        "nebula.settings.api_request",
-        "nebula.settings.notebook",
-        "nebula.settings.set_notebook",
-        "nebula.settings.set_post_tool",
-        "nebula.settings.models",
-        "nebula.settings.set_default_model",
+    assert not BUTLER_TOOL_NAMES.intersection(ordinary.specs)
+    assert set(settings.specs) == BUTLER_TOOL_NAMES | {
         "workspace.read",
         "workspace.search",
         "tool_output.read",

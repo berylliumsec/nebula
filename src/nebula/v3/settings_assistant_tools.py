@@ -626,6 +626,7 @@ def provider_plugins(
     settings_api: SettingsAssistantApi | None = None,
     notebooks: Any = None,
     work: Any = None,
+    all_work: bool = False,
 ) -> list[AnalysisTool]:
     async def list_settings(_arguments: dict[str, Any]) -> dict[str, Any]:
         return catalog()
@@ -875,9 +876,15 @@ def provider_plugins(
         ),
     ]
     if work is not None:
-        from .control_assistant_work import WORK_TOOLS, dispatch_work_tool
+        from .control_assistant_work import (
+            WORK_TOOLS,
+            _ALL_WORK_TOOLS,
+            dispatch_work_tool,
+        )
 
-        for name, description, schema, read_only in WORK_TOOLS:
+        for name, description, schema, read_only in (
+            _ALL_WORK_TOOLS if all_work else WORK_TOOLS
+        ):
 
             async def run_work(
                 arguments: dict[str, Any], *, tool_name: str = name

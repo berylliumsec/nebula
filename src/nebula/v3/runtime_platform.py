@@ -65,7 +65,6 @@ from .tools import (
 )
 from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
 from .working_notes import WriteNotesTool
-from .settings_assistant_tools import provider_plugins as settings_assistant_plugins
 from .settings_assistant_api import SettingsAssistantApi
 
 if TYPE_CHECKING:
@@ -414,7 +413,9 @@ class RuntimePlatform:
         registry = ToolRegistry()
         privileged_names: set[str] = set()
         if settings_assistant:
-            for plugin in settings_assistant_plugins(
+            from .butler_capabilities import ButlerCapabilities
+
+            for plugin in ButlerCapabilities(
                 self.store,
                 self.artifact_store,
                 engagement_id,
@@ -424,7 +425,7 @@ class RuntimePlatform:
                 if self.mcp_service is not None
                 and self.mcp_service.notebook_tools is not None
                 else None,
-            ):
+            ).plugins():
                 registry.register(plugin)
                 privileged_names.add(plugin.spec.name)
         if search_enabled:
