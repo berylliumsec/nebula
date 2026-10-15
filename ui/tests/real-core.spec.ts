@@ -9446,10 +9446,30 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await approval.getByRole("button", {name: "Approve", exact: true}).click();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("APPROVAL_ACCEPTED_ONCE", {timeout: 30_000});
     await expect(page.getByRole("button", {name: "Needs you", exact: true})).toBeVisible();
+    if (page.viewportSize()!.width <= 760) {
+      await page.getByRole("button", {name: "Conversation actions", exact: true}).click();
+      const actionsMenu = page.getByRole("menu", {name: "Conversation actions"});
+      await expect(actionsMenu).toBeVisible();
+      const menuBounds = await actionsMenu.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        return {left: rect.left, right: rect.right, viewportLeft: viewport?.offsetLeft ?? 0, viewportRight: (viewport?.offsetLeft ?? 0) + (viewport?.width ?? innerWidth)};
+      });
+      expect(menuBounds.left).toBeGreaterThanOrEqual(menuBounds.viewportLeft + 8);
+      expect(menuBounds.right).toBeLessThanOrEqual(menuBounds.viewportRight - 8);
+      await actionsMenu.getByRole("menuitem", {name: /Search messages/}).click();
+      await expect(page.locator("#assistant-transcript-search")).toBeVisible();
+      await page.getByRole("button", {name: "Close transcript search", exact: true}).click();
+    }
     const savedUrl = page.url();
     await page.reload();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("APPROVAL_ACCEPTED_ONCE");
     expect(page.url()).toBe(savedUrl);
+    if (page.viewportSize()!.width <= 760) {
+      await page.getByRole("button", {name: "Conversation actions", exact: true}).click();
+      await expect(page.getByRole("menu", {name: "Conversation actions"}).getByRole("menuitem", {name: /Search messages/})).toBeVisible();
+      await page.keyboard.press("Escape");
+    }
     await core.disconnect();
     const retryConnection = page.getByRole("button", {name: "Retry connection"});
     await expect(retryConnection).toBeVisible({timeout: 20_000});
