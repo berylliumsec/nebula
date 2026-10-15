@@ -105,6 +105,7 @@ from .application_model.workflow import (
 )
 from .browser_companion import BrowserCompanion
 from .browser_engine import BrowserEngineRegistry
+from .butler_memory import BUTLER_MEMORY_INSTRUCTION
 from .domain import BrowserSession
 
 from .domain import (
@@ -5658,6 +5659,7 @@ class ChatService:
                 "saved ID, status, and link when available. Say when a fact cannot be verified."
             )
             if self.butler_memory is not None and engagement_id is not None:
+                instructions += "\n\n" + BUTLER_MEMORY_INSTRUCTION
                 instructions += self.butler_memory.turn_context(
                     engagement_id, request.messages[-1].content
                 )
