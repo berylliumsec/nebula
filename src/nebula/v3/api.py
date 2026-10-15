@@ -189,6 +189,7 @@ from .chat_assistant_config import (
     chat_assistant_config,
     update_chat_assistant_config,
 )
+from .butler_sessions import ButlerSessionReservation, reserve_butler_session
 from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
 from .live_voice import create_live_session
@@ -10328,6 +10329,28 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
+        if request.control_assistant and request.session_id is None:
+            if request.engagement_id is None:
+                raise ChatConfigurationError(
+                    "Butler requires a selected project before starting a conversation"
+                )
+            reserved = reserve_butler_session(
+                store,
+                harness_runtime,
+                ButlerSessionReservation(
+                    engagement_id=request.engagement_id,
+                    backend=request.backend,
+                    provider_id=request.provider_id,
+                    harness_profile_id=request.harness_profile_id,
+                    model=request.model,
+                    mcp_server_ids=request.mcp_server_ids,
+                    harness_reasoning_effort=request.harness_reasoning_effort,
+                    harness_service_tier=request.harness_service_tier,
+                    harness_cyber_access_program=request.harness_cyber_access_program,
+                    allow_cloud_tool_results=request.allow_cloud_tool_results,
+                ),
+            )
+            request = request.model_copy(update={"session_id": reserved.id})
         scoped_chat = (
             store.get(ChatSession, request.session_id) if request.session_id else None
         )
@@ -11817,6 +11840,17 @@ def create_app(
         except MemoryConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return Response(status_code=204)
+
+    @app.post(
+        f"{API_PREFIX}/chat/control-assistant/session",
+        response_model=ChatSession,
+        tags=["chat-sessions"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_or_create_control_assistant_session(
+        request: ButlerSessionReservation,
+    ) -> ChatSession:
+        return reserve_butler_session(store, harness_runtime, request)
 
     def _live_api_key() -> str:
         # An OpenAI-compatible or custom endpoint must not have its credential

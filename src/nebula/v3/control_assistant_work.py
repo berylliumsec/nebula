@@ -5,6 +5,7 @@ This is a project-bound control plane over Core's chat and mission services.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
@@ -40,6 +41,7 @@ from .domain import (
     ApprovalStatus,
     ChatBackend,
     ChatGoal,
+    ChatMessage,
     ChatRole,
     ChatSession,
     ChatSubagent,
@@ -106,11 +108,19 @@ CHAT_SETTINGS_FIELDS: dict[str, Any] = {
         "type": ["string", "null"],
         "enum": [None, "automatic", "standard", "daybreakBlue", "daybreakRed"],
     },
-    "mcp_server_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
+    "mcp_server_ids": {
+        "type": "array",
+        "items": {"type": "string"},
+        "maxItems": 64,
+        "description": "Select enabled MCP servers by ID from chat_settings.available.mcp_servers. Their tools are attached on the next message. Preserve existing IDs when adding a server.",
+    },
     "hook_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
     "include_knowledge": {"type": "boolean"},
     "allow_cloud_knowledge": {"type": "boolean"},
-    "tools_enabled": {"type": "boolean"},
+    "tools_enabled": {
+        "type": "boolean",
+        "description": "Enable built-in chat tools. This does not select MCP servers; browser-security-testing-tools must be selected with mcp_server_ids when available.",
+    },
     "allow_subagents": {"type": "boolean"},
     "allow_agent_messaging": {"type": "boolean"},
     "max_active_subagents": {"type": ["integer", "null"], "minimum": 1, "maximum": 100},
@@ -175,6 +185,16 @@ MESSAGE_CHAT_SCHEMA: dict[str, Any] = {
         "delivery": {"type": "string", "enum": ["next", "steer"]},
     },
     "required": ["session_id", "text"],
+}
+AWAIT_CHAT_RESULT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 25},
+    },
+    "required": ["session_id", "item_id"],
 }
 START_MISSION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -583,25 +603,34 @@ class ControlAssistantWork:
             if project.scope_policy_id
             else None
         )
-        mcp = [
-            {
-                "id": item.id,
-                "name": item.name,
-                "tools": len(
-                    usable_mcp_tools(
-                        item,
-                        bypass_permissions=bool(scope and scope.bypass_permissions),
-                    )
-                ),
-            }
-            for item in self.store.find_entities(McpServerProfile, {}, limit=None)
-            if item.enabled
-            and (
-                item.metadata.get("built_in") != "notebook_v1"
-                or item.metadata.get("engagement_id") == project_id
+        mcp = []
+        for item in self.store.find_entities(McpServerProfile, {}, limit=None):
+            if (
+                not item.enabled
+                or item.capabilities.checked_at is None
+                or (
+                    item.metadata.get("built_in") == "notebook_v1"
+                    and item.metadata.get("engagement_id") != project_id
+                )
+            ):
+                continue
+            tools = usable_mcp_tools(
+                item,
+                bypass_permissions=bool(scope and scope.bypass_permissions),
             )
-            and item.capabilities.checked_at is not None
-        ]
+            mcp.append(
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "description": item.description,
+                    "tools": len(tools),
+                    "tool_details": [
+                        {"name": tool.name, "description": tool.description}
+                        for tool in tools[:20]
+                    ],
+                    "more_tools": max(0, len(tools) - 20),
+                }
+            )
         hooks = (
             [
                 {"id": item.id, "name": item.manifest.name}
@@ -721,7 +750,7 @@ class ControlAssistantWork:
                 name for name, *_ in _ALL_WORK_TOOLS if name != "nebula.work.catalog"
             ],
             "managed_tool": "nebula.work.manage",
-            "scope": "selected project; browser and notes control are not included",
+            "scope": "selected project; Assistant settings can attach available browser MCP tools to a chat; direct browser and notes control are not included",
         }
 
     def overview(self, project_id: str) -> dict[str, Any]:
@@ -2174,6 +2203,82 @@ class ControlAssistantWork:
             "status": item["status"],
         }
 
+    async def await_chat_result(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Wait briefly for one queued follow-up and return its linked saved reply."""
+
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        timeout = arguments.get("timeout_seconds", 20)
+        if type(timeout) is not int or not 0 <= timeout <= 25:
+            raise ValueError("timeout_seconds must be between 0 and 25")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            queue = self.queue.get(session.id)
+            item = next((row for row in queue.items if row.get("id") == item_id), None)
+            if item is None:
+                raise ValueError(
+                    "follow-up is no longer in the recent queue; read the chat before reporting its outcome"
+                )
+            status = str(item.get("status") or "unknown")
+            result = {
+                "session_id": session.id,
+                "item_id": item_id,
+                "queue_status": status,
+                "turn_id": item.get("turn_id"),
+                "harness_turn_id": item.get("harness_turn_id"),
+                "detail": item.get("detail"),
+                "url": _chat_url(project_id, session.id),
+            }
+            if status in {"complete", "cancelled", "needs_review", "failed", "interrupted"}:
+                turn_id = item.get("turn_id")
+                harness_turn_id = item.get("harness_turn_id")
+                if isinstance(turn_id, str) or isinstance(harness_turn_id, str):
+                    messages = self.store.find_entities(
+                        ChatMessage,
+                        {"session_id": session.id},
+                        engagement_id=project_id,
+                        newest_first=True,
+                        limit=100,
+                    )
+                    answer = next(
+                        (
+                            message
+                            for message in messages
+                            if message.role == ChatRole.ASSISTANT
+                            and (
+                                (
+                                    isinstance(turn_id, str)
+                                    and message.metadata.get("chat_turn_id") == turn_id
+                                )
+                                or (
+                                    isinstance(harness_turn_id, str)
+                                    and message.metadata.get("harness_turn_id")
+                                    == harness_turn_id
+                                )
+                            )
+                        ),
+                        None,
+                    )
+                    if answer is not None:
+                        result["saved_reply"] = answer.content[:4000]
+                result["result"] = (
+                    "saved reply available"
+                    if result.get("saved_reply") and status == "complete"
+                    else "follow-up needs review in the chat"
+                    if status in {"needs_review", "failed", "interrupted", "cancelled"}
+                    else "no saved reply for this follow-up; inspect the chat"
+                )
+                return result
+            if queue.paused or loop.time() >= deadline:
+                return {
+                    **result,
+                    "result": "queue paused" if queue.paused else "still in progress",
+                }
+            await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
+
     async def stop_chat(self, project_id: str, session_id: Any) -> dict[str, Any]:
         session = self._non_subagent_chat(project_id, session_id)
         pending = self.chat.pending_turn(session.id)
@@ -2290,7 +2395,7 @@ class ControlAssistantWork:
 _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     (
         "nebula.work.catalog",
-        "List project controls and runtimes; pass operation for one exact action schema.",
+        "List project controls and runtimes, including chat settings, MCP capability selection, follow-up delivery, and result checks; pass operation for one exact action schema.",
         CATALOG_SCHEMA,
         True,
     ),
@@ -2302,7 +2407,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.chat",
-        "Read recent messages and pending activity for one listed assistant chat.",
+        "Read recent messages and pending activity for one listed assistant chat. After a follow-up, inspect this and the queue before reporting what the agent achieved.",
         CHAT_TARGET_SCHEMA,
         True,
     ),
@@ -2416,13 +2521,13 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.chat_settings",
-        "Read saved next-turn Assistant settings, their revision, and available choices for a listed chat or session_id=self.",
+        "Read saved next-turn Assistant settings, revision, and available choices for a listed chat or session_id=self. Available MCP servers include their purpose and usable tools; tools_enabled alone does not attach an MCP browser.",
         CHAT_SETTINGS_TARGET_SCHEMA,
         True,
     ),
     (
         "nebula.work.set_chat_settings",
-        "Change the next-turn Assistant settings for one listed chat or session_id=self. First read chat_settings and pass its revision. Running and queued turns keep their submitted settings. Read back the saved result.",
+        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To give an agent a missing MCP capability, add the listed server ID to mcp_server_ids while preserving existing IDs, read back the setting, then send a new message. Running and queued turns keep their submitted settings.",
         SET_CHAT_SETTINGS_SCHEMA,
         False,
     ),
@@ -2440,9 +2545,15 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.message_chat",
-        "Send a durable next message to a main assistant chat, or steer its active harness turn. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer.",
+        "Send a durable next message to a main assistant chat, or steer its active harness turn. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
         MESSAGE_CHAT_SCHEMA,
         False,
+    ),
+    (
+        "nebula.work.await_chat_result",
+        "Wait up to 25 seconds for one message_chat queued item. Return its exact queue status and linked saved assistant reply when available. If still in progress, call again or tell the operator it is running; never invent a completed result.",
+        AWAIT_CHAT_RESULT_SCHEMA,
+        True,
     ),
     (
         "nebula.work.stop_chat",
@@ -2548,7 +2659,7 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     *(item for item in _ALL_WORK_TOOLS if item[0] not in _MANAGED_WORK_NAMES),
     (
         "nebula.work.manage",
-        "Read or change a project chat, mission, goal, subagent, follow-up queue, or schedule. First call nebula.work.catalog with the chosen operation for its exact fields; then pass operation and arguments here. Read before writes and use the saved revision.",
+        "Read or change a project chat, its Assistant settings and MCP tools, mission, goal, subagent, follow-up queue, or schedule. Use nebula.work.catalog for the chosen operation's exact fields, then pass operation and arguments here. Read before writes, use saved revisions, and check a delegated result before claiming completion.",
         MANAGE_SCHEMA,
         False,
     ),
@@ -2618,6 +2729,8 @@ async def dispatch_work_tool(
         return await work.start_chat(project_id, arguments)
     if name == "nebula.work.message_chat":
         return await work.message_chat(project_id, arguments)
+    if name == "nebula.work.await_chat_result":
+        return await work.await_chat_result(project_id, arguments)
     if name == "nebula.work.stop_chat":
         return await work.stop_chat(project_id, arguments.get("session_id"))
     if name == "nebula.work.start_mission":

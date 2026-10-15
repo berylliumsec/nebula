@@ -1592,6 +1592,141 @@ def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_messa
     assert request["allow_agent_messaging"] is True
 
 
+def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
+    tmp_path,
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="model-a",
+            capabilities=HarnessCapabilities(models=["model-a"]),
+        )
+    )
+    harness = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness.id,
+            model="model-a",
+        )
+    )
+    security = app.state.agent_security_tools.register_profile()
+    work = app.state.control_assistant_work
+    before = work.chat_settings(project.id, chat.id)
+    offered = next(
+        item
+        for item in before["available"]["mcp_servers"]
+        if item["id"] == security.id
+    )
+    assert "Headless Project security testing" in offered["description"]
+    assert {tool["name"] for tool in offered["tool_details"]} >= {
+        "navigate",
+        "status",
+    }
+    assert offered["tools"] >= 2
+    assert "does not attach an MCP browser" in (
+        work.catalog(project.id, "nebula.work.chat_settings")["description"]
+    )
+    with pytest.raises(ValueError, match="work roster"):
+        work.chat_settings(other.id, chat.id)
+
+    saved = work.set_chat_settings(
+        project.id,
+        {
+            "session_id": chat.id,
+            "expected_revision": before["revision"],
+            "settings": {"mcp_server_ids": [security.id]},
+        },
+    )
+    assert saved["settings"]["mcp_server_ids"] == [security.id]
+    assert saved["settings"]["tools_enabled"] is False
+    queued = asyncio.run(
+        work.message_chat(
+            project.id,
+            {"session_id": chat.id, "text": "Use the browser tool to find the result"},
+        )
+    )
+    assert queued["delivery"] == "queued"
+    assert work.queue.get(chat.id).items[0]["request"]["mcp_server_ids"] == [
+        security.id
+    ]
+    pending = asyncio.run(
+        work.await_chat_result(
+            project.id,
+            {
+                "session_id": chat.id,
+                "item_id": queued["item_id"],
+                "timeout_seconds": 0,
+            },
+        )
+    )
+    assert pending["result"] == "still in progress"
+    assert "saved_reply" not in pending
+    queue = work.queue.get(chat.id)
+    store.update(
+        ChatQueue,
+        queue.id,
+        {
+            "items": [
+                {
+                    **queue.items[0],
+                    "status": "complete",
+                    "turn_id": "retry-turn",
+                    "harness_turn_id": "harness-retry-turn",
+                }
+            ]
+        },
+        expected_revision=queue.revision,
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=chat.id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="The search found a result with a source.",
+            metadata={"harness_turn_id": "harness-retry-turn"},
+        )
+    )
+    completed = asyncio.run(
+        work.await_chat_result(
+            project.id,
+            {
+                "session_id": chat.id,
+                "item_id": queued["item_id"],
+                "timeout_seconds": 0,
+            },
+        )
+    )
+    assert completed["queue_status"] == "complete"
+    assert completed["saved_reply"] == "The search found a result with a source."
+    with pytest.raises(ValueError, match="work roster"):
+        asyncio.run(
+            work.await_chat_result(
+                other.id,
+                {
+                    "session_id": chat.id,
+                    "item_id": queued["item_id"],
+                    "timeout_seconds": 0,
+                },
+            )
+        )
+
+
 def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
