@@ -6202,12 +6202,26 @@ test("assistant upgrade control assistant starts project work on production LAN 
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   let providerId = "";
   const requestText = "Start a mission named LAN control mission to inspect this synthetic project.";
+  const preference = "Remember that I want time in Eastern and not UTC.";
+  const savedPreference = "The operator prefers times in Eastern Time, not UTC.";
   const stub = await startLocalModelStub({
     responseContent: "The mission was started in this project. Open Missions to follow its progress.",
     toolCall: body => {
       const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
-      if (messages.filter(message => message.role === "user").at(-1)?.content !== requestText) return undefined;
-      const toolReplies = messages.filter(message => message.role === "tool").length;
+      const lastUser = messages.map(message => message.role).lastIndexOf("user");
+      const userText = messages[lastUser]?.content;
+      const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+      if (userText === preference) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "remember long-term memory preference"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.memory.remember"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_change", arguments: {
+          operation: "nebula.memory.remember", arguments: {
+            scope: "global_preference", content: savedPreference, source_quote: "I want time in Eastern and not UTC",
+          },
+        }};
+        return undefined;
+      }
+      if (userText !== requestText) return undefined;
       if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "start a mission"}};
       if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.start_mission"}};
       if (toolReplies === 2) return {name: "nebula_capabilities_change", arguments: {
@@ -6303,12 +6317,25 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Send to Butler"}).click();
     await expect(statusRequest.then(request => request.postDataJSON() as {reasoning_effort?: string})).resolves.toMatchObject({reasoning_effort: "high"});
     await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The mission was started in this project. Open Missions to follow its progress.").last()).toBeVisible({timeout: 45_000});
-    const preference = "I prefer concise progress summaries.";
+    await memoryToggle.click();
+    stub.responseContent = "I saved your preference for Eastern Time.";
     await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(preference);
     await assistant.getByRole("button", {name: "Send to Butler"}).click();
-    await expect(assistant.getByText(preference, {exact: true})).toBeVisible({timeout: 45_000});
-    await memory.getByRole("button", {name: "Memory", exact: true}).click();
-    const preferenceRow = memory.getByRole("listitem").filter({hasText: preference});
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const response = await api.get(`butler/memory?engagement_id=${projectId}&limit=50`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const saved = await response.json() as {items: Array<{content: string}>};
+      return saved.items.some(item => item.content === savedPreference);
+    }).toBe(true);
+    await testInfo.attach("butler-memory-model-route", {
+      body: JSON.stringify(stub.requests.map((body) => {
+        const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+        const lastUser = messages.map(message => message.role).lastIndexOf("user");
+        return {user: messages[lastUser]?.content, rolesAfterUser: messages.slice(lastUser + 1).map(message => message.role), toolNames: Array.isArray(body.tools) ? (body.tools as Array<{function?: {name?: string}}>).map(tool => tool.function?.name) : []};
+      })), contentType: "application/json",
+    });
+    const preferenceRow = memory.getByRole("listitem").filter({hasText: savedPreference});
     await expect(preferenceRow).toBeVisible({timeout: 30_000});
     await preferenceRow.locator("summary").click();
     expect(await memory.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);

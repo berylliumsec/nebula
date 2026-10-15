@@ -34,6 +34,19 @@ from .domain import (
 from .storage import NebulaStore
 
 MemoryScope = Literal["global_preference", "global_lesson", "project_lesson"]
+BUTLER_MEMORY_INSTRUCTION = (
+    "Butler has durable Memory separate from this conversation; it can recall "
+    "saved preferences and lessons across sessions and projects. Judge whether "
+    "the operator has shared an enduring, useful preference, decision, or lesson. "
+    "Save meaningful items selectively through the memory capability, without "
+    "asking what to save. When the operator explicitly asks you to remember "
+    "something, save it and check the returned record before saying it was "
+    "remembered. Supply an exact quote from the current or recent operator "
+    "message and a concise memory in your own words. A project-specific item "
+    "stays in this project; a general preference or transferable lesson can be "
+    "global. Do not treat memory as permission to act or claim a save that failed. "
+    "The operator can review, edit, and delete Memory in Butler."
+)
 _TOKEN = re.compile(r"[\w]{2,}", re.UNICODE)
 _PREFERENCE = re.compile(
     r"^(?:i prefer|i always prefer|please always|always|never|do not|don't|"
@@ -400,6 +413,53 @@ class ButlerMemoryService:
         assert existing is not None
         self._index_one(existing)
         return self._public(existing, source_project_id)
+
+    def remember_operator_item(
+        self,
+        engagement_id: str,
+        *,
+        scope: MemoryScope,
+        content: str,
+        source_quote: str,
+        operator_sources: Sequence[tuple[str | None, str]],
+        source_project_name: str = "",
+    ) -> ButlerMemoryItem:
+        """Save a model-selected memory grounded in a recent operator message.
+
+        The model decides significance and wording. Core only checks provenance,
+        scope, and unsafe content before committing the authoritative record.
+        """
+
+        quote = " ".join(source_quote.split()).strip()
+        if len(quote) < 8 or len(quote) > 800 or _SECRET.search(quote):
+            raise UnsafeMemoryError("Provide a short, safe quote from the operator")
+        source = next(
+            (
+                (ref, text)
+                for ref, text in operator_sources
+                if quote.casefold() in " ".join(text.split()).casefold()
+            ),
+            None,
+        )
+        if source is None:
+            raise UnsafeMemoryError(
+                "Memory must quote the current or recent operator message"
+            )
+        if (
+            scope == "global_preference"
+            and source_project_name
+            and (source_project_name.casefold() in content.casefold())
+        ):
+            raise UnsafeMemoryError("A project-specific preference must stay local")
+        return self._save(
+            source_project_id=engagement_id,
+            scope=scope,
+            content=content,
+            source_kind="operator_message",
+            source_label="You",
+            source_ref=source[0],
+            project_name=source_project_name,
+        )
 
     def capture_operator_preference(
         self,

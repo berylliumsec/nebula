@@ -50,10 +50,11 @@ function MemoryRow({ item, onEdit, onDelete, editing, deleting, busy, disabled, 
   </li>;
 }
 
-function ButlerMemoryForProject({ api, projectId, coreState }: {
+function ButlerMemoryForProject({ api, projectId, coreState, refreshRevision }: {
   api?: ApiClient;
   projectId: string;
   coreState: "checking" | "online" | "offline";
+  refreshRevision: number;
 }) {
   const panelId = useId();
   const [open, setOpen] = useState(false);
@@ -94,7 +95,7 @@ function ButlerMemoryForProject({ api, projectId, coreState }: {
   useEffect(() => {
     if (open) void load();
     return () => request.current?.abort();
-  }, [open, load]);
+  }, [open, load, refreshRevision]);
 
   const mutate = async (item: ButlerMemoryItem, operation: "edit" | "delete") => {
     if (!api || coreState !== "online") return;
@@ -154,6 +155,6 @@ function ButlerMemoryForProject({ api, projectId, coreState }: {
 }
 
 /** Keying by project discards prior-project presentation and in-flight reads immediately. */
-export function ButlerMemory(props: { api?: ApiClient; projectId: string; coreState: "checking" | "online" | "offline" }) {
-  return <ButlerMemoryForProject key={props.projectId} {...props} />;
+export function ButlerMemory(props: { api?: ApiClient; projectId: string; coreState: "checking" | "online" | "offline"; refreshRevision?: number }) {
+  return <ButlerMemoryForProject key={props.projectId} {...props} refreshRevision={props.refreshRevision ?? 0} />;
 }
