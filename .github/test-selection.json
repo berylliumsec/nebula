@@ -1,25 +1,26 @@
 {
-  "change_digest": "0c78bd082757ec97a3d84916da9cbd3676e02b6c37458ecb81dd35bbc146e67a",
-  "reviewed_by": "Codex Butler approval gateway review",
-  "reason": "Allow the trusted in-process Butler change capability through Codex without a duplicate MCP approval under no-prompt policy. The override applies only to the Butler session and nebula.capabilities.change. Focused Python cases cover new and resumed Codex threads, goal mutations, and exact pending approval decisions. Existing real-Core Butler journeys cover the operator entry point on desktop and mobile.",
-  "exclusions": "No UI source, native platform, or external MCP server behavior changed. Frontend unit and native layers are excluded. Browser entries are limited to the existing Butler real-Core journey; other app workflows and full suites are excluded.",
+  "change_digest": "08cb67083a138df9fc313ab1313cf75dfb2f2a5390ec8ad19fbcb7499f6f45e5",
+  "reviewed_by": "Codex installed iPhone Butler menu review",
+  "reason": "Keep the installed iPhone Butler conversation menu fully inside the visual viewport. The selected existing shell journey checks keyboard opening and dismissal at desktop and the 320, 390, and 430 px mobile boundaries in Chromium and WebKit. The selected real-Core LAN journey checks a touch action, saved chat reload, and menu reopening against the production bundle in both mobile engines.",
+  "exclusions": "No Core, provider, or native source changes; Python, frontend unit, and native tests do not exercise this CSS geometry. Landscape projects use a wide viewport where the compact phone menu is not rendered. Other workflows and full suites are excluded.",
   "expected_tests": {
-    "python": 7,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 9
   },
-  "python": [
-    "tests/v3/test_harness_adapters.py::test_codex_project_never_policy_keeps_butler_change_callable",
-    "tests/v3/test_control_assistant_work.py::test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets",
-    "tests/v3/test_control_assistant_work.py::test_control_assistant_reviews_and_decides_exact_project_approval",
-    "tests/v3/test_butler_capabilities.py::test_butler_change_routes_validate_schema_revision_and_project"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:control-assistant-work/assistant-real-desktop",
-    "entry:control-assistant-work/assistant-real-chromium-390",
-    "entry:control-assistant-work/assistant-real-webkit-390"
+    "entry:ios-assistant-only/desktop",
+    "entry:ios-assistant-only/mobile-chromium-small",
+    "entry:ios-assistant-only/mobile-chromium",
+    "entry:ios-assistant-only/mobile-chromium-wide",
+    "entry:ios-assistant-only/mobile-webkit-small",
+    "entry:ios-assistant-only/mobile-webkit",
+    "entry:ios-assistant-only/mobile-webkit-wide",
+    "entry:ios-assistant-only/assistant-real-chromium-390",
+    "entry:ios-assistant-only/assistant-real-webkit-390"
   ]
 }

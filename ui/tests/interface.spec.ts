@@ -14611,6 +14611,20 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await expect(composer).toBeVisible();
   await setTheme(page, "quiet-lens");
   if (page.viewportSize()!.width <= 760) {
+    const menuTrigger = page.getByRole("button", {name: "Conversation actions", exact: true});
+    await menuTrigger.focus();
+    await menuTrigger.press("Enter");
+    const actionsMenu = page.getByRole("menu", {name: "Conversation actions"});
+    await expect(actionsMenu).toBeVisible();
+    const menuBounds = await actionsMenu.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      return {left: rect.left, right: rect.right, viewportLeft: viewport?.offsetLeft ?? 0, viewportRight: (viewport?.offsetLeft ?? 0) + (viewport?.width ?? innerWidth)};
+    });
+    expect(menuBounds.left).toBeGreaterThanOrEqual(menuBounds.viewportLeft + 8);
+    expect(menuBounds.right).toBeLessThanOrEqual(menuBounds.viewportRight - 8);
+    await page.keyboard.press("Escape");
+    await expect(actionsMenu).toHaveCount(0);
     const geometry = await page.locator(".assistant-only-page").evaluate(root => {
       const header = root.querySelector(".mobile-conversation-header")!;
       const title = header.querySelector(".mobile-conversation-title")!;
