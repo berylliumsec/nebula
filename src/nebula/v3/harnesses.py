@@ -9740,6 +9740,7 @@ class HarnessRuntimeService:
         prompt: str,
         files: dict[str, str] | None = None,
         nebula_tools: bool = True,
+        butler_recovery_case_id: str | None = None,
     ) -> HarnessTurn:
         """Run a tool-disabled, durable harness turn for bounded analysis.
 
@@ -9763,11 +9764,12 @@ class HarnessRuntimeService:
             model=selected_model,
             mcp_server_ids=[],
             tools_enabled=nebula_tools,
+            control_assistant=butler_recovery_case_id is not None,
         )
         native = (
-            _container_only_native_capabilities(profile.native_capabilities)
-            if nebula_tools
-            else HarnessNativeCapabilities()
+            HarnessNativeCapabilities()
+            if butler_recovery_case_id is not None or not nebula_tools
+            else _container_only_native_capabilities(profile.native_capabilities)
         )
         session = self.store.update(
             HarnessSession,
@@ -9778,6 +9780,16 @@ class HarnessRuntimeService:
                     "context_management": "isolated_analysis",
                     "analysis_only": True,
                     "analysis_files": files or {},
+                    **(
+                        {"butler_recovery_case_id": butler_recovery_case_id}
+                        if butler_recovery_case_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"command_runtime_enabled": False, "browser_runtime_enabled": False}
+                        if butler_recovery_case_id is not None
+                        else {}
+                    ),
                     "native_capabilities": native.model_dump(mode="json"),
                     **({} if nebula_tools else {"nebula_gateway": False}),
                 }
@@ -9791,7 +9803,14 @@ class HarnessRuntimeService:
                 harness_session_id=session.id,
                 origin=HarnessTurnOrigin.ANALYSIS,
                 prompt=prompt,
-                metadata={"analysis_only": True},
+                metadata={
+                    "analysis_only": True,
+                    **(
+                        {"butler_recovery_case_id": butler_recovery_case_id}
+                        if butler_recovery_case_id is not None
+                        else {}
+                    ),
+                },
             )
         )
         try:
@@ -13956,7 +13975,11 @@ class HarnessRuntimeService:
         )
 
     def _butler_capabilities(
-        self, project_id: str, *, turn: HarnessTurn | None = None
+        self,
+        project_id: str,
+        *,
+        turn: HarnessTurn | None = None,
+        background_case_id: str | None = None,
     ) -> Any:
         from .butler_capabilities import ButlerCapabilities
 
@@ -13971,6 +13994,14 @@ class HarnessRuntimeService:
                 str(turn.metadata.get("user_prompt") or "") if turn is not None else ""
             ),
             operator_turn_id=(turn.chat_turn_id if turn is not None else None),
+            background_case_id=(
+                background_case_id
+                or (
+                    str(turn.metadata.get("butler_recovery_case_id"))
+                    if turn is not None and turn.metadata.get("butler_recovery_case_id")
+                    else None
+                )
+            ),
             notebooks=(
                 self.mcp_service.notebook_tools.notebooks
                 if self.mcp_service is not None
@@ -13989,8 +14020,16 @@ class HarnessRuntimeService:
         current = self.store.get(HarnessSession, session.id)
         settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
+        if turn is None:
+            active = self._active.get(current.id)
+            if active is not None:
+                turn = self.store.get(HarnessTurn, active.turn_id)
         if settings_only:
-            for plugin in self._butler_capabilities(current.engagement_id).plugins():
+            for plugin in self._butler_capabilities(
+                current.engagement_id,
+                turn=turn,
+                background_case_id=current.metadata.get("butler_recovery_case_id"),
+            ).plugins():
                 spec = plugin.spec
                 read_only = spec.risk_class == RiskClass.LOCAL_READ
                 tools.append(
@@ -14018,10 +14057,6 @@ class HarnessRuntimeService:
 
         mapping: dict[str, tuple[McpServerProfile, McpToolSnapshot]] = {}
         oci_mapping: dict[str, str] = {}
-        if turn is None:
-            active = self._active.get(current.id)
-            if active is not None:
-                turn = self.store.get(HarnessTurn, active.turn_id)
         if (
             self.knowledge_retriever is not None
             and turn is not None
@@ -15111,20 +15146,29 @@ class HarnessRuntimeService:
         result: dict[str, Any] | None = None,
         error: BaseException | None = None,
     ) -> None:
-        latest = self.store.get(ToolCall, call_id)
-        self.store.update(
-            ToolCall,
-            latest.id,
-            {
-                "status": ToolCallStatus.FAILED
-                if error is not None
-                else ToolCallStatus.COMPLETE,
-                **({"error": _safe_error(error)} if error is not None else {}),
-                **({"result": result} if result is not None else {}),
-                "completed_at": utc_now(),
-            },
-            expected_revision=latest.revision,
-        )
+        from .butler_oversight import _entity_in_transaction
+
+        with self.store.transaction(immediate=True) as transaction:
+            latest = _entity_in_transaction(transaction, ToolCall, call_id)
+            if latest is None:
+                raise NotFoundError("gateway tool call is unavailable")
+            saved = transaction.update(
+                ToolCall,
+                latest.id,
+                {
+                    "status": ToolCallStatus.FAILED
+                    if error is not None
+                    else ToolCallStatus.COMPLETE,
+                    **({"error": _safe_error(error)} if error is not None else {}),
+                    **({"result": result} if result is not None else {}),
+                    "completed_at": utc_now(),
+                },
+                expected_revision=latest.revision,
+            )
+            if error is not None and saved.tool_name == "subagent.start":
+                from .butler_recovery import record_subagent_start_failure
+
+                record_subagent_start_failure(transaction, saved, error)
 
     async def _gateway_action_call(
         self,
