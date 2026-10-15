@@ -49,6 +49,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [destinationQuery, setDestinationQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [memoryRefreshRevision, setMemoryRefreshRevision] = useState(0);
   const [suggestions, setSuggestions] = useState<SettingCatalogEntry[]>([]);
   const [sessionId, setSessionId] = useState<string>();
   const [sessionRuntime, setSessionRuntime] = useState<{ kind: "provider" | "harness"; id: string; model: string }>();
@@ -679,6 +680,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           writeStorage(actionOutcomesKey, JSON.stringify(Object.fromEntries(Object.entries(outcomes).slice(-50))));
         }
         setMessages((current) => [...current, result.message, ...confirmations.map((content) => ({ role: "assistant" as const, content }))]);
+        setMemoryRefreshRevision((current) => current + 1);
       }
       else if (!controller.signal.aborted) setError("The response is still running. Reopen this assistant to check its saved conversation.");
     } catch (caught) {
@@ -767,6 +769,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (!result?.message) throw new Error("The assistant response is still running. Check the saved work before retrying.");
     confirmations.push(...workReceipts.filter(({ url }) => !result.message!.content.includes(url)).map(({ content }) => content));
     setMessages((current) => [...current, result.message!, ...confirmations.map((content) => ({ role: "assistant" as const, content }))]);
+    setMemoryRefreshRevision((current) => current + 1);
     return [result.message.content, ...confirmations].filter(Boolean).join("\n\n");
   };
 
@@ -800,7 +803,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       </section>}
       {!hidden && engagement && <div className={styles.butlerWorkspace}>
         <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
-        <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} />
+        <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />
       </div>}
       <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
         const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);

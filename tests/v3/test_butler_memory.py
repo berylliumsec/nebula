@@ -26,7 +26,10 @@ from nebula.v3.domain import (
     FindingStatus,
     HarnessKind,
     HarnessProfile,
+    ChatMessage,
     ChatRole,
+    ChatSession,
+    ChatTurn,
     ProviderProfile,
     Report,
     ReportStatus,
@@ -43,7 +46,9 @@ from nebula.v3.providers import (
     ProviderConfig,
     ProviderHealth,
     ProviderKind,
+    ToolCall,
 )
+from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
 
 
@@ -104,6 +109,56 @@ class ResponseProvider(PreparationProvider):
             usage=ModelUsage(input_tokens=5, output_tokens=4, total_tokens=9),
             finish_reason="stop",
             provider_request_id="butler-memory-test",
+        )
+
+
+class MemoryActionProvider(ResponseProvider):
+    """Exercise Butler's discovery-to-save route as a model tool sequence."""
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        operations = [
+            (
+                "nebula.capabilities.search",
+                {"query": "remember long-term memory preference"},
+            ),
+            (
+                "nebula.capabilities.describe",
+                {"operation": "nebula.memory.remember"},
+            ),
+            (
+                "nebula.capabilities.change",
+                {
+                    "operation": "nebula.memory.remember",
+                    "arguments": {
+                        "scope": "global_preference",
+                        "content": "The operator prefers times in Eastern Time, not UTC.",
+                        "source_quote": "I want time in Eastern and not UTC",
+                    },
+                },
+            ),
+        ]
+        if len(self.requests) <= len(operations):
+            name, arguments = operations[len(self.requests) - 1]
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                tool_calls=[
+                    ToolCall(
+                        id=f"memory-{len(self.requests)}",
+                        name=name,
+                        arguments=arguments,
+                    )
+                ],
+                usage=ModelUsage(input_tokens=5, output_tokens=4, total_tokens=9),
+                finish_reason="tool_calls",
+            )
+        return ModelResponse(
+            provider_id=self.config.id,
+            model=request.model or "model-a",
+            text="I saved your time preference.",
+            usage=ModelUsage(input_tokens=5, output_tokens=4, total_tokens=9),
+            finish_reason="stop",
         )
 
 
@@ -433,6 +488,26 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
     first = store.create(Engagement(id="project-a", name="Project A"))
     second = store.create(Engagement(id="project-b", name="Project B"))
     memory = _service(tmp_path)
+    profile = store.create(
+        ProviderProfile(name="Local", provider_type="ollama", is_local=True)
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=second.id,
+            title="Butler",
+            provider_profile_id=profile.id,
+            model="model-a",
+            metadata={"control_assistant": True},
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=second.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
     memory.capture_verified_lesson(
         first.id,
         "This project's approved evidence requires source review.",
@@ -444,14 +519,14 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
         ArtifactStore(tmp_path / "artifacts"),
         second.id,
         memory=memory,
-        operator_message="I prefer concise progress summaries.",
-        operator_turn_id="turn-b",
+        operator_message="Remember that I want time in Eastern, not UTC.",
+        operator_turn_id=turn.id,
     )
 
     async def scenario():
         assert len(capabilities.plugins()) == 4
-        found = await capabilities.search({"query": "memory preference"})
-        assert "nebula.memory.remember_preference" in {
+        found = await capabilities.search({"query": "memory remember"})
+        assert "nebula.memory.remember" in {
             item["operation"] for item in found["matches"]
         }
         listed = await capabilities.invoke(
@@ -459,11 +534,35 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
         )
         assert listed["items"] == []
         saved = await capabilities.invoke(
-            {"operation": "nebula.memory.remember_preference", "arguments": {}},
+            {
+                "operation": "nebula.memory.remember",
+                "arguments": {
+                    "scope": "global_preference",
+                    "content": "The operator prefers times in Eastern Time, not UTC.",
+                    "source_quote": "I want time in Eastern, not UTC",
+                },
+            },
             change=True,
         )
-        assert saved["item"]["content"] == "I prefer concise progress summaries."
-        assert saved["item"]["source_ref"] == "turn-b"
+        assert (
+            saved["item"]["content"]
+            == "The operator prefers times in Eastern Time, not UTC."
+        )
+        assert saved["item"]["source_ref"] == turn.id
+        assert saved["item"]["scope"] == "global_preference"
+        assert saved["item"]["id"] == memory.list(first.id).items[0].id
+        with pytest.raises(UnsafeMemoryError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.memory.remember",
+                    "arguments": {
+                        "scope": "global_preference",
+                        "content": "The operator prefers Pacific Time.",
+                        "source_quote": "I want Pacific Time",
+                    },
+                },
+                change=True,
+            )
         forgotten = await capabilities.invoke(
             {
                 "operation": "nebula.memory.forget",
@@ -475,6 +574,90 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
         assert memory.list(second.id).items == []
 
     asyncio.run(scenario())
+
+
+def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(tmp_path):
+    store = NebulaStore(tmp_path / "core.sqlite3")
+    project = store.create(Engagement(id="project-a", name="Project A"))
+    profile = store.create(
+        ProviderProfile(name="Local", provider_type="ollama", is_local=True)
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            provider_profile_id=profile.id,
+            model="model-a",
+            metadata={"control_assistant": True},
+        )
+    )
+    earlier = store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=session.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="For all updates, show times in Eastern instead of UTC.",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    memory = _service(tmp_path)
+    capabilities = ButlerCapabilities(
+        store,
+        ArtifactStore(tmp_path / "artifacts"),
+        project.id,
+        memory=memory,
+        operator_message="That timing detail will matter later.",
+        operator_turn_id=turn.id,
+    )
+    saved = asyncio.run(
+        capabilities.invoke(
+            {
+                "operation": "nebula.memory.remember",
+                "arguments": {
+                    "scope": "global_preference",
+                    "content": "Show update times in Eastern Time instead of UTC.",
+                    "source_quote": "show times in Eastern instead of UTC",
+                },
+            },
+            change=True,
+        )
+    )
+    assert saved["item"]["source_ref"] == earlier.id
+    assert saved["item"]["content"] in memory.turn_context(
+        project.id, "What time zone should updates use?"
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=session.id,
+            sequence=2,
+            role=ChatRole.USER,
+            content="Use Pacific Time for every update.",
+            metadata={"retracted_at": utc_now().isoformat()},
+        )
+    )
+    with pytest.raises(UnsafeMemoryError):
+        asyncio.run(
+            capabilities.invoke(
+                {
+                    "operation": "nebula.memory.remember",
+                    "arguments": {
+                        "scope": "global_preference",
+                        "content": "Show every update in Pacific Time.",
+                        "source_quote": "Use Pacific Time for every update",
+                    },
+                },
+                change=True,
+            )
+        )
 
 
 def test_harness_butler_turn_reads_scoped_memory_without_foreign_source(tmp_path):
@@ -586,7 +769,7 @@ def test_provider_butler_turn_reads_scoped_memory_without_foreign_source(tmp_pat
     assert "report-a" not in instructions
 
 
-def test_api_butler_turn_auto_saves_operator_preference_and_reads_it_next_turn(
+def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_turn(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "core.sqlite3")
@@ -597,13 +780,26 @@ def test_api_butler_turn_auto_saves_operator_preference_and_reads_it_next_turn(
             provider_type="ollama",
             is_local=True,
             model_allowlist=["model-a"],
+            capability_verifications={
+                "model-a": {"model": "model-a", "status": "verified"}
+            },
         )
     )
-    provider = ResponseProvider(provider_profile.id)
+    provider = MemoryActionProvider(provider_profile.id)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     memory = _service(tmp_path)
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    runtime = RuntimePlatform(
+        store=store, artifact_store=artifacts, data_root=tmp_path / "runtime"
+    )
     client = TestClient(
-        create_app(store, auth_token="test-token", butler_memory_service=memory)
+        create_app(
+            store,
+            auth_token="test-token",
+            artifact_store=artifacts,
+            tool_platform=runtime,
+            butler_memory_service=memory,
+        )
     )
     headers = {"Authorization": "Bearer test-token"}
     first = client.post(
@@ -615,14 +811,18 @@ def test_api_butler_turn_auto_saves_operator_preference_and_reads_it_next_turn(
             "model": "model-a",
             "control_assistant": True,
             "messages": [
-                {"role": "user", "content": "I prefer concise progress summaries."}
+                {
+                    "role": "user",
+                    "content": "Remember that I want time in Eastern and not UTC.",
+                }
             ],
         },
     )
     assert first.status_code == 200, first.text
     saved = memory.list(project.id).items
     assert len(saved) == 1
-    assert saved[0].content == "I prefer concise progress summaries."
+    assert saved[0].content == "The operator prefers times in Eastern Time, not UTC."
+    assert saved[0].source_ref is not None
     second = client.post(
         "/api/v1/chat/completions",
         headers=headers,
@@ -638,31 +838,13 @@ def test_api_butler_turn_auto_saves_operator_preference_and_reads_it_next_turn(
     assert second.status_code == 200, second.text
     assert any(
         "What changed today?" in str(request.messages)
-        and "I prefer concise progress summaries" in request.instructions
+        and "times in Eastern Time, not UTC" in request.instructions
         for request in provider.requests
     )
-    third = client.post(
-        "/api/v1/chat/completions",
-        headers=headers,
-        json={
-            "engagement_id": project.id,
-            "provider_id": provider_profile.id,
-            "session_id": first.json()["session_id"],
-            "model": "model-a",
-            "control_assistant": True,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Next time, verify evidence before reporting results.",
-                }
-            ],
-        },
-    )
-    assert third.status_code == 200, third.text
     another_project = store.create(Engagement(id="project-b", name="Project B"))
     cross_project = memory.list(another_project.id).items
     assert any(
-        item.scope == "global_lesson" and "verify evidence" in item.content
+        item.scope == "global_preference" and "Eastern Time" in item.content
         for item in cross_project
     )
     assert all(item.source_ref is None for item in cross_project)

@@ -15,6 +15,18 @@ const response = (items: unknown[] = [preference, lesson], state = ready) => ({ 
 const client = (request: ReturnType<typeof vi.fn>) => ({ request } as unknown as ApiClient);
 
 describe("ButlerMemory", () => {
+  it("refreshes an open Memory panel after a Butler turn saves a memory", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn().mockResolvedValueOnce(response([])).mockResolvedValueOnce(response([preference]));
+    const api = client(request);
+    const view = render(<ButlerMemory api={api} projectId="project-a" coreState="online" refreshRevision={0} />);
+    await user.click(screen.getByRole("button", { name: "Memory" }));
+    expect(await screen.findByText("0 saved memories")).toBeVisible();
+    view.rerender(<ButlerMemory api={api} projectId="project-a" coreState="online" refreshRevision={1} />);
+    expect(await screen.findByText("Prefer concise progress summaries")).toBeVisible();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("loads only when opened and keeps full content and source behind disclosure", async () => {
     const user = userEvent.setup();
     const request = vi.fn().mockResolvedValue(response());

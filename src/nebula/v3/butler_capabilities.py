@@ -11,7 +11,14 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 
-from .domain import Engagement, RiskClass
+from .domain import (
+    ChatMessage,
+    ChatRole,
+    ChatTurn,
+    Engagement,
+    RiskClass,
+    message_is_replaced,
+)
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -105,6 +112,7 @@ class ButlerCapabilities:
     ) -> None:
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
+        self._store = store
         self._project_id = project_id
         self._project_name = store.get(Engagement, project_id).name
         self._memory = memory
@@ -140,17 +148,32 @@ class ButlerCapabilities:
                 self._project_id, arguments["query"], limit=arguments.get("limit", 12)
             ).model_dump(mode="json")
 
-        async def remember_preference(_arguments: dict[str, Any]) -> dict[str, Any]:
-            item = self._memory.capture_operator_preference(
+        async def remember_item(arguments: dict[str, Any]) -> dict[str, Any]:
+            sources: list[tuple[str | None, str]] = [
+                (self._operator_turn_id, self._operator_message)
+            ]
+            if self._operator_turn_id:
+                turn = self._store.get(ChatTurn, self._operator_turn_id)
+                if turn.engagement_id != self._project_id:
+                    raise ValueError("Memory source belongs to another project")
+                messages = self._store.list_session_entities(
+                    ChatMessage, turn.session_id, newest_first=True, limit=16
+                )
+                sources.extend(
+                    (message.id, message.content)
+                    for message in messages
+                    if message.engagement_id == self._project_id
+                    and message.role == ChatRole.USER
+                    and not message_is_replaced(message)
+                )
+            item = self._memory.remember_operator_item(
                 self._project_id,
-                self._operator_message,
-                source_ref=self._operator_turn_id,
+                scope=arguments["scope"],
+                content=arguments["content"],
+                source_quote=arguments["source_quote"],
+                operator_sources=sources,
                 source_project_name=self._project_name,
             )
-            if item is None:
-                raise ValueError(
-                    "The current operator message has no explicit, safe preference to remember"
-                )
             return {"item": item.model_dump(mode="json")}
 
         async def edit_item(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -200,11 +223,31 @@ class ButlerCapabilities:
                 search_items,
             ),
             (
-                "nebula.memory.remember_preference",
-                "Remember an explicit stable preference in the operator's current message; Core reads the original message and rejects unsafe content or invented preferences.",
-                {"type": "object", "properties": {}, "additionalProperties": False},
+                "nebula.memory.remember",
+                "Save a selectively chosen durable Butler memory or an explicit remember request. Quote exact words from the current or recent operator message. Use global_preference for a general preference, global_lesson for transferable guidance, and project_lesson for project-specific guidance. Core verifies the quote, scope, and safe content and returns the saved record. Search existing memory first to avoid redundant saves.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "enum": [
+                                "global_preference",
+                                "global_lesson",
+                                "project_lesson",
+                            ],
+                        },
+                        "content": {"type": "string", "minLength": 8, "maxLength": 800},
+                        "source_quote": {
+                            "type": "string",
+                            "minLength": 8,
+                            "maxLength": 800,
+                        },
+                    },
+                    "required": ["scope", "content", "source_quote"],
+                    "additionalProperties": False,
+                },
                 RiskClass.WORKSPACE_WRITE,
-                remember_preference,
+                remember_item,
             ),
             (
                 "nebula.memory.update",

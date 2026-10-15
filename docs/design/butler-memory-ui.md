@@ -4,9 +4,23 @@ Butler saves useful preferences and lessons automatically. The operator opens
 Memory from the Butler panel only when they want to review or manage it. Opening
 the section is the first read; saving never interrupts a chat or Voice turn.
 
+Butler decides what is worth keeping during its model turn, including Voice
+requests delegated to the saved Butler conversation. An explicit request to
+remember an item should call the memory capability and report the saved record;
+ordinary turns should produce a memory only when the model judges the item
+useful beyond the immediate exchange. Core checks an exact quote against the
+current or recent operator messages, rejects unsafe content, persists the item
+in Butler's SQLite database, and returns its ID. Chroma is a rebuildable search
+index. The next turn and a reopened Memory panel read Core's saved record.
+If the save fails, Butler must report that failure and must not imply it kept
+the item in long-term memory. Project lessons stay in the selected project;
+global preferences and transferable lessons can be recalled elsewhere.
+
 | Journey | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |
 | Open Memory | No request occurs before the operator opens it; a compact list and search appear on demand | React owns open state; Core owns items | component, production browser |
+| Remember from text or Voice | Explicit requests yield a saved ID and later recall; model-selected useful items save without a prompt | Butler model selects; Core validates quote and owns persistence | capability integration, real Core |
+| Butler turn completes while Memory is open | The list refreshes from Core and shows any new record without closing the panel | Core database; React only triggers the read | component, real Core |
 | Find a memory | Search uses the selected project and displays scope, source, and last update; fallback search quality is labelled | selected project and Core search/index status | component, real Core |
 | Review a result | Full content and source reference, when visible, expand without crowding the Butler chat | Core scoped read; React expansion | component, mobile browser |
 | Edit or delete | A saved revision is sent, destructive deletion requires an explicit second click, and the list reloads from Core | Core revision and database | component, real Core |

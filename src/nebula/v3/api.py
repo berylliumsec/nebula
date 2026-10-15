@@ -10355,9 +10355,6 @@ def create_app(
             store.get(ChatSession, request.session_id) if request.session_id else None
         )
         request = isolate_settings_assistant_request(request, scoped_chat)
-        butler_request = request.control_assistant or bool(
-            scoped_chat and scoped_chat.metadata.get("control_assistant") is True
-        )
         if request.session_id:
             selected_chat = store.get(ChatSession, request.session_id)
             if selected_chat.metadata.get("side_chat") is True:
@@ -10459,37 +10456,6 @@ def create_app(
                 allow_agent_messaging=request.allow_agent_messaging,
                 control_assistant=request.control_assistant,
             )
-            if butler_request:
-                try:
-                    project_name = store.get(Engagement, engagement_id).name
-                    butler_memory_service.capture_operator_preference(
-                        engagement_id,
-                        prompt,
-                        source_ref=chat_turn.id,
-                        source_project_name=project_name,
-                    )
-                    butler_memory_service.capture_operator_lesson(
-                        engagement_id,
-                        prompt,
-                        source_ref=chat_turn.id,
-                        source_project_name=project_name,
-                    )
-                    butler_memory_service.capture_operator_decision(
-                        engagement_id,
-                        prompt,
-                        source_ref=chat_turn.id,
-                        source_project_name=project_name,
-                    )
-                except (
-                    Exception
-                ) as exc:  # diagnostic-expected: memory is advisory to chat
-                    record_caught_exception(
-                        "butler-memory",
-                        "butler_memory.capture_failed",
-                        "Butler could not retain this memory; the chat turn continues.",
-                        exc,
-                        stage="capture",
-                    )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)
             harness_runtime.start_chat_turn(harness_turn.id)
@@ -10793,38 +10759,6 @@ def create_app(
                 if prepared.turn is not None
                 else None
             )
-        preference_source_ref = accepted_turn_id or (
-            result.session_id if not request.stream else None
-        )
-        if butler_request and prepared.engagement_id and preference_source_ref:
-            try:
-                project_name = store.get(Engagement, prepared.engagement_id).name
-                butler_memory_service.capture_operator_preference(
-                    prepared.engagement_id,
-                    request.messages[-1].content,
-                    source_ref=preference_source_ref,
-                    source_project_name=project_name,
-                )
-                butler_memory_service.capture_operator_lesson(
-                    prepared.engagement_id,
-                    request.messages[-1].content,
-                    source_ref=preference_source_ref,
-                    source_project_name=project_name,
-                )
-                butler_memory_service.capture_operator_decision(
-                    prepared.engagement_id,
-                    request.messages[-1].content,
-                    source_ref=preference_source_ref,
-                    source_project_name=project_name,
-                )
-            except Exception as exc:  # diagnostic-expected: memory is advisory to chat
-                record_caught_exception(
-                    "butler-memory",
-                    "butler_memory.capture_failed",
-                    "Butler could not retain this memory; the chat turn continues.",
-                    exc,
-                    stage="capture",
-                )
         if not request.stream:
             return result
 
