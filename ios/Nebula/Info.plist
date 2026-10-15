@@ -14,5 +14,6 @@
 <key>UILaunchScreen</key><dict/>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>NSLocalNetworkUsageDescription</key><string>Connect to your Nebula server on your home network.</string>
+<key>NSMicrophoneUsageDescription</key><string>Talk with Nebula Voice about your projects, chats, and missions.</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/><key>NSAllowsArbitraryLoadsInWebContent</key><true/></dict>
 </dict></plist>

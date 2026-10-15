@@ -1688,6 +1688,29 @@ export interface ProviderUpdateRequest {
 
 export type ChatRole = "user" | "assistant" | "system";
 
+export interface VoiceWorkRoster {
+  project: { id: string; name: string };
+  chats: { id: string; title: string; backend: string; model: string; state: string; url: string }[];
+  missions: { id: string; name: string; status: string; backend: string; updated_at: string; url: string }[];
+  attention?: { kind: "approval" | "question"; action_id: string; owner_kind: "chat" | "mission"; owner_id: string; owner: string; summary: string; risk?: string; contains_secret?: boolean; url: string }[];
+  more_chats: boolean;
+  more_missions: boolean;
+  more_attention?: boolean;
+}
+
+export interface VoiceWorkDetail {
+  id: string;
+  title?: string;
+  name?: string;
+  status?: string;
+  model?: string;
+  objective?: string;
+  recent_messages?: { role: string; content: string }[];
+  tasks?: { id: string; title: string; status: string }[];
+  pending_turn?: { id: string; status: string } | null;
+  url: string;
+}
+
 export interface ChatMessage {
   id?: Identifier;
   role: ChatRole;
@@ -2386,6 +2409,7 @@ export interface ChatSessionSummary {
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
   isControlAssistant?: boolean;
+  assistantConfig?: ChatAssistantConfig;
   inheritedMessageCount?: number;
   forkedFromMessageId?: Identifier;
   model?: string;
@@ -2409,6 +2433,30 @@ export interface ChatSessionSummary {
   createdAt: string;
   updatedAt: string;
   revision: number;
+}
+
+/** Core's saved choices for this conversation's next message. */
+export interface ChatAssistantConfig {
+  backend: "provider" | "harness";
+  profileId: Identifier;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  harnessReasoningEffort?: string;
+  harnessServiceTier?: string;
+  harnessMode?: string;
+  harnessCyberAccessProgram?: "automatic" | "standard" | "daybreakBlue" | "daybreakRed";
+  mcpServerIds: Identifier[];
+  hookIds: Identifier[];
+  includeKnowledge: boolean;
+  allowCloudKnowledge: boolean;
+  toolsEnabled: boolean;
+  allowSubagents: boolean;
+  allowAgentMessaging: boolean;
+  maxActiveSubagents?: number;
+  subagentProviderId?: Identifier;
+  subagentHarnessProfileId?: Identifier;
+  subagentModel?: string;
+  subagentReasoningEffort?: ReasoningEffort;
 }
 
 export interface ChatSessionActivity {

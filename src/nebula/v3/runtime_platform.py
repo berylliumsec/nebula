@@ -108,6 +108,28 @@ class ToolExecutionBroker(Protocol):
     ) -> ToolExecutionResult: ...
 
 
+class _ControlAssistantScopeBroker:
+    """Keep policy repair tools privileged without exempting ordinary tools."""
+
+    def __init__(self, broker: ToolExecutionBroker, privileged_names: set[str]) -> None:
+        self.broker = broker
+        self.privileged_names = frozenset(privileged_names)
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: Approval | None = None,
+    ) -> ToolExecutionResult:
+        effective_scope = (
+            scope.model_copy(update={"bypass_permissions": True})
+            if invocation.tool_name in self.privileged_names
+            else scope
+        )
+        return await self.broker.execute(invocation, effective_scope, approval=approval)
+
+
 def _runner_profile_fingerprint(profile: StoredRunnerProfile) -> str:
     """Bind preparation to runner security configuration, not health telemetry."""
 
@@ -381,11 +403,7 @@ class RuntimePlatform:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
-        if settings_assistant and (mcp_profiles or ssh_environments or include_oci):
-            raise RuntimePlatformError(
-                "the settings assistant cannot attach general tools"
-            )
-        search_enabled = web_search_enabled(scope) and not settings_assistant
+        search_enabled = web_search_enabled(scope)
         if (
             not mcp_profiles
             and not ssh_environments
@@ -394,6 +412,7 @@ class RuntimePlatform:
         ):
             raise RuntimePlatformError("no tool source was selected")
         registry = ToolRegistry()
+        privileged_names: set[str] = set()
         if settings_assistant:
             for plugin in settings_assistant_plugins(
                 self.store,
@@ -407,6 +426,7 @@ class RuntimePlatform:
                 else None,
             ):
                 registry.register(plugin)
+                privileged_names.add(plugin.spec.name)
         if search_enabled:
             registry.register(WebSearchTool(self.search_runtime, scope))
         if mcp_profiles:
@@ -424,11 +444,10 @@ class RuntimePlatform:
                 raise RuntimePlatformError(str(exc)) from exc
         for plugin in build_ssh_tool_plugins(ssh_environments):
             registry.register(plugin)
-        if not settings_assistant:
-            register_artifact_retrieval_tools(
-                registry,
-                output_service=ToolOutputService(self.store, self.artifact_store),
-            )
+        register_artifact_retrieval_tools(
+            registry,
+            output_service=ToolOutputService(self.store, self.artifact_store),
+        )
         broker = ToolBroker(
             registry=registry,
             policy_engine=PolicyEngine(),
@@ -443,13 +462,12 @@ class RuntimePlatform:
             auto_approve=project_auto_approves_tools(self.store, engagement_id),
         )
         return RuntimeToolComponents(
-            broker=broker,
-            # This catalog is available only to the dedicated, authenticated
-            # settings assistant. Project execution windows and prohibited
-            # tool names must not prevent the operator repairing that policy.
-            scope=scope.model_copy(update={"bypass_permissions": True})
+            broker=_ControlAssistantScopeBroker(broker, privileged_names)
             if settings_assistant
-            else scope,
+            else broker,
+            # Only product-control tools bypass project policy. General tools
+            # retain the saved scope and their ordinary approval requirements.
+            scope=scope,
             workspace=self.workspace_for(engagement_id),
             specs={spec.name: spec for spec in registry.specs()},
         )

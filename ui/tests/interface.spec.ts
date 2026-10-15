@@ -2202,6 +2202,83 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
+reloadTest("stabilization Nebula Voice stays active until explicit exit", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const provider = {
+    ...entity, id: "provider-voice", name: "Voice work provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["voice-work-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "voice-work-model" },
+  };
+  await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
+  await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["voice-work-model"] } }));
+  await page.addInitScript(() => {
+    const track = { enabled: true, stop() {} };
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => ({ getAudioTracks: () => [track], getTracks: () => [track] }) } });
+    class Meter {
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      createAnalyser() { return { fftSize: 512, connect() {}, disconnect() {}, getByteTimeDomainData(samples: Uint8Array) { samples.fill(180); } }; }
+      createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} }; }
+      destination = {};
+      async resume() {}
+      async close() {}
+    }
+    Object.defineProperty(window, "AudioContext", { configurable: true, value: Meter });
+    class Events extends EventTarget {
+      readyState = "open";
+      send(raw: string) {
+        if (JSON.parse(raw).type === "session.close") queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "session.closed" }) })));
+      }
+      close() { this.readyState = "closed"; this.dispatchEvent(new Event("close")); }
+    }
+    class Peer extends EventTarget {
+      channel = new Events();
+      iceGatheringState = "complete";
+      connectionState = "connected";
+      localDescription = { sdp: "v=0\r\nmock-offer" };
+      createDataChannel() { return this.channel; }
+      addTrack() { return {}; }
+      async createOffer() { return { type: "offer", sdp: "v=0\r\nmock-offer" }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() { queueMicrotask(() => this.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "session.started" }) }))); }
+      close() {}
+    }
+    Object.defineProperty(window, "RTCPeerConnection", { configurable: true, value: Peer });
+  });
+  await page.route("**/api/v1/voice/session", route => route.fulfill({ status: 200, json: { session_id: "live-test", sdp: "answer" } }));
+  await page.route(/\/api\/v1\/voice\/work(?:\/.*)?\?/, route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chats/chat-voice")) return route.fulfill({ status: 200, json: { id: "chat-voice", title: "Surface review", url: "/chat", recent_messages: [{ role: "assistant", content: "Reviewing current scope" }] } });
+    return route.fulfill({ status: 200, json: { project: { id: "scratch-project", name: "Scratch Project" }, chats: [{ id: "chat-voice", title: "Surface review", backend: "harness", model: "fixture", state: "working", url: "/chat" }], missions: [{ id: "mission-voice", name: "Audit scope", status: "running", backend: "harness", updated_at: "now", url: "/mission" }], attention: [{ kind: "approval", action_id: "approval-voice", owner_kind: "chat", owner_id: "chat-voice", owner: "Code agent", summary: "write_file", url: "/chat" }], more_chats: false, more_missions: false } });
+  });
+  await openWorkspace(page, "/", "Workbench");
+  await page.getByRole("button", { name: "Open Nebula assistant" }).click();
+  await page.getByRole("button", { name: "Start Nebula Voice" }).click();
+  const voice = page.getByRole("dialog", { name: "Nebula Voice" });
+  await expect(voice).toBeVisible();
+  await expect(voice.getByRole("status").filter({ hasText: "Listening" })).toBeVisible();
+  await expect.poll(() => voice.getByTestId("voice-orb").evaluate(element => Number.parseFloat(getComputedStyle(element).scale))).toBeGreaterThan(1.02);
+  await expect(voice.getByText("Audit scope")).toBeVisible();
+  await expect(voice.getByText("1 needs attention")).toBeVisible();
+  await voice.getByRole("button", { name: /Surface review/ }).click();
+  await expect(voice.getByText("Reviewing current scope")).toBeVisible();
+  await voice.getByRole("button", { name: "Speaker output" }).click();
+  await expect(voice.getByRole("group", { name: "Speaker audio" })).toContainText("No speaker stream is connected");
+  await expect(voice.getByRole("button", { name: "Reconnect voice" })).toBeVisible();
+  const orb = await voice.getByTestId("voice-orb").boundingBox();
+  expect(orb).toBeTruthy();
+  expect(Math.abs(orb!.x + orb!.width / 2 - page.viewportSize()!.width / 2)).toBeLessThanOrEqual(12);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const close = voice.getByRole("button", { name: "Exit voice mode" });
+  const rect = await close.boundingBox();
+  expectTouchTarget(rect?.width, "Voice exit width");
+  expectTouchTarget(rect?.height, "Voice exit height");
+  const scan = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Nebula Voice"]').analyze();
+  expect(scan.violations).toEqual([]);
+  await close.click();
+  await expect(voice).toHaveCount(0);
+});
+
 reloadTest("stabilization Nebula assistant opens from every screen and changes this device theme", async ({ page }) => {
   let policyMode: "docker" | "host" = "docker";
   let savedRequest: Record<string, unknown> | undefined;
@@ -14380,6 +14457,11 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await expect(page).toHaveURL(/\/projects\/scratch-project\/workbench\?view=chat/);
   await expect(page.getByRole("button", {name: "Open conversations"})).toBeVisible({timeout: 30_000});
   await expect(page.getByRole("button", {name: "Start new chat"})).toBeVisible();
+  await page.getByRole("button", {name: "Open Nebula assistant"}).click();
+  const controlAssistant = page.getByRole("dialog", {name: "Nebula assistant"});
+  await expect(controlAssistant).toBeVisible();
+  await expect(controlAssistant.getByRole("button", {name: "Start Nebula Voice"})).toBeVisible();
+  await controlAssistant.getByRole("button", {name: "Close Nebula assistant"}).click();
   await page.getByRole("button", {name: "Start new chat"}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
   await expect(composer).toBeVisible();

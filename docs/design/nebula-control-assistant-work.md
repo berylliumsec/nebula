@@ -18,10 +18,9 @@ owned tool calls, so a browser disconnect does not own the delegated work.
 | Failure and retry | A failed or ambiguous action remains visible, identifies its target, and gives a safe next step | Core errors and tool result | Unit and browser |
 | Delete or revoke | No delete or revoke tool is included in this slice; existing product controls retain those transitions | Core | Not applicable: no delete action added |
 
-The tool boundary permits only typed `nebula.work.*` actions on the selected
-project. It never gives the control assistant arbitrary filesystem, MCP, web,
-browser companion, or general chat tools. Ordinary chats do not receive these
-work tools. Browser and notes control are outside this slice. A read result is a
+The initial tool boundary permits only typed `nebula.work.*` actions on the selected
+project. Ordinary chats do not receive these work tools. Browser and notes
+control are outside this slice. A read result is a
 snapshot, and a submitted message or started run is reported with its observed
 Core status, not as completed work. Non-idempotent starts are not retried by the
 assistant; each queued chat follow-up carries its own idempotency key.
@@ -36,3 +35,38 @@ binding, roster, queue, start, steering, stop and read-back; provider and harnes
 tool boundary tests; component tests for discoverability and browser action
 behavior; selected Playwright desktop Chromium and mobile Chromium/WebKit cases;
 production build and isolated real-Core LAN journey with synthetic data.
+
+## Per-chat assistant settings expansion
+
+Entry: an operator opens Nebula assistant settings from the persistent panel,
+or asks Nebula assistant to inspect or change another project chat's Assistant
+settings. The panel links to the same full chat settings controls used by
+ordinary conversations. A chat can be chosen from a named project roster; an
+opaque ID is not required. These choices affect the next message, not an
+already queued or running turn.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover | Nebula assistant exposes its own Assistant settings and can list configurable project chats | UI and Core catalog | Component and browser |
+| Select | A named target resolves to one saved chat in the selected project; ambiguous names require clarification | Core ChatSession | Unit and real Core |
+| Inspect | The assistant reports the saved runtime, model, effort, speed, mode, cyber access, knowledge, skills, subagents, messaging, and MCP choices with availability reasons | Core chat, harness and capability catalogs | Unit and real Core |
+| Change | Every supplied choice is validated against the enabled profile and project catalog, saved with a revision guard, then read back | Core ChatSession and profile catalogs | Unit and real Core |
+| Use | The next visible UI turn uses those saved choices, while existing approvals and tool policies still govern execution | Core request, provider or harness session | Real Core and browser |
+| Refresh and reconnect | The same settings and chat identity return after reload; a stale UI value does not overwrite a newer Core change | Core ChatSession plus URL | Real Core and browser |
+| Failure and retry | A conflict or unsupported choice explains the valid next action and leaves the prior settings intact | Core error contract | Unit and browser |
+| Delete or revoke | Deleting a chat removes its settings; disabled profiles and MCP servers cannot be newly selected | Core ChatSession and catalogs | Real Core |
+
+The special product-control tools remain available only to the control
+conversation. General command, MCP, knowledge, skill, subagent and messaging
+capabilities are opt-in per conversation and run under their normal policy and
+approval path. A product-control tool's policy repair exception must not become
+a blanket permission bypass for general tools. The selected project binds every
+target and runtime; a cross-project chat or MCP server is never accepted.
+
+The URL owns full-chat navigation, Core owns saved conversation settings and
+transcripts, provider and harness sessions own actual execution, and React owns
+only unsent selections and panel presentation. Browser storage can restore an
+unsent first-turn preference but cannot override a saved Core choice. Discover,
+select, inspect, change, use, stream, interrupt, refresh, reconnect, failure and
+retry are required. Forking follows the existing chat workflow. Physical phone
+testing remains a separate gate from mobile browser emulation.

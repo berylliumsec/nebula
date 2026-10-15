@@ -1996,24 +1996,26 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   useEffect(() => {
     if (!activeChatSession) return;
     if (pendingSubagentSaveSessionRef.current === activeChatSession.id) return;
+    const next = activeChatSession.assistantConfig;
     if (pendingAgentMessagingSaveSessionRef.current !== activeChatSession.id) {
-      setAllowAgentMessaging(activeChatSession.allowAgentMessaging === true);
+      setAllowAgentMessaging(next?.allowAgentMessaging ?? activeChatSession.allowAgentMessaging === true);
     }
-    if (activeChatSession.backend === "harness") {
-      setAllowSubagents(activeChatSession.allowSubagents === true);
-      setSubagentProviderId(activeChatSession.subagentProviderId ?? "");
-      setSubagentHarnessId(activeChatSession.subagentHarnessId ?? "");
-      setSubagentModel(activeChatSession.subagentModel ?? "");
-      setSubagentLimit(activeChatSession.subagentLimit);
-      setSubagentReasoningEffort(activeChatSession.subagentReasoningEffort);
+    if (next?.backend === "harness" || (!next && activeChatSession.backend === "harness")) {
+      setAllowSubagents(next?.allowSubagents ?? activeChatSession.allowSubagents === true);
+      setSubagentProviderId(next?.subagentProviderId ?? activeChatSession.subagentProviderId ?? "");
+      setSubagentHarnessId(next?.subagentHarnessProfileId ?? activeChatSession.subagentHarnessId ?? "");
+      setSubagentModel(next?.subagentModel ?? activeChatSession.subagentModel ?? "");
+      setSubagentLimit(next?.maxActiveSubagents ?? activeChatSession.subagentLimit);
+      setSubagentReasoningEffort(next?.subagentReasoningEffort ?? activeChatSession.subagentReasoningEffort);
+      setSelectedMcpIds(next?.mcpServerIds ?? activeChatSession.mcpServerIds);
       return;
     }
-    setSelectedMcpIds(activeChatSession.mcpServerIds);
-    setSelectedHookIds(activeChatSession.hookIds);
-    setReasoningEffort(activeChatSession.reasoningEffort ?? "");
-    setAllowSubagents(activeChatSession.allowSubagents === true);
-    setSubagentLimit(activeChatSession.subagentLimit);
-    setSubagentReasoningEffort(activeChatSession.subagentReasoningEffort);
+    setSelectedMcpIds(next?.mcpServerIds ?? activeChatSession.mcpServerIds);
+    setSelectedHookIds(next?.hookIds ?? activeChatSession.hookIds);
+    setReasoningEffort(next?.reasoningEffort ?? activeChatSession.reasoningEffort ?? "");
+    setAllowSubagents(next?.allowSubagents ?? activeChatSession.allowSubagents === true);
+    setSubagentLimit(next?.maxActiveSubagents ?? activeChatSession.subagentLimit);
+    setSubagentReasoningEffort(next?.subagentReasoningEffort ?? activeChatSession.subagentReasoningEffort);
   }, [activeChatSession?.id, activeChatSession?.revision]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = contextUsePercent(activeContextStatus);
@@ -2469,7 +2471,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       ?? (profile?.defaultModel?.trim() || profile?.models[0]) ?? "");
   }, [activeChatSession?.backend, harnessId, harnessSessionId, harnessSessions, harnesses, runtimeKind, sessionId]);
   useEffect(() => {
-    if (selectedHarnessSession) setSelectedMcpIds(selectedHarnessSession.mcpServerIds);
+    if (selectedHarnessSession && !activeChatSession?.assistantConfig) setSelectedMcpIds(selectedHarnessSession.mcpServerIds);
   }, [selectedHarnessSession?.id]);
   useEffect(() => {
     if (runtimeKind !== "harness") return;
@@ -2480,19 +2482,24 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       && currentDefaults.value.model === model
       ? currentDefaults.value : undefined;
     setHarnessReasoningEffort(
-      (selectedHarnessSession?.harnessProfileId === harnessId && selectedHarnessSession?.model === model ? selectedHarnessSession.reasoningEffort : undefined)
+      (activeChatSession?.assistantConfig?.backend === "harness" && activeChatSession.assistantConfig.model === model ? activeChatSession.assistantConfig.harnessReasoningEffort : undefined)
+      ?? (selectedHarnessSession?.harnessProfileId === harnessId && selectedHarnessSession?.model === model ? selectedHarnessSession.reasoningEffort : undefined)
       ?? saved?.harnessReasoningEffort
       ?? selectedHarnessModelOptions?.defaultReasoningEffort
       ?? "",
     );
     setHarnessServiceTier(
-      (selectedHarnessSession?.harnessProfileId === harnessId && selectedHarnessSession?.model === model ? selectedHarnessSession.serviceTier : undefined)
+      (activeChatSession?.assistantConfig?.backend === "harness" && activeChatSession.assistantConfig.model === model ? activeChatSession.assistantConfig.harnessServiceTier : undefined)
+      ?? (selectedHarnessSession?.harnessProfileId === harnessId && selectedHarnessSession?.model === model ? selectedHarnessSession.serviceTier : undefined)
       ?? saved?.harnessServiceTier
       ?? selectedHarnessModelOptions?.defaultServiceTier
       ?? "",
     );
     setHarnessCyberAccessProgram(
-      (selectedHarnessSession?.harnessProfileId === harnessId && selectedHarnessSession?.model === model
+      (activeChatSession?.assistantConfig?.backend === "harness" && activeChatSession.assistantConfig.model === model
+        ? activeChatSession.assistantConfig.harnessCyberAccessProgram === "automatic" ? "" : activeChatSession.assistantConfig.harnessCyberAccessProgram
+        : undefined)
+      ?? (selectedHarnessSession?.harnessProfileId === harnessId && selectedHarnessSession?.model === model
         ? selectedHarnessSession.cyberAccessProgram : undefined) ?? "",
     );
   }, [
@@ -2501,6 +2508,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     harnessId,
     runtimeKind,
     selectedHarness?.id,
+    activeChatSession?.assistantConfig,
     selectedHarnessModelOptions,
     selectedHarnessSession?.id,
     selectedHarnessSession?.reasoningEffort,
@@ -2690,7 +2698,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
     const controller = new AbortController();
     void (async () => {
-      if (!embeddedSideChat) return (await api.listChatSessions(engagement.id, controller.signal)).items;
+      if (!embeddedSideChat) return (await api.listChatSessions(engagement.id, controller.signal, true)).items;
       if (!requestedSessionId) return [];
       // The focused pane needs its own durable session, not a second copy of
       // the project's conversation catalog. This also survives a refresh.
@@ -2805,7 +2813,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const selectionGeneration = sessionSelectionGenerationRef.current;
     const listed = embeddedSideChat
       ? requestedSessionId ? [await api.getChatSession(requestedSessionId)] : []
-      : (await api.listChatSessions(requestedEngagementId)).items;
+      : (await api.listChatSessions(requestedEngagementId, undefined, true)).items;
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
     // A read that started before a save may answer after it; keep the newer copy.
     setSessions((current) => reconcileListedSessions(current, listed));
@@ -2910,7 +2918,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       immediate: false,
       read: async (signal): Promise<PollOutcome> => {
         try {
-          const page = await api.listChatSessions(requestedEngagementId, signal);
+          const page = await api.listChatSessions(requestedEngagementId, signal, true);
           if (signal.aborted || activeEngagementIdRef.current !== requestedEngagementId) return "stop";
           setSessions(current => {
             const next = reconcileListedSessions(current, page.items);
@@ -3058,7 +3066,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     let authoritativeSessions: ChatSessionSummary[] | undefined;
     try {
       if (engagement) {
-        const page = await api.listChatSessions(engagement.id);
+        const page = await api.listChatSessions(engagement.id, undefined, true);
         authoritativeSessions = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         setSessions(authoritativeSessions);
       } else {
@@ -3240,6 +3248,25 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
   };
 
+  const saveNextTurnSettings = async (settings: Record<string, unknown>) => {
+    if (!api || !sessionId || assistantSettingsBusy) return;
+    setAssistantSettingsBusy(true);
+    setAssistantSettingsError(undefined);
+    try {
+      const current = await api.getChatSession(sessionId);
+      await api.updateChatAssistantConfig(sessionId, current.revision, settings);
+      await refreshSessions();
+      setAssistantSettingsStatus("Assistant settings saved. Applies to your next message.");
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions.next_turn_settings_save_failed", "The next-turn Assistant settings could not be saved.", error, "assistant_settings");
+      setAssistantSettingsStatus("");
+      setAssistantSettingsError(error instanceof Error ? error.message : "Could not save Assistant settings.");
+      await refreshSessions();
+    } finally {
+      setAssistantSettingsBusy(false);
+    }
+  };
+
   const chooseChatRuntime = (next: "provider" | "harness") => {
     if (engagement) runtimeDefaultEngagementRef.current = engagement.id;
     setRuntimeKind(next);
@@ -3253,12 +3280,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setProviderId(selected?.id ?? "");
       setModel(nextModel);
       void rememberAssistantDefaults({ backend: next, providerId: selected?.id ?? null, model: nextModel || null, mcpServerIds: [], hookIds: [] });
+      if (selected?.id && nextModel) void saveNextTurnSettings({backend: next, profileId: selected.id, model: nextModel, mcpServerIds: [], hookIds: [], harnessReasoningEffort: null, harnessServiceTier: null, harnessMode: null, harnessCyberAccessProgram: null});
     } else {
       const selected = selectedHarness ?? harnesses[0];
       const nextModel = selected?.defaultModel?.trim() || selected?.models[0] || "";
       setHarnessId(selected?.id ?? "");
       setModel(nextModel);
       void rememberAssistantDefaults({ backend: next, harnessId: selected?.id ?? null, model: nextModel || null, mcpServerIds: [], hookIds: [] });
+      if (selected?.id && nextModel) void saveNextTurnSettings({backend: next, profileId: selected.id, model: nextModel, mcpServerIds: [], hookIds: [], reasoningEffort: null, allowSubagents: false});
     }
   };
 
@@ -3271,6 +3300,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setModel(nextModel);
     setAssistantSettingsStatus("Harness updated. Applies to your next message.");
     void rememberAssistantDefaults({ backend: "harness", harnessId: id, model: nextModel || null, mcpServerIds: [] });
+    if (nextModel) void saveNextTurnSettings({backend: "harness", profileId: id, model: nextModel, mcpServerIds: [], hookIds: [], harnessReasoningEffort: null, harnessServiceTier: null, harnessCyberAccessProgram: "automatic"});
   };
 
   const ensureNotebookConsent = async (nextIds: string[]): Promise<boolean> => {
@@ -3293,6 +3323,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     catch (error) { logCaughtDiagnostic("interface.sessions.notebook_consent_failed", "Notebook Host access could not be confirmed.", error, "assistant_settings"); setAssistantSettingsError(String(error)); return; }
     setSelectedMcpIds(nextIds);
     void rememberAssistantDefaults({ mcpServerIds: nextIds });
+    void saveNextTurnSettings({mcpServerIds: nextIds});
   };
 
   const saveProviderAssistantSelections = async (
@@ -3507,7 +3538,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         return await run(activeSession!);
       } catch (error) {
         if (!(error instanceof ApiError && error.status === 409)) throw error;
-        const page = await api.listChatSessions(engagementIdForSwitch);
+        const page = await api.listChatSessions(engagementIdForSwitch, undefined, true);
         const latest = page.items.find((item) => item.id === sessionIdForSwitch);
         if (!latest) throw error;
         activeSession = latest;
@@ -3839,15 +3870,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     if (summary) {
-      setRuntimeKind(summary.backend);
-      setProviderId(summary.providerId ?? "");
-      setHarnessId(summary.harnessProfileId ?? "");
+      const next = summary.assistantConfig;
+      setRuntimeKind(next?.backend ?? summary.backend);
+      setProviderId(next?.backend === "provider" ? next.profileId : summary.providerId ?? "");
+      setHarnessId(next?.backend === "harness" ? next.profileId : summary.harnessProfileId ?? "");
       setHarnessSessionId(summary.harnessSessionId ?? "");
-      setModel(summary.model ?? "");
-      if (summary.backend === "provider") {
-        setSelectedMcpIds(summary.mcpServerIds);
-        setSelectedHookIds(summary.hookIds);
-      }
+      setModel(next?.model ?? summary.model ?? "");
+      setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
+      setSelectedHookIds(next?.hookIds ?? summary.hookIds);
+      if (next) setHarnessMode(next.harnessMode ?? "");
     }
     let authoritativeHistoryLoaded = false;
     try {
@@ -4612,6 +4643,26 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return () => controller.abort();
   }, [api, embeddedSideChat, engagement?.id, requestedSessionId, updateSearchParams]);
 
+  const missingRequestedSessionRef = useRef("");
+  useEffect(() => {
+    if (!api || !engagement || !requestedSessionId || sessions.some(item => item.id === requestedSessionId)) return;
+    const key = `${engagement.id}:${requestedSessionId}`;
+    if (missingRequestedSessionRef.current === key) return;
+    missingRequestedSessionRef.current = key;
+    const controller = new AbortController();
+    void api.getChatSession(requestedSessionId, controller.signal).then((item) => {
+      if (!controller.signal.aborted && item.engagementId === engagement.id && !item.isSideChat) {
+        setSessions(current => current.some(existing => existing.id === item.id) ? current : [item, ...current]);
+      }
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        void logCaughtDiagnostic("interface.sessions_page.requested_chat_load_failed", "The requested conversation could not be opened.", error, "sessions_page");
+        setChatError(error instanceof Error ? error.message : "Could not open this conversation.");
+      }
+    });
+    return () => controller.abort();
+  }, [api, engagement?.id, requestedSessionId, sessions]);
+
   useEffect(() => {
     const pendingNavigation = pendingSessionNavigationRef.current;
     if (pendingNavigation) {
@@ -4643,7 +4694,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     try {
       // The attached conversation may be newer than the loaded list; refresh
       // it first so the selection below can find its runtime.
-      const page = await api.listChatSessions(engagement.id);
+      const page = await api.listChatSessions(engagement.id, undefined, true);
       const ordered = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       setSessions(ordered);
       summary = ordered.find((session) => session.id === id);
@@ -4653,15 +4704,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       return;
     }
     if (summary) {
-      setRuntimeKind(summary.backend);
-      setProviderId(summary.providerId ?? "");
-      setHarnessId(summary.harnessProfileId ?? "");
+      const next = summary.assistantConfig;
+      setRuntimeKind(next?.backend ?? summary.backend);
+      setProviderId(next?.backend === "provider" ? next.profileId : summary.providerId ?? "");
+      setHarnessId(next?.backend === "harness" ? next.profileId : summary.harnessProfileId ?? "");
       setHarnessSessionId(summary.harnessSessionId ?? "");
-      setModel(summary.model ?? "");
-      if (summary.backend === "provider") {
-        setSelectedMcpIds(summary.mcpServerIds);
-        setSelectedHookIds(summary.hookIds);
-      }
+      setModel(next?.model ?? summary.model ?? "");
+      setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
+      setSelectedHookIds(next?.hookIds ?? summary.hookIds);
+      if (next) setHarnessMode(next.harnessMode ?? "");
     }
     // Selecting through selectSession advances the selection generation and
     // aborts any in-flight load, so an earlier selection cannot overwrite it.
@@ -5135,7 +5186,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const content = (resent?.text ?? queuedFollowUp?.text ?? draft.trim()) || (!resent && pendingImages.length ? "Attached image" : "");
     const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
     const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
-    if (!content || (!queueOptions && composerBusy) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
+    if (!content || assistantSettingsBusy || (!queueOptions && composerBusy) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
 
     const failQueuedFollowUp = (detail: string) => {
       if (!queuedFollowUp) return;
@@ -5282,8 +5333,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     };
     const initialSessionId = sessionId || undefined;
     let returnedSessionId = initialSessionId;
+    const nextSettings = activeChatSession?.assistantConfig;
     const chatRequest: ChatCompletionRequest = {
       backend: runtimeKind,
+      controlAssistant: activeChatSession?.isControlAssistant === true,
       providerId: providerRuntime?.id,
       harnessProfileId: harnessRuntime?.id,
       harnessSessionId: !initialSessionId && harnessSessionId ? harnessSessionId : undefined,
@@ -5304,9 +5357,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             { role: "user", content, contentBlocks: userMessage.contentBlocks },
           ],
       contextAttachments,
-      includeKnowledge: wantsKnowledge,
-      allowCloudKnowledge,
-      toolsEnabled: !embeddedSideChat && (runtimeKind === "provider" ? canUseTools : wantsTools),
+      includeKnowledge: nextSettings?.includeKnowledge ?? wantsKnowledge,
+      allowCloudKnowledge: nextSettings?.allowCloudKnowledge ?? allowCloudKnowledge,
+      toolsEnabled: !embeddedSideChat && (nextSettings?.toolsEnabled ?? (runtimeKind === "provider" ? canUseTools : wantsTools)),
       allowCloudToolResults,
       allowAgentMessaging: !embeddedSideChat && allowAgentMessaging,
       harnessMode: runtimeKind === "harness" ? harnessMode || undefined : undefined,
@@ -6092,7 +6145,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [assistantSettingsOpen]);
   const authoritativeProviderBusy = runtimeKind === "provider" && Boolean(authoritativeState?.busy);
   const composerBusy = sending || authoritativeProviderBusy || pendingResponseActive || Boolean(interruptedRecovery) || Boolean(waitingCallback);
-  const canSend = Boolean(!requestedSessionPending && (!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
+  const canSend = Boolean(!requestedSessionPending && (!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !assistantSettingsBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     !isHarnessCommand(draft)
     && sending
@@ -6421,20 +6474,20 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 <header role="presentation"><strong id={`assistant-settings-title${panelIdSuffix}`}>Assistant settings</strong><button className="icon-button subtle" type="button" aria-label="Close assistant settings" onClick={() => { setAssistantSettingsOpen(false); assistantSettingsButtonRef.current?.focus(); }}><X size={16} aria-hidden="true" /></button></header>
                 <div className="chat-context-bar">
                 <div className="chat-settings-fields" data-guide="assistant-runtime">
-                <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={composerBusy} onChange={(event) => chooseChatRuntime(event.target.value as "provider" | "harness")}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
-                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} onChange={(event) => { const nextProvider = enabledProviders.find(item => item.id === event.target.value); void proposeProviderRuntime(event.target.value, providerDefaultModel(nextProvider)); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy} onChange={(event) => chooseHarness(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
+                <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => chooseChatRuntime(event.target.value as "provider" | "harness")}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
+                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} onChange={(event) => { const nextProvider = enabledProviders.find(item => item.id === event.target.value); void proposeProviderRuntime(event.target.value, providerDefaultModel(nextProvider)); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => chooseHarness(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
                 {runtimeKind === "provider" ? <>
                   {(selectedProvider?.models.length ?? 0) + unlistedProviderModels.length > 8
                     ? <div className="chat-model-field" title={selectedProvider?.message}><span>Model</span><SearchableModelPicker key={selectedProvider?.id} options={providerPickerOptions} value={model} providerName={selectedProvider?.name ?? "provider"} busy={modelDiscoveryInProgress} disabled={modelDiscoveryInProgress} onSelect={(nextModel) => void chooseProviderModel(nextModel)} />{selectedModelSummary && <small>{selectedModelSummary}</small>}</div>
                     : <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={modelDiscoveryInProgress || !providerPickerOptions.length} onChange={(event) => void chooseProviderModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && !unlistedProviderModels.includes(model) && <option value={model}>{model} · saved model</option>}{unlistedProviderModels.length > 0
                       ? <><optgroup label="Allowed models">{selectedProvider?.models.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup><optgroup label={`More ${selectedProvider?.name ?? "provider"} models · adds to allowed`}>{unlistedProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup></>
                       : selectedProvider?.models.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label>}
-                </> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={!harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); void rememberAssistantDefaults({ backend: "harness", harnessId, model: event.target.value || null }); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
-                {!shellOnly && <>{runtimeKind === "provider" && <label><span>Effort</span><select aria-label="Reasoning effort" value={reasoningEffort} disabled={assistantSettingsBusy} onChange={(event) => void saveProviderReasoningEffort(event.target.value as ReasoningEffort | "")}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option value={item} key={item}>{item === "none" ? "None · answer only" : item}</option>)}</select></label>}{runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} onChange={(event) => { setHarnessReasoningEffort(event.target.value); void rememberAssistantDefaults({ harnessReasoningEffort: event.target.value || null }); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
-                {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} onChange={(event) => { setHarnessServiceTier(event.target.value); void rememberAssistantDefaults({ harnessServiceTier: event.target.value || null }); setAssistantSettingsStatus("Speed updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
-                {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && (harnessCyberAccessPrograms?.length || harnessCyberAccessProgram) ? <label><span>Cyber access</span><select aria-label="Codex cyber access" value={harnessCyberAccessProgram} disabled={composerBusy} onChange={(event) => { setHarnessCyberAccessProgram(event.target.value as "" | "standard" | "daybreakBlue" | "daybreakRed"); setAssistantSettingsStatus("Cyber access updated. Applies to your next message."); }}><option value="">Codex automatic</option>{harnessCyberAccessProgram && !harnessCyberAccessPrograms?.includes(harnessCyberAccessProgram) && <option value={harnessCyberAccessProgram}>{harnessCyberAccessProgram} · saved</option>}{harnessCyberAccessPrograms?.map((program) => <option value={program} key={program}>{program === "standard" ? "Standard" : program === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label> : null}
+                </> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={assistantSettingsBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); void rememberAssistantDefaults({ backend: "harness", harnessId, model: event.target.value || null }); setAssistantSettingsStatus("Model updated. Applies to your next message."); void saveNextTurnSettings({backend: "harness", profileId: harnessId, model: event.target.value, harnessReasoningEffort: null, harnessServiceTier: null, harnessCyberAccessProgram: "automatic"}); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
+                {!shellOnly && <>{runtimeKind === "provider" && <label><span>Effort</span><select aria-label="Reasoning effort" value={reasoningEffort} disabled={assistantSettingsBusy} onChange={(event) => void saveProviderReasoningEffort(event.target.value as ReasoningEffort | "")}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option value={item} key={item}>{item === "none" ? "None · answer only" : item}</option>)}</select></label>}{runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} disabled={assistantSettingsBusy} onChange={(event) => { setHarnessReasoningEffort(event.target.value); void rememberAssistantDefaults({ harnessReasoningEffort: event.target.value || null }); setAssistantSettingsStatus("Effort updated. Applies to your next message."); void saveNextTurnSettings({harnessReasoningEffort: event.target.value || null}); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
+                {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={assistantSettingsBusy} onChange={(event) => { setHarnessServiceTier(event.target.value); void rememberAssistantDefaults({ harnessServiceTier: event.target.value || null }); setAssistantSettingsStatus("Speed updated. Applies to your next message."); void saveNextTurnSettings({harnessServiceTier: event.target.value || null}); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
+                {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && (harnessCyberAccessPrograms?.length || harnessCyberAccessProgram) ? <label><span>Cyber access</span><select aria-label="Codex cyber access" value={harnessCyberAccessProgram} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => { setHarnessCyberAccessProgram(event.target.value as "" | "standard" | "daybreakBlue" | "daybreakRed"); setAssistantSettingsStatus("Cyber access updated. Applies to your next message."); void saveNextTurnSettings({harnessCyberAccessProgram: event.target.value || "automatic"}); }}><option value="">Codex automatic</option>{harnessCyberAccessProgram && !harnessCyberAccessPrograms?.includes(harnessCyberAccessProgram) && <option value={harnessCyberAccessProgram}>{harnessCyberAccessProgram} · saved</option>}{harnessCyberAccessPrograms?.map((program) => <option value={program} key={program}>{program === "standard" ? "Standard" : program === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label> : null}
                 {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && selectedHarnessModelOptions && !harnessCyberAccessPrograms?.length && !harnessCyberAccessProgram && <small role="status">This Codex runtime did not advertise a cyber access choice for this model and account.</small>}
-                {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => { setHarnessMode(event.target.value); void rememberAssistantDefaults({ harnessMode: event.target.value || null }); }}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
+                {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending || assistantSettingsBusy} onChange={(event) => { setHarnessMode(event.target.value); void rememberAssistantDefaults({ harnessMode: event.target.value || null }); void saveNextTurnSettings({harnessMode: event.target.value || null}); }}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
                 </>}
                 </div>
                 {assistantSettingsStatus && <p className="provider-dialog-note" role="status">{assistantSettingsStatus}</p>}
@@ -6457,8 +6510,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   onChange={(choice) => void saveSubagentChoice(choice)}
                 />}
                 {runtimeKind === "provider" && <div className="chat-provider-subagents"><label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveSubagentChoice({ enabled: event.target.checked, providerId: "", model: "", limit: subagentLimit, reasoningEffort: subagentReasoningEffort })} /><span><strong>Subagents</strong><small>Delegate independent work to parallel children on this model · {subagentLimitLabel(subagentLimit)}</small></span></label>{allowSubagents && <SubagentEffortField effort={subagentReasoningEffort} disabled={sending || assistantSettingsBusy} onChange={(reasoningEffort) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit: subagentLimit, reasoningEffort })} />}{allowSubagents && <SubagentLimitField limit={subagentLimit} delegator="the assistant" disabled={sending || assistantSettingsBusy} onChange={(limit) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit, reasoningEffort: subagentReasoningEffort })} />}</div>}
-                {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.isSideChat && !activeChatSession.isControlAssistant && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>{runtimeKind === "provider" && !modelVerified ? "Available when this model is verified for tools. Text chat still works." : runtimeKind === "harness" && selectedHarness?.capabilities?.mcp === false ? "This harness does not advertise messaging tools. Text chat still works." : "Coordinate with main agents in this project. Messages appear in both conversations."}</small></span></label>}
-                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void (async () => { try { if (await ensureNotebookConsent(nextIds)) await saveProviderAssistantSelections(nextIds, selectedHookIds); } catch (error) { logCaughtDiagnostic("interface.sessions.notebook_mcp_selection_failed", "Notebook MCP selection could not be saved.", error, "assistant_settings"); setAssistantSettingsError(String(error)); } })()} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => void chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
+                {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.isSideChat && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>{runtimeKind === "provider" && !modelVerified ? "Available when this model is verified for tools. Text chat still works." : runtimeKind === "harness" && selectedHarness?.capabilities?.mcp === false ? "This harness does not advertise messaging tools. Text chat still works." : "Coordinate with main agents in this project. Messages appear in both conversations."}</small></span></label>}
+                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void (async () => { try { if (await ensureNotebookConsent(nextIds)) await saveProviderAssistantSelections(nextIds, selectedHookIds); } catch (error) { logCaughtDiagnostic("interface.sessions.notebook_mcp_selection_failed", "Notebook MCP selection could not be saved.", error, "assistant_settings"); setAssistantSettingsError(String(error)); } })()} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
                 <AssistantSetupLinks items={[
                   { entry: settingCatalogEntry(runtimeKind === "provider" ? "settings.providers" : "settings.harnesses"), icon: runtimeKind === "provider" ? Settings2 : Bot, label: runtimeKind === "provider" ? "Model providers" : "Assistant harnesses", detail: runtimeKind === "provider" ? `${enabledProviders.length} enabled` : `${harnesses.filter((item) => item.enabled).length} enabled` },
@@ -6829,6 +6882,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 </>}
               </div>}
             </div>
+            {shellOnly && <NebulaAssistantLauncherButton />}
             {shellOnly && <MobileAttentionInbox onOpenChat={(item) => {
               setMobileListOpen(false);
               setMobileConversationMenuOpen(false);
@@ -6855,6 +6909,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           </button>}
             <div className="conversation-heading"><strong className="conversation-toolbar-title" title={conversationTitle}>{conversationTitle}</strong><small>{engagement?.name ?? "Assistant"} · {assistantSource}{runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}</small></div>
             {conversationActions}
+            {shellOnly && <NebulaAssistantLauncherButton />}
           </header>}
 
           {!shellOnly && api && engagement && <div ref={(element) => { chatTerminalSize.panelRef.current = element; }} id="chat-side-terminal" aria-label={chatTerminalVisible ? "Terminal beside chat" : undefined} role={chatTerminalVisible ? "region" : undefined} style={chatTerminalVisible ? chatTerminalSize.panelStyle : undefined} className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen && view === "terminal" ? " assistant-open" : ""}${chatTerminalVisible ? " chat-side-terminal" : ""}`} hidden={view !== "terminal" && !chatTerminalVisible}>

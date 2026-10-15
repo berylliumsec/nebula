@@ -7,7 +7,6 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import (
     ChatCompletionRequest,
-    ChatConfigurationError,
     ChatHistoryConflict,
     ChatRequestMessage,
     isolate_settings_assistant_request,
@@ -300,10 +299,14 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(
         "nebula.settings.set_post_tool",
         "nebula.settings.models",
         "nebula.settings.set_default_model",
+        "workspace.read",
+        "workspace.search",
+        "tool_output.read",
+        "tool_output.search",
     }
 
 
-def test_settings_session_cannot_be_reused_as_general_chat_or_attach_general_tools():
+def test_control_session_keeps_its_identity_and_accepts_selected_assistant_tools():
     message = ChatRequestMessage(role=ChatRole.USER, content="Show project policy")
     settings = ChatCompletionRequest(
         provider_id="provider",
@@ -313,12 +316,14 @@ def test_settings_session_cannot_be_reused_as_general_chat_or_attach_general_too
         include_knowledge=True,
     )
     scoped = isolate_settings_assistant_request(settings)
-    assert scoped.include_knowledge is False
-    assert scoped.allow_mcp_catalog is False
-    with pytest.raises(ChatConfigurationError):
+    assert scoped.include_knowledge is True
+    assert scoped.allow_mcp_catalog is True
+    assert (
         isolate_settings_assistant_request(
             settings.model_copy(update={"tools_enabled": True})
-        )
+        ).tools_enabled
+        is True
+    )
     saved = ChatSession(
         engagement_id="project",
         title="Nebula assistant",

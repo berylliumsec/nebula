@@ -7563,8 +7563,6 @@ class GrokAcpAdapter(HarnessAdapter):
         settings_only = bool(
             session and session.metadata.get("control_assistant") is True
         )
-        if settings_only:
-            command.extend(["--disable-web-search", "--no-subagents"])
         if (
             native_capabilities.workspace_access == HarnessWorkspaceAccess.NONE
             and not native_capabilities.shell
@@ -10388,24 +10386,6 @@ class HarnessRuntimeService:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
-        if control_assistant:
-            if any(
-                (
-                    mcp_server_ids,
-                    context_attachments,
-                    harness_skill,
-                    provider_subagent,
-                    pending_provider_subagent,
-                    allow_agent_messaging,
-                    harness_mode,
-                )
-            ):
-                raise HarnessConfigurationError(
-                    "The Nebula assistant accepts bounded Nebula help, settings, navigation, and work tools only."
-                )
-            include_knowledge = False
-            allow_cloud_knowledge = False
-            max_artifact_queries = 0
         profile = self.store.get(HarnessProfile, profile_id)
         from .chat_agent_messages import resolve_agent_messaging_choice
 
@@ -10617,7 +10597,7 @@ class HarnessRuntimeService:
                     reasoning_effort=effort,
                     service_tier=tier,
                     cyber_access_program=cyber_program,
-                    tools_enabled=not control_assistant,
+                    tools_enabled=True,
                     control_assistant=control_assistant,
                 )
                 chat = self._rebind_chat_session(
@@ -10719,7 +10699,7 @@ class HarnessRuntimeService:
                         if harness_cyber_access_program == "automatic"
                         else harness_cyber_access_program
                     ),
-                    tools_enabled=not control_assistant,
+                    tools_enabled=True,
                     control_assistant=control_assistant,
                 )
             chat = self.store.create(
@@ -10990,10 +10970,10 @@ class HarnessRuntimeService:
             "linked host folder, but not arbitrary host paths. Host mode grants new command sessions "
             "the Nebula server user's filesystem access after an explicit operator instruction; existing sessions "
             "keep their frozen mode. Explain the least disruptive remedy, such as linking the desired "
-            "folder as the project workspace or switching future sessions to Host mode. You cannot edit "
-            "host files from this assistant; after fixing access, the operator can ask the general "
-            "assistant in a new session to make the edit. Call only nebula.help, nebula.settings, and nebula.navigate tools "
-            "for product help, settings, and navigation; use nebula.work tools for project chats and missions. "
+            "folder as the project workspace or switching future sessions to Host mode. When command tools "
+            "are enabled for this conversation, use the selected project's runtime and policy for file work. "
+            "Use nebula.help, nebula.settings, and nebula.navigate tools for product help, settings, and "
+            "navigation; use nebula.work tools for project chats and missions. "
             "For a theme change, call nebula.settings.set_device_theme; 'Zero theme' means zero-dark. "
             "For a Docker or Host mode change, call nebula.settings.set_project_mode. "
             "For URL, target, port, or permission scope changes, call nebula.settings.set_project_scope; "
@@ -11013,9 +10993,14 @@ class HarnessRuntimeService:
             "The assistant window handles explicit Docker/Host mode changes "
             "with Core read-back. For assistant chats and missions, call nebula.work.catalog to see configured "
             "runtimes and nebula.work.overview to resolve the exact target in this project. Inspect a chat or "
-            "mission before steering or stopping it. Start work only on an explicit operator request. "
+            "mission before steering or stopping it. For per-chat Assistant settings, call "
+            "nebula.work.chat_settings before nebula.work.set_chat_settings and use session_id=self "
+            "for your own next-turn settings. A saved setting applies to the next message, not a "
+            "running or already queued turn. Start work only on an explicit operator request. "
             "Use message_chat delivery=next for a durable follow-up, and delivery=steer only for a live "
-            "harness turn. Started or queued is not completed work; report the saved ID, current status, "
+            "harness turn. For pending approvals or questions, call nebula.work.attention, "
+            "inspect the exact request, and decide only on an explicit operator instruction. "
+            "A saved approval is not completed work. Started or queued is not completed work; report the saved ID, current status, "
             "and a link from the tool result so the operator can open it. "
             "Browser and notes control are not available here yet. If facts are unavailable, say what needs checking."
             if control_assistant
@@ -14108,10 +14093,6 @@ class HarnessRuntimeService:
                         },
                     }
                 )
-        if settings_only:
-            self._gateway_tool_maps[session.id] = {}
-            self._gateway_oci_tool_maps[session.id] = {}
-            return {"tools": tools}
         if current.metadata.get("browser_companion_session_id"):
             spec = companion_spec(image_supported=self._model_image_supported(current))
             tools.append(
@@ -14563,7 +14544,8 @@ class HarnessRuntimeService:
             name.startswith(
                 ("nebula.settings.", "nebula.help.", "nebula.navigate.", "nebula.work.")
             )
-        ) != settings_only:
+            and not settings_only
+        ):
             raise HarnessConfigurationError(
                 "This tool is not available to this assistant."
             )
@@ -16312,16 +16294,15 @@ class HarnessRuntimeService:
         )
         self._gateways[session.id] = gateway
         execution_mode = _session_execution_mode(session)
-        settings_only = session.metadata.get("control_assistant") is True
         isolated_workspace = (
             self.workspace_resolver(session.engagement_id)
-            if execution_mode == "host" and not analysis_only and not settings_only
+            if execution_mode == "host" and not analysis_only
             else gateway.root / "vendor-workspace"
         )
         if portable_names and not analysis_only:
             # Grok indexes native sessions by cwd. Keep this private directory
             # stable across Core restarts, separately from the ephemeral socket.
-            if execution_mode != "host" or settings_only:
+            if execution_mode != "host":
                 isolated_workspace = (
                     self.artifact_store.root
                     / "harness-workspaces"
@@ -16440,6 +16421,14 @@ class HarnessRuntimeService:
             allowed = {
                 f"nebula__{_portable_gateway_tool_name(tool['name'])}"
                 for tool in self._gateway_catalog(session)["tools"]
+                if tool["name"].startswith(
+                    (
+                        "nebula.help.",
+                        "nebula.settings.",
+                        "nebula.navigate.",
+                        "nebula.work.",
+                    )
+                )
             }
             if target in allowed:
                 scoped_future: asyncio.Future[HarnessPermissionDecision] = (

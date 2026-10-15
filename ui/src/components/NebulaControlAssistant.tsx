@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Bot, GripHorizontal, Minimize2, Send, Square, X } from "lucide-react";
+import { Bot, GripHorizontal, Minimize2, Send, Settings2, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
@@ -11,11 +11,12 @@ import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeCon
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
-import type { ChatMessage } from "../api/types";
+import type { ChatAssistantConfig, ChatMessage } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
 import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
+import { MicrophoneIcon, NebulaVoice } from "./NebulaVoice";
 import styles from "./NebulaControlAssistant.module.css";
 
 function readActionOutcomes(key: string): Record<string, string> {
@@ -48,32 +49,32 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [suggestions, setSuggestions] = useState<SettingCatalogEntry[]>([]);
   const [sessionId, setSessionId] = useState<string>();
   const [sessionRuntime, setSessionRuntime] = useState<{ kind: "provider" | "harness"; id: string; model: string }>();
+  const [sessionConfig, setSessionConfig] = useState<ChatAssistantConfig>();
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [error, setError] = useState("");
+  const [voiceStart, setVoiceStart] = useState<{ microphone?: Promise<MediaStream> }>();
   const [position, setPosition] = useState(() => ({ x: Math.max(12, window.innerWidth - 580), y: 72 }));
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const abort = useRef<AbortController | undefined>(undefined);
   const activeTurn = useRef<{ turnId?: string; harnessTurnId?: string }>({});
+  const voiceSessionId = useRef<string | undefined>(undefined);
   const input = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const catalogRef = useRef<HTMLDetailsElement>(null);
   const destinationCatalogRef = useRef<HTMLDetailsElement>(null);
   const runtime = sessionRuntime ?? defaultModelRuntime(providers, harnesses);
-  const toolRuntime: ToolSharingRuntime | undefined = runtime?.kind === "provider"
-    ? (() => { const profile = providers.find((item) => item.id === runtime.id); return profile ? { kind: "provider", profile } : undefined; })()
-    : runtime?.kind === "harness"
-      ? (() => { const profile = harnesses.find((item) => item.id === runtime.id); return profile ? { kind: "harness", profile } : undefined; })()
-      : undefined;
   const storageKey = engagement ? `nebula.control-assistant.session.${engagement.id}` : undefined;
   const actionOutcomesKey = storageKey ? `${storageKey}.action-outcomes` : undefined;
 
   useEffect(() => () => { abort.current?.abort(); }, [engagement?.id]);
 
   useEffect(() => {
+    voiceSessionId.current = undefined;
     setSessionId(undefined);
     setSessionRuntime(undefined);
+    setSessionConfig(undefined);
     setMessages([]);
     setSuggestions([]);
     setError("");
@@ -85,6 +86,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       if (!current || !session || session.engagementId !== engagement?.id) return;
       localStorage.setItem(storageKey, session.id);
       setSessionId(session.id);
+      voiceSessionId.current = session.id;
+      setSessionConfig(session.assistantConfig);
+      if (typeof api.getChatAssistantConfig === "function") {
+        void api.getChatAssistantConfig(session.id).then((saved) => {
+          if (current) setSessionConfig(saved.settings);
+        }).catch((caught: unknown) => {
+          void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.settings_load_failed", message: "Saved assistant settings could not be loaded.", outcome: "failure", stage: "history", retryable: true, exception: caught });
+        });
+      }
       const runtimeId = session.backend === "provider" ? session.providerId : session.harnessProfileId;
       if (runtimeId && session.model) setSessionRuntime({ kind: session.backend, id: runtimeId, model: session.model });
       return api.listChatMessages(session.id);
@@ -418,11 +428,36 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       return;
     }
     if (!api || !engagement || !runtime) return;
-    const turnOptions = assistantTurnOptions(runtime, harnesses);
+    let effectiveSessionId = sessionId;
+    let effectiveConfig = sessionConfig;
+    if (sessionId) {
+      try {
+        const latest = await api.getControlAssistantSession(engagement.id);
+        if (latest?.id === sessionId) {
+          effectiveSessionId = latest.id;
+          effectiveConfig = latest.assistantConfig;
+          if (typeof api.getChatAssistantConfig === "function") {
+            effectiveConfig = (await api.getChatAssistantConfig(latest.id)).settings;
+          }
+          setSessionConfig(effectiveConfig);
+        }
+      } catch (caught) {
+        void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_refresh_failed", message: "The assistant's next-turn settings could not be refreshed.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
+        setError(caught instanceof Error ? caught.message : "Could not load Nebula assistant settings. Retry after reconnecting.");
+        return;
+      }
+    }
+    const selectedRuntime = effectiveConfig
+      ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
+      : runtime;
+    const turnOptions = assistantTurnOptions(selectedRuntime, harnesses);
+    const selectedToolRuntime: ToolSharingRuntime | undefined = selectedRuntime.kind === "provider"
+      ? (() => { const profile = providers.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "provider", profile } : undefined; })()
+      : (() => { const profile = harnesses.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "harness", profile } : undefined; })();
     let allowCloudToolResults = false;
-    if (toolRuntime && !(toolRuntime.kind === "provider" ? toolRuntime.profile.local : toolRuntime.profile.localOnly)) {
-      if (!toolRuntime.profile.permitsSensitiveData) {
-        setError(`${toolRuntime.profile.name} is configured for text only. Permit project data in Settings to use settings tools.`);
+    if (selectedToolRuntime && !(selectedToolRuntime.kind === "provider" ? selectedToolRuntime.profile.local : selectedToolRuntime.profile.localOnly)) {
+      if (!selectedToolRuntime.profile.permitsSensitiveData) {
+        setError(`${selectedToolRuntime.profile.name} is configured for text only. Permit project data in Settings to use settings tools.`);
         return;
       }
       // The profile's saved sensitive-data permission is the standing consent
@@ -444,16 +479,29 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       const result = await api.streamChat({
         controlAssistant: true,
         engagementId: engagement.id,
-        sessionId,
-        backend: runtime.kind,
-        providerId: runtime.kind === "provider" ? runtime.id : undefined,
-        harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
+        sessionId: effectiveSessionId,
+        backend: selectedRuntime.kind,
+        providerId: selectedRuntime.kind === "provider" ? selectedRuntime.id : undefined,
+        harnessProfileId: selectedRuntime.kind === "harness" ? selectedRuntime.id : undefined,
         model: turnOptions.model,
-        reasoningEffort: turnOptions.reasoningEffort,
-        harnessReasoningEffort: turnOptions.harnessReasoningEffort,
-        harnessServiceTier: turnOptions.harnessServiceTier,
+        reasoningEffort: effectiveConfig?.reasoningEffort ?? turnOptions.reasoningEffort,
+        harnessReasoningEffort: effectiveConfig?.harnessReasoningEffort ?? turnOptions.harnessReasoningEffort,
+        harnessServiceTier: effectiveConfig?.harnessServiceTier ?? turnOptions.harnessServiceTier,
+        harnessMode: effectiveConfig?.harnessMode,
+        harnessCyberAccessProgram: effectiveConfig?.harnessCyberAccessProgram,
+        mcpServerIds: effectiveConfig?.mcpServerIds,
+        hookIds: effectiveConfig?.hookIds,
+        includeKnowledge: effectiveConfig?.includeKnowledge,
+        allowCloudKnowledge: effectiveConfig?.allowCloudKnowledge,
+        allowAgentMessaging: effectiveConfig?.allowAgentMessaging,
+        allowSubagents: effectiveConfig?.allowSubagents,
+        maxActiveSubagents: effectiveConfig?.maxActiveSubagents,
+        subagentProviderId: effectiveConfig?.subagentProviderId,
+        subagentHarnessId: effectiveConfig?.subagentHarnessProfileId,
+        subagentModel: effectiveConfig?.subagentModel,
+        subagentReasoningEffort: effectiveConfig?.subagentReasoningEffort,
         messages: [{ role: "user", content: prompt }],
-        toolsEnabled: false,
+        toolsEnabled: effectiveConfig?.toolsEnabled ?? false,
         allowCloudToolResults,
       }, (event) => {
         if (event.type === "started" && event.turnId) activeTurn.current.turnId = event.turnId;
@@ -477,6 +525,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setSessionId(result.sessionId);
         const runtimeId = result.backend === "harness" ? result.harnessProfileId : result.providerId;
         if (runtimeId) setSessionRuntime({ kind: result.backend === "harness" ? "harness" : "provider", id: runtimeId, model: result.model });
+        void api.getControlAssistantSession(engagement.id).then((latest) => {
+          if (latest && latest.id === result.sessionId) {
+            setSessionConfig(latest.assistantConfig);
+            if (typeof api.getChatAssistantConfig === "function") {
+              void api.getChatAssistantConfig(latest.id).then((saved) => setSessionConfig(saved.settings));
+            }
+          }
+        });
       }
       if (result?.message) {
         confirmations.push(...workReceipts.filter(({ url }) => !result.message.content.includes(url)).map(({ content }) => content));
@@ -497,6 +553,97 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     } finally { setBusy(false); }
   };
 
+  const startVoice = () => {
+    if (!api || !engagement || !runtime || busy || loadingHistory) return;
+    // Begin permission from the actual button activation for mobile browsers.
+    const microphone = window.isSecureContext && navigator.mediaDevices?.getUserMedia
+      ? navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+      : undefined;
+    voiceSessionId.current = sessionId;
+    setVoiceStart({ microphone });
+    setOpen(true);
+    setHidden(true);
+  };
+
+  const delegateVoice = async (prompt: string): Promise<string | undefined> => {
+    if (!api || !engagement || !runtime) throw new Error("Choose a project and a healthy model runtime to direct work.");
+    const effectiveSessionId = voiceSessionId.current;
+    let effectiveConfig = sessionConfig;
+    if (effectiveSessionId) {
+      const latest = await api.getControlAssistantSession(engagement.id);
+      if (latest?.id === effectiveSessionId) {
+        effectiveConfig = latest.assistantConfig;
+        if (typeof api.getChatAssistantConfig === "function") {
+          effectiveConfig = (await api.getChatAssistantConfig(latest.id)).settings;
+        }
+        setSessionConfig(effectiveConfig);
+      }
+    }
+    const selectedRuntime = effectiveConfig
+      ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
+      : runtime;
+    const options = assistantTurnOptions(selectedRuntime, harnesses);
+    const selectedToolRuntime: ToolSharingRuntime | undefined = selectedRuntime.kind === "provider"
+      ? (() => { const profile = providers.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "provider", profile } : undefined; })()
+      : (() => { const profile = harnesses.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "harness", profile } : undefined; })();
+    const cloud = selectedToolRuntime && !(selectedToolRuntime.kind === "provider" ? selectedToolRuntime.profile.local : selectedToolRuntime.profile.localOnly);
+    if (cloud && !selectedToolRuntime.profile.permitsSensitiveData) throw new Error("Permit project data for this runtime in Settings before using voice work controls.");
+    const confirmations: string[] = [];
+    const workReceipts: { url: string; content: string }[] = [];
+    const applied = new Set<string>();
+    let actionQueue = Promise.resolve();
+    setMessages((current) => [...current, { role: "user", content: prompt }]);
+    const result = await api.streamChat({
+      controlAssistant: true,
+      engagementId: engagement.id,
+      sessionId: effectiveSessionId,
+      backend: selectedRuntime.kind,
+      providerId: selectedRuntime.kind === "provider" ? selectedRuntime.id : undefined,
+      harnessProfileId: selectedRuntime.kind === "harness" ? selectedRuntime.id : undefined,
+      model: options.model,
+      reasoningEffort: effectiveConfig?.reasoningEffort ?? options.reasoningEffort,
+      harnessReasoningEffort: effectiveConfig?.harnessReasoningEffort ?? options.harnessReasoningEffort,
+      harnessServiceTier: effectiveConfig?.harnessServiceTier ?? options.harnessServiceTier,
+      harnessMode: effectiveConfig?.harnessMode,
+      harnessCyberAccessProgram: effectiveConfig?.harnessCyberAccessProgram,
+      mcpServerIds: effectiveConfig?.mcpServerIds,
+      hookIds: effectiveConfig?.hookIds,
+      includeKnowledge: effectiveConfig?.includeKnowledge,
+      allowCloudKnowledge: effectiveConfig?.allowCloudKnowledge,
+      allowAgentMessaging: effectiveConfig?.allowAgentMessaging,
+      allowSubagents: effectiveConfig?.allowSubagents,
+      maxActiveSubagents: effectiveConfig?.maxActiveSubagents,
+      subagentProviderId: effectiveConfig?.subagentProviderId,
+      subagentHarnessId: effectiveConfig?.subagentHarnessProfileId,
+      subagentModel: effectiveConfig?.subagentModel,
+      subagentReasoningEffort: effectiveConfig?.subagentReasoningEffort,
+      messages: [{ role: "user", content: prompt }],
+      toolsEnabled: effectiveConfig?.toolsEnabled ?? false,
+      allowCloudToolResults: Boolean(cloud),
+    }, (event) => {
+      const action = settingClientAction(event);
+      if (action && event.type === "tool_completed" && !applied.has(event.toolCallId)) {
+        applied.add(event.toolCallId);
+        actionQueue = actionQueue.then(async () => { confirmations.push(await applyClientAction(action)); });
+      }
+      const receipt = assistantWorkReceipt(event, engagement.id);
+      if (receipt && event.type === "tool_completed" && !applied.has(event.toolCallId)) {
+        applied.add(event.toolCallId);
+        workReceipts.push(receipt);
+      }
+    });
+    await actionQueue;
+    if (result?.sessionId && storageKey) {
+      voiceSessionId.current = result.sessionId;
+      writeStorage(storageKey, result.sessionId);
+      setSessionId(result.sessionId);
+    }
+    if (!result?.message) throw new Error("The assistant response is still running. Check the saved work before retrying.");
+    confirmations.push(...workReceipts.filter(({ url }) => !result.message!.content.includes(url)).map(({ content }) => content));
+    setMessages((current) => [...current, result.message!, ...confirmations.map((content) => ({ role: "assistant" as const, content }))]);
+    return [result.message.content, ...confirmations].filter(Boolean).join("\n\n");
+  };
+
   const matches = query.trim() ? settingCatalog.filter((entry) =>
     [entry.label, entry.description, ...entry.keywords].join(" ").toLowerCase().includes(query.toLowerCase())) : settingCatalog;
   const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
@@ -506,7 +653,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     <div className={styles.header}>
       <button className="icon-button subtle" type="button" aria-label="Move Nebula assistant" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
       <strong>Nebula assistant</strong><small>{engagement?.name ?? "Choose a project"}</small>
+      <button className="icon-button subtle" type="button" aria-label="Start Nebula Voice" title="Start Nebula Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} /></button>
       <button className="icon-button subtle" type="button" aria-label="Hide Nebula assistant" title="Hide assistant" onClick={() => setHidden(true)}><Minimize2 size={18} /></button>
+      <button className="icon-button subtle" type="button" aria-label="Nebula assistant settings" title={sessionId ? "Open Nebula assistant settings" : "Send a message to create Nebula assistant settings"} disabled={!sessionId || !engagement} onClick={() => { if (!sessionId || !engagement) return; setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}><Settings2 size={18} /></button>
       <button className="icon-button subtle" type="button" aria-label="Close Nebula assistant" title="Close assistant; keep history" onClick={() => { setOpen(false); setHidden(false); }}><X size={18} /></button>
     </div>
     <div className={styles.body}>
@@ -549,5 +698,6 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     {children}
     {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Nebula assistant" : "Open Nebula assistant"} title="Nebula assistant" onClick={() => { setOpen(true); setHidden(false); }}><Bot size={22} aria-hidden="true" /></button> : null}
     {panelContent && createPortal(panelContent, document.body)}
+    {voiceStart && api && engagement && createPortal(<NebulaVoice api={api} project={{ id: engagement.id, name: engagement.name }} initialMicrophone={voiceStart.microphone} onDelegate={delegateVoice} onExit={() => { setVoiceStart(undefined); setHidden(false); }} />, document.body)}
   </NebulaAssistantLauncherContext.Provider>;
 }
