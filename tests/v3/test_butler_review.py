@@ -3,15 +3,18 @@
 import asyncio
 import json
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import nebula.v3.butler_oversight as oversight
+import nebula.v3.butler_review as semantic_review
 from nebula.v3.butler_oversight import (
     ButlerEvidenceRef,
     ButlerOversightService,
+    GoalAttentionReport,
     GoalProgressReport,
     butler_router,
     ingest_agent_report,
@@ -28,18 +31,25 @@ from nebula.v3.butler_review import (
     is_meaningful_event,
     review_pending,
 )
+from nebula.v3.butler_memory import ButlerMemoryService
+from nebula.v3.butler_precedent import read_precedents
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalUpdate, GoalWrite
 from nebula.v3.domain import (
     ButlerDecision,
     ButlerGoalWatch,
     ButlerIncident,
     ButlerProjectState,
+    ChatBackend,
     ChatGoal,
     ChatMessage,
     ChatSession,
+    ChatTokenUsage,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    HarnessKind,
+    HarnessProfile,
+    ProviderPrivacy,
     ProviderProfile,
     utc_now,
 )
@@ -209,6 +219,28 @@ def test_review_packet_is_bounded_and_contains_core_citations(tmp_path):
         build_review_packet(store, "other", event)
 
 
+def test_precedent_packet_is_bounded_and_excludes_foreign_project_memory(tmp_path):
+    memory = ButlerMemoryService(tmp_path / "precedent.db")
+    preference = memory.capture_operator_preference(
+        "other-project",
+        "Always ask the parent before changing a goal.",
+        source_ref="other-project-private-source",
+    )
+    foreign = memory.capture_verified_lesson(
+        "other-project",
+        "Record the other project's private checkpoint before continuing.",
+        source_ref="other-project-private-result",
+        verification_state="verified",
+    )
+    assert preference is not None
+    snapshot = read_precedents(memory, "project", "goal.progress_overdue")
+    assert [item.id for item in snapshot.items] == [preference.id]
+    assert foreign.id not in [item.id for item in snapshot.items]
+    assert "other-project-private-source" not in snapshot.model_dump_json()
+    assert "other-project-private-result" not in snapshot.model_dump_json()
+    assert len(snapshot.items) <= 4
+
+
 def test_review_decision_survives_restart_without_duplicate_model_call(tmp_path):
     path, store, goals, goal, worker = _setup(tmp_path)
     _plan_edit(goals, goal)
@@ -249,6 +281,171 @@ def test_review_decision_survives_restart_without_duplicate_model_call(tmp_path)
     assert restarted.get(ButlerDecision, saved.id).source_event_id == candidate.id
 
 
+def test_escalation_opens_one_project_incident_with_cited_evidence_and_replays_cleanly(
+    tmp_path,
+):
+    path, store, goals, goal, worker = _setup(tmp_path)
+    store.create(Engagement(id="other-project", name="Other Project"))
+    _plan_edit(goals, goal)
+    reviewer = CitingReviewer(choice="escalate")
+
+    first = asyncio.run(review_pending(store, "project", worker.worker_id, reviewer))
+    assert first is not None and first.choice == "escalate"
+    incidents = store.find_entities(ButlerIncident, {}, engagement_id="project")
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident.source == "semantic_review"
+    assert incident.verification_state == "model_assessed"
+    assert incident.status == "open"
+    assert incident.goal_ids == [goal.id]
+    assert incident.session_ids == [goal.session_id]
+    assert {
+        (ref["kind"], ref["id"], ref["project_id"]) for ref in incident.evidence_refs
+    } == {
+        ("decision", first.id, "project"),
+        ("goal", goal.id, "project"),
+    }
+    assert any("saved goal plan" in item for item in incident.evidence_summary)
+    assert any("Why now" in item for item in incident.evidence_summary)
+    assert store.count_entities(ChatMessage, engagement_id="project") == 0
+
+    app = FastAPI()
+    app.include_router(butler_router(worker), prefix="/api/v1")
+    client = TestClient(app)
+    project_overview = client.get("/api/v1/engagements/project/butler/overview").json()
+    other_overview = client.get(
+        "/api/v1/engagements/other-project/butler/overview"
+    ).json()
+    assert project_overview["summary"]["open_incidents"] == 1
+    assert project_overview["incidents"][0]["id"] == incident.id
+    assert other_overview["summary"]["open_incidents"] == 0
+    assert other_overview["incidents"] == []
+    assert store.count_entities(ButlerIncident, engagement_id="other-project") == 0
+
+    restarted = NebulaStore(path)
+    restarted.update(
+        ButlerProjectState,
+        oversight.project_state_id("project"),
+        {"lease_expires_at": utc_now() - timedelta(seconds=1)},
+    )
+    second_worker = ButlerOversightService(restarted)
+    assert second_worker.replay_project("project")
+    assert (
+        asyncio.run(
+            review_pending(restarted, "project", second_worker.worker_id, reviewer)
+        )
+        is None
+    )
+    assert len(reviewer.calls) == 1
+    assert restarted.count_entities(ButlerIncident, engagement_id="project") == 1
+    assert [item.event_type for item in _events(restarted)].count(
+        "incident.opened"
+    ) == 1
+
+
+def test_repeated_escalation_updates_existing_concern_without_duplicate(tmp_path):
+    _, store, goals, goal, worker = _setup(tmp_path)
+    reviewer = CitingReviewer(choice="escalate")
+    first_plan = _plan_edit(goals, goal)
+    first = asyncio.run(review_pending(store, "project", worker.worker_id, reviewer))
+    assert first is not None
+    store.update(
+        ButlerProjectState,
+        oversight.project_state_id("project"),
+        {"last_review_requested_at": utc_now() - timedelta(minutes=1)},
+    )
+    goals.update(
+        first_plan.session_id,
+        GoalUpdate(
+            expected_revision=first_plan.revision,
+            objective=first_plan.objective,
+            completion_criteria=first_plan.completion_criteria,
+            plan=[*first_plan.plan, "Check an independent sample"],
+        ),
+    )
+    second = asyncio.run(review_pending(store, "project", worker.worker_id, reviewer))
+    assert second is not None and second.id != first.id
+    incidents = store.find_entities(ButlerIncident, {}, engagement_id="project")
+    assert len(incidents) == 1
+    assert {
+        ref["id"] for ref in incidents[0].evidence_refs if ref["kind"] == "decision"
+    } == {
+        first.id,
+        second.id,
+    }
+    event_types = [item.event_type for item in _events(store)]
+    assert event_types.count("incident.opened") == 1
+    assert event_types.count("incident.updated") == 1
+
+
+def test_expired_review_lease_cannot_record_escalation(tmp_path):
+    _, store, goals, goal, worker = _setup(tmp_path)
+    _plan_edit(goals, goal)
+
+    class ExpiringReviewer(CitingReviewer):
+        async def review(self, packet):
+            result = await super().review(packet)
+            store.update(
+                ButlerProjectState,
+                oversight.project_state_id("project"),
+                {"lease_expires_at": utc_now() - timedelta(seconds=1)},
+            )
+            return result
+
+    saved = asyncio.run(
+        review_pending(
+            store, "project", worker.worker_id, ExpiringReviewer(choice="escalate")
+        )
+    )
+    assert saved is None
+    assert store.count_entities(ButlerDecision, engagement_id="project") == 0
+    assert store.count_entities(ButlerIncident, engagement_id="project") == 0
+    assert [item.event_type for item in _events(store)].count(
+        "butler.decision_recorded"
+    ) == 0
+
+
+def test_incident_write_failure_rolls_back_decision_and_review_cursor(
+    tmp_path, monkeypatch
+):
+    _, store, goals, goal, worker = _setup(tmp_path)
+    _plan_edit(goals, goal)
+    original = semantic_review._append_project_event
+
+    def fail_on_incident(*args, **kwargs):
+        if kwargs["event_type"] == "incident.opened":
+            raise RuntimeError("incident event unavailable")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(semantic_review, "_append_project_event", fail_on_incident)
+    with pytest.raises(RuntimeError, match="incident event unavailable"):
+        asyncio.run(
+            review_pending(
+                store, "project", worker.worker_id, CitingReviewer(choice="escalate")
+            )
+        )
+    assert store.count_entities(ButlerDecision, engagement_id="project") == 0
+    assert store.count_entities(ButlerIncident, engagement_id="project") == 0
+    assert (
+        store.get(
+            ButlerProjectState, oversight.project_state_id("project")
+        ).last_review_sequence
+        == 0
+    )
+    assert [item.event_type for item in _events(store)].count(
+        "butler.decision_recorded"
+    ) == 0
+
+    monkeypatch.setattr(semantic_review, "_append_project_event", original)
+    saved = asyncio.run(
+        review_pending(
+            store, "project", worker.worker_id, CitingReviewer(choice="escalate")
+        )
+    )
+    assert saved is not None and saved.choice == "escalate"
+    assert store.count_entities(ButlerIncident, engagement_id="project") == 1
+
+
 def test_same_goal_plan_burst_is_coalesced_into_one_review(tmp_path):
     _, store, goals, goal, worker = _setup(tmp_path)
     first = _plan_edit(goals, goal)
@@ -274,6 +471,61 @@ def test_same_goal_plan_burst_is_coalesced_into_one_review(tmp_path):
         == candidate.sequence
     )
     assert store.get(ChatGoal, second.id).plan == second.plan
+
+
+@pytest.mark.parametrize("attention_first", [True, False])
+def test_attention_report_is_review_boundary_even_with_adjacent_plan_change(
+    tmp_path, attention_first
+):
+    _, store, goals, goal, worker = _setup(tmp_path)
+    turn = store.create(
+        ChatTurn(
+            id="attention-turn",
+            engagement_id="project",
+            session_id=goal.session_id,
+            goal_id=goal.id,
+            provider_profile_id="provider",
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tools_enabled=True,
+        )
+    )
+
+    def report_attention():
+        ingest_agent_report(
+            store,
+            turn_id=turn.id,
+            idempotency_key="urgent-machine",
+            body=GoalAttentionReport(
+                condition="machine_unreachable",
+                machine="target.example",
+                symptom="The connection timed out.",
+                impact="The check cannot continue.",
+                evidence=["Three attempts timed out."],
+                attempted_recovery="Retried once.",
+                urgency="urgent",
+                help_requested="Check whether the machine is available.",
+            ),
+            source="provider_tool",
+        )
+
+    if attention_first:
+        report_attention()
+        _plan_edit(goals, goal)
+    else:
+        _plan_edit(goals, goal)
+        report_attention()
+    attention_event = next(
+        event
+        for event in _events(store)
+        if event.event_type == "agent.attention_reported"
+    )
+    reviewer = CitingReviewer(choice="steer")
+    saved = asyncio.run(review_pending(store, "project", worker.worker_id, reviewer))
+    assert saved is not None
+    assert saved.source_event_id == attention_event.id
+    assert saved.source_event_type == "agent.attention_reported"
+    assert reviewer.calls[0].source_verification_state == "agent_reported"
 
 
 def test_overview_exposes_project_decision_and_pages_history(tmp_path):
@@ -331,6 +583,7 @@ def test_invalid_model_citation_becomes_unavailable_without_foreign_evidence(tmp
     assert saved.status == "unavailable"
     assert saved.reason == "invalid_evidence_citation"
     assert all(ref["project_id"] == "project" for ref in saved.evidence_refs)
+    assert store.count_entities(ButlerIncident, engagement_id="project") == 0
 
 
 def test_model_failure_cannot_suppress_deterministic_overdue_incident(tmp_path):
@@ -347,6 +600,7 @@ def test_model_failure_cannot_suppress_deterministic_overdue_incident(tmp_path):
         )
         == 1
     )
+    assert store.count_entities(ButlerIncident, engagement_id="project") == 1
 
     class FailingReviewer:
         async def review(self, _packet):
@@ -364,6 +618,33 @@ def test_model_failure_cannot_suppress_deterministic_overdue_incident(tmp_path):
         )
         == 1
     )
+    assert store.count_entities(ButlerIncident, engagement_id="project") == 1
+
+
+def test_escalation_joins_guaranteed_overdue_incident(tmp_path):
+    _, store, _, goal, worker = _setup(tmp_path)
+    store.update(
+        ButlerGoalWatch,
+        watch_id(goal.id),
+        {"progress_due_at": utc_now() - timedelta(seconds=1)},
+    )
+    assert worker.fire_due_deadlines("project") == 1
+    prior = store.find_entities(ButlerIncident, {}, engagement_id="project")[0]
+    reviewer = CitingReviewer(choice="escalate")
+    saved = asyncio.run(review_pending(store, "project", worker.worker_id, reviewer))
+
+    assert saved is not None and saved.choice == "escalate"
+    incidents = store.find_entities(ButlerIncident, {}, engagement_id="project")
+    assert len(incidents) == 1
+    assert incidents[0].id == prior.id
+    assert incidents[0].source == "goal_checkpoint"
+    assert incidents[0].verification_state == "core_observed"
+    assert {
+        ref["id"] for ref in incidents[0].evidence_refs if ref["kind"] == "decision"
+    } == {saved.id}
+    event_types = [item.event_type for item in _events(store)]
+    assert event_types.count("incident.opened") == 1
+    assert event_types.count("incident.updated") == 1
 
 
 def test_provider_reviewer_uses_goal_runtime_without_chat_mutation(tmp_path):
@@ -398,6 +679,81 @@ def test_provider_reviewer_uses_goal_runtime_without_chat_mutation(tmp_path):
     assert saved is not None and saved.choice == "observe"
     assert provider.requests[0].metadata["operation"] == "butler_semantic_review"
     assert provider.requests[0].tools == []
+    assert store.get(ChatSession, goal.session_id).revision == chat_before.revision
+    assert store.count_entities(ChatTurn, engagement_id="project") == 0
+
+
+@pytest.mark.parametrize("foreign_citation", [False, True])
+def test_harness_reviewer_uses_project_scoped_tool_free_analysis_and_checks_citations(
+    tmp_path, foreign_citation
+):
+    _, store, goals, goal, worker = _setup(tmp_path)
+    store.create(
+        HarnessProfile(
+            id="codex",
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/usr/bin/codex",
+            default_model="model-a",
+            privacy=ProviderPrivacy(local_only=True),
+        )
+    )
+    store.update(
+        ChatSession,
+        goal.session_id,
+        {
+            "backend": ChatBackend.HARNESS,
+            "provider_profile_id": None,
+            "harness_profile_id": "codex",
+            "harness_session_id": "existing-codex-session",
+        },
+    )
+    _plan_edit(goals, goal)
+    chat_before = store.get(ChatSession, goal.session_id)
+
+    class FakeHarnessRuntime:
+        def __init__(self):
+            self.requests = []
+
+        async def analyze_structured(self, **request):
+            self.requests.append(request)
+            packet = json.loads(request["files"]["review-packet.json"])
+            payload = {
+                "choice": "steer",
+                "summary": "The plan needs a control.",
+                "reason": "The saved plan lacks a control comparison.",
+                "evidence_refs": [
+                    {
+                        "kind": "goal",
+                        "id": goal.id,
+                        "project_id": "other-project"
+                        if foreign_citation
+                        else "project",
+                    }
+                ],
+            }
+            return SimpleNamespace(
+                engagement_id=packet["project_id"],
+                response=json.dumps(payload),
+                usage=ChatTokenUsage(input_tokens=25, output_tokens=10),
+            )
+
+    runtime = FakeHarnessRuntime()
+    reviewer = ProviderButlerReviewer(store, lambda _profile: None, runtime)
+    saved = asyncio.run(review_pending(store, "project", worker.worker_id, reviewer))
+    assert saved is not None
+    assert saved.status == ("unavailable" if foreign_citation else "reviewed")
+    assert saved.reason == (
+        "invalid_evidence_citation"
+        if foreign_citation
+        else "The saved plan lacks a control comparison."
+    )
+    assert runtime.requests[0]["engagement_id"] == "project"
+    assert runtime.requests[0]["profile_id"] == "codex"
+    assert runtime.requests[0]["nebula_tools"] is False
+    assert "Return exactly one JSON object" in runtime.requests[0]["prompt"]
+    assert f'"id":"{goal.id}"' in runtime.requests[0]["prompt"]
+    assert '"project_id":"project"' in runtime.requests[0]["prompt"]
     assert store.get(ChatSession, goal.session_id).revision == chat_before.revision
     assert store.count_entities(ChatTurn, engagement_id="project") == 0
 

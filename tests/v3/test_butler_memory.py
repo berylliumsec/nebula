@@ -211,6 +211,17 @@ def test_edit_revision_is_authoritative_and_stale_delete_fails(tmp_path):
     assert memory.list("project-a").items[0].content == updated.content
 
 
+def test_auto_capture_remembers_stable_status_checkpoint_preference(tmp_path):
+    memory = _service(tmp_path)
+    checkpoint = memory.capture_operator_preference(
+        "project-a",
+        "I always prefer concise status checkpoints that name the next action.",
+    )
+    assert checkpoint is not None
+    assert checkpoint.scope == "global_preference"
+    assert memory.search("project-b", "status checkpoint").items[0].id == checkpoint.id
+
+
 def test_auto_capture_rejects_secrets_and_unverified_claims(tmp_path):
     memory = _service(tmp_path)
     assert memory.capture_operator_preference("project-a", "A machine is down.") is None

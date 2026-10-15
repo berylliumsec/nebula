@@ -24,7 +24,9 @@ from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import (
     Artifact,
     ButlerAccountCredit,
+    ButlerAction,
     ButlerAgentReport,
+    ButlerAuthorityPolicy,
     ButlerDecision,
     ButlerGoalWatch,
     ButlerHarnessQuota,
@@ -47,6 +49,7 @@ from .domain import (
 from .storage import ConflictError, NebulaStore, NotFoundError
 
 if TYPE_CHECKING:
+    from .butler_memory import ButlerMemoryService
     from .butler_review import ButlerReviewer
     from .storage import StoreTransaction
 
@@ -92,6 +95,7 @@ class ButlerEvidenceRef(NebulaModel):
         "agent_report",
         "incident",
         "decision",
+        "action",
     ]
     id: str = Field(min_length=1, max_length=200)
     project_id: str = Field(min_length=1, max_length=200)
@@ -849,10 +853,15 @@ class ButlerOversightService:
     """Replay project events and fire one-shot deadlines without a browser tab."""
 
     def __init__(
-        self, store: NebulaStore, reviewer: ButlerReviewer | None = None
+        self,
+        store: NebulaStore,
+        reviewer: ButlerReviewer | None = None,
+        memory_service: ButlerMemoryService | None = None,
     ) -> None:
         self.store = store
         self.reviewer = reviewer
+        self.memory_service = memory_service
+        self.authority_service = None
         self.worker_id = f"butler-worker-{uuid4()}"
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -1245,8 +1254,35 @@ class ButlerOversightService:
                     from .butler_review import review_pending
 
                     await review_pending(
-                        self.store, engagement_id, self.worker_id, self.reviewer
+                        self.store,
+                        engagement_id,
+                        self.worker_id,
+                        self.reviewer,
+                        self.memory_service,
                     )
+                    if self.authority_service is not None:
+                        await self.authority_service.process_project(
+                            engagement_id, self.worker_id
+                        )
+                    if self.memory_service is not None:
+                        try:
+                            for _ in range(5):
+                                consumed = await asyncio.to_thread(
+                                    self.memory_service.capture_pivotal_project_events,
+                                    self.store,
+                                    engagement_id,
+                                    limit=100,
+                                )
+                                if consumed < 100:
+                                    break
+                        except Exception as exc:
+                            record_caught_exception(
+                                "butler",
+                                "butler.memory_capture_failed",
+                                "Butler memory will retry without stopping project oversight.",
+                                exc,
+                                stage="memory_capture",
+                            )
                 wait_seconds = await asyncio.to_thread(
                     self._next_wait_seconds, engagement_id
                 )
@@ -1275,6 +1311,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
         incident_offset: int = 0,
         resource_offset: int = 0,
         decision_offset: int = 0,
+        action_offset: int = 0,
     ) -> dict:
         service.store.get(Engagement, engagement_id)
         if any(
@@ -1284,6 +1321,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 incident_offset,
                 resource_offset,
                 decision_offset,
+                action_offset,
             )
         ):
             raise HTTPException(422, "overview offsets must be nonnegative")
@@ -1459,13 +1497,34 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             limit=OVERVIEW_PAGE_SIZE,
             newest_first=True,
         )
+        action_count = service.store.count_entities(
+            ButlerAction, engagement_id=engagement_id
+        )
+        actions = service.store.find_entities(
+            ButlerAction,
+            {},
+            engagement_id=engagement_id,
+            offset=action_offset,
+            limit=OVERVIEW_PAGE_SIZE,
+            newest_first=True,
+        )
+        from .butler_authority import authority_view
+
+        policy = service.store.find_entity(
+            ButlerAuthorityPolicy, "engagement_id", engagement_id
+        )
+        authority = authority_view(engagement_id, policy)
         return {
             "project_id": engagement_id,
-            "authority": "watch",
+            "authority": authority["authority"],
+            "authority_revision": authority["revision"],
+            "delegate_actions": authority["delegate_actions"],
+            "effective_actions": authority["effective_actions"],
             "watched_goals": watched_goals,
             "incidents": [item.model_dump(mode="json") for item in incidents],
             "resources": resources,
             "decisions": [item.model_dump(mode="json") for item in decisions],
+            "actions": [item.model_dump(mode="json") for item in actions],
             "last_event_sequence": state.last_event_sequence if state else 0,
             "summary": {
                 "watched_goals": watch_count,
@@ -1475,6 +1534,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 "account_resources": account_count,
                 "harness_quota_resources": quota_count,
                 "decisions": decision_count,
+                "actions": action_count,
             },
             "next_watch_offset": (
                 watch_offset + len(watches)
@@ -1496,10 +1556,17 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 if decision_offset + len(decisions) < decision_count
                 else None
             ),
+            "next_action_offset": (
+                action_offset + len(actions)
+                if action_offset + len(actions) < action_count
+                else None
+            ),
             "capabilities": {
-                "authority_levels": ["watch"],
+                "authority_levels": ["watch", "steer", "delegate"],
+                "supported_actions": authority["supported_actions"],
                 "incidents": True,
                 "decisions": True,
+                "actions": True,
                 "agent_reports": True,
                 "machine_alerts": True,
                 "resource_alerts": True,
@@ -1509,7 +1576,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 "Agent reporting requires a goal turn with verified provider tools; harness report adapters are not connected yet.",
                 "OpenRouter account checks require a separate management key and run after provider setup or use and manual refresh; external spending is not polled periodically.",
                 "Harness quota alerts require authoritative Codex account windows or numeric Claude SDK rate-limit notices; Grok and missing percentages remain unavailable.",
-                "Semantic review uses a project goal's provider when background evidence sharing is permitted; unsupported runtimes and model failures produce explicit unavailable decisions. Review recommendations do not act on chats.",
+                "Semantic review uses a project goal's provider when background evidence sharing is permitted; unsupported runtimes and model failures produce explicit unavailable decisions. Steer and Delegate use only explicitly advertised bounded actions.",
                 "Live event push is not connected yet.",
             ],
         }

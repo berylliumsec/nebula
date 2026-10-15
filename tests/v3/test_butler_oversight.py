@@ -907,6 +907,7 @@ def test_overview_pages_watches_and_prioritizes_open_incidents(tmp_path, monkeyp
         "account_resources": 0,
         "harness_quota_resources": 0,
         "decisions": 0,
+        "actions": 0,
     }
     assert len(first_page["watched_goals"]) == 2
     assert len(first_page["incidents"]) == 2

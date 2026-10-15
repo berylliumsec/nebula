@@ -20,31 +20,74 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .domain import Finding, FindingStatus, Report, ReportStatus
+from .domain import (
+    ButlerAction,
+    ButlerDecision,
+    Engagement,
+    Finding,
+    FindingStatus,
+    Report,
+    ReportStatus,
+)
 from .storage import NebulaStore
 
 MemoryScope = Literal["global_preference", "global_lesson", "project_lesson"]
 _TOKEN = re.compile(r"[\w]{2,}", re.UNICODE)
 _PREFERENCE = re.compile(
-    r"^(?:i prefer|i always prefer|please always|always|never|do not|don't)\b",
+    r"^(?:i prefer|i always prefer|please always|always|never|do not|don't|"
+    r"from now on|in future|for future work|by default)\b",
+    re.IGNORECASE,
+)
+_STABLE_PREFERENCE = re.compile(
+    r"\b(?:always|never|by default|from now on|in future|for future work|"
+    r"every time|going forward|across projects)\b",
+    re.IGNORECASE,
+)
+_PREFERENCE_WISH = re.compile(
+    r"^(?:remember that )?(?:i want|i'd like|i would like|i like|please)\b",
+    re.IGNORECASE,
+)
+_AUTHORITY_CLAIM = re.compile(
+    r"\b(?:approve|authorize|grant|delegate|bypass|override|ignore approvals?)\b",
     re.IGNORECASE,
 )
 _OPERATOR_LESSON = re.compile(
     r"^(?:(?:next time|in future|for future work|we learned to)\b|lesson learned\b:?)",
     re.IGNORECASE,
 )
+_OPERATOR_DECISION = re.compile(
+    r"^(?:(?:we decided|we've decided|i decided|the decision is)\b|decision\s*:)",
+    re.IGNORECASE,
+)
+_PROJECT_LOCAL_CUE = re.compile(
+    r"\b(?:this|current|selected) (?:project|chat|mission|agent|goal)\b",
+    re.IGNORECASE,
+)
+_LESSON_PROCESS = re.compile(r"^(?:when|if|after|before)\b", re.IGNORECASE)
+_LESSON_REASON = re.compile(
+    r"\b(?:because|so that|to avoid|unless|until|rather than)\b", re.IGNORECASE
+)
+_NOVELTY_STOPWORDS = frozenset(
+    "a an and are as at be because before by for from if in is it of on or "
+    "that the their then this to when with would should could "
+    "butler suggested steer escalate cited core observed goal event review "
+    "suggestion verified research result".split()
+)
 _AUTO_WORK_TOPIC = re.compile(
-    r"\b(?:answer|approval|browser|chat|citation|code|conversation|deploy|"
+    r"\b(?:answer|approval|browser|chat|checkpoint|citation|code|conversation|deploy|"
     r"effort|evidence|format|goal|harness|message|mission|model|note|"
-    r"notification|progress|project|question|report|reply|response|"
+    r"notification|progress|project|question|quota|credit|cost|report|reply|response|status|"
     r"review|source|summary|summaries|task|test|theme|update|voice|"
     r"workflow|step|finding|outcome|result|verification)"
     r"(?:s|ies)?\b",
     re.IGNORECASE,
 )
 _AUTO_PRIVATE = re.compile(
-    r"(?:\d|[\\/@<>`\"]|\b(?:ssn|social security|pin|passcode|"
-    r"birthdate|birthday|maiden name|account number|card number)\b)",
+    r"(?:[\\/@<>`\"]|\b(?:ssn|social security|pin|passcode|"
+    r"birthdate|birthday|maiden name|account number|card number)\b|"
+    r"\b\d[\d\s().-]{7,}\d\b|\d{7,}|\b[A-Za-z0-9_-]{32,}\b|"
+    r"\b\d{1,6}\s+\w+(?:\s+\w+){0,3}\s+"
+    r"(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|blvd|boulevard)\b)",
     re.IGNORECASE,
 )
 _SECRET = re.compile(
@@ -170,6 +213,13 @@ class ButlerMemoryService:
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS butler_memory_scope ON "
                     "butler_memories(scope, scope_key, updated_at DESC)"
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS butler_memory_event_cursors (
+                        project_id TEXT PRIMARY KEY,
+                        last_event_sequence INTEGER NOT NULL DEFAULT 0
+                            CHECK (last_event_sequence >= 0)
+                    )"""
                 )
             self._ready = True
 
@@ -338,10 +388,15 @@ class ButlerMemoryService:
         first = text.strip().splitlines()[0].strip() if text.strip() else ""
         candidate = re.split(r"(?<=[.!?])\s+", first, maxsplit=1)[0]
         if (
-            not _PREFERENCE.match(candidate)
+            not (
+                _PREFERENCE.match(candidate)
+                or _PREFERENCE_WISH.match(candidate)
+                and _STABLE_PREFERENCE.search(candidate)
+            )
             or len(candidate) > 220
             or _AUTO_PRIVATE.search(candidate)
             or not _AUTO_WORK_TOPIC.search(candidate)
+            or _AUTHORITY_CLAIM.search(candidate)
         ):
             return None
         if engagement_id.casefold() in candidate.casefold() or (
@@ -400,6 +455,52 @@ class ButlerMemoryService:
                 content=candidate,
                 source_kind="operator_message",
                 source_label="You · process guidance",
+                source_ref=source_ref,
+                project_name=source_project_name,
+            )
+        except UnsafeMemoryError:
+            return None
+
+    def capture_operator_decision(
+        self,
+        engagement_id: str,
+        text: str,
+        *,
+        source_ref: str | None = None,
+        source_project_name: str = "",
+    ) -> ButlerMemoryItem | None:
+        """Remember an explicit standing operator decision, not a one-off task.
+
+        Only a direct Butler input can call this method. A decision about the
+        current project stays local even when its wording sounds reusable.
+        """
+
+        first = text.strip().splitlines()[0].strip() if text.strip() else ""
+        candidate = re.split(r"(?<=[.!?])\s+", first, maxsplit=1)[0]
+        if (
+            not _OPERATOR_DECISION.match(candidate)
+            or not _STABLE_PREFERENCE.search(candidate)
+            or len(candidate) > 220
+            or _AUTO_PRIVATE.search(candidate)
+            or not _AUTO_WORK_TOPIC.search(candidate)
+            or _AUTHORITY_CLAIM.search(candidate)
+        ):
+            return None
+        local = (
+            bool(_PROJECT_LOCAL_CUE.search(candidate))
+            or engagement_id.casefold() in candidate.casefold()
+            or bool(
+                source_project_name
+                and source_project_name.casefold() in candidate.casefold()
+            )
+        )
+        try:
+            return self._save(
+                source_project_id=engagement_id,
+                scope="project_lesson" if local else "global_lesson",
+                content=candidate,
+                source_kind="operator_message",
+                source_label="You · standing decision",
                 source_ref=source_ref,
                 project_name=source_project_name,
             )
@@ -530,6 +631,280 @@ class ButlerMemoryService:
                         source_ref=finding_ref,
                     )
         return local, transferable
+
+    @staticmethod
+    def _lesson_tokens(value: str) -> set[str]:
+        return {
+            token.casefold()
+            for token in _TOKEN.findall(value)
+            if token.casefold() not in _NOVELTY_STOPWORDS
+        }
+
+    def _novel_review_lesson(self, project_id: str, candidate: str) -> bool:
+        """Keep one useful precedent, not repeated rewordings of a checkpoint."""
+
+        tokens = self._lesson_tokens(candidate)
+        if len(tokens) < 6:
+            return False
+        self._ensure_ready()
+        with self._connect() as connection:
+            previous = connection.execute(
+                """SELECT content FROM butler_memories
+                   WHERE scope='project_lesson' AND scope_key=?
+                     AND source_kind='butler_review_candidate'
+                   ORDER BY updated_at DESC LIMIT 100""",
+                (project_id,),
+            ).fetchall()
+        for row in previous:
+            prior_tokens = self._lesson_tokens(row["content"])
+            if prior_tokens and (
+                len(tokens & prior_tokens) / min(len(tokens), len(prior_tokens)) >= 0.8
+            ):
+                return False
+        return True
+
+    def _review_lesson_candidate(
+        self, *, project_id: str, project_name: str, decision: ButlerDecision
+    ) -> str | None:
+        """Accept only short causal process guidance, as an unverified suggestion."""
+
+        candidate = getattr(decision, "lesson_candidate", None)
+        if not isinstance(candidate, str):
+            return None
+        candidate = " ".join(candidate.split()).strip()
+        if (
+            not 50 <= len(candidate) <= 280
+            or not _LESSON_PROCESS.match(candidate)
+            or not _LESSON_REASON.search(candidate)
+            or not _AUTO_WORK_TOPIC.search(candidate)
+            or _AUTO_PRIVATE.search(candidate)
+            or _AUTHORITY_CLAIM.search(candidate)
+            or project_id.casefold() in candidate.casefold()
+            or (
+                len(project_name) >= 3
+                and re.search(
+                    rf"(?<!\w){re.escape(project_name)}(?!\w)",
+                    candidate,
+                    re.IGNORECASE,
+                )
+            )
+        ):
+            return None
+        try:
+            self._clean(candidate)
+        except UnsafeMemoryError:
+            return None
+        return candidate if self._novel_review_lesson(project_id, candidate) else None
+
+    def _capture_review_candidate(
+        self, store: NebulaStore, project_id: str, decision: ButlerDecision
+    ) -> ButlerMemoryItem | None:
+        """Recheck a decision and its Core source before saving model guidance."""
+        from .butler_oversight import (
+            PROJECT_STREAM_KIND,
+            ButlerEventPayload,
+            project_stream_id,
+        )
+
+        if (
+            decision.engagement_id != project_id
+            or decision.status != "reviewed"
+            or decision.choice not in {"steer", "escalate"}
+            or decision.source_verification_state != "core_observed"
+            or decision.source_event_type
+            not in {"goal.progress_overdue", "goal.blocked", "goal.plan_changed"}
+        ):
+            return None
+        source = store.replay_operation_events(
+            project_stream_id(project_id),
+            after_sequence=decision.source_sequence - 1,
+            through_sequence=decision.source_sequence,
+            limit=1,
+        )
+        source_payload = (
+            ButlerEventPayload.model_validate(source[0].payload)
+            if len(source) == 1
+            else None
+        )
+        if (
+            len(source) != 1
+            or source[0].id != decision.source_event_id
+            or source[0].event_type != decision.source_event_type
+            or source[0].engagement_id != project_id
+            or source[0].operation_kind != PROJECT_STREAM_KIND
+            or source_payload is None
+            or source_payload.project_id != project_id
+            or source_payload.goal_id != decision.goal_id
+            or source_payload.session_id != decision.session_id
+            or source_payload.verification_state != "core_observed"
+        ):
+            raise UnsafeMemoryError("The Butler decision source is not Core-observed")
+        if not decision.evidence_refs or any(
+            not ref.get("kind")
+            or not ref.get("id")
+            or ref.get("project_id") != project_id
+            for ref in decision.evidence_refs
+        ):
+            return None
+        project_name = store.get(Engagement, project_id).name
+        candidate = self._review_lesson_candidate(
+            project_id=project_id,
+            project_name=project_name,
+            decision=decision,
+        )
+        if candidate is None:
+            return None
+        return self._save(
+            source_project_id=project_id,
+            scope="project_lesson",
+            content=(
+                f"Butler suggested {decision.choice} from a cited, Core-observed "
+                f"goal event: {candidate} This is a review suggestion, not a "
+                "verified research result."
+            ),
+            source_kind="butler_review_candidate",
+            source_label="Butler review suggestion · Core observed",
+            source_ref=decision.id,
+        )
+
+    def _capture_pivotal_event(
+        self, store: NebulaStore, project_id: str, event: Any
+    ) -> ButlerMemoryItem | None:
+        """Classify committed Core events without retaining model or agent prose."""
+
+        from .butler_oversight import PROJECT_STREAM_KIND, ButlerEventPayload
+
+        if (
+            event.engagement_id != project_id
+            or event.operation_kind != PROJECT_STREAM_KIND
+        ):
+            raise UnsafeMemoryError("The Butler event belongs to another project")
+        payload = ButlerEventPayload.model_validate(event.payload)
+        if payload.project_id != project_id:
+            raise UnsafeMemoryError("The Butler event payload has a foreign project")
+        if event.event_type == "butler.decision_recorded":
+            refs = [ref for ref in payload.evidence_refs if ref.kind == "decision"]
+            if len(refs) != 1 or refs[0].project_id != project_id:
+                raise UnsafeMemoryError("The Butler decision reference is invalid")
+            decision = store.get(ButlerDecision, refs[0].id)
+            if (
+                decision.engagement_id != project_id
+                or decision.status != "reviewed"
+                or decision.choice != "escalate"
+                or payload.goal_id != decision.goal_id
+                or payload.session_id != decision.session_id
+                or payload.metrics.get("choice") != decision.choice
+                or payload.metrics.get("status") != decision.status
+                or payload.verification_state != "core_observed"
+            ):
+                return None
+            return self._capture_review_candidate(store, project_id, decision)
+        if event.event_type == "butler.action_dispatched":
+            refs = [ref for ref in payload.evidence_refs if ref.kind == "action"]
+            if len(refs) != 1 or refs[0].project_id != project_id:
+                raise UnsafeMemoryError("The Butler action reference is invalid")
+            action = store.get(ButlerAction, refs[0].id)
+            if (
+                action.engagement_id != project_id
+                or action.status != "dispatched"
+                or action.action_type
+                not in {"request_parent_status", "request_parent_plan_reassessment"}
+                or action.verification_state != "core_observed"
+                or payload.goal_id != action.goal_id
+                or payload.session_id != action.source_session_id
+                or payload.metrics.get("action_type") != action.action_type
+                or payload.metrics.get("status") != action.status
+                or payload.verification_state != "core_observed"
+                or not action.outcome.get("queue_item_id")
+                or action.finished_at is None
+            ):
+                return None
+            decision = store.get(ButlerDecision, action.decision_id)
+            if (
+                decision.choice != "steer"
+                or decision.source_event_id != action.source_event_id
+                or decision.goal_id != action.goal_id
+                or decision.session_id != action.source_session_id
+            ):
+                return None
+            return self._capture_review_candidate(store, project_id, decision)
+        if event.event_type == "butler.action_applied":
+            refs = [ref for ref in payload.evidence_refs if ref.kind == "action"]
+            if len(refs) != 1 or refs[0].project_id != project_id:
+                raise UnsafeMemoryError("The Butler action reference is invalid")
+            action = store.get(ButlerAction, refs[0].id)
+            if (
+                action.engagement_id != project_id
+                or action.action_type != "pause_urgent_machine_blocker"
+                or action.status != "applied"
+                or payload.goal_id != action.goal_id
+                or payload.session_id != action.source_session_id
+                or payload.metrics.get("action_type") != action.action_type
+                or payload.metrics.get("status") != action.status
+                or action.verification_state != "agent_reported"
+                or action.outcome.get("goal_id") != action.goal_id
+                or action.finished_at is None
+            ):
+                return None
+            return self._save(
+                source_project_id=project_id,
+                scope="global_lesson",
+                content=(
+                    "Past case: Butler paused a main goal under explicit Delegate "
+                    "authority after an urgent agent-reported machine blocker. "
+                    "The machine condition was not independently verified."
+                ),
+                source_kind="butler_action_precedent",
+                source_label="Butler action · Core observed",
+                source_ref=action.id,
+            )
+        return None
+
+    def capture_pivotal_project_events(
+        self, store: NebulaStore, project_id: str, *, limit: int = 100
+    ) -> int:
+        """Consume only salient committed review/action events after Core commits.
+
+        The separate SQLite cursor advances after each candidate is handled.
+        A crash can replay the event; content hashing makes that harmless.
+        """
+
+        from .butler_oversight import project_stream_id
+
+        if not 1 <= limit <= 500:
+            raise ValueError("Pivotal event page must be 1 through 500")
+        store.get(Engagement, project_id)
+        self._ensure_ready()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT last_event_sequence FROM butler_memory_event_cursors WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+        cursor = int(row["last_event_sequence"]) if row else 0
+        events = store.replay_operation_events(
+            project_stream_id(project_id),
+            after_sequence=cursor,
+            event_types=[
+                "butler.decision_recorded",
+                "butler.action_dispatched",
+                "butler.action_applied",
+            ],
+            limit=limit,
+        )
+        for event in events:
+            self._capture_pivotal_event(store, project_id, event)
+            with self._lock, self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """INSERT INTO butler_memory_event_cursors
+                       (project_id, last_event_sequence) VALUES (?, ?)
+                       ON CONFLICT(project_id) DO UPDATE SET
+                         last_event_sequence=MAX(
+                           last_event_sequence, excluded.last_event_sequence)""",
+                    (project_id, event.sequence),
+                )
+                connection.commit()
+        return len(events)
 
     def _authorized_rows(self, engagement_id: str) -> list[sqlite3.Row]:
         self._ensure_ready()
