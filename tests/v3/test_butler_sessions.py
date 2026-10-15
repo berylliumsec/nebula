@@ -47,7 +47,9 @@ def test_provider_reservation_is_atomic_across_clients_and_core_restart(tmp_path
         # Separate stores exercise the same database boundary used by two
         # Core processes, rather than one in-process lock.
         connection = connections[index]
-        return reserve_butler_session(connection, _runtime(connection, tmp_path), request)
+        return reserve_butler_session(
+            connection, _runtime(connection, tmp_path), request
+        )
 
     with ThreadPoolExecutor(max_workers=6) as executor:
         sessions = list(executor.map(reserve, range(6)))
@@ -87,7 +89,9 @@ def test_harness_reservation_commits_one_chat_and_vendor_binding(tmp_path):
     def reserve(index: int) -> ChatSession:
         barrier.wait()
         connection = connections[index]
-        return reserve_butler_session(connection, _runtime(connection, tmp_path), request)
+        return reserve_butler_session(
+            connection, _runtime(connection, tmp_path), request
+        )
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         sessions = list(executor.map(reserve, range(4)))
@@ -121,7 +125,10 @@ def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_path):
         "mcp_server_ids": [browser_mcp.id],
     }
 
-    assert client.post("/api/v1/chat/control-assistant/session", json=payload).status_code == 401
+    assert (
+        client.post("/api/v1/chat/control-assistant/session", json=payload).status_code
+        == 401
+    )
     created = client.post(
         "/api/v1/chat/control-assistant/session", json=payload, headers=headers
     )
@@ -139,7 +146,9 @@ def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_path):
     )
     assert other.status_code == 200, other.text
     assert other.json()["id"] != created.json()["id"]
-    assert store.get(ChatSession, created.json()["id"]).provider_profile_id == profile.id
+    assert (
+        store.get(ChatSession, created.json()["id"]).provider_profile_id == profile.id
+    )
     assert store.get(ChatSession, created.json()["id"]).metadata["mcp_server_ids"] == [
         browser_mcp.id
     ]

@@ -763,7 +763,10 @@ class ButlerAuthorityService:
                         "Keep the work within its existing objective and approval boundaries."
                     )
                 else:
-                    if decision.source_event_type == "goal.read_only_tool_failures_repeated":
+                    if (
+                        decision.source_event_type
+                        == "goal.read_only_tool_failures_repeated"
+                    ):
                         text = (
                             f"Butler observed that the same read-only tool invocation for {subject} "
                             f"(goal {goal.id}) failed in three separate completed turns. "

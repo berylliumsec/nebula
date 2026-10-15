@@ -12,7 +12,11 @@ from nebula.v3.butler_oversight import (
     project_state_id,
     project_stream_id,
 )
-from nebula.v3.butler_review import ButlerReviewOutput, ButlerReviewResult, review_pending
+from nebula.v3.butler_review import (
+    ButlerReviewOutput,
+    ButlerReviewResult,
+    review_pending,
+)
 from nebula.v3.domain import (
     ButlerAction,
     ButlerIncident,
@@ -112,9 +116,11 @@ def test_three_exact_failures_create_one_concern_and_queue_only_to_parent(tmp_pa
     ]
     assert len(events) == 1
     assert events[0].payload["verification_state"] == "core_observed"
-    assert {ref["id"] for ref in events[0].payload["evidence_refs"] if ref["kind"] == "tool_call"} == {
-        call.id for call in calls
-    }
+    assert {
+        ref["id"]
+        for ref in events[0].payload["evidence_refs"]
+        if ref["kind"] == "tool_call"
+    } == {call.id for call in calls}
     incidents = store.find_entities(ButlerIncident, {}, engagement_id=project.id)
     assert len(incidents) == 1
     assert incidents[0].source == "repeated_read_only_tool_failure"
@@ -152,13 +158,18 @@ def test_three_exact_failures_create_one_concern_and_queue_only_to_parent(tmp_pa
     )
     assert restarted.replay_project(project.id)
     assert reopened.count_entities(ButlerIncident, engagement_id=project.id) == 1
-    assert len(
-        [
-            event
-            for event in reopened.replay_operation_events(project_stream_id(project.id))
-            if event.event_type == "goal.read_only_tool_failures_repeated"
-        ]
-    ) == 1
+    assert (
+        len(
+            [
+                event
+                for event in reopened.replay_operation_events(
+                    project_stream_id(project.id)
+                )
+                if event.event_type == "goal.read_only_tool_failures_repeated"
+            ]
+        )
+        == 1
+    )
 
 
 def test_changed_or_ambiguous_read_only_outcomes_do_not_create_concern(tmp_path):

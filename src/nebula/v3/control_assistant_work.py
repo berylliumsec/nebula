@@ -2232,7 +2232,13 @@ class ControlAssistantWork:
                 "detail": item.get("detail"),
                 "url": _chat_url(project_id, session.id),
             }
-            if status in {"complete", "cancelled", "needs_review", "failed", "interrupted"}:
+            if status in {
+                "complete",
+                "cancelled",
+                "needs_review",
+                "failed",
+                "interrupted",
+            }:
                 turn_id = item.get("turn_id")
                 harness_turn_id = item.get("harness_turn_id")
                 if isinstance(turn_id, str) or isinstance(harness_turn_id, str):

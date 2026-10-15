@@ -22,7 +22,9 @@ from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.storage import NebulaStore
 
 
-def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(tmp_path):
+def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "butler-harness-history.db")
     engagement = store.create(Engagement(name="Butler history"))
     profile = store.create(
@@ -59,7 +61,10 @@ def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
             harness_profile_id=profile.id,
             harness_session_id=vendor.id,
             model=vendor.model,
-            metadata={"control_assistant": True, "context_management": "runtime_managed"},
+            metadata={
+                "control_assistant": True,
+                "context_management": "runtime_managed",
+            },
         )
     )
     store.create(
@@ -90,11 +95,12 @@ def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
     assert continued_chat.id == chat.id
     assert continued_chat.harness_session_id == vendor.id
     assert continued_turn.harness_session_id == vendor.id
-    assert store.get(HarnessSession, vendor.id).external_session_id == "saved-codex-thread"
+    assert (
+        store.get(HarnessSession, vendor.id).external_session_id == "saved-codex-thread"
+    )
     assert len(store.list_entities(HarnessSession, engagement_id=engagement.id)) == 1
     assert [
-        message.content
-        for message in store.list_session_entities(ChatMessage, chat.id)
+        message.content for message in store.list_session_entities(ChatMessage, chat.id)
     ] == ["Remember the earlier project question.", "Continue that question."]
 
 

@@ -810,7 +810,8 @@ async def review_pending(
                 break
             later_payload = ButlerEventPayload.model_validate(later.payload)
             if (
-                candidate.event_type in {
+                candidate.event_type
+                in {
                     "agent.attention_reported",
                     "goal.read_only_tool_failures_repeated",
                 }

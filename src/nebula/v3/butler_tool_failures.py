@@ -82,7 +82,9 @@ def record_completed_provider_turn(
     ):
         return False
     goal = _entity_in_transaction(transaction, ChatGoal, completed_turn.goal_id)
-    session = _entity_in_transaction(transaction, ChatSession, completed_turn.session_id)
+    session = _entity_in_transaction(
+        transaction, ChatSession, completed_turn.session_id
+    )
     if (
         goal is None
         or session is None
@@ -93,15 +95,19 @@ def record_completed_provider_turn(
         or goal.status != ChatGoalStatus.RUNNING
     ):
         return False
-    rows = transaction.session.execute(
-        select(EntityRow)
-        .where(
-            EntityRow.kind == ToolCall.entity_kind,
-            EntityRow.chat_session_id == session.id,
+    rows = (
+        transaction.session.execute(
+            select(EntityRow)
+            .where(
+                EntityRow.kind == ToolCall.entity_kind,
+                EntityRow.chat_session_id == session.id,
+            )
+            .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
+            .limit(4)
         )
-        .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
-        .limit(4)
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if len(rows) < 3:
         return False
     calls = [ToolCall.model_validate(row.payload) for row in rows]

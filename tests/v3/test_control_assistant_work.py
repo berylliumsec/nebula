@@ -1628,9 +1628,7 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
     work = app.state.control_assistant_work
     before = work.chat_settings(project.id, chat.id)
     offered = next(
-        item
-        for item in before["available"]["mcp_servers"]
-        if item["id"] == security.id
+        item for item in before["available"]["mcp_servers"] if item["id"] == security.id
     )
     assert "Headless Project security testing" in offered["description"]
     assert {tool["name"] for tool in offered["tool_details"]} >= {
@@ -1638,8 +1636,9 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
         "status",
     }
     assert offered["tools"] >= 2
-    assert "does not attach an MCP browser" in (
-        work.catalog(project.id, "nebula.work.chat_settings")["description"]
+    assert (
+        "does not attach an MCP browser"
+        in (work.catalog(project.id, "nebula.work.chat_settings")["description"])
     )
     with pytest.raises(ValueError, match="work roster"):
         work.chat_settings(other.id, chat.id)

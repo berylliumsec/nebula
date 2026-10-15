@@ -50,7 +50,9 @@ class ButlerSessionReservation(NebulaModel):
                     self.harness_cyber_access_program,
                 )
             ):
-                raise ValueError("provider Butler sessions cannot select harness options")
+                raise ValueError(
+                    "provider Butler sessions cannot select harness options"
+                )
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError("harness Butler sessions require only harness_profile_id")
         return self
@@ -94,7 +96,8 @@ def reserve_butler_session(
             .where(
                 EntityRow.kind == ChatSession.entity_kind,
                 EntityRow.engagement_id == request.engagement_id,
-                EntityRow.payload["metadata"]["control_assistant"].as_boolean()
+                EntityRow.payload["metadata"]["control_assistant"]
+                .as_boolean()
                 .is_(True),
                 EntityRow.payload["metadata"]["archived_at"].as_string().is_(None),
             )
@@ -171,7 +174,9 @@ def reserve_butler_session(
                     "mcp_server_ids": list(session.mcp_server_ids),
                     "context_management": "runtime_managed",
                     "initial_title_state": "operator",
-                    "harness_runtime_options": session.metadata.get("runtime_options", {}),
+                    "harness_runtime_options": session.metadata.get(
+                        "runtime_options", {}
+                    ),
                 },
             )
         transaction.add(chat)
