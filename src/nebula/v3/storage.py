@@ -1024,6 +1024,7 @@ class NebulaStore:
         limit: int = 100,
         include_temporary: bool = False,
         newest_first: bool = False,
+        recent_first: bool = False,
     ) -> list[EntityT]:
         if offset < 0:
             raise ValueError("offset cannot be negative")
@@ -1050,9 +1051,12 @@ class NebulaStore:
             statement = statement.where(
                 EntityRow.automation_expires_at <= automation_expires_before
             )
-        statement = (
-            statement.order_by(*_entity_order(newest_first)).offset(offset).limit(limit)
+        order = (
+            (EntityRow.updated_at.desc(), EntityRow.id.desc())
+            if recent_first
+            else _entity_order(newest_first)
         )
+        statement = statement.order_by(*order).offset(offset).limit(limit)
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
 

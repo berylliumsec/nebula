@@ -14836,12 +14836,14 @@ def _register_crud_routes(
             engagement_id: str | None = None,
             offset: int = Query(default=0, ge=0),
             limit: int = Query(default=100, ge=1, le=1000),
+            recent_first: bool = False,
         ) -> list[Entity]:
             entities = store.list_entities(
                 model,
                 engagement_id=engagement_id,
                 offset=offset,
                 limit=limit,
+                recent_first=recent_first and model is ChatSession,
             )
             if model is HarnessSession and entities:
 

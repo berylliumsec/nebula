@@ -100,6 +100,13 @@ class EntityRow(Base):
     __table_args__ = (
         Index("ix_entities_kind_engagement", "kind", "engagement_id"),
         Index("ix_entities_engagement_updated", "engagement_id", "updated_at"),
+        Index(
+            "ix_entities_kind_engagement_updated_id",
+            "kind",
+            "engagement_id",
+            "updated_at",
+            "id",
+        ),
         Index("ix_entities_kind_updated", "kind", "updated_at"),
         Index(
             "ix_entities_automation_run_session",
