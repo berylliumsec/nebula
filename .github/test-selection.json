@@ -1,8 +1,8 @@
 {
-  "change_digest": "1c1a013abcd39c57414962a38596d11ba418165ac898587f32a0017f05a05c22",
-  "reviewed_by": "Codex Butler README image alignment review",
-  "reason": "This change centers the existing Butler architecture SVG beneath the full-width Voice GIF in the README. The image and product runtime are unchanged; the README markup and diff are checked directly.",
-  "exclusions": "No Python, frontend runtime, native, or Playwright tests exercise README image alignment, so all four test layers are omitted. Full suites and unrelated workflows are excluded. The centered markup and image path are verified directly.",
+  "change_digest": "98471e3dfcad49080220bdf6a6eec964aeae866f4621acdbd7dad96d6b77f4a6",
+  "reviewed_by": "Codex Butler README voice setup review",
+  "reason": "This change adds a Butler getting-started lead and documents the OpenAI API key required for GPT-Live Voice, its server-side use, separate Codex delegation, and API charges. Only README prose changes; links, rendered Markdown, and the diff are checked directly.",
+  "exclusions": "No Python, frontend runtime, native, or Playwright tests exercise README prose, so all four test layers are omitted. Full suites and unrelated workflows are excluded. The cited OpenAI setup guidance and current Nebula credential path were checked directly.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
