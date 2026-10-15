@@ -9329,6 +9329,23 @@ export class ApiClient {
     ).then((items) => page(items.map(mapChatSession).filter(session => !session.isSideChat && (includeControlAssistant || !session.isControlAssistant))));
   }
 
+  /** A bounded recent slice for the Workbench sidebar. Core excludes side chats before paging. */
+  listChatSessionsPage(
+    engagementId: string,
+    offset = 0,
+    signal?: AbortSignal,
+    includeControlAssistant = false,
+  ): Promise<{ items: ChatSessionSummary[]; nextOffset?: number }> {
+    const limit = 100;
+    return this.request<WireChatSession[]>(
+      `chat-sessions?engagement_id=${encodeURIComponent(engagementId)}&offset=${offset}&limit=${limit}&recent_first=true`,
+      { signal },
+    ).then((batch) => ({
+      items: batch.map(mapChatSession).filter(session => !session.isSideChat && (includeControlAssistant || !session.isControlAssistant)),
+      nextOffset: batch.length === limit ? offset + batch.length : undefined,
+    }));
+  }
+
   getChatAssistantConfig(sessionId: string): Promise<{sessionId: string; revision: number; settings: ChatAssistantConfig}> {
     return this.request<{session_id: string; revision: number; settings: JsonObject}>(
       `chat-sessions/${encodeURIComponent(sessionId)}/assistant-config`,
