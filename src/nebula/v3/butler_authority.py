@@ -141,6 +141,7 @@ class ButlerAuthorityService:
         try:
             last = self.store.get(ToolCall, refs[-1].id)
         except NotFoundError:
+            # diagnostic-expected: missing cited evidence invalidates this pending action.
             return False
         if (
             last.engagement_id != project_id
@@ -171,6 +172,7 @@ class ButlerAuthorityService:
             try:
                 turn = self.store.get(ChatTurn, call.chat_turn_id)
             except NotFoundError:
+                # diagnostic-expected: a missing cited turn cancels the stale request.
                 return False
             if (
                 turn.engagement_id != project_id
@@ -674,6 +676,7 @@ class ButlerAuthorityService:
             decision = self.store.get(ButlerDecision, action.decision_id)
             proposal = self._proposal(action.engagement_id, decision, policy)
         except (NotFoundError, ConflictError):
+            # diagnostic-expected: source changes cancel the saved action below.
             proposal = None
         if (
             proposal is None
@@ -690,6 +693,7 @@ class ButlerAuthorityService:
                     decision.source_event_type,
                 )
             except Exception:
+                # diagnostic-expected: a failed precedent read durably defers this action.
                 self._defer_for_memory(action)
                 return
             if decision.precedent_digest != current_precedent.digest:
@@ -807,7 +811,8 @@ class ButlerAuthorityService:
                 self._reconcile(action)
         except Exception:
             # The control may have committed immediately before the exception.
-            # Never blindly retry an uncertain external side effect.
+            # diagnostic-expected: reconcile records the observed outcome or uncertainty;
+            # never blindly retry an uncertain external side effect.
             self._reconcile(action)
 
     async def process_project(self, project_id: str, worker_id: str) -> None:

@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from .diagnostics import record_diagnostic
 from .domain import (
     ButlerAction,
     ButlerDecision,
@@ -245,8 +246,17 @@ class ButlerMemoryService:
                     name="nebula-butler-memory-v1",
                     metadata={"hnsw:space": "cosine"},
                 )
-            except Exception:
+            except Exception as exc:
                 self._vector_error = True
+                record_diagnostic(
+                    "error",
+                    "butler",
+                    "butler.memory_vector_open_failed",
+                    "Butler memory is using keyword search while its vector index is unavailable.",
+                    exception_type=type(exc).__name__,
+                    outcome="fallback",
+                    stage="memory_vector_open",
+                )
             return self._collection
 
     def _embedding_ready(self) -> bool:
@@ -255,7 +265,16 @@ class ButlerMemoryService:
             return False
         try:
             return source.status.state == "ready"
-        except Exception:
+        except Exception as exc:
+            record_diagnostic(
+                "error",
+                "butler",
+                "butler.memory_embedding_status_failed",
+                "Butler memory could not check embedding readiness and is using keyword search.",
+                exception_type=type(exc).__name__,
+                outcome="fallback",
+                stage="memory_embedding_status",
+            )
             return False
 
     def _embed(self, texts: list[str]) -> list[list[float]] | None:
@@ -263,8 +282,17 @@ class ButlerMemoryService:
             return None
         try:
             return self.embedding_index.embed(texts)
-        except Exception:
+        except Exception as exc:
             self._vector_error = True
+            record_diagnostic(
+                "error",
+                "butler",
+                "butler.memory_embedding_failed",
+                "Butler memory is using keyword search after embedding failed.",
+                exception_type=type(exc).__name__,
+                outcome="fallback",
+                stage="memory_embedding",
+            )
             return None
 
     def _index_status(self) -> ButlerMemoryIndexStatus:
@@ -414,6 +442,7 @@ class ButlerMemoryService:
                 source_ref=source_ref,
             )
         except UnsafeMemoryError:
+            # diagnostic-expected: Unsafe operator text is intentionally not memorized.
             return None
 
     def capture_operator_lesson(
@@ -459,6 +488,7 @@ class ButlerMemoryService:
                 project_name=source_project_name,
             )
         except UnsafeMemoryError:
+            # diagnostic-expected: Reject unsafe process guidance before persistence.
             return None
 
     def capture_operator_decision(
@@ -505,6 +535,7 @@ class ButlerMemoryService:
                 project_name=source_project_name,
             )
         except UnsafeMemoryError:
+            # diagnostic-expected: Reject unsafe standing decisions before persistence.
             return None
 
     def capture_verified_lesson(
@@ -615,6 +646,7 @@ class ButlerMemoryService:
                     source_ref=finding_ref,
                 )
             except UnsafeMemoryError:
+                # diagnostic-expected: One unsafe finding title must not block the signed report.
                 continue
             if finding.status == FindingStatus.CONFIRMED:
                 for cwe in finding.cwe_ids[:3]:
@@ -693,6 +725,7 @@ class ButlerMemoryService:
         try:
             self._clean(candidate)
         except UnsafeMemoryError:
+            # diagnostic-expected: Untrusted review suggestions fail the memory safety gate.
             return None
         return candidate if self._novel_review_lesson(project_id, candidate) else None
 
@@ -946,8 +979,17 @@ class ButlerMemoryService:
                     }
                 ],
             )
-        except Exception:
+        except Exception as exc:
             self._vector_error = True
+            record_diagnostic(
+                "error",
+                "butler",
+                "butler.memory_vector_write_failed",
+                "Butler memory was saved, but its optional vector index could not be updated.",
+                exception_type=type(exc).__name__,
+                outcome="fallback",
+                stage="memory_vector_write",
+            )
 
     def _sync_index(self, rows: list[sqlite3.Row]) -> None:
         if not self._embedding_ready():
@@ -968,8 +1010,17 @@ class ButlerMemoryService:
             ]
             for row in missing[:500]:
                 self._index_one(row)
-        except Exception:
+        except Exception as exc:
             self._vector_error = True
+            record_diagnostic(
+                "error",
+                "butler",
+                "butler.memory_vector_sync_failed",
+                "Butler memory is using keyword search because vector synchronization failed.",
+                exception_type=type(exc).__name__,
+                outcome="fallback",
+                stage="memory_vector_sync",
+            )
 
     def search(
         self, engagement_id: str, query: str, *, limit: int = 20
@@ -1003,8 +1054,17 @@ class ButlerMemoryService:
                 )
                 for rank, item_id in enumerate((result.get("ids") or [[]])[0]):
                     vector_rank[item_id] = 1 / (rank + 1)
-            except Exception:
+            except Exception as exc:
                 self._vector_error = True
+                record_diagnostic(
+                    "error",
+                    "butler",
+                    "butler.memory_vector_search_failed",
+                    "Butler memory is using keyword search because vector search failed.",
+                    exception_type=type(exc).__name__,
+                    outcome="fallback",
+                    stage="memory_vector_search",
+                )
         ranked = sorted(
             rows,
             key=lambda row: (
@@ -1118,5 +1178,14 @@ class ButlerMemoryService:
         if collection is not None:
             try:
                 collection.delete(ids=[item_id])
-            except Exception:
+            except Exception as exc:
                 self._vector_error = True
+                record_diagnostic(
+                    "error",
+                    "butler",
+                    "butler.memory_vector_delete_failed",
+                    "Butler memory was deleted, but its optional vector index could not be updated.",
+                    exception_type=type(exc).__name__,
+                    outcome="fallback",
+                    stage="memory_vector_delete",
+                )

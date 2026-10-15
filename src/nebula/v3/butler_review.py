@@ -867,10 +867,13 @@ async def review_pending(
         except asyncio.CancelledError:
             raise
         except ReviewUnavailable as exc:
+            # diagnostic-expected: the saved decision records why review was unavailable.
             unavailable_reason = exc.reason_code
         except TimeoutError:
+            # diagnostic-expected: the saved decision records the model timeout.
             unavailable_reason = "model_timeout"
         except Exception:
+            # diagnostic-expected: the saved decision records the unavailable dependency.
             unavailable_reason = (
                 "memory_unavailable"
                 if memory_service is not None and packet.precedent_digest is None

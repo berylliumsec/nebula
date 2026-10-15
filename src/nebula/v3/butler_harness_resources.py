@@ -80,6 +80,8 @@ def _candidate_watches(store: NebulaStore, profile_id: str) -> dict[str, list[st
         try:
             session = store.get(ChatSession, watch.session_id)
         except NotFoundError:
+            # diagnostic-expected: a watch can outlive a deleted session;
+            # the transaction rechecks every surviving project binding.
             continue
         if (
             session.engagement_id == watch.engagement_id
@@ -373,6 +375,8 @@ def record_harness_rate_limit(
         session = store.get(HarnessSession, turn.harness_session_id)
         profile = store.get(HarnessProfile, profile_id)
     except NotFoundError:
+        # diagnostic-expected: a stale activity callback has no surviving
+        # turn/session/profile to cite, so no incident can be attributed.
         return False
     if (
         turn.engagement_id != session.engagement_id
@@ -526,6 +530,8 @@ class HarnessQuotaObserver:
         try:
             profile = self.store.get(HarnessProfile, profile_id)
         except NotFoundError:
+            # diagnostic-expected: the profile may be removed after scheduling;
+            # there is no configured harness left to check.
             return
         if not profile.enabled or profile.kind != HarnessKind.CODEX_APP_SERVER:
             return
@@ -649,7 +655,13 @@ class HarnessQuotaObserver:
             return recent
         task = self._inflight.get(profile_id)
         if task is None:
-            task = asyncio.create_task(self._read_and_record(profile_id))
+            task = create_diagnostic_task(
+                self._read_and_record(profile_id),
+                feature="butler",
+                event_code="butler.harness_quota_read_failed",
+                failure_message="A shared harness quota read could not be completed or saved.",
+                name=f"nebula-harness-quota-read-{profile_id[:24]}",
+            )
             self._inflight[profile_id] = task
             task.add_done_callback(
                 lambda completed: (

@@ -75,6 +75,8 @@ def _candidate_watches(store: NebulaStore, management_ref: str) -> dict[str, lis
         try:
             session = store.get(ChatSession, watch.session_id)
         except NotFoundError:
+            # diagnostic-expected: a watch can outlive a deleted session;
+            # the write transaction rechecks surviving project bindings.
             continue
         if (
             session.engagement_id != watch.engagement_id
@@ -86,6 +88,8 @@ def _candidate_watches(store: NebulaStore, management_ref: str) -> dict[str, lis
             try:
                 profiles[provider_id] = store.get(ProviderProfile, provider_id)
             except NotFoundError:
+                # diagnostic-expected: a deleted provider cannot be tied to
+                # this account, so skip its stale session binding.
                 profiles[provider_id] = None
         profile = profiles[provider_id]
         if (
@@ -410,7 +414,13 @@ class OpenRouterCreditObserver:
             return recent.model_copy(update={"provider_id": provider_id})
         task = self._inflight.get(key)
         if task is None:
-            task = asyncio.create_task(self._read_and_record(profile, reference))
+            task = create_diagnostic_task(
+                self._read_and_record(profile, reference),
+                feature="butler",
+                event_code="butler.openrouter_credit_read_failed",
+                failure_message="A shared OpenRouter credit read could not be completed or saved.",
+                name=f"nebula-openrouter-credit-read-{profile.id[:24]}",
+            )
             self._inflight[key] = task
             task.add_done_callback(
                 lambda completed: (

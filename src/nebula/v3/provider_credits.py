@@ -106,6 +106,8 @@ async def read_openrouter_credits(
     try:
         secret = await asyncio.to_thread(credentials.resolve, reference)
     except CredentialError:
+        # diagnostic-expected: a configured management reference may be absent
+        # or unreadable; the explicit unavailable reason preserves that state.
         return unavailable("management_credential_unavailable")
 
     try:
@@ -121,6 +123,8 @@ async def read_openrouter_credits(
         if response.status_code != 200:
             return unavailable("upstream_unavailable")
     except httpx.HTTPError:
+        # diagnostic-expected: transport and protocol failures are upstream
+        # unavailability; the snapshot retains the retryable reason.
         return unavailable("upstream_unavailable")
     try:
         payload = response.json()
@@ -130,6 +134,8 @@ async def read_openrouter_credits(
         total_credits = _amount(data.get("total_credits"))
         total_usage = _amount(data.get("total_usage"))
     except (ValueError, TypeError):
+        # diagnostic-expected: malformed vendor JSON or amounts are retained
+        # as invalid_upstream_response, without storing its response body.
         return unavailable("invalid_upstream_response")
 
     observed_at = utc_now()

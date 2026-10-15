@@ -218,6 +218,7 @@ def normalize_machine(value: str) -> str:
     try:
         return ipaddress.ip_address(address).compressed
     except ValueError:
+        # diagnostic-expected: non-IP text is checked as a hostname below.
         pass
     if len(candidate) > 253 or not re.fullmatch(
         r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*",
@@ -984,6 +985,7 @@ class ButlerOversightService:
         try:
             state = self._claim_project(engagement_id)
         except ConflictError:
+            # diagnostic-expected: another worker owns the project lease.
             return False
         if state is None:
             return False
@@ -1226,6 +1228,7 @@ class ButlerOversightService:
                         )
                 fired += 1
             except ConflictError:
+                # diagnostic-expected: a concurrent worker already advanced this deadline.
                 continue
         return fired
 
@@ -1299,6 +1302,7 @@ class ButlerOversightService:
             try:
                 await asyncio.wait_for(signal.wait(), timeout=wait_seconds)
             except TimeoutError:
+                # diagnostic-expected: the deadline elapsed; the next loop checks due work.
                 pass
 
 
@@ -1345,6 +1349,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             try:
                 goal = service.store.get(ChatGoal, watch.goal_id)
             except NotFoundError:
+                # diagnostic-expected: a deleted goal cannot appear in the overview.
                 continue
             if goal.engagement_id != engagement_id:
                 raise ConflictError("watch points outside its project")
@@ -1433,6 +1438,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 try:
                     candidate = service.store.get(ProviderProfile, provider_id)
                 except NotFoundError:
+                    # diagnostic-expected: removed profiles are omitted from resource labels.
                     continue
                 if (
                     candidate.enabled
@@ -1463,6 +1469,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 profile = service.store.get(HarnessProfile, resource.harness_profile_id)
                 available = profile.enabled
             except NotFoundError:
+                # diagnostic-expected: a removed harness is shown as unavailable.
                 profile = None
                 available = False
             resources.append(
