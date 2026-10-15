@@ -6221,7 +6221,8 @@ test("assistant upgrade control assistant starts project work on production LAN 
     expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
       .toBe(build.assets[entry!]);
     await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
-    const workbenchUrl = `${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`;
+    await pairRealCoreBrowser(page, core, "Control assistant LAN browser", {requireReady: false});
+    const workbenchUrl = `${core.origin}/projects/${projectId}/workbench?view=chat`;
     await page.goto(workbenchUrl);
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Nebula assistant"});
@@ -6271,7 +6272,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
     }).toBe(1);
     expect(stub.requests.some(item => Array.isArray(item.tools) &&
       (item.tools as Array<{function?: {name?: string}}>).some(tool => tool.function?.name === "nebula_work_start_mission"))).toBe(true);
-    // The disposable LAN fixture uses a URL token instead of a paired device.
+    // The paired browser must retain its saved chat and work receipts across navigation.
     await page.goto("about:blank");
     await page.goto(workbenchUrl);
     await openNebulaAssistantFromShell(page);
