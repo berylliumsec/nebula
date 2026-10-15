@@ -1,20 +1,28 @@
 {
-  "change_digest": "79e75bd1a010998d744169393ecf67a6c40dcdbeb8967b49c4b607cb248b1e4a",
-  "reviewed_by": "Codex release smoke navigation review",
-  "reason": "The release Core smoke timed out because the desktop navigation handle reveals its menu on hover before Playwright can complete a click. Use the documented hover interaction for fine pointers and click for touch. The exact release smoke verifies pairing, project creation, chat, and reload on production LAN Core; the project-switch journey exercises the touch branch in mobile Chromium and WebKit.",
-  "exclusions": "Only a Playwright navigation helper changes. Python, frontend unit, and native tests cannot exercise the pointer race. Other journeys, viewports, and full suites are excluded because the product UI and Core are unchanged.",
+  "change_digest": "ba85137d178d3f77b1d4ce3bb17455f230c73fcc7d002c12f7445e8b32ecf80d",
+  "reviewed_by": "Codex scoped Butler mobile table review",
+  "reason": "Butler renders Core-saved Markdown replies in a narrow panel. The component tests cover transcript interaction, eight selected assistant popup browser cases cover table readability, local horizontal scrolling, and reload across desktop Chromium and six mobile Chromium/WebKit widths, and one disposable LAN Core WebKit case verifies the durable message path.",
+  "exclusions": "No Python, native, provider, harness, or unrelated UI tests: only the Butler reply renderer and CSS change. Full suites are excluded. Physical iPhone testing remains an operator acceptance gate.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 27,
     "native": 0,
-    "playwright": 3
+    "playwright": 17
   },
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/NebulaControlAssistant.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:release-core-smoke/real-core",
-    "entry:release-core-project-switch/assistant-real-chromium-390",
-    "entry:release-core-project-switch/assistant-real-webkit-390"
+    "entry:ask-nebula-popup/desktop",
+    "entry:ask-nebula-popup/compact",
+    "entry:ask-nebula-popup/mobile-chromium-small",
+    "entry:ask-nebula-popup/mobile-chromium-ledger-390",
+    "entry:ask-nebula-popup/mobile-chromium-wide",
+    "entry:ask-nebula-popup/mobile-webkit-small",
+    "entry:ask-nebula-popup/mobile-webkit",
+    "entry:ask-nebula-popup/mobile-webkit-wide",
+    "entry:butler-response-table/assistant-real-webkit-390"
   ]
 }
