@@ -14394,7 +14394,13 @@ class HarnessRuntimeService:
         )
         if (
             name.startswith(
-                ("nebula.settings.", "nebula.help.", "nebula.navigate.", "nebula.work.", "nebula.capabilities.")
+                (
+                    "nebula.settings.",
+                    "nebula.help.",
+                    "nebula.navigate.",
+                    "nebula.work.",
+                    "nebula.capabilities.",
+                )
             )
             and not settings_only
         ):
@@ -14405,7 +14411,9 @@ class HarnessRuntimeService:
             from .butler_capabilities import BUTLER_TOOL_NAMES
 
             if name not in BUTLER_TOOL_NAMES:
-                raise HarnessConfigurationError("This Butler capability is unavailable.")
+                raise HarnessConfigurationError(
+                    "This Butler capability is unavailable."
+                )
             capability = self._butler_capabilities(turn.engagement_id)
             if name == "nebula.capabilities.search":
                 value = await capability.search(arguments)

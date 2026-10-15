@@ -283,8 +283,10 @@ PAGE_SCHEMA: dict[str, Any] = {
 GOAL_CREATE_FIELDS: dict[str, Any] = {
     "objective": {"type": "string", "minLength": 1, "maxLength": 20000},
     "completion_criteria": {
-        "type": "array", "items": {"type": "string", "minLength": 1},
-        "minItems": 1, "maxItems": 50,
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+        "minItems": 1,
+        "maxItems": 50,
     },
     "plan": {"type": "array", "items": {"type": "string"}, "maxItems": 200},
     "token_budget": {"type": ["integer", "null"], "minimum": 1},
@@ -293,12 +295,14 @@ GOAL_CREATE_FIELDS: dict[str, Any] = {
     "child_budget": {"type": ["integer", "null"], "minimum": 0, "maximum": 32},
 }
 CREATE_GOAL_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {**CHAT_TARGET_SCHEMA["properties"], **GOAL_CREATE_FIELDS},
     "required": ["session_id", "objective", "completion_criteria"],
 }
 START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         **GOAL_CREATE_FIELDS,
         "backend": {"type": "string", "enum": ["provider", "harness"]},
@@ -309,7 +313,8 @@ START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
     "required": ["objective", "completion_criteria"],
 }
 UPDATE_GOAL_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         **CREATE_GOAL_SCHEMA["properties"],
         "expected_revision": {"type": "integer", "minimum": 1},
@@ -317,24 +322,34 @@ UPDATE_GOAL_SCHEMA: dict[str, Any] = {
     "required": ["session_id", "expected_revision"],
 }
 GOAL_ACTION_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "expected_revision": {"type": "integer", "minimum": 1},
-        "action": {"type": "string", "enum": ["start", "pause", "resume", "cancel", "block", "complete"]},
+        "action": {
+            "type": "string",
+            "enum": ["start", "pause", "resume", "cancel", "block", "complete"],
+        },
         "reason": {"type": "string", "maxLength": 2000},
         "completion_summary": {"type": "string", "maxLength": 20000},
-        "completion_evidence": {"type": "array", "items": {"type": "object"}, "maxItems": 200},
+        "completion_evidence": {
+            "type": "array",
+            "items": {"type": "object"},
+            "maxItems": 200,
+        },
     },
     "required": ["session_id", "expected_revision", "action"],
 }
 SUBAGENT_TARGET_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {"subagent_id": {"type": "string", "minLength": 1, "maxLength": 200}},
     "required": ["subagent_id"],
 }
 NATIVE_SUBAGENT_TARGET_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         "turn_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "task_id": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -342,7 +357,8 @@ NATIVE_SUBAGENT_TARGET_SCHEMA: dict[str, Any] = {
     "required": ["turn_id", "task_id"],
 }
 SUBAGENT_LIST_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         **PAGE_SCHEMA["properties"],
         "parent_session_id": {"type": "string", "minLength": 1, "maxLength": 200},
@@ -350,11 +366,15 @@ SUBAGENT_LIST_SCHEMA: dict[str, Any] = {
     },
 }
 QUEUE_ACTION_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "expected_revision": {"type": "integer", "minimum": 0},
-        "action": {"type": "string", "enum": ["pause", "resume", "remove", "clear", "retry", "reorder", "edit"]},
+        "action": {
+            "type": "string",
+            "enum": ["pause", "resume", "remove", "clear", "retry", "reorder", "edit"],
+        },
         "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "order": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
         "text": {"type": "string", "minLength": 1, "maxLength": 20000},
@@ -371,12 +391,14 @@ MANAGE_SCHEMA: dict[str, Any] = {
     "required": ["operation", "arguments"],
 }
 CREATE_GOAL_CHILD_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {**CHAT_TARGET_SCHEMA["properties"], **GOAL_CREATE_FIELDS},
     "required": ["session_id", "objective", "completion_criteria"],
 }
 CREATE_SCHEDULE_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "interval_seconds": {"type": "integer", "minimum": 3600, "maximum": 2592000},
@@ -384,7 +406,8 @@ CREATE_SCHEDULE_SCHEMA: dict[str, Any] = {
     "required": ["session_id", "interval_seconds"],
 }
 SET_SCHEDULE_SCHEMA: dict[str, Any] = {
-    "type": "object", "additionalProperties": False,
+    "type": "object",
+    "additionalProperties": False,
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "expected_revision": {"type": "integer", "minimum": 1},
@@ -465,7 +488,9 @@ class ControlAssistantWork:
             )
         return session
 
-    def _main_ancestor(self, project_id: str, session: ChatSession) -> ChatSession | None:
+    def _main_ancestor(
+        self, project_id: str, session: ChatSession
+    ) -> ChatSession | None:
         current = session
         seen: set[str] = set()
         while _chat_kind(current) != "main":
@@ -474,7 +499,9 @@ class ControlAssistantWork:
             seen.add(current.id)
             try:
                 current = self._chat(project_id, current.parent_session_id)
-            except ValueError:  # diagnostic-expected: stale or private lineage has no message target
+            except (
+                ValueError
+            ):  # diagnostic-expected: stale or private lineage has no message target
                 return None
         return current
 
@@ -490,7 +517,9 @@ class ControlAssistantWork:
             return None
         try:
             snapshot = self.harness.session_activity(session.harness_session_id).goal
-        except NotFoundError:  # diagnostic-expected: old chat may lack its harness session
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: old chat may lack its harness session
             return None
         if snapshot is None:
             return None
@@ -677,13 +706,17 @@ class ControlAssistantWork:
             if entry is None:
                 raise ValueError("choose an operation from nebula.work.catalog")
             return {
-                "name": entry[0], "description": entry[1],
-                "parameters": entry[2], "read_only": entry[3],
+                "name": entry[0],
+                "description": entry[1],
+                "parameters": entry[2],
+                "read_only": entry[3],
             }
         return {
             "project_id": project_id,
             "runtimes": model_choices(self.store),
-            "actions": [name for name, *_ in _ALL_WORK_TOOLS if name != "nebula.work.catalog"],
+            "actions": [
+                name for name, *_ in _ALL_WORK_TOOLS if name != "nebula.work.catalog"
+            ],
             "managed_tool": "nebula.work.manage",
             "scope": "selected project; browser and notes control are not included",
         }
@@ -778,7 +811,8 @@ class ControlAssistantWork:
             "parent_session_id": session.parent_session_id,
             "parent_url": (
                 _chat_url(project_id, session.parent_session_id)
-                if session.parent_session_id else None
+                if session.parent_session_id
+                else None
             ),
             **self._message_via(project_id, session),
             "subagent_id": session.metadata.get("subagent_id"),
@@ -839,48 +873,65 @@ class ControlAssistantWork:
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
         goals = self.store.find_entities(
-            ChatGoal, {}, engagement_id=project_id,
-            newest_first=True, offset=offset, limit=31,
+            ChatGoal,
+            {},
+            engagement_id=project_id,
+            newest_first=True,
+            offset=offset,
+            limit=31,
         )
         items = []
         for goal in goals[:30]:
             try:
                 session = self._chat(project_id, goal.session_id)
-            except ValueError:  # diagnostic-expected: private assistant sessions are not work targets
+            except (
+                ValueError
+            ):  # diagnostic-expected: private assistant sessions are not work targets
                 continue
-            items.append({
-                "session_id": session.id,
-                "title": session.title,
-                "kind": _chat_kind(session),
-                "parent_session_id": session.parent_session_id,
-                "parent_url": (
-                    _chat_url(project_id, session.parent_session_id)
-                    if session.parent_session_id else None
-                ),
-                **self._message_via(project_id, session),
-                "url": _chat_url(project_id, session.id),
-                **(self._goal_summary(session.id) or {}),
-            })
+            items.append(
+                {
+                    "session_id": session.id,
+                    "title": session.title,
+                    "kind": _chat_kind(session),
+                    "parent_session_id": session.parent_session_id,
+                    "parent_url": (
+                        _chat_url(project_id, session.parent_session_id)
+                        if session.parent_session_id
+                        else None
+                    ),
+                    **self._message_via(project_id, session),
+                    "url": _chat_url(project_id, session.id),
+                    **(self._goal_summary(session.id) or {}),
+                }
+            )
         harness_chats = self.store.find_entities(
-            ChatSession, {"backend": ChatBackend.HARNESS},
-            engagement_id=project_id, newest_first=True, offset=offset, limit=31,
+            ChatSession,
+            {"backend": ChatBackend.HARNESS},
+            engagement_id=project_id,
+            newest_first=True,
+            offset=offset,
+            limit=31,
         )
         native_goals = []
         for session in harness_chats[:30]:
             try:
                 self._chat(project_id, session.id)
-            except ValueError:  # diagnostic-expected: private chats are not work targets
+            except (
+                ValueError
+            ):  # diagnostic-expected: private chats are not work targets
                 continue
             snapshot = self._native_goal(session)
             if snapshot is not None:
-                native_goals.append({
-                    "title": session.title,
-                    "kind": _chat_kind(session),
-                    "parent_session_id": session.parent_session_id,
-                    **self._message_via(project_id, session),
-                    "url": _chat_url(project_id, session.id),
-                    **snapshot,
-                })
+                native_goals.append(
+                    {
+                        "title": session.title,
+                        "kind": _chat_kind(session),
+                        "parent_session_id": session.parent_session_id,
+                        **self._message_via(project_id, session),
+                        "url": _chat_url(project_id, session.id),
+                        **snapshot,
+                    }
+                )
         return {
             "project_id": project_id,
             "goals": items,
@@ -904,7 +955,8 @@ class ControlAssistantWork:
                 "parent_session_id": session.parent_session_id,
                 "parent_url": (
                     _chat_url(project_id, session.parent_session_id)
-                    if session.parent_session_id else None
+                    if session.parent_session_id
+                    else None
                 ),
                 **self._message_via(project_id, session),
                 "url": _chat_url(project_id, session.id),
@@ -920,7 +972,8 @@ class ControlAssistantWork:
             "parent_session_id": session.parent_session_id,
             "parent_url": (
                 _chat_url(project_id, session.parent_session_id)
-                if session.parent_session_id else None
+                if session.parent_session_id
+                else None
             ),
             **self._message_via(project_id, session),
             "url": _chat_url(project_id, session.id),
@@ -943,11 +996,12 @@ class ControlAssistantWork:
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         session = self._chat(project_id, arguments.get("session_id"))
-        body = GoalCreate.model_validate({
-            key: value for key, value in arguments.items() if key != "session_id"
-        })
+        body = GoalCreate.model_validate(
+            {key: value for key, value in arguments.items() if key != "session_id"}
+        )
         await self._request(
-            "POST", f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal",
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal",
             body.model_dump(mode="json"),
         )
         return self.goal_detail(project_id, session.id)
@@ -957,7 +1011,11 @@ class ControlAssistantWork:
     ) -> dict[str, Any]:
         self._project(project_id)
         backend, profile_id, model = self._runtime(arguments)
-        fields = {key: value for key, value in arguments.items() if key in GoalCreate.model_fields}
+        fields = {
+            key: value
+            for key, value in arguments.items()
+            if key in GoalCreate.model_fields
+        }
         goal = GoalCreate.model_validate(fields)
         enabled = arguments.get("tools_enabled", False)
         if type(enabled) is not bool:
@@ -987,13 +1045,16 @@ class ControlAssistantWork:
         fields = set(GoalCreate.model_fields)
         if not fields.intersection(arguments):
             raise ValueError("provide at least one goal field to change")
-        body = GoalUpdate.model_validate({
-            **{key: getattr(current, key) for key in fields},
-            **{key: value for key, value in arguments.items() if key in fields},
-            "expected_revision": expected,
-        })
+        body = GoalUpdate.model_validate(
+            {
+                **{key: getattr(current, key) for key in fields},
+                **{key: value for key, value in arguments.items() if key in fields},
+                "expected_revision": expected,
+            }
+        )
         await self._request(
-            "PATCH", f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal",
+            "PATCH",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal",
             body.model_dump(mode="json"),
         )
         return self.goal_detail(project_id, session.id)
@@ -1006,11 +1067,12 @@ class ControlAssistantWork:
         expected = arguments.get("expected_revision")
         if type(expected) is not int or expected != current.revision:
             raise ValueError("goal changed; read its current revision before acting")
-        body = GoalWrite.model_validate({
-            key: value for key, value in arguments.items() if key != "session_id"
-        })
+        body = GoalWrite.model_validate(
+            {key: value for key, value in arguments.items() if key != "session_id"}
+        )
         await self._request(
-            "POST", f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/actions",
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/actions",
             body.model_dump(mode="json"),
         )
         return self.goal_detail(project_id, session.id)
@@ -1022,11 +1084,12 @@ class ControlAssistantWork:
         parent = self.goals.get(session.id)
         if parent.status.value != "running":
             raise ValueError("start the parent goal before creating child work")
-        body = GoalCreate.model_validate({
-            key: value for key, value in arguments.items() if key != "session_id"
-        })
+        body = GoalCreate.model_validate(
+            {key: value for key, value in arguments.items() if key != "session_id"}
+        )
         created = await self._request(
-            "POST", f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/children",
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/children",
             body.model_dump(mode="json"),
         )
         return self.goal_detail(project_id, created["session_id"])
@@ -1049,11 +1112,12 @@ class ControlAssistantWork:
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         session = self._messageable_chat(project_id, arguments.get("session_id"))
-        body = ScheduleCreate.model_validate({
-            "interval_seconds": arguments.get("interval_seconds")
-        })
+        body = ScheduleCreate.model_validate(
+            {"interval_seconds": arguments.get("interval_seconds")}
+        )
         await self._request(
-            "POST", f"/api/v1/chat/sessions/{quote(session.id, safe='')}/schedule",
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/schedule",
             body.model_dump(mode="json"),
         )
         return self.schedule_detail(project_id, session.id)
@@ -1065,13 +1129,18 @@ class ControlAssistantWork:
         current = self.schedules.get(session.id)
         expected = arguments.get("expected_revision")
         if type(expected) is not int or expected != current.revision:
-            raise ValueError("schedule changed; read its current revision before acting")
-        body = ScheduleWrite.model_validate({
-            "expected_revision": expected,
-            "enabled": arguments.get("enabled"),
-        })
+            raise ValueError(
+                "schedule changed; read its current revision before acting"
+            )
+        body = ScheduleWrite.model_validate(
+            {
+                "expected_revision": expected,
+                "enabled": arguments.get("enabled"),
+            }
+        )
         await self._request(
-            "POST", f"/api/v1/chat/sessions/{quote(session.id, safe='')}/schedule/actions",
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/schedule/actions",
             body.model_dump(mode="json"),
         )
         return self.schedule_detail(project_id, session.id)
@@ -1121,13 +1190,21 @@ class ControlAssistantWork:
         while True:
             if turn.origin == HarnessTurnOrigin.CHAT:
                 rows = self.store.replay_operation_events(
-                    turn.id, after_sequence=cursor, limit=1000,
-                    event_types=("harness.item_upsert", "harness.item_started", "harness.item_completed"),
+                    turn.id,
+                    after_sequence=cursor,
+                    limit=1000,
+                    event_types=(
+                        "harness.item_upsert",
+                        "harness.item_started",
+                        "harness.item_completed",
+                    ),
                     payload_values={"item_kind": ("subagent",)},
                 )
             else:
                 rows = self.store.replay_events(
-                    turn.run_id or "", after_sequence=cursor, limit=1000,
+                    turn.run_id or "",
+                    after_sequence=cursor,
+                    limit=1000,
                     event_type_prefix="harness.",
                     payload_values={
                         "harness_turn_id": (turn.id,),
@@ -1162,11 +1239,13 @@ class ControlAssistantWork:
             and _session_native_capabilities(session, profile).subagents
             and activity.live
             and activity.turn_id == turn.id
-            and status in {"queued", "running", "streaming", "waiting_approval", "waiting_input"}
+            and status
+            in {"queued", "running", "streaming", "waiting_approval", "waiting_input"}
         )
         parent = (
             self.store.get(ChatSession, turn.chat_session_id)
-            if turn.chat_session_id else None
+            if turn.chat_session_id
+            else None
         )
         title = str(payload.get("title") or "Native subagent")[:500]
         return {
@@ -1182,12 +1261,14 @@ class ControlAssistantWork:
             "parent_kind": _chat_kind(parent) if parent else "mission",
             **(
                 self._message_via(turn.engagement_id, parent)
-                if parent else {"message_via_session_id": None, "message_via_url": None}
+                if parent
+                else {"message_via_session_id": None, "message_via_url": None}
             ),
             "run_id": turn.run_id,
             "url": (
                 _chat_url(turn.engagement_id, parent.id)
-                if parent else _mission_url(turn.engagement_id, turn.run_id or "")
+                if parent
+                else _mission_url(turn.engagement_id, turn.run_id or "")
             ),
             "can_stop": can_stop,
             "can_message": False,
@@ -1205,8 +1286,12 @@ class ControlAssistantWork:
             parent = self._chat(project_id, parent_id)
             filters["chat_session_id"] = parent.id
         turns = self.store.find_entities(
-            HarnessTurn, filters, engagement_id=project_id,
-            newest_first=True, offset=native_offset, limit=31,
+            HarnessTurn,
+            filters,
+            engagement_id=project_id,
+            newest_first=True,
+            offset=native_offset,
+            limit=31,
         )
         items: list[dict[str, Any]] = []
         for turn in turns[:30]:
@@ -1233,8 +1318,12 @@ class ControlAssistantWork:
             parent = self._chat(project_id, parent_id)
             filters["parent_session_id"] = parent.id
         records = self.store.find_entities(
-            ChatSubagent, filters, engagement_id=project_id,
-            newest_first=True, offset=offset, limit=31,
+            ChatSubagent,
+            filters,
+            engagement_id=project_id,
+            newest_first=True,
+            offset=offset,
+            limit=31,
         )
         native = self._native_subagents_overview(project_id, arguments)
         return {
@@ -1259,7 +1348,11 @@ class ControlAssistantWork:
         turn = self._native_turn(project_id, arguments.get("turn_id"))
         task_id = _text(arguments.get("task_id"), "task_id", 500)
         item = next(
-            (row for row in self._native_subagent_items(turn) if row["task_id"] == task_id),
+            (
+                row
+                for row in self._native_subagent_items(turn)
+                if row["task_id"] == task_id
+            ),
             None,
         )
         if item is None:
@@ -1279,9 +1372,7 @@ class ControlAssistantWork:
         )
         return self.native_subagent_detail(project_id, arguments)
 
-    async def stop_subagent(
-        self, project_id: str, subagent_id: Any
-    ) -> dict[str, Any]:
+    async def stop_subagent(self, project_id: str, subagent_id: Any) -> dict[str, Any]:
         record = self._subagent(project_id, subagent_id)
         await self._request(
             "POST",
@@ -1314,8 +1405,15 @@ class ControlAssistantWork:
                     "id": item.get("id"),
                     "status": item.get("status"),
                     "text": str(
-                        ((item.get("request") or item.get("original_request") or {})
-                         .get("messages") or [{}])[0].get("content") or ""
+                        (
+                            (
+                                item.get("request")
+                                or item.get("original_request")
+                                or {}
+                            ).get("messages")
+                            or [{}]
+                        )[0].get("content")
+                        or ""
                     )[:2000],
                     "detail": item.get("detail"),
                     "turn_id": item.get("turn_id"),
@@ -1335,7 +1433,15 @@ class ControlAssistantWork:
         if type(expected) is not int or expected != revision:
             raise ValueError("queue changed; read its current revision before acting")
         action = arguments.get("action")
-        if action not in {"pause", "resume", "remove", "clear", "retry", "reorder", "edit"}:
+        if action not in {
+            "pause",
+            "resume",
+            "remove",
+            "clear",
+            "retry",
+            "reorder",
+            "edit",
+        }:
             raise ValueError("choose a supported queue action")
         item_id = arguments.get("item_id")
         if action in {"remove", "retry", "edit"}:
@@ -1343,7 +1449,9 @@ class ControlAssistantWork:
         request = None
         if action == "edit":
             text = _text(arguments.get("text"), "text", 20000)
-            item = next((row for row in current.items if row.get("id") == item_id), None)
+            item = next(
+                (row for row in current.items if row.get("id") == item_id), None
+            )
             if item is None:
                 raise ValueError("choose a queued item from nebula.work.queue")
             original = item.get("request") or item.get("original_request")
@@ -1352,9 +1460,11 @@ class ControlAssistantWork:
             prior = ChatCompletionRequest.model_validate(original)
             if len(prior.messages) != 1 or prior.messages[0].role != ChatRole.USER:
                 raise ValueError("this queued item cannot be edited")
-            request = prior.model_copy(update={
-                "messages": [prior.messages[0].model_copy(update={"content": text})]
-            })
+            request = prior.model_copy(
+                update={
+                    "messages": [prior.messages[0].model_copy(update={"content": text})]
+                }
+            )
         order = arguments.get("order", [])
         if not isinstance(order, list):
             raise ValueError("order must contain queued item IDs")
@@ -1633,7 +1743,9 @@ class ControlAssistantWork:
         source = self._chat(project_id, arguments.get("session_id"))
         if source.revision != arguments.get("expected_revision"):
             raise ValueError("chat changed; read its current revision before forking")
-        message_id = _text(arguments.get("through_message_id"), "through_message_id", 200)
+        message_id = _text(
+            arguments.get("through_message_id"), "through_message_id", 200
+        )
         if not any(
             item.id == message_id for item in self.chat.session_messages(source.id)
         ):
@@ -1698,7 +1810,9 @@ class ControlAssistantWork:
             HarnessTurnStatus.CANCELLED,
             HarnessTurnStatus.INTERRUPTED,
         }:
-            raise ValueError("only failed, cancelled, or interrupted chat turns can be retried")
+            raise ValueError(
+                "only failed, cancelled, or interrupted chat turns can be retried"
+            )
         existing = self.store.find_entities(
             HarnessTurn,
             {"metadata.retry_of_turn_id": turn.id},
@@ -2402,9 +2516,13 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
 )
 
-_DIRECT_WORK_NAMES = frozenset({
-    "nebula.work.catalog", "nebula.work.overview", "nebula.work.start_mission",
-})
+_DIRECT_WORK_NAMES = frozenset(
+    {
+        "nebula.work.catalog",
+        "nebula.work.overview",
+        "nebula.work.start_mission",
+    }
+)
 _MANAGED_WORK_NAMES = frozenset(
     name for name, *_ in _ALL_WORK_TOOLS if name not in _DIRECT_WORK_NAMES
 )

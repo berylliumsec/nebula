@@ -50,13 +50,36 @@ _BROWSER_ACTIONS = frozenset(
     }
 )
 _CATEGORIES = (
-    {"id": "work", "description": "Project chats, main agents, subagents, missions, goals, queues, schedules, and approvals"},
-    {"id": "settings", "description": "Project and next-turn Assistant settings, model choices, and device actions"},
+    {
+        "id": "work",
+        "description": "Project chats, main agents, subagents, missions, goals, queues, schedules, and approvals",
+    },
+    {
+        "id": "settings",
+        "description": "Project and next-turn Assistant settings, model choices, and device actions",
+    },
     {"id": "help", "description": "Source-linked Nebula help and live project context"},
-    {"id": "navigate", "description": "Open product destinations on the requesting device"},
+    {
+        "id": "navigate",
+        "description": "Open product destinations on the requesting device",
+    },
 )
 _SEARCH_FILLER = frozenset(
-    {"a", "an", "the", "to", "for", "of", "on", "in", "with", "my", "this", "that", "please"}
+    {
+        "a",
+        "an",
+        "the",
+        "to",
+        "for",
+        "of",
+        "on",
+        "in",
+        "with",
+        "my",
+        "this",
+        "that",
+        "please",
+    }
 )
 
 
@@ -104,7 +127,8 @@ class ButlerCapabilities:
         if type(offset) is not int or not 0 <= offset <= 1000:
             raise ValueError("offset must be an integer from 0 to 1000")
         terms = [
-            term for term in re.findall(r"[a-z0-9]+", query.lower())
+            term
+            for term in re.findall(r"[a-z0-9]+", query.lower())
             if term not in _SEARCH_FILLER
         ]
         if not terms:
@@ -122,10 +146,10 @@ class ButlerCapabilities:
         for name, plugin in self._actions.items():
             title = name.lower()
             description = plugin.spec.description.lower()
+
             def match(term: str, candidate: str) -> bool:
-                return term in candidate or (
-                    len(term) >= 5 and term[:5] in candidate
-                )
+                return term in candidate or (len(term) >= 5 and term[:5] in candidate)
+
             score = sum(
                 4 if match(term, title) else 1 if match(term, description) else 0
                 for term in terms
@@ -140,7 +164,7 @@ class ButlerCapabilities:
                     "description": plugin.spec.description,
                     "read_only": self._read_only(plugin),
                 }
-                for _, name, plugin in ranked[offset:offset + 12]
+                for _, name, plugin in ranked[offset : offset + 12]
             ],
             "total_matches": len(ranked),
             "next_offset": offset + 12 if offset + 12 < len(ranked) else None,
@@ -150,7 +174,9 @@ class ButlerCapabilities:
     async def describe(self, arguments: dict[str, Any]) -> dict[str, Any]:
         name = arguments.get("operation")
         if not isinstance(name, str) or name not in self._actions:
-            raise ValueError("choose a listed operation from nebula.capabilities.search")
+            raise ValueError(
+                "choose a listed operation from nebula.capabilities.search"
+            )
         plugin = self._actions[name]
         return {
             "operation": name,
@@ -169,7 +195,9 @@ class ButlerCapabilities:
     ) -> dict[str, Any]:
         name = arguments.get("operation")
         if not isinstance(name, str) or name not in self._actions:
-            raise ValueError("choose a listed operation from nebula.capabilities.search")
+            raise ValueError(
+                "choose a listed operation from nebula.capabilities.search"
+            )
         plugin = self._actions[name]
         if self._read_only(plugin) == change:
             route = "read" if self._read_only(plugin) else "change"

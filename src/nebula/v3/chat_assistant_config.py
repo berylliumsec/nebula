@@ -152,9 +152,7 @@ def update_chat_assistant_config(
         if session.metadata.get(
             "control_assistant"
         ) is True and not provider_profile.tools_verified_for(model):
-            raise ValueError(
-                "Butler needs a provider model verified for tools"
-            )
+            raise ValueError("Butler needs a provider model verified for tools")
         if selected["tools_enabled"] and not provider_profile.tools_verified_for(model):
             raise ValueError("this provider model is not verified for command tools")
     else:
