@@ -25,7 +25,11 @@ First, I would like to thank Almighty God, who is the source of all knowledge. W
 
 <img src="ui/public/nebula-logo.svg" alt="Nebula logo used to open Butler" width="23" height="36">
 
-Select the Nebula logo in the header or mobile navigation to open Butler, then use chat or Voice. With a configured model or harness, Butler can answer questions, review the selected project's chats and goals, start or steer work, and manage settings and approvals. It shows delegated work separately from main agents; to redirect a child, ask Butler to guide its parent agent.
+**Not sure how to get started? Ask Butler.** Select the Nebula logo in the header or mobile navigation, then chat or start Voice.
+
+With a configured model or harness, Butler can answer questions, review the selected project's chats and goals, start or steer work, and manage settings and approvals. It shows delegated work separately from main agents; to redirect a child, ask Butler to guide its parent agent.
+
+**Voice setup:** GPT-Live requires a direct OpenAI API key. Add an enabled OpenAI provider with a key in Nebula Settings, or set `OPENAI_API_KEY` on the Nebula host. Nebula keeps the key on the host to start the voice session; your device then exchanges audio with OpenAI over WebRTC. Voice sessions incur OpenAI API charges. Butler can delegate work to a Codex harness, but Codex access does not provide the GPT-Live key. See [OpenAI's GPT-Live WebRTC setup](https://developers.openai.com/api/docs/guides/voice-webrtc#before-you-start).
 
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="docs/images/butler-voice-sample.png">
