@@ -324,7 +324,14 @@ function coreReady(page: Page) {
 
 async function showProjectNavigation(page: Page) {
   const navigation = page.getByRole("button", { name: "Open navigation" });
-  if (await navigation.getAttribute("aria-expanded") !== "true") await navigation.click();
+  if (await navigation.getAttribute("aria-expanded") !== "true") {
+    if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) {
+      await navigation.hover();
+    } else {
+      await navigation.click();
+    }
+  }
+  await expect(navigation).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("button", { name: "Switch project", exact: true })).toBeVisible();
 }
 
