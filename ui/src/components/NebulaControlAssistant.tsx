@@ -17,6 +17,9 @@ import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
 import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import { MicrophoneIcon, NebulaVoice } from "./NebulaVoice";
+import { ButlerMemory } from "./ButlerMemory";
+import { ButlerOversight } from "./ButlerOversight";
+import { useButlerOverview } from "./useButlerOverview";
 import styles from "./NebulaControlAssistant.module.css";
 
 function readActionOutcomes(key: string): Record<string, string> {
@@ -37,7 +40,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, engagement, providers, harnesses } = useWorkspace();
+  const { api, coreState, engagement, providers, harnesses } = useWorkspace();
   const { preference, setPreference } = useTheme();
   const confirm = useConfirmation();
   const [open, setOpen] = useState(false);
@@ -68,12 +71,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const voiceSessionId = useRef<string | undefined>(undefined);
   const input = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
+  const lastScroll = useRef({ visible: false, messages: [] as ChatMessage[], attentionCount: 0, loadingHistory: false });
   const catalogRef = useRef<HTMLDetailsElement>(null);
   const destinationCatalogRef = useRef<HTMLDetailsElement>(null);
   const runtime = sessionRuntime ?? defaultModelRuntime(providers, harnesses);
   const storageKey = engagement ? `nebula.control-assistant.session.${engagement.id}` : undefined;
   const actionOutcomesKey = storageKey ? `${storageKey}.action-outcomes` : undefined;
+  const { overview: attentionOverview, refresh: refreshAttention } = useButlerOverview(engagement ? api : undefined, engagement?.id ?? "", coreState);
+  const attentionCount = attentionOverview?.summary.openIncidents ?? 0;
 
   useEffect(() => () => { abort.current?.abort(); }, [engagement?.id]);
 
@@ -127,8 +134,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   }, [api, engagement?.id, storageKey, actionOutcomesKey]);
 
   useEffect(() => {
-    if (open && !hidden && transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
-  }, [messages, open, hidden]);
+    const visible = open && !hidden;
+    const previous = lastScroll.current;
+    if (visible) {
+      const mobile = window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches;
+      if (mobile && body.current) {
+        if (attentionCount > 0 && (!previous.visible || attentionCount > previous.attentionCount)) body.current.scrollTop = 0;
+        else if (!loadingHistory && (previous.messages !== messages || !previous.visible || previous.loadingHistory)) {
+          const lastMessage = transcript.current?.lastElementChild;
+          if (lastMessage && typeof lastMessage.scrollIntoView === "function") lastMessage.scrollIntoView({ block: "end" });
+          else body.current.scrollTop = body.current.scrollHeight;
+        }
+      } else if (transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
+    }
+    lastScroll.current = { visible, messages, attentionCount, loadingHistory };
+  }, [messages, open, hidden, attentionCount, loadingHistory]);
 
   useEffect(() => {
     if (!open || hidden) return;
@@ -162,13 +182,25 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSettingsError("");
     setSettingsStatus("");
     let config = sessionConfig;
-    if (sessionId && api) {
+    if (api && engagement) {
       setSettingsBusy(true);
       try {
-        const saved = await api.getChatAssistantConfig(sessionId);
-        config = saved.settings;
-        setSessionConfig(config);
-        setSettingsRevision(saved.revision);
+        // The panel can open before the background conversation restore finishes.
+        // Read Core directly so saved settings never appear as first-turn defaults.
+        let savedSessionId = sessionId;
+        if (!savedSessionId) {
+          const restored = await api.getControlAssistantSession(engagement.id);
+          if (restored?.engagementId === engagement.id) {
+            savedSessionId = restored.id;
+            setSessionId(restored.id);
+          }
+        }
+        if (savedSessionId) {
+          const saved = await api.getChatAssistantConfig(savedSessionId);
+          config = saved.settings;
+          setSessionConfig(config);
+          setSettingsRevision(saved.revision);
+        }
       } catch (caught) {
         void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.settings_open_failed", message: "Butler settings could not be loaded.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
         setSettingsError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry by reopening settings.");
@@ -751,7 +783,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen} aria-controls="butler-settings" title="Butler settings" disabled={!api || !engagement || !runtime || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
       <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setSettingsOpen(false); }}><X size={18} /></button>
     </div>
-    <div className={styles.body}>
+    <div ref={body} className={styles.body}>
       {settingsOpen && <section id="butler-settings" className={styles.ownSettings} aria-label="Butler settings">
         <div className={styles.settingsHeading}><strong>Butler settings</strong><span>{selectedSettingsRuntime?.model ?? ""}</span></div>
         <form onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
@@ -765,6 +797,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           {settingsError && <p role="alert">{settingsError}</p>}
         </form>
       </section>}
+      {!hidden && engagement && <div className={styles.butlerWorkspace}>
+        <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
+        <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} />
+      </div>}
       <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children, ...props }) => {
         const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
         const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, engagement?.id));
@@ -800,9 +836,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about work, start an assistant or mission, or change a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
   </div> : null;
 
-  return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, toggle: () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } } }}>
+  const attentionLabel = `${attentionCount} open incident${attentionCount === 1 ? "" : "s"} ${attentionCount === 1 ? "needs" : "need"} attention in the selected project`;
+  return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, attentionCount, toggle: () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } } }}>
     {children}
-    {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={hidden ? "Show Butler" : "Open Butler"} title="Butler" onClick={() => { setOpen(true); setHidden(false); }}><img src="/nebula-logo.svg" width="22" height="36" alt="" aria-hidden="true" /></button> : null}
+    {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={`${hidden ? "Show Butler" : "Open Butler"}${attentionCount ? `; ${attentionLabel}` : ""}`} title={attentionCount ? attentionLabel : "Butler"} onClick={() => { setOpen(true); setHidden(false); }}><img src="/nebula-logo.svg" width="22" height="36" alt="" aria-hidden="true" />{attentionCount > 0 && <span className={styles.launcherAttention} aria-hidden="true" />}</button> : null}
     {panelContent && createPortal(panelContent, document.body)}
     {voiceStart && api && engagement && createPortal(<NebulaVoice api={api} project={{ id: engagement.id, name: engagement.name }} initialMicrophone={voiceStart.microphone} onDelegate={delegateVoice} onExit={() => { setVoiceStart(undefined); setHidden(false); }} />, document.body)}
   </NebulaAssistantLauncherContext.Provider>;

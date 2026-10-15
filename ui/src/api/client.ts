@@ -148,6 +148,7 @@ import type {
   ProviderCatalogEntry,
   ProviderCreateRequest,
   ProviderHealth,
+  OpenRouterCreditSnapshot,
   RuntimeUsageResponse,
   ProviderRuntimeHealth,
   ProviderUpdateRequest,
@@ -1135,6 +1136,7 @@ interface WireProvider extends WireEntity {
   enabled?: boolean;
   is_local?: boolean;
   secret_ref?: string | null;
+  openrouter_management_secret_ref?: string | null;
   model_allowlist?: string[];
   capabilities?: Record<string, boolean>;
   capability_verifications?: Record<
@@ -1170,6 +1172,17 @@ interface WireProviderRuntimeHealth extends JsonObject {
   key_expires_at?: string | null;
   key_limit_remaining?: number | null;
   provider_revision?: number | null;
+}
+
+interface WireOpenRouterCreditSnapshot extends JsonObject {
+  provider_id: string;
+  status: "observed" | "unavailable";
+  checked_at: string;
+  observed_at?: string | null;
+  total_credits_usd?: number | null;
+  total_usage_usd?: number | null;
+  remaining_usd?: number | null;
+  reason_code?: OpenRouterCreditSnapshot["reasonCode"] | null;
 }
 
 interface WireModelDescriptor extends JsonObject {
@@ -2793,6 +2806,8 @@ function mapProvider(value: WireProvider): ProviderHealth {
       ? value.secret_ref.slice(4)
       : undefined,
     credentialRef: value.secret_ref ?? undefined,
+    openrouterManagementSecretRef:
+      value.openrouter_management_secret_ref ?? undefined,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
     autoShareToolResults: value.privacy?.auto_share_tool_results === true,
     retention: value.privacy?.retention ?? undefined,
@@ -2859,6 +2874,21 @@ function mapProviderRuntimeHealth(
     ...(value.key_expires_at ? { keyExpiresAt: value.key_expires_at } : {}),
     ...(value.key_limit_remaining != null ? { keyLimitRemaining: value.key_limit_remaining } : {}),
     ...(value.provider_revision != null ? { providerRevision: value.provider_revision } : {}),
+  };
+}
+
+function mapOpenRouterCreditSnapshot(
+  value: WireOpenRouterCreditSnapshot,
+): OpenRouterCreditSnapshot {
+  return {
+    providerId: value.provider_id,
+    status: value.status,
+    checkedAt: value.checked_at,
+    observedAt: value.observed_at ?? undefined,
+    totalCreditsUsd: value.total_credits_usd ?? undefined,
+    totalUsageUsd: value.total_usage_usd ?? undefined,
+    remainingUsd: value.remaining_usd ?? undefined,
+    reasonCode: value.reason_code ?? undefined,
   };
 }
 
@@ -7945,6 +7975,9 @@ export class ApiClient {
         is_local: body.local,
         secret_ref:
           body.credentialRef ?? (credentialEnv ? `env:${credentialEnv}` : null),
+        ...(body.openrouterManagementSecretRef !== undefined
+          ? { openrouter_management_secret_ref: body.openrouterManagementSecretRef }
+          : {}),
         model_allowlist: modelAllowlist,
         capabilities: { streaming: true },
         privacy: {
@@ -7989,6 +8022,9 @@ export class ApiClient {
           secret_ref:
             body.credentialRef ??
             (credentialEnv ? `env:${credentialEnv}` : null),
+          ...(body.openrouterManagementSecretRef !== undefined
+            ? { openrouter_management_secret_ref: body.openrouterManagementSecretRef }
+            : {}),
           model_allowlist: modelAllowlist,
           privacy: {
             local_only: body.local,
@@ -8068,6 +8104,16 @@ export class ApiClient {
       `providers/${encodeURIComponent(id)}/health`,
       { method: "POST", signal },
     ).then(mapProviderRuntimeHealth);
+  }
+
+  refreshOpenRouterCredits(
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<OpenRouterCreditSnapshot> {
+    return this.request<WireOpenRouterCreditSnapshot>(
+      `providers/${encodeURIComponent(providerId)}/openrouter/credits/refresh`,
+      { method: "POST", signal },
+    ).then(mapOpenRouterCreditSnapshot);
   }
 
   async verifyProviderCapabilities(

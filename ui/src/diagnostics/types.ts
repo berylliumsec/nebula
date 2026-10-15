@@ -14,6 +14,7 @@ export const diagnosticFeatures = [
   "chat",
   "knowledge",
   "harnesses",
+  "butler",
   "missions",
   "runtime",
   "debugger",

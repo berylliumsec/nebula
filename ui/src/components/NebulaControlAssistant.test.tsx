@@ -152,6 +152,33 @@ describe("NebulaControlAssistant", () => {
     }), expect.any(Function), expect.any(AbortSignal)));
   });
 
+  it("loads saved settings when the panel opens before conversation restore finishes", async () => {
+    const user = userEvent.setup();
+    const saved = {
+      id: "control", engagementId: "project", backend: "provider", providerId: "local-provider", model: "model",
+      assistantConfig: {backend: "provider", profileId: "local-provider", model: "model", reasoningEffort: "high"},
+    };
+    let resolveSession!: (value: typeof saved) => void;
+    const pendingSession = new Promise<typeof saved>((resolve) => { resolveSession = resolve; });
+    const getControlAssistantSession = vi.fn().mockReturnValue(pendingSession);
+    const getChatAssistantConfig = vi.fn().mockResolvedValue({sessionId: "control", revision: 2, settings: saved.assistantConfig});
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getControlAssistantSession, getChatAssistantConfig, listChatMessages: vi.fn().mockResolvedValue([])},
+      engagement: {id: "project", name: "Project"},
+      providers: [{id: "local-provider", name: "Local provider", enabled: true, state: "healthy", healthy: true,
+        local: true, permitsSensitiveData: true, models: ["model"], defaultModel: "model"}],
+      harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.click(screen.getByRole("button", {name: "Butler settings"}));
+    expect(screen.getByText("Loading Butler settings…")).toBeInTheDocument();
+    resolveSession(saved);
+    await waitFor(() => expect(screen.getByRole("combobox", {name: "Butler effort"})).toHaveValue("high"));
+    expect(getControlAssistantSession).toHaveBeenCalledWith("project");
+    expect(getChatAssistantConfig).toHaveBeenCalledWith("control");
+  });
+
   it("sends provider effort without Codex-only settings after Core readback", async () => {
     const user = userEvent.setup();
     const saved = {
@@ -231,6 +258,80 @@ describe("NebulaControlAssistant", () => {
     await user.click(screen.getByRole("button", { name: "Hide Butler" }));
     await user.click(screen.getByRole("button", { name: "Show Butler" }));
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me find a setting");
+  });
+
+  it("checks the selected project's incidents before Butler opens and clears its cue on project switch", async () => {
+    let openCount = 2;
+    const request = vi.fn().mockImplementation(async (path: string) => ({
+      project_id: path.includes("project-b") ? "project-b" : "project-a",
+      authority: "watch", watched_goals: [], incidents: [], decisions: [], resources: [], coverage_gaps: [],
+      summary: { watched_goals: 0, open_incidents: path.includes("project-b") ? 0 : openCount,
+        acknowledged_incidents: 0, resolved_incidents: 0, account_resources: 0, harness_quota_resources: 0 },
+      capabilities: { authority_levels: ["watch"], incidents: true, decisions: false, agent_reports: true,
+        machine_alerts: true, resource_alerts: true, live_events: false },
+    }));
+    const api = { request, getControlAssistantSession: vi.fn().mockResolvedValue(null) };
+    let projectId = "project-a";
+    let coreState: "online" | "offline" = "online";
+    vi.mocked(useWorkspace).mockImplementation(() => ({ api, coreState,
+      engagement: { id: projectId, name: projectId }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>));
+    const view = render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+      <header><NebulaAssistantLauncherButton mobile /></header>
+    </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+    expect(await screen.findByRole("button", { name: "Open Butler; 2 open incidents need attention in the selected project" })).toBeVisible();
+    expect(request).toHaveBeenCalledWith("engagements/project-a/butler/overview", { signal: expect.any(AbortSignal) });
+
+    openCount = 3;
+    fireEvent(document, new Event("visibilitychange"));
+    expect(await screen.findByRole("button", { name: "Open Butler; 3 open incidents need attention in the selected project" })).toBeVisible();
+
+    coreState = "offline";
+    view.rerender(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+      <header><NebulaAssistantLauncherButton mobile /></header>
+    </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+    expect(screen.getByRole("button", { name: "Open Butler; 3 open incidents need attention in the selected project" })).toBeVisible();
+    openCount = 1;
+    coreState = "online";
+    view.rerender(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+      <header><NebulaAssistantLauncherButton mobile /></header>
+    </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+    expect(await screen.findByRole("button", { name: "Open Butler; 1 open incident needs attention in the selected project" })).toBeVisible();
+
+    projectId = "project-b";
+    view.rerender(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+      <header><NebulaAssistantLauncherButton mobile /></header>
+    </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+    expect(screen.getByRole("button", { name: "Open Butler" })).toHaveAttribute("title", "Butler");
+    await waitFor(() => expect(request).toHaveBeenCalledWith("engagements/project-b/butler/overview", { signal: expect.any(AbortSignal) }));
+  });
+
+  it("scrolls the mobile body to a new Butler reply", async () => {
+    const user = userEvent.setup();
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true, addListener: vi.fn(), removeListener: vi.fn(),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() });
+    const streamChat = vi.fn().mockResolvedValue({
+      sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+      message: { id: "answer", role: "assistant", content: "I checked the mission." },
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", { name: "Open Butler" }));
+      const body = screen.getByRole("log", { name: "Butler conversation" }).parentElement as HTMLElement;
+      Object.defineProperty(body, "scrollHeight", { configurable: true, value: 700 });
+      await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Check the mission{enter}");
+      expect(await screen.findByText("I checked the mission.")).toBeVisible();
+      await waitFor(() => expect(body.scrollTop).toBe(700));
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   it("opens from the global icon, applies a device theme, and keeps the setting catalog reachable", async () => {

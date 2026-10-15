@@ -2,13 +2,14 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApiClient } from "../api/client";
 import type { ProviderCatalogEntry, ProviderHealth } from "../api/types";
 import { DialogProvider } from "../components/DialogSystem";
 import { SettingsPage } from "./SettingsPage";
 
 const { workspace } = vi.hoisted(() => ({
   workspace: {
-    api: undefined,
+    api: undefined as ApiClient | undefined,
     previewMode: false,
     health: undefined,
     providers: [] as never[],
@@ -47,6 +48,7 @@ vi.mock("../diagnostics", () => ({
 vi.mock("../guides/ShowMeHow", () => ({ ShowMeHow: () => null }));
 vi.mock("../components/ToolingSettings", () => ({ AutomationRuntimeSettings: () => null, RunnerSettings: () => null }));
 vi.mock("../components/EnvironmentSettings", () => ({ EnvironmentSettings: () => null }));
+vi.mock("../components/StorageIntegrations", () => ({ StorageIntegrations: () => null }));
 vi.mock("../components/HarnessSettings", () => ({ HarnessSettings: () => null }));
 vi.mock("../components/PostToolAssistantSettings", () => ({ PostToolAssistantSettings: () => null }));
 vi.mock("../components/TypeSafeIntegrationSettings", () => ({ TypeSafeIntegrationSettings: () => null }));
@@ -88,6 +90,7 @@ function renderSettings(route = "/settings") {
 describe("settings page section routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    workspace.api = undefined;
     workspace.providerCatalog = [openai] as never[];
     workspace.providers = [] as never[];
     window.history.replaceState(null, "", "/");
@@ -135,6 +138,7 @@ describe("settings page section routing", () => {
 describe("settings page dialogs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    workspace.api = undefined;
     workspace.providerCatalog = [openai] as never[];
     workspace.providers = [] as never[];
     window.history.replaceState(null, "", "/");
@@ -179,6 +183,33 @@ describe("settings page dialogs", () => {
       providerType: "openrouter",
       options: expect.objectContaining({ openrouter_zdr: true, openrouter_providers: ["relace"] }),
     })));
+  });
+
+  it("stores the OpenRouter account management key as a separate credential reference", async () => {
+    const createCredential = vi.fn().mockResolvedValue({ reference: "vault:router-management" });
+    workspace.api = {
+      createCredential,
+      deleteCredential: vi.fn(),
+      discoverLocalProviders: vi.fn().mockResolvedValue([]),
+      listOpenRouterUpstreamProviders: vi.fn().mockResolvedValue([]),
+    } as unknown as ApiClient;
+    workspace.providerCatalog = [openrouter] as never[];
+    workspace.addProvider.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderSettings("/settings#provider-settings");
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    await user.type(within(dialog).getByLabelText(/^Account management key/), "management-secret");
+    await user.click(within(dialog).getByRole("button", { name: "Add provider" }));
+
+    await waitFor(() => expect(createCredential).toHaveBeenCalledWith("management-secret", "vault"));
+    expect(createCredential).toHaveBeenCalledTimes(1);
+    expect(workspace.addProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerType: "openrouter",
+      credentialEnv: "OPENROUTER_API_KEY",
+      openrouterManagementSecretRef: "vault:router-management",
+    }));
   });
 
   it("loads the saved routing policy and can clear both options", async () => {

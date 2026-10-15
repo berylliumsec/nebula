@@ -7,6 +7,7 @@ import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { UpstreamProviderPicker, upstreamCatalog, type UpstreamProviderOption } from "../components/UpstreamProviderPicker";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
+import { OpenRouterCreditsPanel } from "../components/OpenRouterCreditsPanel";
 import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
 import { TypeSafeIntegrationSettings } from "../components/TypeSafeIntegrationSettings";
 import { WebSearchRuntimeSettings } from "../components/WebSearchRuntimeSettings";
@@ -142,6 +143,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [credentialSystemd, setCredentialSystemd] = useState("");
   const [credentialSecret, setCredentialSecret] = useState("");
   const [sessionCredential, setSessionCredential] = useState(false);
+  const [managementSecret, setManagementSecret] = useState("");
+  const [managementSessionCredential, setManagementSessionCredential] = useState(false);
   const [vertexProject, setVertexProject] = useState("");
   const [vertexLocation, setVertexLocation] = useState("");
   const [awsRegion, setAwsRegion] = useState("");
@@ -339,6 +342,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setCredentialSystemd("");
     setCredentialSecret("");
     setSessionCredential(false);
+    setManagementSecret("");
+    setManagementSessionCredential(false);
     setVertexProject("");
     setVertexLocation("");
     setAwsRegion("");
@@ -369,6 +374,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setCredentialSystemd("");
     setCredentialSecret("");
     setSessionCredential(false);
+    setManagementSecret("");
+    setManagementSessionCredential(false);
     setVertexProject("");
     setVertexLocation("");
     setAwsRegion("");
@@ -405,6 +412,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       : "");
     setCredentialSecret("");
     setSessionCredential(provider.credentialRef?.startsWith("session:") ?? false);
+    setManagementSecret("");
+    setManagementSessionCredential(false);
     setVertexProject(providerOption(provider, "project"));
     setVertexLocation(providerOption(provider, "location"));
     setAwsRegion(providerOption(provider, "region"));
@@ -435,6 +444,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setCredentialSystemd("");
     setCredentialSecret("");
     setSessionCredential(false);
+    setManagementSecret("");
+    setManagementSessionCredential(false);
     setVertexProject("");
     setVertexLocation("");
     setAwsRegion("");
@@ -495,6 +506,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setFormError(undefined);
     setFormValidationError(undefined);
     let createdCredentialRef: string | undefined;
+    let createdManagementCredentialRef: string | undefined;
     try {
       if (credentialSecret) {
         if (!api) throw new Error("Nebula Core must be available to store a credential.");
@@ -504,6 +516,14 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         );
         createdCredentialRef = credential.reference;
       }
+      if (providerType === "openrouter" && managementSecret.trim()) {
+        if (!api) throw new Error("Nebula Core must be available to store the OpenRouter management key.");
+        const credential = await api.createCredential(
+          managementSecret.trim(),
+          managementSessionCredential || !vault.available ? "session" : "vault",
+        );
+        createdManagementCredentialRef = credential.reference;
+      }
       const serviceCredentialRef = credentialSystemd.trim()
         ? `systemd:${credentialSystemd.trim()}`
         : undefined;
@@ -511,6 +531,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         ?? serviceCredentialRef
         ?? (credentialEnv ? undefined : editingProvider?.credentialRef)
         ?? undefined;
+      const existingManagementRef = (editingProvider as (ProviderHealth & { openrouterManagementSecretRef?: string }) | undefined)?.openrouterManagementSecretRef;
+      const managementRef = createdManagementCredentialRef ?? existingManagementRef;
       if (editingProvider) {
         await updateProvider(editingProvider.id, {
           name,
@@ -521,6 +543,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
           modelAllowlist,
           credentialEnv: credentialRef ? undefined : credentialEnv || undefined,
           credentialRef,
+          ...(providerType === "openrouter" && managementRef ? { openrouterManagementSecretRef: managementRef } : {}),
           permitsSensitiveData,
           autoShareToolResults,
           retention: editingProvider.retention,
@@ -539,6 +562,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
           modelAllowlist,
           credentialEnv: credentialRef ? undefined : credentialEnv || undefined,
           credentialRef,
+          ...(providerType === "openrouter" && managementRef ? { openrouterManagementSecretRef: managementRef } : {}),
           permitsSensitiveData,
           autoShareToolResults,
           options,
@@ -546,11 +570,15 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       }
       setAdding(false);
       setCredentialSecret("");
+      setManagementSecret("");
       announceSettingsSaved(editingProvider ? "Provider changes are ready to use." : "Provider added and ready to configure.");
     } catch (error) {
       void logCaughtDiagnostic("interface.settings_page.caught_failure_02", "A handled interface operation failed.", error, "settings_page");
       if (createdCredentialRef && api) {
         await api.deleteCredential(createdCredentialRef).catch((caughtError) => { void logCaughtDiagnostic("interface.settings_page.caught_failure_03", "A handled interface operation failed.", caughtError, "settings_page"); return undefined; });
+      }
+      if (createdManagementCredentialRef && api) {
+        await api.deleteCredential(createdManagementCredentialRef).catch((caughtError) => { void logCaughtDiagnostic("interface.settings_page.management_key_cleanup_failed", "An unused OpenRouter management credential could not be removed.", caughtError, "settings_page"); return undefined; });
       }
       setFormError(error instanceof Error ? error.message : `Could not ${editingProvider ? "save" : "add"} provider.`);
     } finally {
@@ -700,6 +728,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   };
   const dialogProviderType = editingProvider?.providerType ?? selected?.flavor ?? "";
   const dialogLocal = editingProvider?.local ?? selected?.local ?? false;
+  const editingManagementRef = (editingProvider as (ProviderHealth & { openrouterManagementSecretRef?: string }) | undefined)?.openrouterManagementSecretRef;
   const wantsUpstreamDirectory = adding && dialogProviderType === "openrouter";
   useEffect(() => {
     if (!api || !wantsUpstreamDirectory || upstreamDirectoryLoaded.current) return;
@@ -827,6 +856,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         ) : (
           <StandardEmptyState compact icon={<Server size={23} />} title="No provider profiles" explanation="Add a provider here, then choose its discovered model for chat or missions." />
         )}
+        {openAdvancedGroup === "models-settings" && settingsSection === "advanced-settings" && providers.some((provider) => provider.providerType === "openrouter") && <div className="runtime-usage-grid" aria-label="OpenRouter account credits">{providers.filter((provider) => provider.providerType === "openrouter").map((provider) => <OpenRouterCreditsPanel key={provider.id} api={api} providerId={provider.id} providerName={provider.name} disabled={previewMode} onConfigure={() => openProviderEdit(provider)} />)}</div>}
       </section>
       <section className="settings-section" id="native-skill-settings" data-guide="shared-skills">
         <div className="section-heading"><div><h2>Shared skills</h2><p>Provider-neutral `.agents/skills` catalogs</p></div><ShowMeHow guide="project-skills" /></div>
@@ -896,6 +926,13 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             {credentialSecret && (vault.available
               ? <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>
               : <p className="provider-dialog-note">{vaultUnavailableNote(vault.state, "credential")}</p>)}
+            {dialogProviderType === "openrouter" && <>
+              <label>Account management key<input type="password" autoComplete="new-password" value={managementSecret} placeholder={editingManagementRef ? "Leave blank to keep the saved management key" : "Paste a separate OpenRouter management key"} onChange={(event) => setManagementSecret(event.target.value)} /><small>Used only to read total account credits. The inference API key above cannot supply this balance.</small></label>
+              {managementSecret && (vault.available
+                ? <label className="provider-consent"><input type="checkbox" checked={managementSessionCredential} onChange={(event) => setManagementSessionCredential(event.target.checked)} /><span><strong>Use management key for this Core session only</strong><small>For continuous checks across Core restarts, leave this off so the key is saved in the credential vault.</small></span></label>
+                : <p className="provider-dialog-note">{vaultUnavailableNote(vault.state, "management key")} A session key stops working after Core restarts.</p>)}
+              {!managementSecret && !editingManagementRef && <p className="provider-dialog-note">Account credit checks remain unavailable until a management key is added.</p>}
+            </>}
             {dialogProviderType === "openrouter" && <label className="provider-consent"><input type="checkbox" checked={openrouterZdr} onChange={(event) => setOpenrouterZdr(event.target.checked)} /><span><strong>Require zero data retention (ZDR)</strong><small>Route this profile only through endpoints that do not retain prompts or responses. Fewer models may be available.</small></span></label>}
             {dialogProviderType === "openrouter" && <UpstreamProviderPicker
               catalog={upstreamDirectory.length ? upstreamDirectory : upstreamCatalog(editingProvider?.metadata)}

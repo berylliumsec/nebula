@@ -1536,6 +1536,8 @@ export interface ProviderHealth {
   effectiveDefaultModel?: string;
   credentialEnv?: string;
   credentialRef?: string;
+  /** Separate administrative credential for OpenRouter account credit reads. */
+  openrouterManagementSecretRef?: string;
   permitsSensitiveData: boolean;
   /** Standing consent: send tool results without the per-turn prompt. */
   autoShareToolResults: boolean;
@@ -1623,6 +1625,23 @@ export interface ProviderRuntimeHealth {
   providerRevision?: number;
 }
 
+export interface OpenRouterCreditSnapshot {
+  providerId: Identifier;
+  status: "observed" | "unavailable";
+  checkedAt: string;
+  observedAt?: string;
+  totalCreditsUsd?: number;
+  totalUsageUsd?: number;
+  remainingUsd?: number;
+  reasonCode?:
+    | "management_credential_missing"
+    | "management_credential_unavailable"
+    | "management_credential_rejected"
+    | "provider_disabled"
+    | "upstream_unavailable"
+    | "invalid_upstream_response";
+}
+
 /** One OpenRouter upstream provider; locations are ISO country codes, display-only. */
 export interface UpstreamProviderOption {
   slug: string;
@@ -1663,6 +1682,7 @@ export interface ProviderCreateRequest {
   modelAllowlist?: string[];
   credentialEnv?: string;
   credentialRef?: string;
+  openrouterManagementSecretRef?: string | null;
   permitsSensitiveData?: boolean;
   autoShareToolResults?: boolean;
   options?: Record<string, unknown>;
@@ -1677,6 +1697,7 @@ export interface ProviderUpdateRequest {
   modelAllowlist: string[];
   credentialEnv?: string;
   credentialRef?: string;
+  openrouterManagementSecretRef?: string | null;
   permitsSensitiveData: boolean;
   autoShareToolResults: boolean;
   retention?: string;

@@ -1,0 +1,3 @@
+.button { position: relative; }
+.attention { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border: 2px solid var(--surface-overlay); border-radius: 50%; background: var(--danger, var(--text)); pointer-events: none; }
+.mobile .attention { top: 5px; right: auto; left: calc(50% + 7px); }

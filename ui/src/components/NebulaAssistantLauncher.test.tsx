@@ -23,4 +23,13 @@ describe("Butler launch mark", () => {
     expect(button).toHaveTextContent("Butler");
     expect(button.querySelector("img")).toHaveAttribute("src", "/nebula-logo.svg");
   });
+
+  it("shows a quiet selected-project attention cue with an accessible incident count", () => {
+    render(<NebulaAssistantLauncherContext.Provider value={{ opened: false, visible: false, attentionCount: 2, toggle: vi.fn() }}>
+      <NebulaAssistantLauncherButton mobile />
+    </NebulaAssistantLauncherContext.Provider>);
+    const button = screen.getByRole("button", { name: "Open Butler; 2 open incidents need attention in the selected project" });
+    expect(button).toHaveAttribute("title", "2 open incidents need attention in the selected project");
+    expect(button.querySelectorAll("[aria-hidden='true']")).toHaveLength(2);
+  });
 });
