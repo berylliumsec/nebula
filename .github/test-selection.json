@@ -1,35 +1,21 @@
 {
-  "change_digest": "c82af5ac11e307477d57421da216223630f3aab167e95566ad16f867d2d515a8",
-  "reviewed_by": "Codex combined control assistant settings and Nebula Voice review",
-  "reason": "The combined change gives Nebula assistant project-bound chat and mission controls, saved next-turn Assistant settings for its own and other chats, and a full-screen GPT-Live voice surface. Selected Python cases cover work dispatch, project and control-only scope, approval and question decisions with stale and foreign-project rejection, chat rename/archive, mission retry deduplication, settings validation, revision-guarded persistence, voice transport, exact SDP preservation, credential selection, authentication, and upstream error mapping. Selected UI cases cover saved settings, work receipts, assistant entry, voice delegation, pending attention visibility, remote audio track playback, visible speaker recovery when captions arrive without audio, microphone-reactive orb movement and mute recovery, active microphone display and input switching, and failure recovery without overwriting the useful error. Eight paired real-Core production LAN browser profiles exercise mission creation, settings save, reload, and use; eight voice browser profiles cover full-screen lifecycle, pending attention, speaker diagnostics, microphone-reactive orb, exact orb centering, accessibility, and 320-430 px emulated phones on Chromium and WebKit. The combined HTTPS LAN dogfood uses the configured Codex harness and a direct GPT-Live session probe. The installed iPhone assistant shell now mounts the same control assistant, exposes its launcher in the conversation header, and keeps the existing text/approval workflow reachable; four selected shell entries check this integration in desktop, emulated mobile Chromium/WebKit, and real-Core WebKit on LAN.",
-  "exclusions": "The iOS native manifest and build number changed; its microphone usage string and signed Xcode build are verified separately. No Rust native tests apply. Full suites and unrelated browser, notes, provider, mission, and workspace journeys are excluded. The real-Core browser test uses a deterministic local provider stub; the voice browser matrix simulates WebRTC. Live audio, physical WKWebView microphone and speaker behavior, software keyboard, and physical mobile Safari/Android are separate manual gates and must not be inferred from these selected tests.",
+  "change_digest": "8a30a55f96d04f59f4d7f295d8243b4e7f8a081fe70b1de3ea7a45e0036d61d7",
+  "reviewed_by": "Codex iPhone assistant and Voice layout review",
+  "reason": "The installed iPhone app exposed a cramped Nebula assistant header and a Voice orb that rose over the safe-area header when long project work and an error were visible. The selected component files cover assistant entry and Voice lifecycle. Two exact browser journeys now assert a full-width 48 px Voice action, a stable mobile panel, and an orb below the exit header during normal and failed connections. The matrix covers desktop Chromium 1440/1024, mobile Chromium and WebKit at 320/390/430, and both mobile engines in landscape. The shared impact catalog now maps assistant panel edits to the iPhone shell and Voice to landscape, preventing this omission in later changes. Production LAN Core and the installed physical iPhone are separate dogfood gates.",
+  "exclusions": "No Python, Rust, or native iOS source changed; those test layers are not relevant. Server work, provider persistence, settings mutation, mission and browser journeys, and full suites are excluded. Browser tests use deterministic mocked Core and WebRTC for exact layout assertions; the live credential and actual microphone/speaker path require separate production Core and physical iPhone checks.",
   "expected_tests": {
-    "python": 33,
-    "frontend": 30,
+    "python": 0,
+    "frontend": 28,
     "native": 0,
     "playwright": 20
   },
-  "python": [
-    "tests/v3/test_control_assistant_work.py",
-    "tests/v3/test_settings_assistant_tools.py",
-    "tests/v3/test_voice.py"
-  ],
+  "python": [],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/NebulaVoice.test.tsx",
-    "ui/src/api/client.workReceipts.test.ts",
-    "ui/src/api/client.assistantConfig.test.ts"
+    "ui/src/components/NebulaVoice.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:control-assistant-work/assistant-real-desktop",
-    "entry:control-assistant-work/assistant-real-compact",
-    "entry:control-assistant-work/assistant-real-chromium-320",
-    "entry:control-assistant-work/assistant-real-chromium-390",
-    "entry:control-assistant-work/assistant-real-chromium-430",
-    "entry:control-assistant-work/assistant-real-webkit-320",
-    "entry:control-assistant-work/assistant-real-webkit-390",
-    "entry:control-assistant-work/assistant-real-webkit-430",
     "entry:nebula-voice/desktop",
     "entry:nebula-voice/compact",
     "entry:nebula-voice/mobile-chromium-small",
@@ -38,9 +24,17 @@
     "entry:nebula-voice/mobile-webkit-small",
     "entry:nebula-voice/mobile-webkit",
     "entry:nebula-voice/mobile-webkit-wide",
+    "entry:nebula-voice/browser-chromium-landscape",
+    "entry:nebula-voice/browser-webkit-landscape",
     "entry:ios-assistant-only/desktop",
+    "entry:ios-assistant-only/compact",
     "entry:ios-assistant-only/mobile-chromium-small",
+    "entry:ios-assistant-only/mobile-chromium",
+    "entry:ios-assistant-only/mobile-chromium-wide",
+    "entry:ios-assistant-only/mobile-webkit-small",
     "entry:ios-assistant-only/mobile-webkit",
-    "entry:ios-assistant-only/assistant-real-webkit-390"
+    "entry:ios-assistant-only/mobile-webkit-wide",
+    "entry:ios-assistant-only/browser-chromium-landscape",
+    "entry:ios-assistant-only/browser-webkit-landscape"
   ]
 }
