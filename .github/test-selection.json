@@ -1,40 +1,40 @@
 {
-  "change_digest": "8a30a55f96d04f59f4d7f295d8243b4e7f8a081fe70b1de3ea7a45e0036d61d7",
-  "reviewed_by": "Codex iPhone assistant and Voice layout review",
-  "reason": "The installed iPhone app exposed a cramped Nebula assistant header and a Voice orb that rose over the safe-area header when long project work and an error were visible. The selected component files cover assistant entry and Voice lifecycle. Two exact browser journeys now assert a full-width 48 px Voice action, a stable mobile panel, and an orb below the exit header during normal and failed connections. The matrix covers desktop Chromium 1440/1024, mobile Chromium and WebKit at 320/390/430, and both mobile engines in landscape. The shared impact catalog now maps assistant panel edits to the iPhone shell and Voice to landscape, preventing this omission in later changes. Production LAN Core and the installed physical iPhone are separate dogfood gates.",
-  "exclusions": "No Python, Rust, or native iOS source changed; those test layers are not relevant. Server work, provider persistence, settings mutation, mission and browser journeys, and full suites are excluded. Browser tests use deterministic mocked Core and WebRTC for exact layout assertions; the live credential and actual microphone/speaker path require separate production Core and physical iPhone checks.",
+  "change_digest": "708439eccdc90c1495685125325a7d6164c0366dcd5d91969e7294eb42ffd23a",
+  "reviewed_by": "Codex navigation and loading efficiency review",
+  "reason": "The change narrows the Workbench conversation list to a recent indexed page, keeps older history and full search available, mounts Terminal and Code only when selected, isolates mission events and snapshots from general workspace consumers, stops mission selection and mutation from bootstrapping the project again, and clears previous-project identities on a switch. The focused Python tests cover Core ordering and SQLite migration; selecting the migration test also triggers the existing PostgreSQL migration job. Frontend files cover URL identity, revision reconciliation, event ownership, mission controls, snapshot display, recovery, and component behavior. Seven browser runs cover the new loading journey in desktop Chromium and emulated mobile Chromium/WebKit at 320, 390, and 430 px. Three real-Core journeys cover durable conversation switching, project selection after production LAN reload, and mission recovery. A separate disposable seeded production build is used for operator dogfooding.",
+  "exclusions": "Full suites, unrelated providers, browser automation, native desktop and iOS tests, release packaging, and physical-device testing are outside this selection. The mocked browser journey verifies request bounds and navigation presentation; real-Core tests and the disposable LAN Core verify durable behavior separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 28,
+    "python": 2,
+    "frontend": 84,
     "native": 0,
-    "playwright": 20
+    "playwright": 10
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_chat_session_recent_page.py",
+    "tests/v3/test_migrations.py::test_sqlite_upgrade_downgrade_and_immutable_operation_events"
+  ],
   "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/NebulaVoice.test.tsx"
+    "ui/src/resourceRoutes.test.ts",
+    "ui/src/api/client.chatSessionPage.test.ts",
+    "ui/src/components/SideNav.test.tsx",
+    "ui/src/pages/chatSessionList.test.ts",
+    "ui/src/pages/AgentsPage.test.tsx",
+    "ui/src/pages/OverviewPage.test.tsx",
+    "ui/src/state/WorkspaceContext.recovery.test.tsx",
+    "ui/src/components/MissionControls.test.tsx",
+    "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:nebula-voice/desktop",
-    "entry:nebula-voice/compact",
-    "entry:nebula-voice/mobile-chromium-small",
-    "entry:nebula-voice/mobile-chromium-ledger-390",
-    "entry:nebula-voice/mobile-chromium-wide",
-    "entry:nebula-voice/mobile-webkit-small",
-    "entry:nebula-voice/mobile-webkit",
-    "entry:nebula-voice/mobile-webkit-wide",
-    "entry:nebula-voice/browser-chromium-landscape",
-    "entry:nebula-voice/browser-webkit-landscape",
-    "entry:ios-assistant-only/desktop",
-    "entry:ios-assistant-only/compact",
-    "entry:ios-assistant-only/mobile-chromium-small",
-    "entry:ios-assistant-only/mobile-chromium",
-    "entry:ios-assistant-only/mobile-chromium-wide",
-    "entry:ios-assistant-only/mobile-webkit-small",
-    "entry:ios-assistant-only/mobile-webkit",
-    "entry:ios-assistant-only/mobile-webkit-wide",
-    "entry:ios-assistant-only/browser-chromium-landscape",
-    "entry:ios-assistant-only/browser-webkit-landscape"
+    "entry:navigation-loading/desktop",
+    "entry:navigation-loading/mobile-chromium-small",
+    "entry:navigation-loading/mobile-chromium-ledger-390",
+    "entry:navigation-loading/mobile-chromium-wide",
+    "entry:navigation-loading/mobile-webkit-small",
+    "entry:navigation-loading/mobile-webkit",
+    "entry:navigation-loading/mobile-webkit-wide",
+    "entry:workbench-navigation-core/assistant-real-desktop",
+    "entry:project-switcher-search/real-core",
+    "entry:mission-restart-recovery-core/real-core"
   ]
 }
