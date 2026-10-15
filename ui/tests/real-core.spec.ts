@@ -6206,7 +6206,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
       name: "Control assistant model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
       privacy: {local_only: true, residency: [], permits_sensitive_data: false},
-      metadata: {default_model: "security-model"},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
     }});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
     const provider = await providerResponse.json() as {id: string; revision: number};
