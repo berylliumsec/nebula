@@ -44,8 +44,16 @@ from nebula.v3.domain import (
 from nebula.v3.storage import NebulaStore
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.tools import (
-    AnalysisTool, CapacityReached, InvalidToolArguments, StoreToolLedger,
-    PolicyDenied, ToolBroker, ToolInvocation, ToolNotPermitted, ToolRegistry, ToolSpec,
+    AnalysisTool,
+    CapacityReached,
+    InvalidToolArguments,
+    StoreToolLedger,
+    PolicyDenied,
+    ToolBroker,
+    ToolInvocation,
+    ToolNotPermitted,
+    ToolRegistry,
+    ToolSpec,
 )
 from nebula.v3.providers import ModelResponse, ToolCall as ModelToolCall
 from nebula.v3.policy import PolicyDecision, PolicyEffect
@@ -56,7 +64,9 @@ def _setup(tmp_path):
     project = store.create(Engagement(name="Selected"))
     provider = store.create(
         ProviderProfile(
-            name="Local", provider_type="ollama", is_local=True,
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
             model_allowlist=["model-a"],
         )
     )
@@ -112,7 +122,10 @@ def _failure(store, project, parent, turn, error=None):
         record_subagent_start_failure(
             transaction,
             call,
-            error or CapacityReached("full", resource="active_children", maximum=1, current=1),
+            error
+            or CapacityReached(
+                "full", resource="active_children", maximum=1, current=1
+            ),
         )
     return call
 
@@ -140,31 +153,48 @@ def test_exact_subagent_refusal_creates_one_act_case_with_core_evidence(tmp_path
     assert cases[0].authority_revision == policy.revision
 
 
-def test_provider_broker_failed_subagent_call_wakes_butler_from_durable_receipt(tmp_path):
+def test_provider_broker_failed_subagent_call_wakes_butler_from_durable_receipt(
+    tmp_path,
+):
     store, project, parent, turn, _, _ = _setup(tmp_path)
     registry = ToolRegistry()
 
     async def unused(_arguments):
         return {}
 
-    registry.register(AnalysisTool(
-        ToolSpec(
-            name="subagent.start", description="Start a child",
-            input_schema={"type": "object", "properties": {
-                "task": {"type": "string"}}, "required": ["task"],
-                "additionalProperties": False},
-            output_schema={"type": "object"}, risk_class=RiskClass.LOCAL_READ,
-        ),
-        unused,
-    ))
+    registry.register(
+        AnalysisTool(
+            ToolSpec(
+                name="subagent.start",
+                description="Start a child",
+                input_schema={
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                    "required": ["task"],
+                    "additionalProperties": False,
+                },
+                output_schema={"type": "object"},
+                risk_class=RiskClass.LOCAL_READ,
+            ),
+            unused,
+        )
+    )
     broker = ToolBroker(
-        registry=registry, policy_engine=None, runner=None,
-        ledger=StoreToolLedger(store), workspace_resolver=lambda _: tmp_path,
+        registry=registry,
+        policy_engine=None,
+        runner=None,
+        ledger=StoreToolLedger(store),
+        workspace_resolver=lambda _: tmp_path,
     )
     invocation = ToolInvocation(
-        id="bad-subagent-call", engagement_id=project.id, run_id=turn.id,
-        origin=ToolCallOrigin.CHAT, chat_session_id=parent.id,
-        chat_turn_id=turn.id, tool_name="subagent.start", arguments={},
+        id="bad-subagent-call",
+        engagement_id=project.id,
+        run_id=turn.id,
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id=parent.id,
+        chat_turn_id=turn.id,
+        tool_name="subagent.start",
+        arguments={},
         workspace=tmp_path,
     )
 
@@ -173,7 +203,9 @@ def test_provider_broker_failed_subagent_call_wakes_butler_from_durable_receipt(
             await broker.prepare(invocation, ScopePolicy(engagement_id=project.id))
 
     asyncio.run(scenario())
-    failures = store.find_entities(ToolCall, {"tool_name": "subagent.start"}, engagement_id=project.id)
+    failures = store.find_entities(
+        ToolCall, {"tool_name": "subagent.start"}, engagement_id=project.id
+    )
     assert len(failures) == 1 and failures[0].status == ToolCallStatus.FAILED
     events = store.replay_operation_events(project_stream_id(project.id))
     assert len(events) == 1 and events[0].event_type == "agent.subagent_start_failed"
@@ -181,47 +213,66 @@ def test_provider_broker_failed_subagent_call_wakes_butler_from_durable_receipt(
 
     denied_broker = ToolBroker(
         registry=registry,
-        policy_engine=SimpleNamespace(evaluate=lambda *_: PolicyDecision(
-            effect=PolicyEffect.DENY, reason="Project setting disallows this tool",
-            rule="project_subagent_policy",
-        )),
-        runner=None, ledger=StoreToolLedger(store),
+        policy_engine=SimpleNamespace(
+            evaluate=lambda *_: PolicyDecision(
+                effect=PolicyEffect.DENY,
+                reason="Project setting disallows this tool",
+                rule="project_subagent_policy",
+            )
+        ),
+        runner=None,
+        ledger=StoreToolLedger(store),
         workspace_resolver=lambda _: tmp_path,
     )
-    denied_invocation = invocation.model_copy(update={
-        "id": "denied-subagent-call", "arguments": {"task": "Check one boundary"},
-    })
+    denied_invocation = invocation.model_copy(
+        update={
+            "id": "denied-subagent-call",
+            "arguments": {"task": "Check one boundary"},
+        }
+    )
 
     async def denied_scenario():
         with pytest.raises(PolicyDenied):
-            await denied_broker.prepare(denied_invocation, ScopePolicy(engagement_id=project.id))
+            await denied_broker.prepare(
+                denied_invocation, ScopePolicy(engagement_id=project.id)
+            )
 
     asyncio.run(denied_scenario())
     events = store.replay_operation_events(project_stream_id(project.id))
     assert len(events) == 2
     assert events[-1].payload["metrics"] == {
-        "category": "permission_denied", "rule": "project_subagent_policy",
+        "category": "permission_denied",
+        "rule": "project_subagent_policy",
         "side_effects": "none",
     }
 
 
 def test_harness_gateway_failure_commits_refusal_and_butler_signal_together(tmp_path):
     store, project, parent, turn, _, worker_id = _setup(tmp_path)
-    call = store.create(ToolCall(
-        engagement_id=project.id, run_id=turn.id, origin=ToolCallOrigin.CHAT,
-        chat_session_id=parent.id, chat_turn_id=turn.id, tool_name="subagent.start",
-        status=ToolCallStatus.RUNNING, risk_class=RiskClass.LOCAL_READ,
-        arguments={"task": "Check one boundary"},
-    ))
+    call = store.create(
+        ToolCall(
+            engagement_id=project.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=parent.id,
+            chat_turn_id=turn.id,
+            tool_name="subagent.start",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.LOCAL_READ,
+            arguments={"task": "Check one boundary"},
+        )
+    )
     HarnessRuntimeService._finish_gateway_call(
-        SimpleNamespace(store=store), call.id,
+        SimpleNamespace(store=store),
+        call.id,
         error=ToolNotPermitted("No runtime selected", rule="subagents.runtime_model"),
     )
     assert store.get(ToolCall, call.id).status == ToolCallStatus.FAILED
     events = store.replay_operation_events(project_stream_id(project.id))
     assert len(events) == 1
     assert events[0].payload["metrics"] == {
-        "category": "permission_denied", "rule": "subagents.runtime_model",
+        "category": "permission_denied",
+        "rule": "subagents.runtime_model",
         "side_effects": "none",
     }
     recovery = ButlerRecoveryService(store)
@@ -231,10 +282,14 @@ def test_harness_gateway_failure_commits_refusal_and_butler_signal_together(tmp_
 
 def test_background_harness_analysis_has_only_butler_gateway_authority(tmp_path):
     store, project, _, _, _, _ = _setup(tmp_path)
-    profile = store.create(HarnessProfile(
-        name="Butler harness", kind=HarnessKind.CODEX_APP_SERVER,
-        default_model="model-a", executable="/usr/bin/true",
-    ))
+    profile = store.create(
+        HarnessProfile(
+            name="Butler harness",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            default_model="model-a",
+            executable="/usr/bin/true",
+        )
+    )
 
     class Runtime:
         def __init__(self):
@@ -246,18 +301,28 @@ def test_background_harness_analysis_has_only_butler_gateway_authority(tmp_path)
 
         def create_session(self, **kwargs):
             assert kwargs["control_assistant"] is True
-            session = store.create(HarnessSession(
-                engagement_id=project.id, harness_profile_id=profile.id,
-                model=kwargs["model"], metadata={"control_assistant": True},
-            ))
+            session = store.create(
+                HarnessSession(
+                    engagement_id=project.id,
+                    harness_profile_id=profile.id,
+                    model=kwargs["model"],
+                    metadata={"control_assistant": True},
+                )
+            )
             self.session_id = session.id
             return session
 
         async def stream_turn(self, turn_id):
             turn = store.get(HarnessTurn, turn_id)
-            store.update(HarnessTurn, turn_id, {
-                "status": HarnessTurnStatus.COMPLETE, "response": "Checked Core state",
-            }, expected_revision=turn.revision)
+            store.update(
+                HarnessTurn,
+                turn_id,
+                {
+                    "status": HarnessTurnStatus.COMPLETE,
+                    "response": "Checked Core state",
+                },
+                expected_revision=turn.revision,
+            )
             if False:
                 yield None
 
@@ -265,17 +330,25 @@ def test_background_harness_analysis_has_only_butler_gateway_authority(tmp_path)
             return None
 
     runtime = Runtime()
-    result = asyncio.run(HarnessRuntimeService.analyze_structured(
-        runtime, engagement_id=project.id, profile_id=profile.id,
-        model="model-a", prompt="Inspect case", nebula_tools=True,
-        butler_recovery_case_id="case-1",
-    ))
+    result = asyncio.run(
+        HarnessRuntimeService.analyze_structured(
+            runtime,
+            engagement_id=project.id,
+            profile_id=profile.id,
+            model="model-a",
+            prompt="Inspect case",
+            nebula_tools=True,
+            butler_recovery_case_id="case-1",
+        )
+    )
     assert result.status == HarnessTurnStatus.COMPLETE
     session = store.get(HarnessSession, runtime.session_id)
     assert session.metadata["butler_recovery_case_id"] == "case-1"
     assert session.metadata["command_runtime_enabled"] is False
     assert session.metadata["browser_runtime_enabled"] is False
-    assert session.metadata["native_capabilities"] == HarnessNativeCapabilities().model_dump(mode="json")
+    assert session.metadata[
+        "native_capabilities"
+    ] == HarnessNativeCapabilities().model_dump(mode="json")
 
 
 def test_periodic_check_is_coalesced_and_act_revocation_stops_new_cases(tmp_path):
@@ -306,13 +379,19 @@ def test_periodic_check_is_coalesced_and_act_revocation_stops_new_cases(tmp_path
 
 def test_parent_follow_up_requires_same_child_task_completion_before_resolved(tmp_path):
     store, project, parent, turn, policy, _ = _setup(tmp_path)
-    original = store.create(ToolCall(
-        engagement_id=project.id, run_id=turn.id, origin=ToolCallOrigin.CHAT,
-        chat_session_id=parent.id, chat_turn_id=turn.id,
-        tool_name="subagent.start", status=ToolCallStatus.FAILED,
-        risk_class=RiskClass.LOCAL_READ,
-        arguments={"task": "Check one boundary"},
-    ))
+    original = store.create(
+        ToolCall(
+            engagement_id=project.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=parent.id,
+            chat_turn_id=turn.id,
+            tool_name="subagent.start",
+            status=ToolCallStatus.FAILED,
+            risk_class=RiskClass.LOCAL_READ,
+            arguments={"task": "Check one boundary"},
+        )
+    )
     case = store.create(
         ButlerRecoveryCase(
             engagement_id=project.id,
@@ -339,13 +418,22 @@ def test_parent_follow_up_requires_same_child_task_completion_before_resolved(tm
     )
     recovery = ButlerRecoveryService(store)
     assert recovery.verify_follow_up(case).status == "verifying"
-    store.create(ChatSubagent(
-        engagement_id=project.id, parent_session_id=parent.id,
-        parent_turn_id="retry-turn", child_session_id="other-child",
-        name="Other worker", task="Work on a different task",
-        status=ChatSubagentStatus.COMPLETED, finished_at=utc_now(),
-    ))
-    assert recovery.verify_follow_up(store.get(ButlerRecoveryCase, case.id)).status == "verifying"
+    store.create(
+        ChatSubagent(
+            engagement_id=project.id,
+            parent_session_id=parent.id,
+            parent_turn_id="retry-turn",
+            child_session_id="other-child",
+            name="Other worker",
+            task="Work on a different task",
+            status=ChatSubagentStatus.COMPLETED,
+            finished_at=utc_now(),
+        )
+    )
+    assert (
+        recovery.verify_follow_up(store.get(ButlerRecoveryCase, case.id)).status
+        == "verifying"
+    )
     child = store.create(
         ChatSubagent(
             engagement_id=project.id,
@@ -356,7 +444,10 @@ def test_parent_follow_up_requires_same_child_task_completion_before_resolved(tm
             task="Check one boundary",
         )
     )
-    assert recovery.verify_follow_up(store.get(ButlerRecoveryCase, case.id)).status == "verifying"
+    assert (
+        recovery.verify_follow_up(store.get(ButlerRecoveryCase, case.id)).status
+        == "verifying"
+    )
     store.update(
         ChatSubagent,
         child.id,
@@ -381,7 +472,13 @@ def test_crash_with_possible_side_effect_becomes_uncertain_without_replay(tmp_pa
             status="investigating",
             summary="Subagent start failed",
             started_at=utc_now() - timedelta(minutes=2),
-            steps=[{"id": "step-1", "operation": "nebula.work.set_chat_settings", "status": "running"}],
+            steps=[
+                {
+                    "id": "step-1",
+                    "operation": "nebula.work.set_chat_settings",
+                    "status": "running",
+                }
+            ],
         )
     )
     recovery = ButlerRecoveryService(store)
@@ -394,18 +491,26 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
     store, project, parent, turn, _, worker_id = _setup(tmp_path)
     provider = store.get(ProviderProfile, parent.provider_profile_id)
     store.update(
-        ProviderProfile, provider.id,
-        {"capability_verifications": {
-            "model-a": ProviderCapabilityVerification(
-                model="model-a", status=ProviderVerificationStatus.VERIFIED
-            ).model_dump(mode="json")
-        }},
+        ProviderProfile,
+        provider.id,
+        {
+            "capability_verifications": {
+                "model-a": ProviderCapabilityVerification(
+                    model="model-a", status=ProviderVerificationStatus.VERIFIED
+                ).model_dump(mode="json")
+            }
+        },
         expected_revision=provider.revision,
     )
-    store.create(ChatSession(
-        engagement_id=project.id, title="Butler", provider_profile_id=provider.id,
-        model="model-a", metadata={"control_assistant": True},
-    ))
+    store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            provider_profile_id=provider.id,
+            model="model-a",
+            metadata={"control_assistant": True},
+        )
+    )
     _failure(store, project, parent, turn, ConnectionError("runtime unavailable"))
 
     class Provider:
@@ -419,42 +524,67 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
             step = len(request.tool_results)
             if step == 0:
                 return ModelResponse(
-                    provider_id=provider.id, model="model-a",
-                    tool_calls=[ModelToolCall(
-                        id="call-1", name="nebula.capabilities.read",
-                        arguments={"operation": "nebula.work.chat_settings", "arguments": {
-                            "session_id": parent.id,
-                        }},
-                    )],
+                    provider_id=provider.id,
+                    model="model-a",
+                    tool_calls=[
+                        ModelToolCall(
+                            id="call-1",
+                            name="nebula.capabilities.read",
+                            arguments={
+                                "operation": "nebula.work.chat_settings",
+                                "arguments": {
+                                    "session_id": parent.id,
+                                },
+                            },
+                        )
+                    ],
                 )
             assert request.tool_results[-1].is_error is False
             if step == 1:
                 return ModelResponse(
-                    provider_id=provider.id, model="model-a",
-                    tool_calls=[ModelToolCall(
-                        id="call-2", name="nebula.capabilities.change",
-                        arguments={"operation": "nebula.work.set_chat_settings", "arguments": {
-                            "session_id": parent.id, "expected_revision": 1,
-                            "settings": {
-                                "subagent_provider_id": provider.id,
-                                "subagent_harness_profile_id": None,
-                                "subagent_model": "model-a",
+                    provider_id=provider.id,
+                    model="model-a",
+                    tool_calls=[
+                        ModelToolCall(
+                            id="call-2",
+                            name="nebula.capabilities.change",
+                            arguments={
+                                "operation": "nebula.work.set_chat_settings",
+                                "arguments": {
+                                    "session_id": parent.id,
+                                    "expected_revision": 1,
+                                    "settings": {
+                                        "subagent_provider_id": provider.id,
+                                        "subagent_harness_profile_id": None,
+                                        "subagent_model": "model-a",
+                                    },
+                                },
                             },
-                        }},
-                    )],
+                        )
+                    ],
                 )
             if step == 2:
                 return ModelResponse(
-                    provider_id=provider.id, model="model-a",
-                    tool_calls=[ModelToolCall(
-                        id="call-3", name="nebula.capabilities.change",
-                        arguments={"operation": "nebula.work.message_chat", "arguments": {
-                            "session_id": parent.id, "text": "Please retry the bounded check.",
-                            "delivery": "next",
-                        }},
-                    )],
+                    provider_id=provider.id,
+                    model="model-a",
+                    tool_calls=[
+                        ModelToolCall(
+                            id="call-3",
+                            name="nebula.capabilities.change",
+                            arguments={
+                                "operation": "nebula.work.message_chat",
+                                "arguments": {
+                                    "session_id": parent.id,
+                                    "text": "Please retry the bounded check.",
+                                    "delivery": "next",
+                                },
+                            },
+                        )
+                    ],
                 )
-            return ModelResponse(provider_id=provider.id, model="model-a", text="Parent retry queued")
+            return ModelResponse(
+                provider_id=provider.id, model="model-a", text="Parent retry queued"
+            )
 
     class Work:
         def __init__(self):
@@ -462,14 +592,19 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
             self.changes = []
             self.validated = []
             self.settings = {
-                "backend": "harness", "allow_subagents": True,
+                "backend": "harness",
+                "allow_subagents": True,
                 "subagent_harness_profile_id": "old-harness",
-                "subagent_provider_id": None, "subagent_model": None,
-                "max_active_subagents": 2, "subagent_reasoning_effort": None,
+                "subagent_provider_id": None,
+                "subagent_model": None,
+                "max_active_subagents": 2,
+                "subagent_reasoning_effort": None,
             }
-            self.chat = SimpleNamespace(subagents=SimpleNamespace(
-                validate_harness_setting=lambda *args: self.validated.append(args)
-            ))
+            self.chat = SimpleNamespace(
+                subagents=SimpleNamespace(
+                    validate_harness_setting=lambda *args: self.validated.append(args)
+                )
+            )
 
         def chat_settings(self, project_id, session_id):
             assert (project_id, session_id) == (project.id, parent.id)
@@ -481,7 +616,11 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
             assert arguments["expected_revision"] == 1
             self.changes.append(arguments["settings"])
             self.settings.update(arguments["settings"])
-            return {"session_id": parent.id, "revision": 2, "settings": dict(self.settings)}
+            return {
+                "session_id": parent.id,
+                "revision": 2,
+                "settings": dict(self.settings),
+            }
 
         async def message_chat(self, project_id, arguments, *, idempotency_key):
             self.targets.append((project_id, arguments["session_id"], idempotency_key))
@@ -489,8 +628,12 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
 
     work = Work()
     agent = ButlerRecoveryAgent(
-        store, provider_factory=lambda _: Provider(), harness_runtime=None,
-        artifact_store=ArtifactStore(tmp_path / "artifacts"), work=work, memory=None,
+        store,
+        provider_factory=lambda _: Provider(),
+        harness_runtime=None,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        work=work,
+        memory=None,
     )
     recovery = ButlerRecoveryService(store, agent)
     asyncio.run(recovery.process_project(project.id, worker_id))
@@ -499,14 +642,17 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
     assert cases[0].status == "verifying"
     assert cases[0].queued_item_id == "queued-1"
     assert [step["operation"] for step in cases[0].steps] == [
-        "nebula.work.chat_settings", "nebula.work.set_chat_settings",
+        "nebula.work.chat_settings",
+        "nebula.work.set_chat_settings",
         "nebula.work.message_chat",
     ]
-    assert work.changes == [{
-        "subagent_provider_id": provider.id,
-        "subagent_harness_profile_id": None,
-        "subagent_model": "model-a",
-    }]
+    assert work.changes == [
+        {
+            "subagent_provider_id": provider.id,
+            "subagent_harness_profile_id": None,
+            "subagent_model": "model-a",
+        }
+    ]
     assert work.validated[0][:3] == (project.id, provider.id, "model-a")
     assert len(work.targets) == 1
     assert work.targets[0][:2] == (project.id, parent.id)

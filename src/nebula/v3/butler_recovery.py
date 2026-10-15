@@ -63,7 +63,11 @@ IMMEDIATE_EVENTS = frozenset(
     {"agent.subagent_start_failed", "agent.attention_reported", "goal.blocked"}
 )
 PERIODIC_EVENTS = frozenset(
-    {"butler.periodic_check", "goal.progress_overdue", "goal.read_only_tool_failures_repeated"}
+    {
+        "butler.periodic_check",
+        "goal.progress_overdue",
+        "goal.read_only_tool_failures_repeated",
+    }
 )
 MODEL_TIMEOUT_SECONDS = 45
 MODEL_STEP_LIMIT = 8
@@ -91,9 +95,10 @@ _INSTRUCTIONS = (
 
 
 def recovery_case_id(project_id: str, source_event_id: str) -> str:
-    return "butler-recovery:" + hashlib.sha256(
-        f"{project_id}\0{source_event_id}".encode()
-    ).hexdigest()
+    return (
+        "butler-recovery:"
+        + hashlib.sha256(f"{project_id}\0{source_event_id}".encode()).hexdigest()
+    )
 
 
 def _failure_category(error: BaseException) -> tuple[str, str | None]:
@@ -117,7 +122,11 @@ def record_subagent_start_failure(
 ) -> None:
     """Save the exact Core-observed refusal beside the failed tool receipt."""
 
-    if call.tool_name != "subagent.start" or not call.chat_turn_id or not call.chat_session_id:
+    if (
+        call.tool_name != "subagent.start"
+        or not call.chat_turn_id
+        or not call.chat_session_id
+    ):
         return
     turn = _entity_in_transaction(transaction, ChatTurn, call.chat_turn_id)
     session = _entity_in_transaction(transaction, ChatSession, call.chat_session_id)
@@ -273,7 +282,9 @@ class ButlerRecoveryAgent:
         }
         return json.dumps(packet, ensure_ascii=False)[:16_000]
 
-    async def run(self, case: ButlerRecoveryCase) -> tuple[str, ChatBackend, str, str, str | None]:
+    async def run(
+        self, case: ButlerRecoveryCase
+    ) -> tuple[str, ChatBackend, str, str, str | None]:
         session = self._butler_session(case.engagement_id)
         config = chat_assistant_config(self.store, session)
         profile_id = config["profile_id"]
@@ -291,12 +302,17 @@ class ButlerRecoveryAgent:
                     profile.privacy.permits_sensitive_data
                     and profile.privacy.auto_share_tool_results
                 ):
-                    raise ValueError("Butler's harness is not authorized for unattended project tool results")
+                    raise ValueError(
+                        "Butler's harness is not authorized for unattended project tool results"
+                    )
                 turn = await self.harness_runtime.analyze_structured(
                     engagement_id=case.engagement_id,
                     profile_id=profile_id,
                     model=model,
-                    prompt=_INSTRUCTIONS + "\n\n<core_case_json>\n" + packet + "\n</core_case_json>",
+                    prompt=_INSTRUCTIONS
+                    + "\n\n<core_case_json>\n"
+                    + packet
+                    + "\n</core_case_json>",
                     nebula_tools=True,
                     butler_recovery_case_id=case.id,
                 )
@@ -312,7 +328,9 @@ class ButlerRecoveryAgent:
                 profile.privacy.permits_sensitive_data
                 and profile.privacy.auto_share_tool_results
             ):
-                raise ValueError("Butler's provider is not authorized for unattended project tool results")
+                raise ValueError(
+                    "Butler's provider is not authorized for unattended project tool results"
+                )
             provider = self.provider_factory(profile)
             validate_engagement_provider_privacy(
                 self.store, self.store.get(Engagement, case.engagement_id), provider
@@ -382,7 +400,9 @@ class ButlerRecoveryAgent:
                             is_error=is_error,
                             response_group=group,
                             response_text=response.text[:1000] if index == 0 else None,
-                            reasoning_state=response.reasoning_state if index == 0 else None,
+                            reasoning_state=response.reasoning_state
+                            if index == 0
+                            else None,
                             provider_metadata=call.provider_metadata,
                         )
                     )
@@ -396,7 +416,9 @@ class ButlerRecoveryService:
         self.store = store
         self.agent = agent
 
-    def _current_act(self, project_id: str, worker_id: str) -> ButlerAuthorityPolicy | None:
+    def _current_act(
+        self, project_id: str, worker_id: str
+    ) -> ButlerAuthorityPolicy | None:
         state = self.store.find_entity(ButlerProjectState, "engagement_id", project_id)
         if (
             state is None
@@ -408,7 +430,9 @@ class ButlerRecoveryService:
         project = self.store.get(Engagement, project_id)
         if project.status == EngagementStatus.ARCHIVED or not project.work_enabled:
             return None
-        policy = self.store.find_entity(ButlerAuthorityPolicy, "engagement_id", project_id)
+        policy = self.store.find_entity(
+            ButlerAuthorityPolicy, "engagement_id", project_id
+        )
         return policy if policy and policy.authority == "act" else None
 
     def fire_periodic_check(self, project_id: str, worker_id: str) -> bool:
@@ -478,8 +502,12 @@ class ButlerRecoveryService:
         payload = ButlerEventPayload.model_validate(event.payload)
         if payload.project_id != project_id:
             return None
-        tool_ref = next((ref for ref in payload.evidence_refs if ref.kind == "tool_call"), None)
-        turn_ref = next((ref for ref in payload.evidence_refs if ref.kind == "chat_turn"), None)
+        tool_ref = next(
+            (ref for ref in payload.evidence_refs if ref.kind == "tool_call"), None
+        )
+        turn_ref = next(
+            (ref for ref in payload.evidence_refs if ref.kind == "chat_turn"), None
+        )
         return ButlerRecoveryCase(
             id=recovery_case_id(project_id, event.id),
             engagement_id=project_id,
@@ -522,7 +550,8 @@ class ButlerRecoveryService:
                 or current.lease_owner != worker_id
                 or not current.lease_expires_at
                 or current.lease_expires_at <= utc_now()
-                or current.last_recovery_event_sequence != state.last_recovery_event_sequence
+                or current.last_recovery_event_sequence
+                != state.last_recovery_event_sequence
             ):
                 return 0
             current_policy = (
@@ -537,7 +566,10 @@ class ButlerRecoveryService:
             ):
                 return 0
             for case in candidates:
-                if _entity_in_transaction(transaction, ButlerRecoveryCase, case.id) is None:
+                if (
+                    _entity_in_transaction(transaction, ButlerRecoveryCase, case.id)
+                    is None
+                ):
                     transaction.add(case)
             transaction.update(
                 ButlerProjectState,
@@ -559,7 +591,9 @@ class ButlerRecoveryService:
             raise NotFoundError("Butler recovery source event is unavailable")
         return event
 
-    def _update_case(self, case: ButlerRecoveryCase, **changes: Any) -> ButlerRecoveryCase:
+    def _update_case(
+        self, case: ButlerRecoveryCase, **changes: Any
+    ) -> ButlerRecoveryCase:
         return self.store.update(
             ButlerRecoveryCase,
             case.id,
@@ -567,9 +601,7 @@ class ButlerRecoveryService:
             expected_revision=case.revision,
         )
 
-    def _claim_case(
-        self, project_id: str, worker_id: str
-    ) -> ButlerRecoveryCase | None:
+    def _claim_case(self, project_id: str, worker_id: str) -> ButlerRecoveryCase | None:
         policy = self._current_act(project_id, worker_id)
         if policy is None:
             return None
@@ -638,9 +670,7 @@ class ButlerRecoveryService:
             if case.started_at is None or case.started_at >= expired:
                 continue
             if case.queued_item_id:
-                self._update_case(
-                    case, status="verifying", next_check_at=utc_now()
-                )
+                self._update_case(case, status="verifying", next_check_at=utc_now())
             elif case.steps:
                 self._update_case(
                     case,
@@ -652,7 +682,11 @@ class ButlerRecoveryService:
                 policy = self.store.find_entity(
                     ButlerAuthorityPolicy, "engagement_id", project_id
                 )
-                if policy and policy.authority == "act" and policy.revision == case.authority_revision:
+                if (
+                    policy
+                    and policy.authority == "act"
+                    and policy.revision == case.authority_revision
+                ):
                     self._update_case(case, status="observed", started_at=None)
                 else:
                     self._update_case(
@@ -667,7 +701,11 @@ class ButlerRecoveryService:
     def verify_follow_up(self, case: ButlerRecoveryCase) -> ButlerRecoveryCase:
         """A queue receipt is intermediate; require the parent's new child result."""
 
-        if case.status != "verifying" or not case.queued_item_id or not case.target_session_id:
+        if (
+            case.status != "verifying"
+            or not case.queued_item_id
+            or not case.target_session_id
+        ):
             return case
         try:
             queue = self.store.get(ChatQueue, "chat-queue-" + case.target_session_id)
@@ -718,24 +756,31 @@ class ButlerRecoveryService:
                         finished_at=utc_now(),
                     )
                 if original.engagement_id != case.engagement_id:
-                    raise ValueError("original subagent request belongs to another project")
+                    raise ValueError(
+                        "original subagent request belongs to another project"
+                    )
                 task = original.arguments.get("task")
                 if isinstance(task, str) and task.strip():
                     original_task = " ".join(task.split()).casefold()
             if original_task is not None:
                 children = [
-                    child for child in children
+                    child
+                    for child in children
                     if " ".join(child.task.split()).casefold() == original_task
                 ]
             if children:
-                if any(child.status == ChatSubagentStatus.COMPLETED for child in children):
+                if any(
+                    child.status == ChatSubagentStatus.COMPLETED for child in children
+                ):
                     return self._update_case(
                         case,
                         status="resolved",
                         outcome="Core confirmed the parent retry started and completed a subagent.",
                         finished_at=utc_now(),
                     )
-                if all(child.status != ChatSubagentStatus.RUNNING for child in children):
+                if all(
+                    child.status != ChatSubagentStatus.RUNNING for child in children
+                ):
                     return self._update_case(
                         case,
                         status="needs_attention",
@@ -756,9 +801,7 @@ class ButlerRecoveryService:
                 outcome="The parent retry did not produce a confirmed result within 20 minutes.",
                 finished_at=utc_now(),
             )
-        return self._update_case(
-            case, next_check_at=utc_now() + timedelta(seconds=30)
-        )
+        return self._update_case(case, next_check_at=utc_now() + timedelta(seconds=30))
 
     async def process_project(self, project_id: str, worker_id: str) -> None:
         self.recover_interrupted_cases(project_id)
@@ -799,16 +842,24 @@ class ButlerRecoveryService:
             )
             return
         current = self.store.get(ButlerRecoveryCase, case.id)
-        policy = self.store.find_entity(ButlerAuthorityPolicy, "engagement_id", project_id)
+        policy = self.store.find_entity(
+            ButlerAuthorityPolicy, "engagement_id", project_id
+        )
         if current.queued_item_id:
             status = "verifying"
             outcome = "Butler queued a parent retry and is checking its actual result."
             next_check = utc_now() + timedelta(seconds=30)
-        elif any(step.get("status") in {"uncertain", "running"} for step in current.steps):
+        elif any(
+            step.get("status") in {"uncertain", "running"} for step in current.steps
+        ):
             status = "uncertain"
             outcome = "An action may have taken effect; inspect Core before retry."
             next_check = None
-        elif policy is None or policy.authority != "act" or policy.revision != case.authority_revision:
+        elif (
+            policy is None
+            or policy.authority != "act"
+            or policy.revision != case.authority_revision
+        ):
             status = "cancelled"
             outcome = "Act authority changed during the investigation."
             next_check = None
@@ -818,7 +869,11 @@ class ButlerRecoveryService:
             next_check = None
         else:
             read_core = any(step.get("status") == "applied" for step in current.steps)
-            status = "resolved" if case.trigger == "periodic" and read_core else "needs_attention"
+            status = (
+                "resolved"
+                if case.trigger == "periodic" and read_core
+                else "needs_attention"
+            )
             outcome = (
                 summary or "Butler found no safe automatic repair."
                 if read_core

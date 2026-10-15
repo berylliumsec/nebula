@@ -188,7 +188,9 @@ class ButlerCapabilities:
             raise ValueError("Butler Act authority or recovery case changed")
         return case
 
-    def _check_background_change_reason(self, case: ButlerRecoveryCase, name: str) -> None:
+    def _check_background_change_reason(
+        self, case: ButlerRecoveryCase, name: str
+    ) -> None:
         if case.signal != "agent.subagent_start_failed":
             return
         from .butler_oversight import ButlerEventPayload
@@ -202,13 +204,15 @@ class ButlerCapabilities:
             category == "permission_denied"
             and rule not in {"subagents.turned_off", "subagents.runtime_model"}
         ):
-            raise ValueError("Core's budget or policy refusal cannot be bypassed by Act")
+            raise ValueError(
+                "Core's budget or policy refusal cannot be bypassed by Act"
+            )
         if category == "capacity_reached" and name == "nebula.work.set_chat_settings":
-            raise ValueError("A full subagent slot is not a runtime configuration failure")
+            raise ValueError(
+                "A full subagent slot is not a runtime configuration failure"
+            )
 
-    def _begin_background_step(
-        self, operation: str, arguments: dict[str, Any]
-    ) -> str:
+    def _begin_background_step(self, operation: str, arguments: dict[str, Any]) -> str:
         from .butler_oversight import _entity_in_transaction
         from .butler_authority import policy_id
 
@@ -272,7 +276,9 @@ class ButlerCapabilities:
             if case is None:
                 return
             steps = list(case.steps)
-            index = next((i for i, row in enumerate(steps) if row.get("id") == step_id), None)
+            index = next(
+                (i for i, row in enumerate(steps) if row.get("id") == step_id), None
+            )
             if index is None or steps[index].get("status") != "running":
                 return
             steps[index] = {
@@ -503,7 +509,9 @@ class ButlerCapabilities:
         ]
         if not terms:
             return {
-                "categories": list(_CATEGORIES[:2] if self._background_case_id else _CATEGORIES),
+                "categories": list(
+                    _CATEGORIES[:2] if self._background_case_id else _CATEGORIES
+                ),
                 "suggested": [
                     name
                     for name in (
@@ -599,15 +607,22 @@ class ButlerCapabilities:
                 "nebula.work.message_chat",
                 "nebula.work.retry_chat_turn",
             }:
-                target = self._store.get(ChatSession, str(payload.get("session_id") or ""))
+                target = self._store.get(
+                    ChatSession, str(payload.get("session_id") or "")
+                )
                 if target.engagement_id != self._project_id or target.parent_session_id:
                     raise ValueError("background Butler may act only on a main chat")
             if change and name == "nebula.work.goal_action":
                 goal = self._store.get(ChatGoal, str(payload.get("goal_id") or ""))
                 if goal.engagement_id != self._project_id or goal.parent_goal_id:
                     raise ValueError("background Butler may act only on a main goal")
-            if name == "nebula.work.message_chat" and payload.get("delivery", "next") != "next":
-                raise ValueError("background Butler sends an idempotent next-turn follow-up")
+            if (
+                name == "nebula.work.message_chat"
+                and payload.get("delivery", "next") != "next"
+            ):
+                raise ValueError(
+                    "background Butler sends an idempotent next-turn follow-up"
+                )
             if name == "nebula.work.set_chat_settings" and self._work is not None:
                 settings = payload.get("settings")
                 if isinstance(settings, dict) and any(
@@ -622,7 +637,9 @@ class ButlerCapabilities:
                         self._project_id, payload.get("session_id")
                     )
                     selected = {**current["settings"], **settings}
-                    if selected.get("backend") == "harness" and selected.get("allow_subagents"):
+                    if selected.get("backend") == "harness" and selected.get(
+                        "allow_subagents"
+                    ):
                         self._work.chat.subagents.validate_harness_setting(
                             self._project_id,
                             selected.get("subagent_provider_id") or "",

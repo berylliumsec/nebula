@@ -8,7 +8,13 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES, ButlerCapabilities
 from nebula.v3.butler_authority import policy_id
-from nebula.v3.domain import ButlerAuthorityPolicy, ButlerRecoveryCase, ChatSession, Engagement, ProviderProfile
+from nebula.v3.domain import (
+    ButlerAuthorityPolicy,
+    ButlerRecoveryCase,
+    ChatSession,
+    Engagement,
+    ProviderProfile,
+)
 from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
 
@@ -160,21 +166,38 @@ def test_butler_browser_action_is_not_reported_as_saved_state(tmp_path):
 
 def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
     store, selected, parent, _, ordinary = _capabilities(tmp_path)
-    policy = store.create(ButlerAuthorityPolicy(
-        id=policy_id(selected.id), engagement_id=selected.id, authority="act"
-    ))
-    case = store.create(ButlerRecoveryCase(
-        engagement_id=selected.id, trigger="immediate", signal="goal.blocked",
-        source_event_id="event-1", source_event_sequence=1,
-        authority_revision=policy.revision, status="investigating", summary="Subagent failed",
-    ))
-    child = store.create(ChatSession(
-        engagement_id=selected.id, title="Child", parent_session_id=parent.id,
-        provider_profile_id=parent.provider_profile_id, model=parent.model,
-    ))
+    policy = store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(selected.id), engagement_id=selected.id, authority="act"
+        )
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=selected.id,
+            trigger="immediate",
+            signal="goal.blocked",
+            source_event_id="event-1",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="investigating",
+            summary="Subagent failed",
+        )
+    )
+    child = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Child",
+            parent_session_id=parent.id,
+            provider_profile_id=parent.provider_profile_id,
+            model=parent.model,
+        )
+    )
     background = ButlerCapabilities(
-        store, ArtifactStore(tmp_path / "artifacts"), selected.id,
-        work=ordinary._work, background_case_id=case.id,
+        store,
+        ArtifactStore(tmp_path / "artifacts"),
+        selected.id,
+        work=ordinary._work,
+        background_case_id=case.id,
     )
 
     async def scenario():
@@ -183,9 +206,17 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
         with pytest.raises(ValueError, match="listed operation"):
             await background.describe({"operation": "nebula.work.delete_chat"})
         with pytest.raises(ValueError, match="main chat"):
-            await background.invoke({"operation": "nebula.work.message_chat", "arguments": {
-                "session_id": child.id, "text": "Retry work", "delivery": "next",
-            }}, change=True)
+            await background.invoke(
+                {
+                    "operation": "nebula.work.message_chat",
+                    "arguments": {
+                        "session_id": child.id,
+                        "text": "Retry work",
+                        "delivery": "next",
+                    },
+                },
+                change=True,
+            )
         assert store.get(ButlerRecoveryCase, case.id).steps == []
 
     asyncio.run(scenario())

@@ -4189,7 +4189,13 @@ class ButlerRecoveryCase(Entity):
     goal_id: str | None = Field(default=None, max_length=200)
     authority_revision: int = Field(ge=1)
     status: Literal[
-        "observed", "investigating", "verifying", "resolved", "needs_attention", "uncertain", "cancelled"
+        "observed",
+        "investigating",
+        "verifying",
+        "resolved",
+        "needs_attention",
+        "uncertain",
+        "cancelled",
     ] = "observed"
     summary: str = Field(min_length=1, max_length=500)
     outcome: str = Field(default="", max_length=1000)
