@@ -2731,7 +2731,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     })()
       .then((page) => {
         if (controller.signal.aborted || activeEngagementIdRef.current !== projectId || fullListProjectRef.current === projectId) return;
-        setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+        setSessions((current) => embeddedSideChat
+          ? page.items
+          : mergeRecentListedSessions(current.filter(item => item.engagementId === projectId), page.items, !page.nextOffset));
         setSessionNextOffset(page.nextOffset);
       })
       .catch((error) => {
@@ -4701,7 +4703,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (embeddedSideChat || !api || !engagement || !requestedSessionId) return;
     const controller = new AbortController();
     void api.getChatSession(requestedSessionId, controller.signal).then((selected) => {
-      if (controller.signal.aborted || !selected.isSideChat || !selected.parentSessionId || selected.engagementId !== engagement.id) return;
+      if (controller.signal.aborted || selected.engagementId !== engagement.id) return;
+      if (!selected.isSideChat) {
+        // The exact lookup also restores deep links outside the recent page.
+        // The initial page merges with this result regardless of answer order.
+        setSessions(current => mergeRecentListedSessions(current.filter(item => item.engagementId === engagement.id), [selected]));
+        return;
+      }
+      if (!selected.parentSessionId) return;
       updateSearchParams(params => {
         if (params.get("session") !== selected.id) return;
         params.set("view", "chat");
@@ -4715,26 +4724,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     });
     return () => controller.abort();
   }, [api, embeddedSideChat, engagement?.id, requestedSessionId, updateSearchParams]);
-
-  const missingRequestedSessionRef = useRef("");
-  useEffect(() => {
-    if (!api || !engagement || !requestedSessionId || sessions.some(item => item.id === requestedSessionId)) return;
-    const key = `${engagement.id}:${requestedSessionId}`;
-    if (missingRequestedSessionRef.current === key) return;
-    missingRequestedSessionRef.current = key;
-    const controller = new AbortController();
-    void api.getChatSession(requestedSessionId, controller.signal).then((item) => {
-      if (!controller.signal.aborted && item.engagementId === engagement.id && !item.isSideChat) {
-        setSessions(current => current.some(existing => existing.id === item.id) ? current : [item, ...current]);
-      }
-    }).catch((error) => {
-      if (!controller.signal.aborted) {
-        void logCaughtDiagnostic("interface.sessions_page.requested_chat_load_failed", "The requested conversation could not be opened.", error, "sessions_page");
-        setChatError(error instanceof Error ? error.message : "Could not open this conversation.");
-      }
-    });
-    return () => controller.abort();
-  }, [api, engagement?.id, requestedSessionId, sessions]);
 
   useEffect(() => {
     const pendingNavigation = pendingSessionNavigationRef.current;
