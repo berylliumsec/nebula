@@ -14561,6 +14561,64 @@ reloadTest("notebook Workbench tab and chat companion keep the same Python file:
   await expect(panel.getByRole("combobox", {name: "Notebook"})).toHaveValue("indexed.ipynb");
 });
 
+reloadTest("assistant popup keeps Butler reply tables readable and contained after reload", async ({page}) => {
+  await installTruthfulCore(page);
+  const sessionId = "butler-table";
+  const answer = [
+    "Three assistants are active in this sample project.",
+    "",
+    "| Goal | What its assistants are checking |",
+    "| --- | --- |",
+    "| Sample Project | One is checking the next task and its owner. |",
+    "| Documentation | One is checking the draft for open questions. |",
+    "| Support | One is checking the request queue for updates. |",
+    "",
+    "| Goal | Long result | Owner | Revision |",
+    "| --- | --- | --- | --- |",
+    "| Sample Project | Checking the next task | Sample assistant | https://example.test/evidence/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |",
+  ].join("\n");
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat/control-assistant/session")) return route.fulfill({json: {
+      ...entity, id: sessionId, engagement_id: "scratch-project", title: "Butler",
+      backend: "harness", harness_profile_id: "local", model: "model", metadata: {control_assistant: true},
+    }});
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) return route.fulfill({json: [{
+      ...entity, id: "butler-table-answer", engagement_id: "scratch-project", session_id: sessionId,
+      sequence: 1, role: "assistant", content: answer, citations: [], metadata: {},
+    }]});
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", {name: "Open Butler"}).click();
+  const butler = page.getByRole("dialog", {name: "Butler"});
+  const tables = butler.getByRole("region", {name: "Butler response table"});
+  await expect(tables).toHaveCount(2);
+  await expect(tables.first().getByRole("cell", {name: "Sample Project"})).toBeVisible();
+  const verifyLayout = async () => {
+    const goal = tables.first().getByRole("cell", {name: "Sample Project"});
+    const width = await goal.evaluate(cell => cell.getBoundingClientRect().width);
+    expect(width).toBeGreaterThanOrEqual(80);
+    const overflow = await tables.last().evaluate(element => ({
+      scroll: element.scrollWidth, client: element.clientWidth,
+      right: element.getBoundingClientRect().right,
+    }));
+    expect(overflow.scroll).toBeGreaterThan(overflow.client);
+    expect(overflow.right).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  };
+  await verifyLayout();
+  await tables.last().focus();
+  await expect(tables.last()).toBeFocused();
+  await tables.last().evaluate(element => { element.scrollLeft = element.scrollWidth; });
+  expect(await tables.last().evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  await page.reload();
+  await page.getByRole("button", {name: "Open Butler"}).click();
+  await expect(tables).toHaveCount(2);
+  await verifyLayout();
+});
+
 reloadTest("iPhone assistant shell keeps chat and pending actions reachable without work tools", async ({page}, testInfo) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
