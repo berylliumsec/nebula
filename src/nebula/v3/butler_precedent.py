@@ -22,6 +22,8 @@ _QUERIES = {
     "goal.plan_changed": "investigation plan change correction precedent lesson",
     "goal.blocked": "blocked investigation recovery parent agent precedent lesson",
     "goal.read_only_tool_failures_repeated": "repeated read only tool failure parent agent reassessment lesson",
+    "agent.subagent_start_failed": "subagent start refusal harness provider runtime recovery parent lesson",
+    "butler.periodic_check": "running goal stalled work blocker provider tools parent agent lesson",
 }
 
 

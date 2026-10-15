@@ -7,7 +7,7 @@ type OverviewState = {
   projectId: string;
   overview?: ButlerOverview;
   loading: boolean;
-  loadingMore?: "watch" | "incident" | "action" | "resource";
+  loadingMore?: "watch" | "incident" | "action" | "recovery" | "resource";
   error?: string;
 };
 
@@ -76,10 +76,10 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
     return () => window.clearInterval(interval);
   }, [api, coreState, refresh]);
 
-  const loadMore = useCallback(async (kind: "watch" | "incident" | "action" | "resource") => {
+  const loadMore = useCallback(async (kind: "watch" | "incident" | "action" | "recovery" | "resource") => {
     const current = state.projectId === projectId ? state.overview : undefined;
     const offset = kind === "watch" ? current?.nextWatchOffset : kind === "incident" ? current?.nextIncidentOffset
-      : kind === "action" ? current?.nextActionOffset : current?.nextResourceOffset;
+      : kind === "action" ? current?.nextActionOffset : kind === "recovery" ? current?.nextRecoveryOffset : current?.nextResourceOffset;
     if (!api || coreState !== "online" || !current || offset === undefined || state.loading || state.loadingMore) return;
     request.current?.abort();
     const controller = new AbortController();
@@ -88,7 +88,7 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
     try {
       const next = await getButlerOverview(api, projectId, controller.signal,
         kind === "watch" ? { watch: offset } : kind === "incident" ? { incident: offset }
-          : kind === "action" ? { action: offset } : { resource: offset });
+          : kind === "action" ? { action: offset } : kind === "recovery" ? { recovery: offset } : { resource: offset });
       if (!controller.signal.aborted) setState((previous) => {
         if (previous.projectId !== projectId || !previous.overview) return previous;
         const before = previous.overview;
@@ -103,12 +103,16 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
           actions: kind === "action"
             ? [...new Map([...before.actions, ...next.actions].map((action) => [action.id, action])).values()]
             : before.actions,
+          recoveryCases: kind === "recovery"
+            ? [...new Map([...before.recoveryCases, ...next.recoveryCases].map((item) => [item.id, item])).values()]
+            : before.recoveryCases,
           resources: kind === "resource"
             ? [...new Map([...before.resources, ...next.resources].map((resource) => [butlerResourceKey(resource), resource])).values()]
             : before.resources,
           nextWatchOffset: kind === "watch" ? next.nextWatchOffset : before.nextWatchOffset,
           nextIncidentOffset: kind === "incident" ? next.nextIncidentOffset : before.nextIncidentOffset,
           nextActionOffset: kind === "action" ? next.nextActionOffset : before.nextActionOffset,
+          nextRecoveryOffset: kind === "recovery" ? next.nextRecoveryOffset : before.nextRecoveryOffset,
           nextResourceOffset: kind === "resource" ? next.nextResourceOffset : before.nextResourceOffset,
         } };
       });

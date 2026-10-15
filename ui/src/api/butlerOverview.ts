@@ -1,6 +1,6 @@
 import type { ApiClient } from "./client";
 
-export type ButlerAuthority = "watch" | "steer" | "delegate";
+export type ButlerAuthority = "watch" | "steer" | "delegate" | "act";
 export type ButlerActorRole = "main_agent" | "subagent";
 export type ButlerDelegateAction = "pause_urgent_machine_blocker";
 
@@ -80,6 +80,20 @@ export interface ButlerAction {
   finishedAt?: string;
 }
 
+export interface ButlerRecoveryCase {
+  id: string;
+  trigger: "immediate" | "periodic";
+  signal: string;
+  status: "observed" | "investigating" | "verifying" | "resolved" | "needs_attention" | "uncertain" | "cancelled";
+  summary: string;
+  outcome: string;
+  sourceSessionId?: string;
+  targetSessionId?: string;
+  createdAt?: string;
+  finishedAt?: string;
+  steps: Array<{ id: string; operation: string; status: string; started_at?: string; finished_at?: string }>;
+}
+
 export interface ButlerOpenRouterResource {
   kind: "openrouter_account";
   providerId: string;
@@ -120,19 +134,22 @@ export interface ButlerOverview {
   incidents: ButlerIncident[];
   decisions: ButlerDecision[];
   actions: ButlerAction[];
+  recoveryCases: ButlerRecoveryCase[];
   resources: ButlerResource[];
   lastEventSequence: number;
   coverageGaps: string[];
-  summary: { watchedGoals: number; openIncidents: number; acknowledgedIncidents: number; resolvedIncidents: number; actions: number; accountResources: number; harnessQuotaResources: number };
+  summary: { watchedGoals: number; openIncidents: number; acknowledgedIncidents: number; resolvedIncidents: number; actions: number; recoveryCases: number; recoveryAttention: number; recoveryActive: number; accountResources: number; harnessQuotaResources: number };
   nextWatchOffset?: number;
   nextIncidentOffset?: number;
   nextActionOffset?: number;
+  nextRecoveryOffset?: number;
   nextResourceOffset?: number;
   capabilities: {
     authorityLevels: ButlerAuthority[];
     incidents: boolean;
     decisions: boolean;
     actions: boolean;
+    recovery: boolean;
     agentReports: boolean;
     machineAlerts: boolean;
     resourceAlerts: boolean;
@@ -204,6 +221,19 @@ interface WireButlerOverview {
     started_at?: string | null;
     finished_at?: string | null;
   }>;
+  recovery_cases?: Array<{
+    id: string;
+    trigger: ButlerRecoveryCase["trigger"];
+    signal: string;
+    status: ButlerRecoveryCase["status"];
+    summary: string;
+    outcome: string;
+    source_session_id?: string | null;
+    target_session_id?: string | null;
+    created_at?: string | null;
+    finished_at?: string | null;
+    steps?: ButlerRecoveryCase["steps"];
+  }>;
   resources?: Array<{
     kind: "openrouter_account";
     provider_id: string;
@@ -227,16 +257,18 @@ interface WireButlerOverview {
   }>;
   last_event_sequence?: number;
   coverage_gaps?: string[];
-  summary?: { watched_goals: number; open_incidents: number; acknowledged_incidents: number; resolved_incidents: number; actions?: number; account_resources?: number; harness_quota_resources?: number };
+  summary?: { watched_goals: number; open_incidents: number; acknowledged_incidents: number; resolved_incidents: number; actions?: number; recovery_cases?: number; recovery_attention?: number; recovery_active?: number; account_resources?: number; harness_quota_resources?: number };
   next_watch_offset?: number | null;
   next_incident_offset?: number | null;
   next_action_offset?: number | null;
+  next_recovery_offset?: number | null;
   next_resource_offset?: number | null;
   capabilities?: {
     authority_levels?: ButlerAuthority[];
     incidents?: boolean;
     decisions?: boolean;
     actions?: boolean;
+    recovery?: boolean;
     agent_reports?: boolean;
     machine_alerts?: boolean;
     resource_alerts?: boolean;
@@ -246,12 +278,13 @@ interface WireButlerOverview {
 
 /** Read the selected project's durable oversight snapshot through normal Core auth. */
 export async function getButlerOverview(api: ApiClient, projectId: string, signal?: AbortSignal, offsets?: {
-  watch?: number; incident?: number; action?: number; resource?: number;
+  watch?: number; incident?: number; action?: number; recovery?: number; resource?: number;
 }): Promise<ButlerOverview> {
   const query = new URLSearchParams();
   if (offsets?.watch) query.set("watch_offset", String(offsets.watch));
   if (offsets?.incident) query.set("incident_offset", String(offsets.incident));
   if (offsets?.action) query.set("action_offset", String(offsets.action));
+  if (offsets?.recovery) query.set("recovery_offset", String(offsets.recovery));
   if (offsets?.resource) query.set("resource_offset", String(offsets.resource));
   const wire = await api.request<WireButlerOverview>(
     `engagements/${encodeURIComponent(projectId)}/butler/overview${query.size ? `?${query}` : ""}`, { signal },
@@ -326,6 +359,19 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       startedAt: action.started_at ?? undefined,
       finishedAt: action.finished_at ?? undefined,
     })),
+    recoveryCases: (wire.recovery_cases ?? []).map((item) => ({
+      id: item.id,
+      trigger: item.trigger,
+      signal: item.signal,
+      status: item.status,
+      summary: item.summary,
+      outcome: item.outcome,
+      sourceSessionId: item.source_session_id ?? undefined,
+      targetSessionId: item.target_session_id ?? undefined,
+      createdAt: item.created_at ?? undefined,
+      finishedAt: item.finished_at ?? undefined,
+      steps: item.steps ?? [],
+    })),
     resources: (wire.resources ?? []).map((resource): ButlerResource => resource.kind === "harness_quota" ? ({
       kind: resource.kind,
       harnessProfileId: resource.harness_profile_id,
@@ -355,18 +401,23 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       acknowledgedIncidents: wire.summary?.acknowledged_incidents ?? wire.incidents?.filter((item) => item.status === "acknowledged").length ?? 0,
       resolvedIncidents: wire.summary?.resolved_incidents ?? 0,
       actions: wire.summary?.actions ?? wire.actions?.length ?? 0,
+      recoveryCases: wire.summary?.recovery_cases ?? wire.recovery_cases?.length ?? 0,
+      recoveryAttention: wire.summary?.recovery_attention ?? wire.recovery_cases?.filter((item) => ["needs_attention", "uncertain"].includes(item.status)).length ?? 0,
+      recoveryActive: wire.summary?.recovery_active ?? wire.recovery_cases?.filter((item) => ["observed", "investigating", "verifying"].includes(item.status)).length ?? 0,
       accountResources: wire.summary?.account_resources ?? wire.resources?.filter((item) => item.kind === "openrouter_account").length ?? 0,
       harnessQuotaResources: wire.summary?.harness_quota_resources ?? wire.resources?.filter((item) => item.kind === "harness_quota").length ?? 0,
     },
     nextWatchOffset: wire.next_watch_offset ?? undefined,
     nextIncidentOffset: wire.next_incident_offset ?? undefined,
     nextActionOffset: wire.next_action_offset ?? undefined,
+    nextRecoveryOffset: wire.next_recovery_offset ?? undefined,
     nextResourceOffset: wire.next_resource_offset ?? undefined,
     capabilities: {
       authorityLevels: wire.capabilities?.authority_levels ?? ["watch"],
       incidents: wire.capabilities?.incidents ?? false,
       decisions: wire.capabilities?.decisions ?? false,
       actions: wire.capabilities?.actions ?? false,
+      recovery: wire.capabilities?.recovery ?? false,
       agentReports: wire.capabilities?.agent_reports ?? false,
       machineAlerts: wire.capabilities?.machine_alerts ?? false,
       resourceAlerts: wire.capabilities?.resource_alerts ?? false,
@@ -414,7 +465,7 @@ export async function updateButlerAuthority(api: ApiClient, policy: ButlerAuthor
   delegateActions: ButlerDelegateAction[]): Promise<ButlerAuthorityPolicy> {
   const wire = await api.request<WireButlerAuthorityPolicy>(`engagements/${encodeURIComponent(policy.projectId)}/butler/authority`, {
     method: "PUT",
-    body: JSON.stringify({ authority, delegate_actions: authority === "delegate" ? delegateActions : [], expected_revision: policy.revision }),
+    body: JSON.stringify({ authority, delegate_actions: authority === "delegate" || authority === "act" ? delegateActions : [], expected_revision: policy.revision }),
   });
   return mapAuthorityPolicy(wire, policy.projectId);
 }

@@ -7,17 +7,26 @@ are advertised to a model; the exact action schema is returned on demand.
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 from typing import Any
+from uuid import uuid4
 
 from jsonschema import Draft202012Validator, ValidationError
 
 from .domain import (
     ChatMessage,
+    ChatGoal,
     ChatRole,
+    ChatSession,
     ChatTurn,
     Engagement,
+    EngagementStatus,
+    ButlerAuthorityPolicy,
+    ButlerRecoveryCase,
     RiskClass,
     message_is_replaced,
+    utc_now,
 )
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
@@ -56,6 +65,17 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.headless_session",
     }
 )
+_BACKGROUND_CHANGES = frozenset(
+    {
+        "nebula.work.set_chat_settings",
+        "nebula.work.message_chat",
+        "nebula.work.goal_action",
+        "nebula.work.decide_approval",
+        "nebula.work.retry_chat_turn",
+        "nebula.work.retry_mission",
+    }
+)
+_BACKGROUND_STEP_LIMIT = 12
 _CATEGORIES = (
     {
         "id": "work",
@@ -109,6 +129,7 @@ class ButlerCapabilities:
         memory: Any = None,
         operator_message: str = "",
         operator_turn_id: str | None = None,
+        background_case_id: str | None = None,
     ) -> None:
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
@@ -118,6 +139,8 @@ class ButlerCapabilities:
         self._memory = memory
         self._operator_message = operator_message
         self._operator_turn_id = operator_turn_id
+        self._background_case_id = background_case_id
+        self._work = work
         self._actions = {
             plugin.spec.name: plugin
             for plugin in provider_plugins(
@@ -133,6 +156,152 @@ class ButlerCapabilities:
         if memory is not None:
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in self._memory_actions()}
+            )
+        if background_case_id is not None:
+            self._actions = {
+                name: plugin
+                for name, plugin in self._actions.items()
+                if name in _BACKGROUND_CHANGES
+                or name in {"nebula.memory.search", "nebula.memory.list"}
+                or name.startswith("nebula.work.")
+                and name != "nebula.work.catalog"
+                and self._read_only(plugin)
+            }
+
+    def _background_case(self) -> ButlerRecoveryCase:
+        if self._background_case_id is None:
+            raise RuntimeError("not a background Butler action")
+        case = self._store.get(ButlerRecoveryCase, self._background_case_id)
+        project = self._store.get(Engagement, self._project_id)
+        policy = self._store.find_entity(
+            ButlerAuthorityPolicy, "engagement_id", self._project_id
+        )
+        if (
+            case.engagement_id != self._project_id
+            or case.status != "investigating"
+            or project.status == EngagementStatus.ARCHIVED
+            or not project.work_enabled
+            or policy is None
+            or policy.authority != "act"
+            or policy.revision != case.authority_revision
+        ):
+            raise ValueError("Butler Act authority or recovery case changed")
+        return case
+
+    def _check_background_change_reason(
+        self, case: ButlerRecoveryCase, name: str
+    ) -> None:
+        if case.signal != "agent.subagent_start_failed":
+            return
+        from .butler_oversight import ButlerEventPayload
+        from .butler_recovery import ButlerRecoveryService
+
+        event = ButlerRecoveryService(self._store).source_event(case)
+        metrics = ButlerEventPayload.model_validate(event.payload).metrics
+        category = metrics.get("category")
+        rule = metrics.get("rule")
+        if category == "budget_exhausted" or (
+            category == "permission_denied"
+            and rule not in {"subagents.turned_off", "subagents.runtime_model"}
+        ):
+            raise ValueError(
+                "Core's budget or policy refusal cannot be bypassed by Act"
+            )
+        if category == "capacity_reached" and name == "nebula.work.set_chat_settings":
+            raise ValueError(
+                "A full subagent slot is not a runtime configuration failure"
+            )
+
+    def _begin_background_step(self, operation: str, arguments: dict[str, Any]) -> str:
+        from .butler_oversight import _entity_in_transaction
+        from .butler_authority import policy_id
+
+        case = self._background_case()
+        step_id = str(uuid4())
+        digest = hashlib.sha256(
+            json.dumps(arguments, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        with self._store.transaction(immediate=True) as transaction:
+            current = _entity_in_transaction(transaction, ButlerRecoveryCase, case.id)
+            policy = _entity_in_transaction(
+                transaction,
+                ButlerAuthorityPolicy,
+                policy_id(self._project_id),
+            )
+            if (
+                current is None
+                or current.status != "investigating"
+                or current.revision != case.revision
+                or len(current.steps) >= _BACKGROUND_STEP_LIMIT
+                or policy is None
+                or policy.authority != "act"
+                or policy.revision != current.authority_revision
+            ):
+                raise ValueError("Butler recovery step budget or state changed")
+            transaction.update(
+                ButlerRecoveryCase,
+                current.id,
+                {
+                    "steps": [
+                        *current.steps,
+                        {
+                            "id": step_id,
+                            "operation": operation,
+                            "arguments_sha256": digest,
+                            "status": "running",
+                            "started_at": utc_now().isoformat(),
+                        },
+                    ]
+                },
+                expected_revision=current.revision,
+            )
+        return step_id
+
+    def _finish_background_step(
+        self,
+        step_id: str,
+        *,
+        operation: str,
+        arguments: dict[str, Any],
+        result: dict[str, Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        from .butler_oversight import _entity_in_transaction
+
+        assert self._background_case_id is not None
+        with self._store.transaction(immediate=True) as transaction:
+            case = _entity_in_transaction(
+                transaction, ButlerRecoveryCase, self._background_case_id
+            )
+            if case is None:
+                return
+            steps = list(case.steps)
+            index = next(
+                (i for i, row in enumerate(steps) if row.get("id") == step_id), None
+            )
+            if index is None or steps[index].get("status") != "running":
+                return
+            steps[index] = {
+                **steps[index],
+                "status": (
+                    "uncertain"
+                    if error and operation in _BACKGROUND_CHANGES
+                    else "failed"
+                    if error
+                    else "applied"
+                ),
+                "finished_at": utc_now().isoformat(),
+                **({"error_type": type(error).__name__} if error else {}),
+            }
+            updates: dict[str, Any] = {"steps": steps}
+            if error is None and operation == "nebula.work.message_chat":
+                updates["queued_item_id"] = result.get("item_id") if result else None
+                updates["target_session_id"] = arguments.get("session_id")
+            transaction.update(
+                ButlerRecoveryCase,
+                case.id,
+                updates,
+                expected_revision=case.revision,
             )
 
     def _memory_actions(self) -> list[AnalysisTool]:
@@ -307,6 +476,25 @@ class ButlerCapabilities:
             and plugin.spec.name not in _BROWSER_ACTIONS
         )
 
+    def _description(self, plugin: AnalysisTool) -> str:
+        description = plugin.spec.description
+        if self._background_case_id is None:
+            return description
+        return (
+            description.replace(
+                "after explicit operator instruction",
+                "under the project's standing Act authority",
+            )
+            .replace(
+                "after the operator explicitly directs that decision",
+                "under the project's standing Act authority after reading the exact request",
+            )
+            .replace(
+                "only when the operator requested it",
+                "when needed to repair the observed project work under Act authority",
+            )
+        )
+
     async def search(self, arguments: dict[str, Any]) -> dict[str, Any]:
         query = arguments.get("query", "")
         if not isinstance(query, str) or len(query) > 200:
@@ -321,20 +509,26 @@ class ButlerCapabilities:
         ]
         if not terms:
             return {
-                "categories": list(_CATEGORIES),
+                "categories": list(
+                    _CATEGORIES[:2] if self._background_case_id else _CATEGORIES
+                ),
                 "suggested": [
-                    "nebula.work.overview",
-                    "nebula.work.attention",
-                    "nebula.help.search",
-                    "nebula.settings.catalog",
-                    "nebula.memory.search",
+                    name
+                    for name in (
+                        "nebula.work.overview",
+                        "nebula.work.attention",
+                        "nebula.memory.search",
+                        "nebula.help.search",
+                        "nebula.settings.catalog",
+                    )
+                    if name in self._actions
                 ],
                 "hint": "Search for the requested action, then describe its exact fields.",
             }
         ranked: list[tuple[int, str, AnalysisTool]] = []
         for name, plugin in self._actions.items():
             title = name.lower()
-            description = plugin.spec.description.lower()
+            description = self._description(plugin).lower()
 
             def match(term: str, candidate: str) -> bool:
                 return term in candidate or (len(term) >= 5 and term[:5] in candidate)
@@ -350,7 +544,7 @@ class ButlerCapabilities:
             "matches": [
                 {
                     "operation": name,
-                    "description": plugin.spec.description,
+                    "description": self._description(plugin),
                     "read_only": self._read_only(plugin),
                 }
                 for _, name, plugin in ranked[offset : offset + 12]
@@ -369,7 +563,7 @@ class ButlerCapabilities:
         plugin = self._actions[name]
         return {
             "operation": name,
-            "description": plugin.spec.description,
+            "description": self._description(plugin),
             "input_schema": plugin.spec.input_schema,
             "read_only": self._read_only(plugin),
             "invoke_with": (
@@ -401,7 +595,85 @@ class ButlerCapabilities:
                 f"invalid arguments for {name}: {exc.message}; "
                 "call nebula.capabilities.describe for its exact schema"
             ) from exc
-        result = await plugin._handler(payload)
+        step_id: str | None = None
+        if self._background_case_id is not None:
+            case = self._background_case()
+            if change and name not in _BACKGROUND_CHANGES:
+                raise ValueError("this operation is unavailable to background Butler")
+            if change:
+                self._check_background_change_reason(case, name)
+            if change and name in {
+                "nebula.work.set_chat_settings",
+                "nebula.work.message_chat",
+                "nebula.work.retry_chat_turn",
+            }:
+                target = self._store.get(
+                    ChatSession, str(payload.get("session_id") or "")
+                )
+                if target.engagement_id != self._project_id or target.parent_session_id:
+                    raise ValueError("background Butler may act only on a main chat")
+            if change and name == "nebula.work.goal_action":
+                goal = self._store.get(ChatGoal, str(payload.get("goal_id") or ""))
+                if goal.engagement_id != self._project_id or goal.parent_goal_id:
+                    raise ValueError("background Butler may act only on a main goal")
+            if (
+                name == "nebula.work.message_chat"
+                and payload.get("delivery", "next") != "next"
+            ):
+                raise ValueError(
+                    "background Butler sends an idempotent next-turn follow-up"
+                )
+            if name == "nebula.work.set_chat_settings" and self._work is not None:
+                settings = payload.get("settings")
+                if isinstance(settings, dict) and any(
+                    key in settings
+                    for key in (
+                        "subagent_provider_id",
+                        "subagent_harness_profile_id",
+                        "subagent_model",
+                    )
+                ):
+                    current = self._work.chat_settings(
+                        self._project_id, payload.get("session_id")
+                    )
+                    selected = {**current["settings"], **settings}
+                    if selected.get("backend") == "harness" and selected.get(
+                        "allow_subagents"
+                    ):
+                        self._work.chat.subagents.validate_harness_setting(
+                            self._project_id,
+                            selected.get("subagent_provider_id") or "",
+                            selected.get("subagent_model") or "",
+                            selected.get("max_active_subagents"),
+                            selected.get("subagent_reasoning_effort"),
+                            selected.get("subagent_harness_profile_id"),
+                        )
+            step_id = self._begin_background_step(name, payload)
+            self._background_case()
+        try:
+            if (
+                self._background_case_id is not None
+                and name == "nebula.work.message_chat"
+                and self._work is not None
+                and step_id is not None
+            ):
+                result = await self._work.message_chat(
+                    self._project_id,
+                    payload,
+                    idempotency_key=f"recovery:{self._background_case_id}:{step_id}",
+                )
+            else:
+                result = await plugin._handler(payload)
+        except BaseException as exc:
+            if step_id is not None:
+                self._finish_background_step(
+                    step_id, operation=name, arguments=payload, error=exc
+                )
+            raise
+        if step_id is not None:
+            self._finish_background_step(
+                step_id, operation=name, arguments=payload, result=result
+            )
         return {
             **result,
             "butler_operation": name,
@@ -433,7 +705,9 @@ class ButlerCapabilities:
             ),
             (
                 "nebula.capabilities.change",
-                "Run one described project-scoped change only when the operator requested it. Core checks target, revision and permissions; report saved state or pending browser action accurately.",
+                "Run one described project-scoped change under this project's standing Act authority. Core checks target, revision and permissions; report saved state accurately."
+                if self._background_case_id is not None
+                else "Run one described project-scoped change only when the operator requested it. Core checks target, revision and permissions; report saved state or pending browser action accurately.",
                 _INVOKE_SCHEMA,
                 RiskClass.WORKSPACE_WRITE,
                 lambda args: self.invoke(args, change=True),

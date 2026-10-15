@@ -694,6 +694,7 @@ CUSTOM_RESOURCES = {
     "butler_decisions",
     "butler_authority_policies",
     "butler_actions",
+    "butler_recovery_cases",
     "butler_agent_reports",
     "butler_account_credits",
     "butler_harness_quotas",
@@ -2646,6 +2647,26 @@ def create_app(
         store, control_assistant_work, memory_service=butler_memory_service
     )
     butler_oversight.authority_service = butler_authority
+    from .butler_recovery import ButlerRecoveryAgent, ButlerRecoveryService
+
+    butler_oversight.recovery_service = ButlerRecoveryService(
+        store,
+        ButlerRecoveryAgent(
+            store,
+            provider_factory=provider_factory,
+            harness_runtime=harness_runtime,
+            artifact_store=artifact_store,
+            work=control_assistant_work,
+            memory=butler_memory_service,
+            settings_api=settings_assistant_api,
+            notebooks=(
+                harness_runtime.mcp_service.notebook_tools.notebooks
+                if harness_runtime.mcp_service is not None
+                and harness_runtime.mcp_service.notebook_tools is not None
+                else None
+            ),
+        ),
+    )
     if tool_platform is not None:
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
         tool_platform.bind_control_assistant_work(control_assistant_work)
