@@ -1,13 +1,13 @@
 {
-  "change_digest": "54e72d0e5cd27caedd6843a79d129acabbdba1e069eef56dee311d074485d5c1",
+  "change_digest": "21b588a7fe34381c54b9196af5ffa36f9c331b09ab10a51a2f833bcb4fdd58c6",
   "reviewed_by": "Codex navigation and loading efficiency review",
-  "reason": "The change narrows the Workbench conversation list to a recent indexed page, keeps older history and full search available, mounts Terminal and Code only when selected, isolates mission events and snapshots from general workspace consumers, stops mission selection and mutation from bootstrapping the project again, and clears previous-project identities on a switch. The focused Python tests cover Core ordering and SQLite migration; selecting the migration test also triggers the existing PostgreSQL migration job, which checks the widened Alembic revision column needed to reach the new index. Frontend files cover URL identity, revision reconciliation, event ownership, mission controls, snapshot display, recovery, and component behavior. Seven browser runs cover the new loading journey in desktop Chromium and emulated mobile Chromium/WebKit at 320, 390, and 430 px. Three real-Core journeys cover durable conversation switching, project selection after production LAN reload, and mission recovery. A separate disposable seeded production build is used for operator dogfooding.",
+  "reason": "The change narrows the Workbench conversation list to a recent indexed page, keeps older history and full search available, mounts Terminal and Code only when selected, isolates mission events and snapshots from general workspace consumers, stops mission selection and mutation from bootstrapping the project again, and clears previous-project identities on a switch. The focused Python tests cover Core ordering and SQLite migration; selecting the migration test also triggers the existing PostgreSQL migration job, which checks the widened Alembic revision column needed to reach the new index. Frontend files cover URL identity, revision reconciliation, event ownership, mission controls, snapshot display, recovery, and component behavior. Seven browser runs cover the new loading journey in desktop Chromium and emulated mobile Chromium/WebKit at 320, 390, and 430 px. Three real-Core journeys cover durable conversation switching, project selection after production LAN reload, and mission recovery. A separate disposable seeded production build is used for operator dogfooding. Two additional production-LAN Core browser runs seed 101 conversations and verify an older deep link restores after a delayed exact-session read and a recent-page response, on desktop and narrow viewports.",
   "exclusions": "Full suites, unrelated providers, browser automation, native desktop and iOS tests, release packaging, and physical-device testing are outside this selection. The mocked browser journey verifies request bounds and navigation presentation; real-Core tests and the disposable LAN Core verify durable behavior separately.",
   "expected_tests": {
     "python": 2,
     "frontend": 84,
     "native": 0,
-    "playwright": 10
+    "playwright": 12
   },
   "python": [
     "tests/v3/test_chat_session_recent_page.py",
@@ -35,6 +35,8 @@
     "entry:navigation-loading/mobile-webkit-wide",
     "entry:workbench-navigation-core/assistant-real-desktop",
     "entry:project-switcher-search/real-core",
-    "entry:mission-restart-recovery-core/real-core"
+    "entry:mission-restart-recovery-core/real-core",
+    "entry:navigation-deeplink/desktop",
+    "entry:navigation-deeplink/narrow"
   ]
 }
