@@ -4053,7 +4053,9 @@ class ButlerProjectState(Entity):
     last_event_sequence: int = Field(default=0, ge=0)
     last_review_sequence: int = Field(default=0, ge=0)
     last_action_event_sequence: int = Field(default=0, ge=0)
+    last_recovery_event_sequence: int = Field(default=0, ge=0)
     last_review_requested_at: datetime | None = None
+    last_periodic_recovery_at: datetime | None = None
     lease_owner: str | None = Field(default=None, max_length=200)
     lease_expires_at: datetime | None = None
 
@@ -4131,15 +4133,15 @@ class ButlerAuthorityPolicy(Entity):
 
     entity_kind: ClassVar[str] = "butler_authority_policies"
     engagement_id: str = Field(min_length=1, max_length=200)
-    authority: Literal["watch", "steer", "delegate"] = "watch"
+    authority: Literal["watch", "steer", "delegate", "act"] = "watch"
     delegate_actions: list[Literal["pause_urgent_machine_blocker"]] = Field(
         default_factory=list, max_length=1
     )
 
     @model_validator(mode="after")
     def grants_require_delegate(self) -> "ButlerAuthorityPolicy":
-        if self.authority != "delegate" and self.delegate_actions:
-            raise ValueError("delegated actions require Delegate authority")
+        if self.authority not in {"delegate", "act"} and self.delegate_actions:
+            raise ValueError("delegated actions require Delegate or Act authority")
         if len(self.delegate_actions) != len(set(self.delegate_actions)):
             raise ValueError("delegated actions must be unique")
         return self
@@ -4168,6 +4170,37 @@ class ButlerAction(Entity):
     verification_state: str = Field(min_length=1, max_length=80)
     summary: str = Field(min_length=1, max_length=500)
     outcome: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class ButlerRecoveryCase(Entity):
+    """One bounded, project-scoped Butler investigation and its verified outcome."""
+
+    entity_kind: ClassVar[str] = "butler_recovery_cases"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    trigger: Literal["immediate", "periodic"]
+    signal: str = Field(min_length=1, max_length=100)
+    source_event_id: str = Field(min_length=1, max_length=200)
+    source_event_sequence: int = Field(ge=1)
+    source_session_id: str | None = Field(default=None, max_length=200)
+    source_turn_id: str | None = Field(default=None, max_length=200)
+    source_tool_call_id: str | None = Field(default=None, max_length=200)
+    goal_id: str | None = Field(default=None, max_length=200)
+    authority_revision: int = Field(ge=1)
+    status: Literal[
+        "observed", "investigating", "verifying", "resolved", "needs_attention", "uncertain", "cancelled"
+    ] = "observed"
+    summary: str = Field(min_length=1, max_length=500)
+    outcome: str = Field(default="", max_length=1000)
+    steps: list[dict[str, Any]] = Field(default_factory=list, max_length=24)
+    model_backend: ChatBackend | None = None
+    model_profile_id: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=500)
+    model_turn_id: str | None = Field(default=None, max_length=200)
+    queued_item_id: str | None = Field(default=None, max_length=200)
+    target_session_id: str | None = Field(default=None, max_length=200)
+    next_check_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -5451,6 +5484,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerDecision,
     ButlerAuthorityPolicy,
     ButlerAction,
+    ButlerRecoveryCase,
     ButlerAgentReport,
     ButlerAccountCredit,
     ButlerHarnessQuota,

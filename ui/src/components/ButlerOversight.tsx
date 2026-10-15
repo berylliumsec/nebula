@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
-import type { ButlerAction, ButlerAuthority, ButlerAuthorityPolicy, ButlerDecision, ButlerIncident, ButlerOverview, ButlerResource, ButlerWatchedGoal } from "../api/butlerOverview";
+import type { ButlerAction, ButlerAuthority, ButlerAuthorityPolicy, ButlerDecision, ButlerIncident, ButlerOverview, ButlerRecoveryCase, ButlerResource, ButlerWatchedGoal } from "../api/butlerOverview";
 import { acknowledgeButlerIncident, butlerResourceKey, getButlerAuthority, updateButlerAuthority } from "../api/butlerOverview";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useButlerOverview } from "./useButlerOverview";
@@ -111,6 +111,25 @@ function ActionRow({ action, projectId, onNavigate }: {
   </li>;
 }
 
+function RecoveryRow({ item, projectId, onNavigate }: {
+  item: ButlerRecoveryCase;
+  projectId: string;
+  onNavigate?(path: string): void;
+}) {
+  const status = item.status.replaceAll("_", " ");
+  const changed = item.steps.filter((step) => step.status === "applied");
+  return <li className={`${styles.row} ${item.status === "uncertain" ? styles.actionUncertain : ""}`}>
+    <div className={styles.rowHead}><strong>{item.summary}</strong><span>{status}</span></div>
+    <small>{item.trigger === "immediate" ? "After a Core signal" : "Scheduled check"}{item.createdAt ? ` · ${timeLabel(item.createdAt) ?? "Time unknown"}` : ""}</small>
+    {item.outcome && <p>{item.outcome}</p>}
+    {changed.length > 0 && <small>{changed.length} action{changed.length === 1 ? "" : "s"} recorded</small>}
+    {item.steps.length > 0 && <details className={styles.evidence}><summary>Investigation steps · {item.steps.length}</summary>
+      <ul>{item.steps.map((step) => <li key={step.id}>{step.operation.replace("nebula.work.", "").replaceAll("_", " ")} · {step.status}</li>)}</ul>
+    </details>}
+    <WorkLink projectId={projectId} sessionId={item.targetSessionId ?? item.sourceSessionId} onNavigate={onNavigate} label="Open parent chat" />
+  </li>;
+}
+
 function ResourceRow({ resource, onNavigate }: { resource: ButlerResource; onNavigate?(path: string): void }) {
   if (resource.kind === "harness_quota") {
     const measured = resource.status === "observed" && resource.remainingPercent !== undefined;
@@ -192,7 +211,7 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
     if (!api || coreState !== "online" || !current?.policy || current.saving || current.conflict) return;
     const policy = current.policy;
     const authority = current.draftAuthority;
-    const grants = authority === "delegate" && current.pauseUrgentMachineBlocker && policy.supportedActions.includes("pause_urgent_machine_blocker")
+    const grants = (authority === "delegate" || authority === "act") && current.pauseUrgentMachineBlocker && policy.supportedActions.includes("pause_urgent_machine_blocker")
       ? ["pause_urgent_machine_blocker" as const] : [];
     setEditor((previous) => previous?.projectId === projectId ? { ...previous, saving: true, error: undefined, saved: false } : previous);
     try {
@@ -214,6 +233,7 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
   const supportedStatus = current?.policy?.supportedActions.includes("request_parent_status") ?? false;
   const supportedPause = current?.policy?.supportedActions.includes("pause_urgent_machine_blocker") ?? false;
   const description = current?.draftAuthority === "watch" ? "Watch tracks goal state and reports incidents."
+    : current?.draftAuthority === "act" ? "Act investigates project agent problems, uses available controls to repair them, and checks the result. Actions appear in Oversight."
     : current?.draftAuthority === "steer" ? supportedStatus
       ? "Steer can request a status or clarification from the parent main agent after Core flags an overdue goal checkpoint."
       : "No automatic Steer actions are available in this build."
@@ -223,7 +243,7 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
           : "No automatic Delegate actions are available in this build.";
   const savedGrant = current?.policy?.delegateActions.includes("pause_urgent_machine_blocker") ?? false;
   const dirty = current?.policy && (current.draftAuthority !== current.policy.authority
-    || (current.draftAuthority === "delegate" && current.pauseUrgentMachineBlocker !== savedGrant));
+    || ((current.draftAuthority === "delegate" || current.draftAuthority === "act") && current.pauseUrgentMachineBlocker !== savedGrant));
 
   return <details className={styles.disclosure} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>Oversight settings</summary>
@@ -236,15 +256,15 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
           <select id={selectId} className={styles.authoritySelect} value={current.draftAuthority} disabled={coreState !== "online" || current.saving || current.conflict || !levels.includes(current.policy.authority)} onChange={(event) => {
             const authority = event.target.value as ButlerAuthority;
             setEditor((previous) => previous?.projectId === projectId ? { ...previous, draftAuthority: authority,
-              pauseUrgentMachineBlocker: authority === "delegate" && previous.pauseUrgentMachineBlocker, error: undefined, saved: false } : previous);
+              pauseUrgentMachineBlocker: (authority === "delegate" || authority === "act") && previous.pauseUrgentMachineBlocker, error: undefined, saved: false } : previous);
           }}>{levels.map((level) => <option key={level} value={level}>{level[0].toUpperCase() + level.slice(1)}</option>)}</select>
           {!levels.includes(current.policy.authority) && <p className={styles.note}>The saved authority is unavailable in this build. Ask an administrator to review it.</p>}
           <p className={styles.note}>{description}</p>
-          {current.draftAuthority === "delegate" && supportedPause && <label className={styles.grantLabel} htmlFor={grantId}>
+          {(current.draftAuthority === "delegate" || current.draftAuthority === "act") && supportedPause && <label className={styles.grantLabel} htmlFor={grantId}>
             <input id={grantId} type="checkbox" checked={current.pauseUrgentMachineBlocker} disabled={coreState !== "online" || current.saving || current.conflict} onChange={(event) => setEditor((previous) => previous?.projectId === projectId ? { ...previous, pauseUrgentMachineBlocker: event.target.checked, saved: false } : previous)} />
             <span>Allow urgent pause of a running main goal after a reviewed, agent-reported machine blocker.</span>
           </label>}
-          {current.draftAuthority === "delegate" && supportedPause && <p className={styles.note}>The pause is reversible and audited. Butler cannot approve pending requests.</p>}
+          {current.draftAuthority === "delegate" && supportedPause && <p className={styles.note}>The pause is reversible and audited. Butler cannot approve pending requests in Delegate mode.</p>}
           {dirty && <button className="button quiet" type="button" disabled={coreState !== "online" || current.saving || current.conflict || !levels.includes(current.draftAuthority)} onClick={() => void save()}>{current.saving ? "Saving…" : "Save authority"}</button>}
           {current.saved && <p role="status" className={styles.note}>Authority saved for this project.</p>}
         </>}
@@ -272,6 +292,9 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
   const incidentsAvailable = overview?.capabilities.incidents ?? false;
   const decisionsAvailable = overview?.capabilities.decisions ?? false;
   const uncertainActions = overview?.actions.filter((action) => action.status === "uncertain") ?? [];
+  const recoveryAttention = overview?.recoveryCases.filter((item) => item.status === "needs_attention" || item.status === "uncertain") ?? [];
+  const recoveryActive = overview?.recoveryCases.filter((item) => ["observed", "investigating", "verifying"].includes(item.status)) ?? [];
+  const recoverySettled = overview?.recoveryCases.filter((item) => !recoveryAttention.includes(item) && !recoveryActive.includes(item)) ?? [];
   const otherActions = overview?.actions.filter((action) => action.status !== "uncertain") ?? [];
   const shownActions = [...uncertainActions, ...otherActions.slice(0, 3)];
   const olderActions = otherActions.slice(3);
@@ -308,7 +331,7 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
   if (compact && !expanded) {
     const openIncident = overview?.incidents.find((incident) => incident.status === "open");
     const openCount = overview?.summary.openIncidents ?? 0;
-    const needsAttention = openCount + uncertainActions.length;
+    const needsAttention = openCount + uncertainActions.length + (overview?.summary.recoveryAttention ?? 0);
     return <section className={`${styles.root} ${styles.compact}`} aria-label="Butler oversight">
       <button className={styles.compactToggle} type="button" aria-expanded={false} title="Open Butler oversight" onClick={() => setExpanded(true)}>
         <span>Oversight</span>
@@ -318,14 +341,16 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
       {ackError?.projectId === projectId && <p role="alert" className={styles.error}>Could not acknowledge incident. {ackError.message}</p>}
       {openIncident && <ul className={styles.list} aria-label="Open Butler incidents"><IncidentRow incident={openIncident} goals={overview?.watchedGoals ?? []} projectId={projectId} onNavigate={onNavigate} onAcknowledge={(incident) => void acknowledge(incident)} acknowledging={acknowledging?.projectId === projectId && acknowledging.incidentId === openIncident.id} canAcknowledge={canAcknowledge} compact /></ul>}
       {uncertainActions.length > 0 && <ul className={styles.list} aria-label="Uncertain Butler actions"><ActionRow action={uncertainActions[0]} projectId={projectId} onNavigate={onNavigate} /></ul>}
+      {recoveryAttention.length > 0 && <ul className={styles.list} aria-label="Butler recovery needing attention"><RecoveryRow item={recoveryAttention[0]} projectId={projectId} onNavigate={onNavigate} /></ul>}
       {openCount > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {openCount} open incidents</button>}
       {uncertainActions.length > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {uncertainActions.length} uncertain actions</button>}
+      {recoveryAttention.length > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {recoveryAttention.length} recovery cases needing attention</button>}
     </section>;
   }
 
   return <section className={styles.root} aria-label="Butler oversight">
     <header className={styles.header}>
-      <div><h2>Oversight</h2><small>{overview ? `${overview.summary.watchedGoals} watched goal${overview.summary.watchedGoals === 1 ? "" : "s"} · ${overview.authority === "watch" ? "Watch" : overview.authority === "steer" ? "Steer" : "Delegate"}` : "Selected project"}</small></div>
+      <div><h2>Oversight</h2><small>{overview ? `${overview.summary.watchedGoals} watched goal${overview.summary.watchedGoals === 1 ? "" : "s"} · ${overview.authority[0].toUpperCase() + overview.authority.slice(1)}` : "Selected project"}</small></div>
       <div className={styles.headerActions}>
         <button className={styles.refresh} type="button" aria-label="Refresh Butler oversight" title="Refresh Butler oversight" disabled={loading || coreState !== "online"} onClick={() => void refresh()}><RefreshCw size={17} aria-hidden="true" /></button>
         {compact && <button className={styles.refresh} type="button" aria-label="Collapse Butler oversight" title="Collapse Butler oversight" onClick={() => setExpanded(false)}><ChevronUp size={17} aria-hidden="true" /></button>}
@@ -336,6 +361,16 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
     {coreState !== "online" && <p role="status" className={styles.note}>Core is offline. {overview ? "Showing the last overview from this project." : "Reconnect to see watched work."}</p>}
     {error && <div className={styles.error} role="alert"><span>Oversight could not be refreshed. {error}</span><button className="button quiet" type="button" disabled={coreState !== "online"} onClick={() => void refresh()}>Retry</button></div>}
     {overview && <>
+      {overview.capabilities.recovery && (overview.authority === "act" || overview.summary.recoveryCases > 0) && <div className={styles.section} role="region" aria-label="Butler recovery">
+        <h3>Autonomous recovery <span>{overview.summary.recoveryActive} active · {overview.summary.recoveryAttention} need attention</span></h3>
+        {recoveryAttention.length + recoveryActive.length > 0 ? <ul className={styles.list}>
+          {[...recoveryAttention, ...recoveryActive].map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} />)}
+        </ul> : <p className={styles.note}>No recovery cases need attention.</p>}
+        {recoverySettled.length > 0 && <details className={styles.disclosure}><summary>Past checks <span>{recoverySettled.length}</span></summary>
+          <ul className={styles.list}>{recoverySettled.map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} />)}</ul>
+        </details>}
+        {overview.nextRecoveryOffset !== undefined && <button className="button quiet" type="button" disabled={loadingMore !== undefined || coreState !== "online"} onClick={() => void loadMore("recovery")}>{loadingMore === "recovery" ? "Loading…" : "Show more checks"}</button>}
+      </div>}
       {incidentsAvailable ? <div className={styles.section} aria-label="Butler incidents">
         <h3>Needs attention <span>{overview.summary.openIncidents} open · {overview.summary.acknowledgedIncidents} acknowledged</span></h3>
         {ackError?.projectId === projectId && <p role="alert" className={styles.error}>Could not acknowledge incident. {ackError.message}</p>}

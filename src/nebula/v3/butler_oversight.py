@@ -32,6 +32,7 @@ from .domain import (
     ButlerHarnessQuota,
     ButlerIncident,
     ButlerProjectState,
+    ButlerRecoveryCase,
     ChatBackend,
     ChatGoal,
     ChatGoalStatus,
@@ -51,6 +52,7 @@ from .storage import ConflictError, NebulaStore, NotFoundError
 
 if TYPE_CHECKING:
     from .butler_authority import ButlerAuthorityService
+    from .butler_recovery import ButlerRecoveryService
     from .butler_memory import ButlerMemoryService
     from .butler_review import ButlerReviewer
     from .storage import StoreTransaction
@@ -873,6 +875,7 @@ class ButlerOversightService:
         self.reviewer = reviewer
         self.memory_service = memory_service
         self.authority_service: ButlerAuthorityService | None = None
+        self.recovery_service: ButlerRecoveryService | None = None
         self.worker_id = f"butler-worker-{uuid4()}"
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -1277,6 +1280,19 @@ class ButlerOversightService:
                         await self.authority_service.process_project(
                             engagement_id, self.worker_id
                         )
+                    if self.recovery_service is not None:
+                        try:
+                            await self.recovery_service.process_project(
+                                engagement_id, self.worker_id
+                            )
+                        except Exception as exc:
+                            record_caught_exception(
+                                "butler",
+                                "butler.recovery_failed",
+                                "Butler recovery will retry without stopping project oversight.",
+                                exc,
+                                stage="recovery",
+                            )
                     if self.memory_service is not None:
                         try:
                             for _ in range(5):
@@ -1326,6 +1342,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
         resource_offset: int = 0,
         decision_offset: int = 0,
         action_offset: int = 0,
+        recovery_offset: int = 0,
     ) -> dict:
         service.store.get(Engagement, engagement_id)
         if any(
@@ -1336,6 +1353,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 resource_offset,
                 decision_offset,
                 action_offset,
+                recovery_offset,
             )
         ):
             raise HTTPException(422, "overview offsets must be nonnegative")
@@ -1527,6 +1545,27 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             limit=OVERVIEW_PAGE_SIZE,
             newest_first=True,
         )
+        recovery_count = service.store.count_entities(
+            ButlerRecoveryCase, engagement_id=engagement_id
+        )
+        recovery_cases = service.store.find_entities(
+            ButlerRecoveryCase,
+            {},
+            engagement_id=engagement_id,
+            offset=recovery_offset,
+            limit=OVERVIEW_PAGE_SIZE,
+            newest_first=True,
+        )
+        recovery_attention = service.store.count_entities(
+            ButlerRecoveryCase,
+            {"status": ["needs_attention", "uncertain"]},
+            engagement_id=engagement_id,
+        )
+        recovery_active = service.store.count_entities(
+            ButlerRecoveryCase,
+            {"status": ["observed", "investigating", "verifying"]},
+            engagement_id=engagement_id,
+        )
         from .butler_authority import authority_view
 
         policy = service.store.find_entity(
@@ -1544,6 +1583,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "resources": resources,
             "decisions": [item.model_dump(mode="json") for item in decisions],
             "actions": [item.model_dump(mode="json") for item in actions],
+            "recovery_cases": [item.model_dump(mode="json") for item in recovery_cases],
             "last_event_sequence": state.last_event_sequence if state else 0,
             "summary": {
                 "watched_goals": watch_count,
@@ -1554,6 +1594,9 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 "harness_quota_resources": quota_count,
                 "decisions": decision_count,
                 "actions": action_count,
+                "recovery_cases": recovery_count,
+                "recovery_attention": recovery_attention,
+                "recovery_active": recovery_active,
             },
             "next_watch_offset": (
                 watch_offset + len(watches)
@@ -1580,12 +1623,18 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 if action_offset + len(actions) < action_count
                 else None
             ),
+            "next_recovery_offset": (
+                recovery_offset + len(recovery_cases)
+                if recovery_offset + len(recovery_cases) < recovery_count
+                else None
+            ),
             "capabilities": {
-                "authority_levels": ["watch", "steer", "delegate"],
+                "authority_levels": ["watch", "steer", "delegate", "act"],
                 "supported_actions": authority["supported_actions"],
                 "incidents": True,
                 "decisions": True,
                 "actions": True,
+                "recovery": service.recovery_service is not None,
                 "agent_reports": True,
                 "machine_alerts": True,
                 "resource_alerts": True,

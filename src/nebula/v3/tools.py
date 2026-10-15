@@ -1665,6 +1665,31 @@ class ToolBroker:
         self.auto_approve = auto_approve
         self._locks: dict[str, asyncio.Lock] = {}
 
+    async def _record_subagent_failure(
+        self, call: PersistedToolCall, error: BaseException
+    ) -> None:
+        if call.tool_name != "subagent.start" or not isinstance(
+            self.ledger, StoreToolLedger
+        ):
+            return
+
+        def save() -> None:
+            from .butler_recovery import record_subagent_start_failure
+
+            with self.ledger.store.transaction(immediate=True) as transaction:
+                record_subagent_start_failure(transaction, call, error)
+
+        try:
+            await asyncio.to_thread(save)
+        except Exception as exc:
+            record_caught_exception(
+                "runtime",
+                "runtime.tools.subagent_failure_signal_failed",
+                "Butler could not record the failed subagent start signal.",
+                exc,
+                stage="butler_recovery",
+            )
+
     async def prepare(
         self,
         invocation: ToolInvocation,
@@ -1695,9 +1720,10 @@ class ToolBroker:
             # status; otherwise the activity feed can leave it running forever.
             setattr(exc, "_nebula_before_execution", True)
             if call.status == ToolCallStatus.PROPOSED:
-                await self.ledger.transition(
+                failed = await self.ledger.transition(
                     call, ToolCallStatus.FAILED, error=str(exc)
                 )
+                await self._record_subagent_failure(failed, exc)
             raise
         if call.status == ToolCallStatus.COMPLETE and call.result is not None:
             if (
@@ -1791,10 +1817,13 @@ class ToolBroker:
                 matched_grant_index=decision.matched_grant_index,
             )
         if decision.effect == PolicyEffect.DENY:
-            await self.ledger.transition(
+            denied = await self.ledger.transition(
                 call, ToolCallStatus.DENIED, error=decision.reason
             )
-            raise PolicyDenied(decision)
+            refusal = PolicyDenied(decision)
+            setattr(refusal, "_nebula_before_execution", True)
+            await self._record_subagent_failure(denied, refusal)
+            raise refusal
         if decision.effect == PolicyEffect.REQUIRE_APPROVAL:
             approval = await self.ledger.request_approval(
                 call, invocation, decision, plugin.spec
@@ -1973,9 +2002,10 @@ class ToolBroker:
                     exc,
                     stage="tools",
                 )
-                await self.ledger.transition(
+                failed = await self.ledger.transition(
                     running, ToolCallStatus.FAILED, error=str(exc)
                 )
+                await self._record_subagent_failure(failed, exc)
                 raise
             terminal_status = ToolCallStatus.COMPLETE
             terminal_error: str | None = None

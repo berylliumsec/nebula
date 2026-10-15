@@ -1,4 +1,4 @@
-# Butler proactive recovery (proposal)
+# Butler proactive recovery
 
 ## Current behavior and gap
 
@@ -14,7 +14,7 @@ needs a separate instruction based on the saved project authority.
 
 ## Operator journey
 
-In the selected project, an operator enables Butler to act on agent problems. A
+In the selected project, an operator enables **Act** for Butler. A
 main agent's subagent attempt fails for an operational reason. Butler notices
 the saved failure while its panel is closed, checks the parent chat's current
 settings and available verified runtimes, selects a repair, applies it through
@@ -54,23 +54,29 @@ The event detector, capability schemas, project authority, and verifier are
 Core contracts. The model selects the remedy and may combine tools; it is not
 limited to a table of preset responses.
 
-The worker wakes for a *change that might require judgment*: a saved tool
-failure or refusal, failed child, blocked or overdue goal, stalled queue item,
-pending approval, or relevant resource constraint. Routine progress is
-coalesced. A pending approval is a decision about an exact request, not a
-blanket ability to change execution policy. Butler reads that request, makes
-its decision under the standing authority, and checks the continuation. If
-Core cannot safely identify the request or resulting side effect, the case
-stays unresolved and visible. The operator is not asked to reapprove every
-individual delegated step.
+The worker has two trigger classes. The first implementation covers these
+Core signals:
+
+1. **Immediate:** Core records a failed `subagent.start`, an agent attention
+   report, or a blocked goal. The recovery worker consumes each saved event
+   under the selected project's current Act policy.
+2. **Periodic:** every 15 minutes while a watched goal is running, Core records
+   a coalesced project work check. Existing goal progress deadline and repeated
+   read-only failure signals also enter this class.
+
+The first implementation does not yet emit recovery signals for a pending
+approval, a stalled queue, a child that fails after starting, or a refusal
+expressed only in model prose. These are next event-source additions. An
+approval decision, when encountered through a supported signal, remains bound
+to the exact Core request and its continuation.
 
 | Signal | Butler's possible investigation or repair | Verification |
 | --- | --- | --- |
 | A harness subagent call is unavailable or denied by a runtime configuration | Inspect parent snapshot and verified provider choices; change next-turn worker and ask parent to retry | New child starts and completes its task |
-| A parent says it lacks a web tool | Inspect available project tools and the chat's next-turn MCP selection; attach a usable tool and ask parent to retry | Retry calls the tool and returns an attributable result |
-| A provider is unavailable or out of quota | Compare enabled project-compatible runtimes and the work's constraints; move the next turn if compatible | New turn runs on the selected runtime and advances the task |
-| A goal stalls | Read its recent turns, child state, and blockers; request status, adjust its plan, or resume an interrupted parent when authorized | Core observes new progress or a concrete blocker |
-| An agent waits for approval | Read the exact request, project policy, and prior decisions; decide through the existing approval capability if delegated | Core records the decision and the waiting turn's continuation |
+| A parent says it lacks a web tool (future signal) | Inspect available project tools and the chat's next-turn MCP selection; attach a usable tool and ask parent to retry | Retry calls the tool and returns an attributable result |
+| A provider is unavailable or out of quota (future signal) | Compare enabled project-compatible runtimes and the work's constraints; move the next turn if compatible | New turn runs on the selected runtime and advances the task |
+| A goal stalls | Read its recent turns, child state, and blockers; request status or adjust its plan when authorized | Core observes new progress or a concrete blocker |
+| An agent waits for approval (future signal) | Read the exact request, project policy, and prior decisions; decide through the existing approval capability if delegated | Core records the decision and the waiting turn's continuation |
 
 Core must distinguish tool-level refusal from model prose. A failed
 `subagent.start` receipt is direct evidence; the absence of such a call is not
@@ -111,11 +117,9 @@ the refusal or seek a compliant path within the existing project policy.
   approvals; it should not create a fresh operator prompt for every step.
 - Core's saved action and outcome are authoritative. A model explanation, a
   settings save, and a queued follow-up are not proof that work succeeded.
-- Automatic remediation uses a standing project authority, distinct from a
-  one-off operator request. Turning it off revokes dispatch before the next
-  action; an in-flight action is recorded accurately. Whether that authority
-  should be a new Act level or included in the current Delegate level is an
-  operator product choice still to settle.
+- Automatic remediation uses the standing **Act** authority for the selected
+  project, distinct from a one-off operator request. Turning Act off revokes
+  dispatch before the next action; an in-flight action is recorded accurately.
 
 ## Planned focused verification
 

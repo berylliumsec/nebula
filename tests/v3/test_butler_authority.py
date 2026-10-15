@@ -215,6 +215,7 @@ def test_authority_api_is_authenticated_revisioned_project_scoped_and_durable(tm
         "watch",
         "steer",
         "delegate",
+        "act",
     ]
     assert (
         ButlerAuthorityService(NebulaStore(tmp_path / "core.db"), None).get(project.id)[

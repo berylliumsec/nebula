@@ -28,6 +28,28 @@ function client(request: ReturnType<typeof vi.fn>): ApiClient {
 }
 
 describe("ButlerOversight", () => {
+  it("shows Act recovery status and keeps past checks behind disclosure", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ...overview,
+      authority: "act",
+      capabilities: { ...overview.capabilities, recovery: true, authority_levels: ["watch", "act"] },
+      summary: { ...overview.summary, recovery_cases: 2, recovery_active: 1, recovery_attention: 0 },
+      recovery_cases: [
+        { id: "case-active", trigger: "immediate", signal: "agent.subagent_start_failed",
+          status: "verifying", summary: "Subagent start failed", outcome: "Parent retry queued",
+          target_session_id: "chat-main", steps: [{ id: "step-1", operation: "nebula.work.message_chat", status: "applied" }] },
+        { id: "case-done", trigger: "periodic", signal: "butler.periodic_check",
+          status: "resolved", summary: "Scheduled work check", outcome: "Work is progressing", steps: [] },
+      ],
+    });
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
+    const recovery = await screen.findByRole("region", { name: "Butler recovery" });
+    expect(within(recovery).getByText("Subagent start failed")).toBeInTheDocument();
+    expect(within(recovery).getByText("Parent retry queued")).toBeInTheDocument();
+    expect(within(recovery).getByText("Past checks")).toBeInTheDocument();
+    expect(within(recovery).getByRole("link", { name: /Open parent chat/ })).toHaveAttribute("href", "/projects/project-a/workbench?view=chat&session=chat-main");
+  });
+
   it("keeps Watch compact beside the chat while surfacing open incidents", async () => {
     const user = userEvent.setup();
     const request = vi.fn().mockResolvedValue({

@@ -20,6 +20,10 @@ describe("getButlerOverview", () => {
       actions: [{ id: "action-1", action_type: "request_parent_status", status: "uncertain",
         summary: "Asked the parent for status", source_session_id: "session one", target_session_id: "session one",
         verification_state: "core_observed", started_at: "2026-10-15T16:00:00Z" }],
+      recovery_cases: [{ id: "case-1", trigger: "immediate", signal: "agent.subagent_start_failed",
+        status: "verifying", summary: "Subagent start failed", outcome: "Parent retry queued",
+        source_session_id: "session one", target_session_id: "session one",
+        steps: [{ id: "step-1", operation: "nebula.work.message_chat", status: "applied" }] }],
       next_action_offset: 50,
       resources: [{ kind: "openrouter_account", provider_id: "provider-1", provider_name: "OpenRouter",
         status: "unavailable", remaining_usd: null, observed_at: null, threshold_state: "unknown" },
@@ -28,8 +32,8 @@ describe("getButlerOverview", () => {
         window_label: "Weekly", resets_at: null, source: "codex_account" }],
       next_resource_offset: 50,
       coverage_gaps: ["No agent reports"],
-      summary: { watched_goals: 1, open_incidents: 0, acknowledged_incidents: 0, resolved_incidents: 0, actions: 51, account_resources: 51, harness_quota_resources: 1 },
-      capabilities: { authority_levels: ["watch"], incidents: false, decisions: false, actions: true, agent_reports: false, machine_alerts: true, resource_alerts: true, live_events: false },
+      summary: { watched_goals: 1, open_incidents: 0, acknowledged_incidents: 0, resolved_incidents: 0, actions: 51, recovery_cases: 1, recovery_active: 1, recovery_attention: 0, account_resources: 51, harness_quota_resources: 1 },
+      capabilities: { authority_levels: ["watch", "act"], incidents: false, decisions: false, actions: true, recovery: true, agent_reports: false, machine_alerts: true, resource_alerts: true, live_events: false },
     });
     const signal = new AbortController().signal;
     const result = await getButlerOverview({ request } as unknown as ApiClient, "a/b", signal);
@@ -48,6 +52,8 @@ describe("getButlerOverview", () => {
     expect(result.summary.actions).toBe(51);
     expect(result.nextActionOffset).toBe(50);
     expect(result.capabilities.actions).toBe(true);
+    expect(result.capabilities.recovery).toBe(true);
+    expect(result.recoveryCases[0]).toMatchObject({ status: "verifying", targetSessionId: "session one", steps: [{ status: "applied" }] });
     expect(result.summary.watchedGoals).toBe(1);
     expect(result.capabilities.incidents).toBe(false);
     expect(result.capabilities.machineAlerts).toBe(true);
@@ -99,5 +105,17 @@ describe("getButlerOverview", () => {
       method: "PUT", body: JSON.stringify({ authority: "watch", delegate_actions: [], expected_revision: 3 }),
     });
     await expect(getButlerAuthority(api, "selected")).rejects.toThrow("different project");
+  });
+
+  it("saves project Act authority with its separate urgent-pause grant", async () => {
+    const policy = { projectId: "selected", authority: "watch" as const,
+      delegateActions: [], effectiveActions: [], supportedActions: ["investigate_and_repair"], revision: 2 };
+    const request = vi.fn().mockResolvedValue({ project_id: "selected", authority: "act", revision: 3,
+      delegate_actions: ["pause_urgent_machine_blocker"], effective_actions: ["investigate_and_repair"],
+      supported_actions: policy.supportedActions });
+    await updateButlerAuthority({ request } as unknown as ApiClient, policy, "act", ["pause_urgent_machine_blocker"]);
+    expect(request).toHaveBeenCalledWith("engagements/selected/butler/authority", {
+      method: "PUT", body: JSON.stringify({ authority: "act", delegate_actions: ["pause_urgent_machine_blocker"], expected_revision: 2 }),
+    });
   });
 });

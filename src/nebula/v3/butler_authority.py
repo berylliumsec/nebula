@@ -1,8 +1,8 @@
 """Persisted project authority and bounded Butler action dispatch.
 
-Only Core's reviewed decisions can reach this service. A standing authority is
-never a grant to approve requests, message a child, or execute arbitrary model
-text. Action bodies are fixed Core templates and go through phase-1 controls.
+Only Core's reviewed decisions can reach this service. Standing authority can
+permit bounded project actions, but never direct child messaging or arbitrary
+model text. Action bodies are fixed Core templates and go through phase-1 controls.
 """
 
 from __future__ import annotations
@@ -48,12 +48,13 @@ if TYPE_CHECKING:
     from .butler_memory import ButlerMemoryService
 
 
-Authority = Literal["watch", "steer", "delegate"]
+Authority = Literal["watch", "steer", "delegate", "act"]
 DelegateAction = Literal["pause_urgent_machine_blocker"]
 SUPPORTED_ACTIONS = (
     "request_parent_status",
     "request_parent_plan_reassessment",
     "pause_urgent_machine_blocker",
+    "investigate_and_repair",
 )
 
 
@@ -74,8 +75,8 @@ class AuthorityWrite(NebulaModel):
 
     @model_validator(mode="after")
     def grant_requires_delegate(self) -> "AuthorityWrite":
-        if self.authority != "delegate" and self.delegate_actions:
-            raise ValueError("delegated actions require Delegate authority")
+        if self.authority not in {"delegate", "act"} and self.delegate_actions:
+            raise ValueError("delegated actions require Delegate or Act authority")
         if len(self.delegate_actions) != len(set(self.delegate_actions)):
             raise ValueError("delegated actions must be unique")
         return self
@@ -85,8 +86,10 @@ def _effective_actions(policy: ButlerAuthorityPolicy | None) -> list[str]:
     if policy is None or policy.authority == "watch":
         return []
     actions = ["request_parent_status", "request_parent_plan_reassessment"]
-    if policy.authority == "delegate":
+    if policy.authority in {"delegate", "act"}:
         actions.extend(policy.delegate_actions)
+    if policy.authority == "act":
+        actions.append("investigate_and_repair")
     return actions
 
 
@@ -355,7 +358,7 @@ class ButlerAuthorityService:
             and payload.verification_state == "agent_reported"
             and decision.actor_role == "main_agent"
             and policy is not None
-            and policy.authority == "delegate"
+            and policy.authority in {"delegate", "act"}
             and "pause_urgent_machine_blocker" in policy.delegate_actions
         ):
             refs = [ref for ref in payload.evidence_refs if ref.kind == "agent_report"]
