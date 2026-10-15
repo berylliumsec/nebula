@@ -5,6 +5,7 @@ This is a project-bound control plane over Core's chat and mission services.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -52,8 +53,10 @@ from .domain import (
     HarnessTurnStatus,
     HarnessTurn,
     McpServerProfile,
+    OperationEvent,
     ProviderProfile,
     RunBackend,
+    RunEvent,
     RunStatus,
     ScopePolicy,
     Task,
@@ -1188,6 +1191,7 @@ class ControlAssistantWork:
         latest: dict[str, dict[str, Any]] = {}
         cursor = 0
         while True:
+            rows: Sequence[OperationEvent | RunEvent]
             if turn.origin == HarnessTurnOrigin.CHAT:
                 rows = self.store.replay_operation_events(
                     turn.id,

@@ -25,20 +25,26 @@ def _capabilities(tmp_path):
     other = store.create(Engagement(name="Other"))
     provider = store.create(
         ProviderProfile(
-            name="Local", provider_type="ollama", is_local=True,
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
             model_allowlist=["model-a"],
         )
     )
     own_chat = store.create(
         ChatSession(
-            engagement_id=selected.id, title="Research agent",
-            provider_profile_id=provider.id, model="model-a",
+            engagement_id=selected.id,
+            title="Research agent",
+            provider_profile_id=provider.id,
+            model="model-a",
         )
     )
     foreign_chat = store.create(
         ChatSession(
-            engagement_id=other.id, title="Foreign agent",
-            provider_profile_id=provider.id, model="model-a",
+            engagement_id=other.id,
+            title="Foreign agent",
+            provider_profile_id=provider.id,
+            model="model-a",
         )
     )
     capabilities = ButlerCapabilities(
@@ -68,10 +74,12 @@ def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path
         approvals = await capabilities.search({"query": "approve an agent request"})
         assert approvals["matches"][0]["operation"] == "nebula.work.decide_approval"
         assert approvals["next_offset"] is not None
-        next_page = await capabilities.search({
-            "query": "approve an agent request",
-            "offset": approvals["next_offset"],
-        })
+        next_page = await capabilities.search(
+            {
+                "query": "approve an agent request",
+                "offset": approvals["next_offset"],
+            }
+        )
         assert next_page["matches"]
         assert next_page["matches"][0] != approvals["matches"][0]
         described = await capabilities.describe(
@@ -111,7 +119,10 @@ def test_butler_change_routes_validate_schema_revision_and_project(tmp_path):
             )
         with pytest.raises(ValueError, match="project's work roster"):
             await capabilities.invoke(
-                {"operation": "nebula.work.chat", "arguments": {"session_id": foreign_chat.id}},
+                {
+                    "operation": "nebula.work.chat",
+                    "arguments": {"session_id": foreign_chat.id},
+                },
                 change=False,
             )
         saved = await capabilities.invoke(payload, change=True)
