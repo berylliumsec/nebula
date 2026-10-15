@@ -1,0 +1,10 @@
+.root { gap: 8px; padding-bottom: 14px; }
+.root > p, .root > small, .root > details { margin: 0; padding: 0 18px; overflow-wrap: anywhere; }
+.root > small { color: var(--muted); font-size: .76rem; line-height: 1.4; }
+.root > p { font-size: .88rem; }
+.root > p strong { font-size: 1.2rem; }
+.root > p button { min-height: 44px; }
+.root > button { align-self: start; min-height: 44px; margin: 0 18px; }
+.root > details summary { min-height: 44px; padding-top: 11px; box-sizing: border-box; cursor: pointer; }
+.root header button { min-width: 44px; min-height: 44px; }
+.root :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

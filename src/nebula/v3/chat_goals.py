@@ -537,20 +537,26 @@ class ChatGoalService:
             and body.token_budget < goal.usage.total_tokens
         ):
             raise ConflictError("token budget cannot be lower than tokens already used")
-        return self.store.update(
-            ChatGoal,
-            goal.id,
-            {
-                "objective": body.objective,
-                "completion_criteria": body.completion_criteria,
-                "plan": body.plan,
-                "token_budget": body.token_budget,
-                "time_budget_seconds": body.time_budget_seconds,
-                "step_budget": body.step_budget,
-                "child_budget": body.child_budget,
-            },
-            expected_revision=goal.revision,
-        )
+        with self.store.transaction() as transaction:
+            updated = transaction.update(
+                ChatGoal,
+                goal.id,
+                {
+                    "objective": body.objective,
+                    "completion_criteria": body.completion_criteria,
+                    "plan": body.plan,
+                    "token_budget": body.token_budget,
+                    "time_budget_seconds": body.time_budget_seconds,
+                    "step_budget": body.step_budget,
+                    "child_budget": body.child_budget,
+                },
+                expected_revision=goal.revision,
+            )
+            if goal.status != ChatGoalStatus.DRAFT:
+                from .butler_oversight import record_goal_plan_change
+
+                record_goal_plan_change(transaction, goal, updated)
+        return updated
 
     def reserve_child(self, goal_id: str, *, expected_revision: int) -> ChatGoal:
         """Reserve one cumulative child slot before delegation begins."""

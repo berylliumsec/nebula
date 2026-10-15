@@ -32,6 +32,7 @@ from .harness_commands import (
     parse_harness_command,
     usage_reply,
 )
+from .harness_quota import HarnessQuotaSnapshot, claude_quota_snapshot
 from .settings_assistant_api import SettingsAssistantApi
 
 import asyncio
@@ -1252,6 +1253,7 @@ class HarnessEvent(NebulaModel):
     tool_name: str | None = Field(default=None, max_length=1_000)
     usage: ChatTokenUsage | None = None
     detailed_usage: HarnessDetailedUsage | None = None
+    quota_snapshot: HarnessQuotaSnapshot | None = None
     artifact_ids: list[str] = Field(default_factory=list, max_length=256)
     payload: dict[str, Any] = Field(default_factory=dict)
     mode: str | None = Field(default=None, max_length=100)
@@ -5233,6 +5235,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 if class_name == "RateLimitEvent":
                     info = getattr(message, "rate_limit_info", None)
                     rate_limit = _object_values(info)
+                    quota_snapshot = claude_quota_snapshot(rate_limit)
                     detailed_usage = detailed_usage.model_copy(
                         update={"rate_limit": _bounded(rate_limit, limit=8_000)}
                     )
@@ -5241,7 +5244,13 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                         vendor=HarnessKind.CLAUDE_AGENT_SDK,
                         title="Claude rate limit",
                         summary=str(rate_limit.get("status") or "Rate limit updated"),
+                        reason_code=(
+                            "rate_limited"
+                            if rate_limit.get("status") == "rejected"
+                            else None
+                        ),
                         detailed_usage=detailed_usage,
+                        quota_snapshot=quota_snapshot,
                         payload=_bounded(rate_limit, limit=8_000),
                     )
                     continue
@@ -8449,6 +8458,7 @@ class HarnessRuntimeService:
         self.browser_automation_platform = browser_automation_platform
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
+        self.butler_memory: Any = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
             raise ValueError("tool platform must use the harness runtime store")
@@ -8496,6 +8506,26 @@ class HarnessRuntimeService:
         # Vendor sessions a conversation moved off, closed once they are idle.
         self._superseded_session_closers: dict[str, asyncio.Task[None]] = {}
         self._closed = False
+        self._quota_snapshot_observer: (
+            Callable[[str, HarnessQuotaSnapshot], None] | None
+        ) = None
+        self._quota_read_observer: Callable[[str], None] | None = None
+        self._rate_limit_observer: (
+            Callable[[str, str, str, datetime, bool], None] | None
+        ) = None
+
+    def bind_quota_observers(
+        self,
+        snapshot_observer: Callable[[str, HarnessQuotaSnapshot], None],
+        read_observer: Callable[[str], None],
+        rate_limit_observer: Callable[[str, str, str, datetime, bool], None]
+        | None = None,
+    ) -> None:
+        """Observe saved numeric notices and request post-use account checks."""
+
+        self._quota_snapshot_observer = snapshot_observer
+        self._quota_read_observer = read_observer
+        self._rate_limit_observer = rate_limit_observer
 
     def bind_knowledge_retriever(self, retriever: KnowledgeRetriever) -> None:
         """Bind Core-owned, engagement-scoped knowledge retrieval."""
@@ -8514,6 +8544,9 @@ class HarnessRuntimeService:
 
     def bind_control_assistant_work(self, work: Any) -> None:
         self.control_assistant_work = work
+
+    def bind_butler_memory(self, memory: Any) -> None:
+        self.butler_memory = memory
 
     def bind_provider_subagents(self, service: SubagentService) -> None:
         """Bind the provider-chat subagent service harness chats delegate to."""
@@ -10974,6 +11007,10 @@ class HarnessRuntimeService:
             else "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
             "Do not claim to have changed a Nebula setting from this conversation."
         )
+        if control_assistant and self.butler_memory is not None:
+            assistant_scope += self.butler_memory.turn_context(
+                engagement_id, clean_prompt
+            )
         chat_turn = ChatTurn(
             id=str(uuid4()),
             engagement_id=engagement_id,
@@ -13901,7 +13938,9 @@ class HarnessRuntimeService:
             ),
         )
 
-    def _butler_capabilities(self, project_id: str) -> Any:
+    def _butler_capabilities(
+        self, project_id: str, *, turn: HarnessTurn | None = None
+    ) -> Any:
         from .butler_capabilities import ButlerCapabilities
 
         return ButlerCapabilities(
@@ -13910,6 +13949,11 @@ class HarnessRuntimeService:
             project_id,
             settings_api=self.settings_assistant_api,
             work=self.control_assistant_work,
+            memory=self.butler_memory,
+            operator_message=(
+                str(turn.metadata.get("user_prompt") or "") if turn is not None else ""
+            ),
+            operator_turn_id=(turn.chat_turn_id if turn is not None else None),
             notebooks=(
                 self.mcp_service.notebook_tools.notebooks
                 if self.mcp_service is not None
@@ -14414,7 +14458,7 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "This Butler capability is unavailable."
                 )
-            capability = self._butler_capabilities(turn.engagement_id)
+            capability = self._butler_capabilities(turn.engagement_id, turn=turn)
             if name == "nebula.capabilities.search":
                 value = await capability.search(arguments)
             elif name == "nebula.capabilities.describe":
@@ -17445,6 +17489,35 @@ class HarnessRuntimeService:
                 payload,
             )
         self._wake_activity_followers(turn.id)
+        try:
+            if event.quota_snapshot is not None and self._quota_snapshot_observer:
+                self._quota_snapshot_observer(
+                    session.harness_profile_id, event.quota_snapshot
+                )
+            if self._rate_limit_observer and (
+                event.reason_code == "rate_limited" or event.type == "usage"
+            ):
+                self._rate_limit_observer(
+                    session.harness_profile_id,
+                    turn.id,
+                    durable.id,
+                    durable.occurred_at,
+                    event.type == "usage" and event.reason_code != "rate_limited",
+                )
+            if (
+                event.vendor == HarnessKind.CODEX_APP_SERVER
+                and event.type in {"usage", "completed"}
+                and self._quota_read_observer
+            ):
+                self._quota_read_observer(session.harness_profile_id)
+        except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.quota_observer_schedule_failed",
+                "A saved harness event could not schedule a quota observation.",
+                exc,
+                stage="quota-observation",
+            )
         return event.model_copy(
             update={
                 "id": durable.id,

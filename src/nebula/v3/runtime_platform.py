@@ -363,12 +363,16 @@ class RuntimePlatform:
         self.mcp_service: McpProbeService | None = None
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
+        self.butler_memory: Any = None
 
     def bind_settings_assistant_api(self, gateway: SettingsAssistantApi) -> None:
         self.settings_assistant_api = gateway
 
     def bind_control_assistant_work(self, work: Any) -> None:
         self.control_assistant_work = work
+
+    def bind_butler_memory(self, memory: Any) -> None:
+        self.butler_memory = memory
 
     def bind_mcp_service(self, service: McpProbeService) -> None:
         if service.store is not self.store:
@@ -387,11 +391,13 @@ class RuntimePlatform:
         include_oci: bool = False,
         allow_empty: bool = False,
         settings_assistant: bool = False,
+        operator_message: str = "",
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
         """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
 
-        del turn_id, provider, model
+        operator_turn_id = turn_id
+        del provider, model
         if include_oci:
             raise RuntimePlatformError(
                 "OCI capabilities are available only through run_command"
@@ -421,6 +427,9 @@ class RuntimePlatform:
                 engagement_id,
                 settings_api=self.settings_assistant_api,
                 work=self.control_assistant_work,
+                memory=self.butler_memory,
+                operator_message=operator_message,
+                operator_turn_id=operator_turn_id,
                 notebooks=self.mcp_service.notebook_tools.notebooks
                 if self.mcp_service is not None
                 and self.mcp_service.notebook_tools is not None

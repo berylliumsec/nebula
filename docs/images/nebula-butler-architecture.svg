@@ -1,87 +1,53 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1672" height="941" viewBox="0 0 1672 941" role="img" aria-labelledby="title description">
-  <title id="title">Nebula and Butler architecture</title>
-  <desc id="description">Internet and LAN reach host operating systems. Optional Mercury controls surround Nebula. Inside Nebula, Butler coordinates three agents in the execution shell; operators bring their own skills, hooks, and software.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="460" viewBox="0 0 720 460" role="img" aria-labelledby="title description">
+  <title id="title">Nebula, Butler, and optional Mercury</title>
+  <desc id="description">Internet and LAN reach a host running Nebula. Mercury can independently add host and app controls. Inside Nebula, Butler directs main agents, which coordinate subagents. Operator-provided skills, hooks, and software extend agent work.</desc>
   <defs>
-    <marker id="arrow" markerWidth="11" markerHeight="11" refX="8" refY="5.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1l7 4.5L1 10" fill="none" stroke="#73c8fc" stroke-width="1.5"/></marker>
-    <marker id="purpleArrow" markerWidth="11" markerHeight="11" refX="8" refY="5.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1l7 4.5L1 10" fill="none" stroke="#b99af4" stroke-width="1.5"/></marker>
-    <g id="hostIcon" fill="none" stroke="#75c9fb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="0" y="0" width="46" height="19" rx="3"/><rect x="0" y="22" width="46" height="19" rx="3"/><circle cx="7" cy="9.5" r="1.5" fill="#75c9fb" stroke="none"/><circle cx="7" cy="31.5" r="1.5" fill="#75c9fb" stroke="none"/>
-    </g>
-    <g id="agentIcon" fill="none" stroke="#75c9fb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M23 4v7M16 11h14"/><circle cx="23" cy="3" r="2" fill="#75c9fb" stroke="none"/><rect x="5" y="12" width="36" height="27" rx="6"/><path d="M5 25H1m40 0h4"/><circle cx="17" cy="25" r="2" fill="#75c9fb" stroke="none"/><circle cx="29" cy="25" r="2" fill="#75c9fb" stroke="none"/>
-    </g>
     <style>
-      text{font-family:Arial,Helvetica,sans-serif}
-      .heading{font-size:36px;font-weight:700;fill:#f5f8fb}
-      .label{font-size:27px;font-weight:600;fill:#f4f7fb}
-      .medium{font-size:22px;font-weight:600;fill:#f4f7fb}
-      .small{font-size:19px;font-weight:500;fill:#c8d4e8}
-      .muted{font-size:19px;font-weight:500;fill:#8da9c5}
-      .flow{fill:none;stroke:#77c9f8;stroke-width:2.3;marker-end:url(#arrow)}
-      .flowPurple{fill:none;stroke:#b99af4;stroke-width:2.3;marker-end:url(#purpleArrow)}
-      .card{fill:#111c29;stroke:#649cbd;stroke-width:1.2}
+      text { font-family: Arial, Helvetica, sans-serif; }
+      .title { fill: #e4edef; font-size: 26px; font-weight: 700; }
+      .label { fill: #d5e1e5; font-size: 21px; font-weight: 600; }
+      .detail { fill: #98adb5; font-size: 16px; }
+      .flow { fill: none; stroke: #729ba7; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+      .card { fill: #13232b; stroke: #466674; stroke-width: 1.2; }
     </style>
   </defs>
 
-  <rect width="1672" height="941" fill="#08121a"/>
+  <rect width="720" height="460" rx="20" fill="#0d161c"/>
 
-  <rect class="card" x="670" y="16" width="331" height="84" rx="11"/>
-  <g fill="none" stroke="#77c9fa" stroke-width="3" transform="translate(730 34)"><circle cx="25" cy="25" r="25"/><ellipse cx="25" cy="25" rx="11" ry="25"/><path d="M0 25h50M5 12h40M5 38h40"/></g>
-  <text class="heading" x="816" y="69">Internet</text>
-  <path d="M836 100v28" fill="none" stroke="#77c9f8" stroke-width="2"/>
-  <rect x="769" y="127" width="134" height="39" rx="20" fill="#0c1a29" stroke="#8ad0ff" stroke-width="2"/>
-  <text class="medium" x="836" y="155" text-anchor="middle">LAN</text>
-  <path d="M836 166v2H287v35M836 168H657v35M836 168h181v35M836 168h549v35" fill="none" stroke="#78caff" stroke-width="2"/>
-  <path class="flow" d="M287 168v35"/><path class="flow" d="M657 168v35"/><path class="flow" d="M1017 168v35"/><path class="flow" d="M1385 168v35"/>
+  <path class="flow" d="M262 59h30m-6-5 6 5-6 5"/>
+  <path class="flow" d="M380 94v33m-5-6 5 6 5-6"/>
+  <path d="M466 59h26" fill="none" stroke="#857797" stroke-width="1.5" stroke-dasharray="5 5" stroke-linecap="round"/>
 
-  <g id="hosts">
-    <rect class="card" x="138" y="206" width="304" height="90" rx="11"/><use href="#hostIcon" x="189" y="230"/><text class="label" x="275" y="261">Host / OS</text>
-    <rect class="card" x="501" y="206" width="307" height="90" rx="11"/><use href="#hostIcon" x="553" y="230"/><text class="label" x="639" y="261">Host / OS</text>
-    <rect class="card" x="864" y="206" width="309" height="90" rx="11"/><use href="#hostIcon" x="927" y="230"/><text class="label" x="1013" y="261">Host / OS</text>
-    <rect class="card" x="1232" y="206" width="301" height="90" rx="11"/><use href="#hostIcon" x="1290" y="230"/><text class="label" x="1376" y="261">Host / OS</text>
-  </g>
-  <path d="M287 296v25M657 296v25M1017 296v25M1385 296v25" fill="none" stroke="#77c9f8" stroke-width="2"/>
+  <rect class="card" x="32" y="24" width="230" height="70" rx="12"/>
+  <text class="label" x="54" y="67">Internet / LAN</text>
 
-  <rect x="82" y="321" width="1508" height="585" rx="21" fill="#0c1622" stroke="#ae95d5" stroke-width="2" stroke-dasharray="12 11"/>
-  <text class="heading" x="135" y="382">Mercury</text>
-  <text class="label" x="290" y="380" fill="#b89af3">(optional)</text>
-  <rect x="479" y="342" width="398" height="51" rx="11" fill="#111d2e" stroke="#ae8bea" stroke-width="1.7"/>
-  <text class="medium" x="572" y="376" fill="#c9c0f1">Host + kernel lockdown</text>
-  <path d="M544 355l11 7-2 16-9 5-9-5-2-16z" fill="none" stroke="#bba9ee" stroke-width="2"/>
-  <rect x="918" y="342" width="342" height="51" rx="11" fill="#111d2e" stroke="#ae8bea" stroke-width="1.7"/>
-  <text class="medium" x="1027" y="376" fill="#c9c0f1">App permissions</text>
-  <path d="M1003 353l11 5v11c0 7-6 12-11 15-5-3-11-8-11-15v-11z" fill="none" stroke="#bba9ee" stroke-width="2"/>
-  <path class="flowPurple" d="M657 393v29"/><path class="flowPurple" d="M1079 393v29"/>
+  <rect class="card" x="294" y="24" width="172" height="70" rx="12"/>
+  <text class="label" x="316" y="67">Host / OS</text>
 
-  <rect x="127" y="425" width="1418" height="447" rx="15" fill="#0a1b25" stroke="#76c7df" stroke-width="2"/>
-  <g transform="translate(716 440) scale(.44 .6)"><path d="M50 8C81 42 81 118 50 152C19 118 19 42 50 8Z" fill="none" stroke="#b7e6ee" stroke-width="4"/></g>
-  <text class="heading" x="787" y="500" font-size="54">Nebula</text>
-  <text class="muted" x="791" y="530">Your computer. Amplified.</text>
+  <rect x="494" y="24" width="194" height="70" rx="12" fill="#1a202c" stroke="#857797" stroke-width="1.2" stroke-dasharray="7 6"/>
+  <text x="512" y="55" fill="#d2c6e0" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Mercury</text>
+  <text x="597" y="54" fill="#a99bbd" font-family="Arial, Helvetica, sans-serif" font-size="14">optional</text>
+  <text x="512" y="77" fill="#98adb5" font-family="Arial, Helvetica, sans-serif" font-size="14">Host + app controls</text>
 
-  <rect x="169" y="547" width="1336" height="305" rx="15" fill="#101e2b" stroke="#5c9cbe" stroke-width="1.2"/>
-  <text class="label" x="203" y="585">Execution shell</text>
+  <rect x="32" y="130" width="656" height="300" rx="16" fill="#101e25" stroke="#527d88" stroke-width="1.4"/>
+  <path d="M81 148c11 13 11 37 0 50-11-13-11-37 0-50z" fill="none" stroke="#95bbc4" stroke-width="2"/>
+  <text class="title" x="111" y="181">Nebula</text>
+  <text class="detail" x="545" y="180">Execution shell</text>
 
-  <rect x="216" y="645" width="293" height="108" rx="11" fill="#142433" stroke="#69b7d7" stroke-width="1.2"/>
-  <g transform="translate(269 655) scale(.52 .59)"><path d="M50 8C81 42 81 118 50 152C19 118 19 42 50 8Z" fill="none" stroke="#b7e6ee" stroke-width="4"/></g>
-  <text class="label" x="359" y="709">Butler</text>
+  <path class="flow" d="M217 262h39m-6-5 6 5-6 5"/>
+  <path class="flow" d="M466 262h35m-6-5 6 5-6 5"/>
+  <path class="flow" d="M361 339v-30m-5 6 5-6 5 6"/>
 
-  <path class="flow" d="M509 686h73v-66h95"/><path class="flow" d="M509 703h169"/><path class="flow" d="M509 720h73v66h95"/>
-  <g id="agents">
-    <rect class="card" x="688" y="589" width="248" height="65" rx="10"/><use href="#agentIcon" x="725" y="600"/><text class="medium" x="802" y="632">Agent</text>
-    <rect class="card" x="688" y="669" width="248" height="65" rx="10"/><use href="#agentIcon" x="725" y="680"/><text class="medium" x="802" y="712">Agent</text>
-    <rect class="card" x="688" y="750" width="248" height="65" rx="10"/><use href="#agentIcon" x="725" y="761"/><text class="medium" x="802" y="793">Agent</text>
-  </g>
+  <rect class="card" x="57" y="215" width="160" height="94" rx="12"/>
+  <text class="label" x="78" y="270">Butler</text>
 
-  <rect x="1094" y="565" width="372" height="267" rx="17" fill="#122233" stroke="#6eb4df" stroke-width="1.5"/>
-  <text class="label" x="1133" y="598">Bring your own</text>
-  <path class="flow" d="M1128 648h-103v-27h-79"/><path class="flow" d="M1128 718h-103v-16h-79"/><path class="flow" d="M1128 788h-103v-5h-79"/>
-  <rect class="card" x="1128" y="617" width="307" height="57" rx="9"/>
-  <text class="medium" x="1229" y="654">Skills</text>
-  <path d="M1187 635l-9 9 9 9m15-18 9 9-9 9m-4-22-9 26" fill="none" stroke="#72c9f8" stroke-width="2.5" stroke-linecap="round"/>
-  <rect class="card" x="1128" y="687" width="307" height="57" rx="9"/>
-  <text class="medium" x="1229" y="724">Hooks</text>
-  <path d="M1176 697v18m14-18v18m-19 0h24m-20 0c0 15 16 15 16 0m-8 15v8" fill="none" stroke="#72c9f8" stroke-width="2.5" stroke-linecap="round"/>
-  <rect class="card" x="1128" y="757" width="307" height="57" rx="9"/>
-  <text class="medium" x="1229" y="794">Software</text>
-  <path d="M1173 773l13-8 13 8v17l-13 8-13-8zm0 0 13 8 13-8m-13 8v17" fill="none" stroke="#72c9f8" stroke-width="2.5" stroke-linejoin="round"/>
+  <rect class="card" x="256" y="215" width="210" height="94" rx="12"/>
+  <text class="label" x="280" y="270">Main agents</text>
+
+  <rect class="card" x="501" y="215" width="162" height="94" rx="12"/>
+  <text class="label" x="519" y="270">Subagents</text>
+
+  <rect class="card" x="57" y="339" width="606" height="62" rx="12"/>
+  <text x="80" y="365" fill="#98adb5" font-family="Arial, Helvetica, sans-serif" font-size="15">Operator-provided</text>
+  <text class="label" x="80" y="389">Skills · Hooks · Software</text>
 </svg>

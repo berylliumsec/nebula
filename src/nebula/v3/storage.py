@@ -58,12 +58,16 @@ from .event_history import (
     EventHistoryPurger,
 )
 from .domain import (
+    AgentAttempt,
+    AgentRun,
     Artifact,
+    ChatGoal,
     ChatMessage,
     ChatTurn,
     ENTITY_MODEL_BY_KIND,
     Entity,
     OperationEvent,
+    RunBackend,
     ToolCall,
     ToolCallOrigin,
     RunEvent,
@@ -159,6 +163,8 @@ _AUTOMATION_ENTITY_KINDS = frozenset(
 
 _CHAT_SESSION_ID_ENTITY_KINDS = frozenset(
     {
+        "butler_agent_reports",
+        "butler_goal_watches",
         "chat_bookmarks",
         "chat_decisions",
         "chat_goals",
@@ -274,6 +280,26 @@ class StoreTransaction:
         # Deleted records whose event history goes once this unit commits.
         self.deleted_event_owners: list[str] = []
         self.chat_activity_changed = False
+        self.oversight_projects_changed: set[str] = set()
+        self.provider_usage_profiles_changed: set[str] = set()
+        self._locked_operation_streams: set[str] = set()
+
+    def lock_operation_stream(self, operation_id: str) -> None:
+        """Serialize project-event sequence assignment before goal row writes.
+
+        SQLite serializes writers when the row update begins. PostgreSQL needs
+        the same project advisory lock before updating a goal, since a parent
+        stop may update child goals later in the same transaction.
+        """
+
+        if operation_id in self._locked_operation_streams:
+            return
+        if self.session.bind and self.session.bind.dialect.name == "postgresql":
+            self.session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:operation_id))"),
+                {"operation_id": operation_id},
+            )
+        self._locked_operation_streams.add(operation_id)
 
     def add(self, entity: Entity) -> Entity:
         row = EntityRow(
@@ -387,6 +413,7 @@ class StoreTransaction:
         # which a large record pays on every update.
         previous_status = row.payload.get("status")
         previous_title = row.payload.get("title")
+        previous_tokens = row.payload.get("tokens_used")
         payload = dict(row.payload)
         payload.update(changes)
         payload["id"] = row.id
@@ -399,6 +426,32 @@ class StoreTransaction:
             # such; otherwise the change itself is invalid.
             _row_to_entity(row, model)
             raise
+        updated_goal = updated if isinstance(updated, ChatGoal) else None
+        updated_turn = updated if isinstance(updated, ChatTurn) else None
+        goal_transition = (
+            updated_goal is not None and previous_status != updated_goal.status.value
+        )
+        completed_goal_turn = (
+            updated_turn is not None
+            and previous_status != "complete"
+            and updated_turn.status.value == "complete"
+            and updated_turn.backend.value == "provider"
+            and updated_turn.goal_id is not None
+        )
+        before_goal = None
+        transition_subject: ChatGoal | ChatTurn | None = None
+        if goal_transition:
+            transition_subject = updated_goal
+        elif completed_goal_turn:
+            transition_subject = updated_turn
+        if transition_subject is not None:
+            from .butler_oversight import project_stream_id
+
+            self.lock_operation_stream(
+                project_stream_id(transition_subject.engagement_id)
+            )
+            if goal_transition:
+                before_goal = ChatGoal.model_validate(row.payload)
         result = self.session.execute(
             update(EntityRow)
             .where(
@@ -431,6 +484,32 @@ class StoreTransaction:
             and previous_title != payload.get("title")
         ):
             self.chat_activity_changed = True
+        if goal_transition and updated_goal is not None:
+            from .butler_oversight import record_goal_transition
+
+            assert before_goal is not None
+            record_goal_transition(self, before_goal, updated_goal)
+        if completed_goal_turn and updated_turn is not None:
+            from .butler_tool_failures import record_completed_provider_turn
+
+            record_completed_provider_turn(self, updated_turn)
+        if (
+            isinstance(updated, AgentAttempt)
+            and isinstance(previous_tokens, int)
+            and updated.tokens_used > previous_tokens
+        ):
+            run_row = self.session.get(EntityRow, updated.run_id)
+            if run_row is not None and run_row.kind == AgentRun.entity_kind:
+                run = AgentRun.model_validate(run_row.payload)
+                if (
+                    run.backend == RunBackend.NATIVE
+                    and run.engagement_id == updated.engagement_id
+                ):
+                    profile_id = (
+                        updated.provider_profile_id or run.supervisor_provider_id
+                    )
+                    if profile_id:
+                        self.provider_usage_profiles_changed.add(profile_id)
         return updated
 
     def delete(
@@ -551,9 +630,19 @@ class NebulaStore:
         # Removes a deleted record's event history off the deleting thread.
         self.event_history = EventHistoryPurger(self.database)
         self._chat_activity_listeners: list[Callable[[], None]] = []
+        self._oversight_listeners: list[Callable[[str], None]] = []
+        self._provider_usage_listeners: list[Callable[[str], None]] = []
 
     def on_chat_activity_change(self, listener: Callable[[], None]) -> None:
         self._chat_activity_listeners.append(listener)
+
+    def on_project_oversight_change(self, listener: Callable[[str], None]) -> None:
+        self._oversight_listeners.append(listener)
+
+    def on_provider_usage_change(self, listener: Callable[[str], None]) -> None:
+        """Signal committed native mission usage without exposing its content."""
+
+        self._provider_usage_listeners.append(listener)
 
     def _begin_run_write(self, connection: Any, run_id: str) -> None:
         """Serialize sequence assignment for one run on supported databases."""
@@ -574,8 +663,13 @@ class NebulaStore:
             )
 
     @contextmanager
-    def transaction(self) -> Iterator[StoreTransaction]:
+    def transaction(self, *, immediate: bool = False) -> Iterator[StoreTransaction]:
         with self.database.session() as session:
+            if immediate and self.database.engine.dialect.name == "sqlite":
+                # Report ingestion reads an absent incident before writing it.
+                # Take SQLite's writer lock first so concurrent agents cannot
+                # both conclude that they need to create the same incident.
+                session.execute(text("BEGIN IMMEDIATE"))
             transaction = StoreTransaction(session)
             yield transaction
         if transaction.chat_activity_changed:
@@ -587,6 +681,30 @@ class NebulaStore:
                         "storage",
                         "storage.chat_activity_signal_failed",
                         "A chat activity change could not be signaled.",
+                        exc,
+                        stage="storage",
+                    )
+        for engagement_id in transaction.oversight_projects_changed:
+            for oversight_listener in self._oversight_listeners:
+                try:
+                    oversight_listener(engagement_id)
+                except Exception as exc:
+                    record_caught_exception(
+                        "storage",
+                        "storage.butler_oversight_signal_failed",
+                        "A committed project oversight event could not be signaled.",
+                        exc,
+                        stage="storage",
+                    )
+        for profile_id in transaction.provider_usage_profiles_changed:
+            for provider_usage_listener in self._provider_usage_listeners:
+                try:
+                    provider_usage_listener(profile_id)
+                except Exception as exc:
+                    record_caught_exception(
+                        "storage",
+                        "storage.provider_usage_signal_failed",
+                        "A committed mission usage change could not be signaled.",
                         exc,
                         stage="storage",
                     )
@@ -1171,6 +1289,26 @@ class NebulaStore:
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
 
+    def count_entities(
+        self,
+        model: type[Entity],
+        filters: Mapping[str, PayloadFilterValue] | None = None,
+        *,
+        engagement_id: str | None = None,
+    ) -> int:
+        """Count payload-filtered records without materializing a project list."""
+
+        statement = self._entity_statement(
+            model, filters or {}, engagement_id=engagement_id
+        )
+        if statement is None:
+            return 0
+        with self.database.session() as session:
+            return int(
+                session.scalar(statement.with_only_columns(func.count()).order_by(None))
+                or 0
+            )
+
     def list_latest_entities(
         self,
         model: type[EntityT],
@@ -1720,6 +1858,8 @@ class NebulaStore:
                 and_(
                     EntityRow.kind.in_(
                         (
+                            "butler_agent_reports",
+                            "butler_goal_watches",
                             "chat_messages",
                             "chat_turns",
                             "chat_goals",

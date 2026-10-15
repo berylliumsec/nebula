@@ -206,6 +206,52 @@ def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path):
         assert codename in excerpts[0]["content"]
 
 
+def test_butler_reuses_saved_provider_history_and_compaction_after_restart(tmp_path):
+    store, service, session, profile, provider = _chat(
+        tmp_path,
+        lambda provider_id: ReportingProvider(provider_id),
+        history=_history(40, repeat=40),
+    )
+    session = store.update(
+        ChatSession,
+        session.id,
+        {"metadata": {"control_assistant": True}},
+        expected_revision=session.revision,
+    )
+
+    _send(
+        service,
+        session,
+        profile,
+        "What did we find about copperwolf?",
+        control_assistant=True,
+    )
+    assert _compactions(provider)
+    assert store.list_entities(ContextSnapshot, engagement_id=session.engagement_id)
+
+    restarted = ChatService(store, provider_factory=lambda _: provider)
+    _send(
+        restarted,
+        store.get(ChatSession, session.id),
+        profile,
+        "Continue with the copperwolf result.",
+        control_assistant=True,
+    )
+    saved = restarted.session_messages(session.id)
+    assert [message.content for message in saved[-4:]] == [
+        "What did we find about copperwolf?",
+        "Evidence-backed answer [source-a:chunk-a].",
+        "Continue with the copperwolf result.",
+        "Evidence-backed answer [source-a:chunk-a].",
+    ]
+    resumed_request = _turn_requests(provider)[-1]
+    assert resumed_request.messages[0].content.startswith(MEMORY_HEADING)
+    assert any(
+        "What did we find about copperwolf?" in message.content
+        for message in resumed_request.messages
+    )
+
+
 def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
     tmp_path,
 ):

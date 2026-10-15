@@ -312,6 +312,12 @@ export const diagnosticRemediationCatalog = {
       "destination": "/settings#advanced-settings",
       "help_article": "provider-model"
     },
+    "butler": {
+      "label": "Butler",
+      "operation": "Project oversight",
+      "destination": "/?view=chat",
+      "help_article": "provider-model"
+    },
     "missions": {
       "label": "Missions",
       "operation": "Mission run",

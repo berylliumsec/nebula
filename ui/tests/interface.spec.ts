@@ -457,6 +457,8 @@ async function installTruthfulCore(page: Page) {
         tags: [],
         metadata: { created_by: "system:bootstrap", bootstrap_kind: "scratch_project_v1" },
       }];
+    } else if (path.endsWith("/storage")) {
+      body = { sources: [], devices: [], volumes: [], incidents: [], actions: [], dispatches: [] };
     } else if (path.endsWith("/container-terminal/public-ip")) {
       body = { address: "203.0.113.42", observed_at: "2026-09-04T10:40:00Z", stale: false };
     } else if (path.endsWith("/container-terminal/capabilities")) {
@@ -2236,7 +2238,7 @@ reloadTest("stabilization Butler Voice stays active until explicit exit", async 
       iceGatheringState = "complete";
       connectionState = "connected";
       localDescription = { sdp: "v=0\r\nmock-offer" };
-      createDataChannel() { return this.channel; }
+      createDataChannel() { Object.assign(window, { __nebulaVoiceTestChannel: this.channel }); return this.channel; }
       addTrack() { return {}; }
       async createOffer() { return { type: "offer", sdp: "v=0\r\nmock-offer" }; }
       async setLocalDescription() {}
@@ -2271,6 +2273,52 @@ reloadTest("stabilization Butler Voice stays active until explicit exit", async 
   await voice.getByRole("button", { name: "Speaker output" }).click();
   await expect(voice.getByRole("group", { name: "Speaker audio" })).toContainText("No speaker stream is connected");
   await expect(voice.getByRole("button", { name: "Reconnect voice" })).toBeVisible();
+  await voice.getByRole("button", { name: "Collapse speaker settings" }).click();
+  const input = voice.getByRole("button", { name: "Microphone input" });
+  await input.click();
+  await expect(voice.getByRole("group", { name: "Microphone input" })).toBeVisible();
+  await voice.getByRole("button", { name: "Collapse input settings" }).click();
+  await expect(input).toHaveAttribute("aria-expanded", "false");
+  await expect(input).toBeFocused();
+  const shortRequest = "Can you check the progress of the active goal and tell me if the parent agent needs anything?";
+  await page.evaluate((caption) => {
+    const channel = (window as Window & { __nebulaVoiceTestChannel?: EventTarget }).__nebulaVoiceTestChannel;
+    if (!channel) throw new Error("Voice test channel is unavailable");
+    channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "session.input_transcript.delta", delta: caption }) }));
+  }, shortRequest);
+  const shortTranscript = voice.getByText(shortRequest);
+  await expect(shortTranscript).toBeVisible();
+  expect(await shortTranscript.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+  await page.evaluate(() => {
+    const channel = (window as Window & { __nebulaVoiceTestChannel?: EventTarget }).__nebulaVoiceTestChannel;
+    if (!channel) throw new Error("Voice test channel is unavailable");
+    const emit = (type: string, delta: string) => channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type, delta }) }));
+    emit("session.input_transcript.delta", "An earlier request about project scope and active work. ".repeat(7) + "Please check the current goal now.");
+    emit("session.output_transcript.delta", "An earlier explanation about Butler's available actions. ".repeat(7) + "I am checking the current goal.");
+  });
+  const youTranscript = voice.getByRole("button", { name: "Show full You transcript" });
+  const nebulaTranscript = voice.getByRole("button", { name: "Show full Nebula transcript" });
+  await expect(youTranscript).toBeVisible();
+  await expect(nebulaTranscript).toBeVisible();
+  await expect(voice.getByText(/Please check the current goal now/)).toBeVisible();
+  await youTranscript.click();
+  await expect(voice.getByText(/An earlier request about project scope/)).toBeVisible();
+  await voice.getByRole("button", { name: "Collapse your transcript" }).click();
+  const transcript = voice.locator('[aria-label="Voice transcript"]');
+  expect(await transcript.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  const transcriptBounds = await transcript.boundingBox();
+  const footerBounds = await voice.locator("footer").boundingBox();
+  expect(footerBounds!.y).toBeGreaterThanOrEqual(transcriptBounds!.y + transcriptBounds!.height - 1);
+  const workBounds = await voice.getByRole("complementary", { name: "Project work" }).boundingBox();
+  expect(footerBounds!.y).toBeGreaterThanOrEqual(workBounds!.y + workBounds!.height - 1);
+  if (test.info().project.name === "desktop") {
+    await page.setViewportSize({ width: 1600, height: 1050 });
+    const wideTranscript = await transcript.boundingBox();
+    const wideFooter = await voice.locator("footer").boundingBox();
+    expect(wideFooter!.y).toBeGreaterThanOrEqual(wideTranscript!.y + wideTranscript!.height - 1);
+    const wideWork = await voice.getByRole("complementary", { name: "Project work" }).boundingBox();
+    expect(wideFooter!.y).toBeGreaterThanOrEqual(wideWork!.y + wideWork!.height - 1);
+  }
   await voice.evaluate(element => { element.scrollTop = 0; });
   const orb = await voice.getByTestId("voice-orb").boundingBox();
   expect(orb).toBeTruthy();

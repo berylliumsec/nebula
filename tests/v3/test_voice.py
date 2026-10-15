@@ -36,6 +36,10 @@ def test_live_transport_sends_client_delegation_and_keeps_secret_out_of_result()
     assert seen["auth"] == "Bearer private-key"
     assert seen["body"]["session"]["model"] == "gpt-live-1"
     assert seen["body"]["session"]["delegation"] == {"type": "client"}
+    instructions = seen["body"]["session"]["instructions"]
+    assert "every substantive user turn" in instructions
+    assert "what was said earlier" in instructions
+    assert "Do not answer a substantive request" in instructions
     assert seen["body"]["transport"] == {"type": "webrtc", "sdp": "v=0\r\nclient-offer"}
     assert result == {"session_id": "live_123", "sdp": "answer"}
     assert "private-key" not in str(result)

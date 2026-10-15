@@ -1,6 +1,7 @@
 .launcher { position: fixed; z-index: 85; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-overlay); color: var(--text); box-shadow: 0 8px 25px rgb(0 0 0 / 18%); cursor: pointer; }
+.launcherAttention { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border: 2px solid var(--surface-overlay); border-radius: 50%; background: var(--danger, var(--text)); pointer-events: none; }
 .launcher:focus-visible, .panel :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.panel { position: fixed; z-index: 85; left: var(--panel-left, 12px); top: var(--panel-top, 72px); box-sizing: border-box; display: flex; flex-direction: column; width: min(560px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - 24px)); border: 1px solid var(--border); border-radius: 18px; background: var(--surface-overlay); color: var(--text); box-shadow: 0 24px 80px rgb(0 0 0 / 24%); }
+.panel { position: fixed; z-index: 85; left: var(--panel-left, 12px); top: var(--panel-top, 72px); box-sizing: border-box; display: flex; flex-direction: column; width: min(560px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - var(--panel-top, 72px) - 12px)); border: 1px solid var(--border); border-radius: 18px; background: var(--surface-overlay); color: var(--text); box-shadow: 0 24px 80px rgb(0 0 0 / 24%); }
 .panel[hidden] { display: none; }
 .panel button { min-width: 44px; min-height: 44px; }
 .header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
@@ -19,6 +20,8 @@
 .settingsActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .settingsActions button { flex: 1 1 auto; }
 .ownSettings p { margin: 0; }
+.butlerWorkspace { min-width: 0; margin-bottom: 12px; }
+.butlerWorkspace > :last-child { border-top: 0; }
 .transcript { max-height: min(380px, 45dvh); overflow: auto; overflow-wrap: anywhere; }
 .transcript pre { max-width: 100%; overflow: auto; }
 .question { margin: 12px 0; color: var(--muted); }

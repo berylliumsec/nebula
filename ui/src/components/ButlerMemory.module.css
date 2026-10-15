@@ -1,0 +1,32 @@
+.root { min-width: 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.root :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.toggle { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 44px; padding: 4px 0; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.toggle span { flex: 1; font-weight: 600; font-size: .86rem; }
+.chevronOpen { transform: rotate(180deg); }
+.panel { padding: 0 0 10px; }
+.intro { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.intro p { margin: 2px 0 8px; color: var(--muted); font-size: .8rem; line-height: 1.4; }
+.refresh { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--text); cursor: pointer; }
+.refresh:hover:not(:disabled) { background: var(--surface-hover); }
+.refresh:disabled { opacity: .5; cursor: default; }
+.search { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.search input { flex: 1; min-width: 0; height: 44px; border: 1px solid var(--border); border-radius: 10px; padding: 0 10px; background: var(--surface); color: var(--text); font: inherit; }
+.search button, .actions button, .panel > button, .error button { min-height: 44px; }
+.note, .count { margin: 8px 0; color: var(--muted); font-size: .8rem; line-height: 1.4; }
+.error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; color: var(--danger, var(--text)); font-size: .8rem; }
+.list { display: grid; gap: 6px; list-style: none; margin: 6px 0 0; padding: 0; }
+.row { min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-hover); }
+.row summary { min-height: 44px; padding: 9px 10px; cursor: pointer; }
+.row summary::marker { color: var(--muted); }
+.preview { display: block; white-space: pre-wrap; font-size: .83rem; line-height: 1.4; }
+.row small { display: block; margin-top: 4px; color: var(--muted); font-size: .74rem; }
+.rowBody { border-top: 1px solid var(--border); padding: 8px 10px; }
+.fullContent { margin: 0 0 8px; white-space: pre-wrap; font-size: .82rem; line-height: 1.45; }
+.source { margin: 0 0 8px; color: var(--muted); font-size: .75rem; }
+.source code { overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.editForm { display: grid; gap: 6px; }
+.editForm label { font-size: .8rem; }
+.editForm textarea { width: 100%; min-width: 0; box-sizing: border-box; resize: vertical; border: 1px solid var(--border); border-radius: 9px; padding: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: .82rem; }
+.deleteConfirm p { margin: 0 0 7px; font-size: .82rem; }
+@media (max-width: 430px) { .search { flex-wrap: wrap; } .search input { flex-basis: 100%; } .search button { width: 100%; } }

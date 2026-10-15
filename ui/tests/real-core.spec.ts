@@ -405,7 +405,7 @@ async function clickAssistantSettings(page: Page) {
   await trigger.click();
 }
 
-async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string> } = {}): Promise<RealCore> {
+async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string>; tls?: boolean } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   // Match the production-test override used by the shared real-Core harness.
   const coreCandidates = [
@@ -428,6 +428,20 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
   let token = options.token ?? "playwright-real-core-token-2026";
   const bindHost = options.bindHost ?? "127.0.0.1";
   const browserHost = options.browserHost ?? bindHost;
+  let tlsCert: string | undefined;
+  let tlsKey: string | undefined;
+  if (options.tls) {
+    await mkdir(dataDir, {recursive: true});
+    tlsCert = path.join(dataDir, "test-lan-cert.pem");
+    tlsKey = path.join(dataDir, "test-lan-key.pem");
+    const generated = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "1", "-nodes",
+      "-keyout", tlsKey, "-out", tlsCert, "-subj", "/CN=Nebula test LAN",
+      "-addext", `subjectAltName=IP:${browserHost},IP:127.0.0.1`], {encoding: "utf8"});
+    if (generated.status !== 0) {
+      if (!options.dataDir) await rm(dataDir, {recursive: true, force: true});
+      throw new Error(`Could not create a temporary LAN HTTPS certificate: ${generated.stderr || generated.error || generated.status}`);
+    }
+  }
   const embedded = process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1";
   const child = spawn(
     coreBinary,
@@ -445,6 +459,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
       "--allow-insecure-device-pairing",
       "--allow-browser-diagnostics",
       ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
+      ...(tlsCert && tlsKey ? ["--tls-cert", tlsCert, "--tls-key", tlsKey] : []),
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
     ],
@@ -464,12 +479,12 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
     const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), 30_000);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
-      const match = output.match(/"url"\s*:\s*"http:\/\/[^:\"]+:(\d+)"/);
+      const match = output.match(/"url"\s*:\s*"(https?):\/\/[^:\"]+:(\d+)"/);
       const generatedToken = output.match(/"token"\s*:\s*"([^"]+)"/);
       if (match && (!embedded || generatedToken)) {
         if (embedded) token = generatedToken![1];
         clearTimeout(timeout);
-        resolve(`http://${browserHost}:${match[1]}`);
+        resolve(`${match[1]}://${browserHost}:${match[2]}`);
       }
     };
     child.stdout.on("data", inspect);
@@ -6176,7 +6191,7 @@ test("project execution mode Nebula help answers a Docker host-file question and
 });
 
 test("assistant upgrade control assistant starts project work on production LAN Core", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   let providerId = "";
   const requestText = "Start a mission named LAN control mission to inspect this synthetic project.";
@@ -6231,13 +6246,25 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await page.goto(workbenchUrl);
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
+    const oversight = assistant.getByRole("region", {name: "Butler oversight"});
+    await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("0 watched");
+    const memory = assistant.getByRole("region", {name: "Butler memory"});
+    const memoryToggle = memory.getByRole("button", {name: "Memory", exact: true});
+    expect((await memoryToggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await memoryToggle.click();
+    await expect(memory.getByText("No memories saved yet. Butler will add useful preferences and lessons as work happens.")).toBeVisible();
+    expect(await memory.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect((await new AxeBuilder({page}).include('[aria-label="Butler memory"]').analyze()).violations).toEqual([]);
+    await memoryToggle.click();
     await expect(assistant.getByRole("button", {name: "Start mission"})).toBeVisible();
     const bounds = await assistant.boundingBox();
     const viewport = page.viewportSize()!;
     expect(bounds).toBeTruthy();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    expect(await assistant.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     expect((await assistant.getByRole("button", {name: "Start mission"}).boundingBox())!.height).toBeGreaterThanOrEqual(44);
     expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
     await assistant.getByRole("button", {name: "Start mission"}).click();
@@ -6249,6 +6276,9 @@ test("assistant upgrade control assistant starts project work on production LAN 
     const controlSession = await (await api.get(`chat/control-assistant/session?engagement_id=${projectId}`)).json() as {id: string};
     await assistant.getByRole("button", {name: "Butler settings"}).click();
     const settings = assistant.getByRole("region", {name: "Butler settings"});
+    expect(await settings.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect((await settings.getByRole("combobox", {name: "Butler effort"}).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({page}).include('[aria-label="Butler settings"]').analyze()).violations).toEqual([]);
     await settings.getByRole("combobox", {name: "Butler effort"}).selectOption("high");
     const effortSaved = page.waitForResponse(response => response.request().method() === "PATCH"
       && response.url().endsWith(`/chat-sessions/${controlSession.id}/assistant-config`));
@@ -6266,6 +6296,20 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Send to Butler"}).click();
     await expect(statusRequest.then(request => request.postDataJSON() as {reasoning_effort?: string})).resolves.toMatchObject({reasoning_effort: "high"});
     await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The mission was started in this project. Open Missions to follow its progress.").last()).toBeVisible({timeout: 45_000});
+    const preference = "I prefer concise progress summaries.";
+    await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(preference);
+    await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    await expect(assistant.getByText(preference, {exact: true})).toBeVisible({timeout: 45_000});
+    await memory.getByRole("button", {name: "Memory", exact: true}).click();
+    const preferenceRow = memory.getByRole("listitem").filter({hasText: preference});
+    await expect(preferenceRow).toBeVisible({timeout: 30_000});
+    await preferenceRow.locator("summary").click();
+    expect(await memory.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect((await new AxeBuilder({page}).include('[aria-label="Butler memory"]').analyze()).violations).toEqual([]);
+    await preferenceRow.getByRole("button", {name: "Delete", exact: true}).click();
+    await preferenceRow.getByRole("button", {name: "Delete memory"}).click();
+    await expect(preferenceRow).toHaveCount(0);
+    await memory.getByRole("button", {name: "Memory", exact: true}).click();
     const missionLink = assistant.getByRole("link", {name: "Open mission"});
     await expect(missionLink).toBeVisible();
     await expect(missionLink).toHaveAttribute("href", new RegExp(`^/projects/${projectId}/workbench\\?view=missions&mission=[a-f0-9-]+$`));
@@ -6294,6 +6338,310 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await expect(page).toHaveURL(new RegExp(`view=missions&mission=${savedMissionId}`));
     await expect(page.getByRole("navigation", {name: "Mission history"}).getByRole("button", {name: /LAN control mission/})).toHaveAttribute("aria-current", "true");
     await testInfo.attach("control-assistant-work", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test.describe("Butler Voice saved conversation", () => {
+  // The temporary Core owns real HTTPS, cookies, chat storage, and history.
+  // Only WebRTC and the upstream Live session exchange are synthetic.
+  test.use({ignoreHTTPSErrors: true});
+
+  test("assistant upgrade Butler Voice keeps two spoken turns in one saved conversation on production LAN Core", async ({page}, testInfo) => {
+    test.setTimeout(180_000);
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), tls: true});
+    const stub = await startLocalModelStub({responseContent: "First voice answer retained."});
+    const api = await playwrightRequest.newContext({
+      baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+      ignoreHTTPSErrors: true,
+    });
+    await withOwnedCleanup(async () => {
+      const created = await api.post("engagements", {data: {
+        name: "Butler Voice continuity LAN acceptance", description: "Synthetic project", client_name: null,
+        status: "active", tags: [], workspace_path: null, metadata: {},
+      }});
+      expect(created.ok(), await created.text()).toBe(true);
+      const projectId = ((await created.json()) as {id: string}).id;
+      const providerResponse = await api.post("providers", {data: {
+        name: "Voice continuity model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+        enabled: true, is_local: true, model_allowlist: ["security-model"],
+        privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+        metadata: {default_model: "security-model", options: {context_window: 32768}},
+      }});
+      expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+      const provider = await providerResponse.json() as {id: string; revision: number};
+      const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+        data: {model: "security-model", expected_revision: provider.revision},
+      });
+      expect(verified.ok(), await verified.text()).toBe(true);
+
+      const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+      const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+      expect(entry).toBeTruthy();
+      expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+        .toBe(build.assets[entry!]);
+
+      await page.addInitScript(() => {
+        const realFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (new URL(url, window.location.href).pathname === "/api/v1/voice/session") {
+            const state = window as Window & {__butlerFakeLiveSessions?: number};
+            state.__butlerFakeLiveSessions = (state.__butlerFakeLiveSessions ?? 0) + 1;
+            return Promise.resolve(new Response(JSON.stringify({session_id: "synthetic-live-session", sdp: "answer"}), {
+              status: 200, headers: {"Content-Type": "application/json"},
+            }));
+          }
+          return realFetch(input, init);
+        };
+        const microphoneTrack = {enabled: true, kind: "audio", label: "Acceptance microphone", stop() {}};
+        const microphone = {getAudioTracks: () => [microphoneTrack], getTracks: () => [microphoneTrack]};
+        Object.defineProperty(navigator, "mediaDevices", {configurable: true, value: {
+          getUserMedia: async () => microphone, enumerateDevices: async () => [],
+        }});
+        class Meter {
+          createMediaStreamSource() { return {connect() {}, disconnect() {}}; }
+          createAnalyser() { return {fftSize: 512, connect() {}, disconnect() {}, getByteTimeDomainData(samples: Uint8Array) {samples.fill(128);} }; }
+          destination = {};
+          async resume() {}
+          async close() {}
+        }
+        Object.defineProperty(window, "AudioContext", {configurable: true, value: Meter});
+        class Events extends EventTarget {
+          readyState = "open";
+          send(raw: string) {
+            const event = JSON.parse(raw) as {type?: string};
+            const state = window as Window & {__butlerVoiceSent?: Array<Record<string, unknown>>};
+            state.__butlerVoiceSent?.push(event);
+            if (event.type === "session.close") queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({type: "session.closed"})})));
+          }
+          close() {this.readyState = "closed"; this.dispatchEvent(new Event("close"));}
+        }
+        class Peer extends EventTarget {
+          channel = new Events();
+          iceGatheringState = "complete";
+          connectionState = "connected";
+          localDescription = {sdp: "v=0\r\nacceptance-offer"};
+          createDataChannel() {
+            Object.assign(window, {__butlerVoiceChannel: this.channel, __butlerVoiceSent: []});
+            return this.channel;
+          }
+          addTrack() {return {};}
+          async createOffer() {return {type: "offer", sdp: "v=0\r\nacceptance-offer"};}
+          async setLocalDescription() {}
+          async setRemoteDescription() {
+            queueMicrotask(() => this.channel.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({type: "session.started"})})));
+          }
+          close() {}
+        }
+        Object.defineProperty(window, "RTCPeerConnection", {configurable: true, value: Peer});
+      });
+      await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+      await pairRealCoreBrowser(page, core, "Butler Voice continuity LAN browser", {requireReady: false});
+      const workbenchUrl = `${core.origin}/projects/${projectId}/workbench?view=chat`;
+      await page.goto(workbenchUrl);
+      expect(await page.evaluate(() => isSecureContext)).toBe(true);
+      await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler"});
+      await assistant.getByRole("button", {name: "Start Butler Voice"}).click();
+      const voice = page.getByRole("dialog", {name: "Butler Voice"});
+      await expect(voice.getByRole("status").filter({hasText: "Listening"})).toBeVisible();
+
+      const speak = async (words: string, id: string, startMs: number) => {
+        await page.evaluate(({words, id, startMs}) => {
+          const channel = (window as Window & {__butlerVoiceChannel?: EventTarget}).__butlerVoiceChannel;
+          if (!channel) throw new Error("Synthetic Live event channel is unavailable");
+          channel.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+            type: "session.input_transcript.delta", delta: words, start_ms: startMs, end_ms: startMs + 500,
+          })}));
+          channel.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+            type: "session.delegation.created", offset_ms: startMs + 500, delegation: {id, target: "client"},
+          })}));
+        }, {words, id, startMs});
+      };
+      const waitForSpokenResult = async (answer: string) => expect.poll(() => page.evaluate((answer) => {
+        const sent = (window as Window & {__butlerVoiceSent?: Array<{type?: string; content?: string}>}).__butlerVoiceSent ?? [];
+        return sent.some(event => event.type === "session.commentary.append" && event.content?.includes(answer));
+      }, answer), {timeout: 45_000}).toBe(true);
+      const firstRequest = "Give me a short status update for this project.";
+      const secondRequest = "What did I ask you just before this?";
+      await speak(firstRequest, "voice-turn-one", 1000);
+      await waitForSpokenResult("First voice answer retained.");
+      const firstSessionResponse = await api.get(`chat/control-assistant/session?engagement_id=${projectId}`);
+      expect(firstSessionResponse.ok(), await firstSessionResponse.text()).toBe(true);
+      const sessionId = ((await firstSessionResponse.json()) as {id: string}).id;
+      expect(sessionId).toBeTruthy();
+
+      stub.responseContent = "Second voice answer used history.";
+      await speak(secondRequest, "voice-turn-two", 3000);
+      await waitForSpokenResult("Second voice answer used history.");
+      const secondSessionResponse = await api.get(`chat/control-assistant/session?engagement_id=${projectId}`);
+      expect(secondSessionResponse.ok(), await secondSessionResponse.text()).toBe(true);
+      expect((await secondSessionResponse.json() as {id: string}).id).toBe(sessionId);
+      const savedResponse = await api.get(`chat/sessions/${sessionId}/messages`);
+      expect(savedResponse.ok(), await savedResponse.text()).toBe(true);
+      const saved = (await savedResponse.json() as Array<{role: string; content: string}>)
+        .filter(message => message.role === "user" || message.role === "assistant");
+      expect(saved.map(message => [message.role, message.content])).toEqual([
+        ["user", firstRequest], ["assistant", "First voice answer retained."],
+        ["user", secondRequest], ["assistant", "Second voice answer used history."],
+      ]);
+      expect(stub.requests.some(request => {
+        const messages = JSON.stringify(request.messages ?? []);
+        return messages.includes(firstRequest) && messages.includes("First voice answer retained.") && messages.includes(secondRequest);
+      })).toBe(true);
+      expect(await page.evaluate(() => (window as Window & {__butlerFakeLiveSessions?: number}).__butlerFakeLiveSessions)).toBe(1);
+
+      await voice.getByRole("button", {name: "Exit voice mode"}).click();
+      await expect(voice).toHaveCount(0);
+      await page.reload();
+      await openNebulaAssistantFromShell(page);
+      const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("log", {name: "Butler conversation"});
+      await expect(restored.getByText(firstRequest, {exact: true})).toBeVisible();
+      await expect(restored.getByText("First voice answer retained.", {exact: true})).toBeVisible();
+      await expect(restored.getByText(secondRequest, {exact: true})).toBeVisible();
+      await expect(restored.getByText("Second voice answer used history.", {exact: true})).toBeVisible();
+      await testInfo.attach("butler-voice-continuity-lan", {body: JSON.stringify({
+        origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(),
+        asset: entry, assetSha256: build.assets[entry!], sessionId, savedTurns: 2,
+        liveTransport: "synthetic WebRTC and Live session", model: "local inert provider stub",
+      }), contentType: "application/json"});
+    }, [
+      {name: "API context", dispose: () => api.dispose()},
+      {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+      {name: "Core fixture", dispose: () => stopRealCore(core)},
+    ]);
+  });
+});
+
+test("assistant upgrade Butler watches a goal and surfaces an agent-reported machine incident on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({
+    responseContent: "The host check is blocked pending operator help.",
+    toolCall: body => {
+      const tools = Array.isArray(body.tools) ? body.tools as Array<{function?: {name?: string}}> : [];
+      if (!tools.some(tool => tool.function?.name === "report_attention")) return undefined;
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string}> : [];
+      if (messages.some(message => message.role === "tool")) return undefined;
+      return {name: "report_attention", arguments: {
+        condition: "machine_unreachable", machine: "fixture.example",
+        symptom: "SSH timed out.", impact: "The active host check cannot continue.",
+        evidence: ["Three connection attempts timed out."],
+        attempted_recovery: "Retried from the scoped runner.", urgency: "urgent",
+        help_requested: "Confirm host availability or approve a different target.", evidence_refs: [],
+      }};
+    },
+  });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {
+      name: "Butler oversight LAN acceptance", description: "Synthetic project", client_name: null,
+      status: "active", tags: [], workspace_path: null, metadata: {},
+    }});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = ((await projectResponse.json()) as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Goal report model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const createdResponse = await api.post("chat/goal-conversations", {data: {
+      engagement_id: projectId, backend: "provider", provider_id: provider.id, model: "security-model",
+      tools_enabled: true, objective: "Check fixture.example availability",
+      completion_criteria: ["Confirm the host is reachable"], step_budget: 3,
+    }});
+    expect(createdResponse.ok(), await createdResponse.text()).toBe(true);
+    const created = await createdResponse.json() as {session: {id: string}; goal: {id: string; revision: number}};
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler oversight LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    const started = await api.post(`chat/sessions/${created.session.id}/goal/actions`, {
+      data: {expected_revision: created.goal.revision, action: "start"},
+    });
+    expect(started.ok(), await started.text()).toBe(true);
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/butler/overview`);
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {summary: {watched_goals: number; open_incidents: number}}).summary;
+    }, {timeout: 45_000}).toMatchObject({watched_goals: 1, open_incidents: 1});
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const oversight = assistant.getByRole("region", {name: "Butler oversight"});
+    await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("1 watched · 1 need attention");
+    await oversight.getByRole("button", {name: /Oversight/}).click();
+    const viewport = page.viewportSize()!;
+    const assistantBounds = await assistant.boundingBox();
+    expect(assistantBounds).toBeTruthy();
+    expect(assistantBounds!.x).toBeGreaterThanOrEqual(0);
+    expect(assistantBounds!.x + assistantBounds!.width).toBeLessThanOrEqual(viewport.width);
+    expect(assistantBounds!.y).toBeGreaterThanOrEqual(0);
+    expect(assistantBounds!.y + assistantBounds!.height).toBeLessThanOrEqual(viewport.height);
+    expect(await oversight.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    const evidenceToggle = oversight.locator("summary").filter({hasText: /Agent-reported evidence/});
+    expect((await evidenceToggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await evidenceToggle.click();
+    await expect(oversight.getByText("SSH timed out.")).toBeVisible();
+    await expect(oversight.getByText("The active host check cannot continue.")).toBeVisible();
+    await expect(oversight.getByText("Confirm host availability or approve a different target.")).toBeVisible();
+    expect((await oversight.getByRole("button", {name: "Acknowledge"}).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({page}).include('[aria-label="Butler oversight"]').analyze()).violations).toEqual([]);
+    await oversight.getByRole("button", {name: "Acknowledge"}).click();
+    const attention = oversight.getByRole("heading", {name: /Needs attention/});
+    const changed = oversight.getByText(/This incident changed\. Review its latest details, then acknowledge it\./);
+    await expect.poll(async () => {
+      if ((await attention.textContent())?.includes("1 acknowledged")) return "acknowledged";
+      return await changed.isVisible() ? "changed" : "waiting";
+    }).not.toBe("waiting");
+    if (await changed.isVisible()) {
+      await expect(oversight.locator("summary").filter({hasText: /Agent-reported evidence/})).toBeVisible();
+      await oversight.getByRole("button", {name: "Acknowledge"}).click();
+    }
+    await expect(attention).toContainText("1 acknowledged");
+    await oversight.locator("summary").filter({hasText: "Oversight settings"}).click();
+    const authoritySelect = oversight.getByRole("combobox", {name: "Butler authority"});
+    await expect(authoritySelect).toHaveValue("watch");
+    expect((await authoritySelect.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect(await oversight.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect((await new AxeBuilder({page}).include('[aria-label="Butler oversight"]').analyze()).violations).toEqual([]);
+    await authoritySelect.selectOption("steer");
+    await oversight.getByRole("button", {name: "Save authority"}).click();
+    await expect(oversight.getByText("Authority saved for this project.")).toBeVisible();
+    const authorityResponse = await api.get(`engagements/${projectId}/butler/authority`);
+    expect(authorityResponse.ok(), await authorityResponse.text()).toBe(true);
+    expect(await authorityResponse.json()).toMatchObject({authority: "steer"});
+    await authoritySelect.selectOption("delegate");
+    await oversight.getByRole("checkbox", {name: /Allow urgent pause of a running main goal/}).check();
+    await oversight.getByRole("button", {name: "Save authority"}).click();
+    await expect(oversight.getByText("Authority saved for this project.")).toBeVisible();
+    const delegateResponse = await api.get(`engagements/${projectId}/butler/authority`);
+    expect(delegateResponse.ok(), await delegateResponse.text()).toBe(true);
+    expect(await delegateResponse.json()).toMatchObject({authority: "delegate", delegate_actions: ["pause_urgent_machine_blocker"]});
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
+    await restored.getByRole("button", {name: /Oversight/}).click();
+    await restored.locator("summary").filter({hasText: /Agent-reported evidence/}).click();
+    await expect(restored.getByText("SSH timed out.")).toBeVisible();
+    await expect(restored.getByRole("heading", {name: /Needs attention/})).toContainText("1 acknowledged");
+    await restored.locator("summary").filter({hasText: "Oversight settings"}).click();
+    await expect(restored.getByRole("combobox", {name: "Butler authority"})).toHaveValue("delegate");
+    await expect(restored.getByRole("checkbox", {name: /Allow urgent pause of a running main goal/})).toBeChecked();
+    const offeredTools = stub.requests.flatMap(item => Array.isArray(item.tools) ? item.tools as Array<{function?: {name?: string}}> : []);
+    expect(offeredTools.some(tool => tool.function?.name === "report_attention")).toBe(true);
+    await testInfo.attach("butler-oversight-lan", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), goalId: created.goal.id}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
@@ -8090,8 +8438,9 @@ async function startDelegatingModelStub(options: { childDelayMs: number }) {
 
 async function pairRealCoreBrowser(page: Page, core: RealCore, name: string, options: { requireReady?: boolean } = {}) {
   const pairingApi = await playwrightRequest.newContext({
-    baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+    baseURL: `${new URL(core.origin).protocol}//127.0.0.1:${new URL(core.origin).port}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    ignoreHTTPSErrors: core.origin.startsWith("https://"),
   });
   const pairingResponse = await pairingApi.post("auth/pairings", { data: { name } });
   expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);

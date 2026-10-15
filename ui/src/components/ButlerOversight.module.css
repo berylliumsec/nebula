@@ -1,0 +1,56 @@
+.root { min-width: 0; border-bottom: 1px solid var(--border); padding: 0 0 12px; overflow-wrap: anywhere; }
+.compact { padding-bottom: 9px; }
+.compactToggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 0 2px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.compactToggle span { font-size: .86rem; font-weight: 600; }
+.compactToggle small { min-width: 0; margin-left: auto; color: var(--muted); font-size: .76rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compactToggle .attention { color: var(--danger, var(--text)); }
+.compactIncident { border-color: var(--danger, var(--border)); background: transparent; }
+.compactIncident .rowHead strong { color: var(--danger, var(--text)); }
+.moreIncidents { min-height: 44px; margin-top: 3px; padding: 0 2px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: .8rem; text-align: left; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.headerActions { display: flex; align-items: center; }
+.header h2 { margin: 0; font-size: .94rem; }
+.header small { display: block; margin-top: 2px; color: var(--muted); }
+.refresh { flex: 0 0 44px; display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--text); cursor: pointer; }
+.refresh:hover { background: var(--surface-hover); }
+.refresh:disabled { opacity: .5; cursor: default; }
+.root :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.note { margin: 8px 0; color: var(--muted); font-size: .83rem; line-height: 1.45; }
+.error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--danger, var(--text)); font-size: .84rem; }
+.error button { min-height: 44px; }
+.section { margin-top: 10px; }
+.section h3 { display: flex; justify-content: space-between; gap: 8px; margin: 0; font-size: .86rem; }
+.section h3 span { color: var(--muted); }
+.disclosure { margin-top: 10px; border-top: 1px solid var(--border); }
+.disclosure > summary { display: list-item; min-height: 44px; padding-top: 11px; box-sizing: border-box; cursor: pointer; font-size: .86rem; }
+.disclosure > summary span { float: right; color: var(--muted); }
+.list { display: grid; gap: 8px; list-style: none; margin: 6px 0 0; padding: 0; }
+.row { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 9px 10px; background: var(--surface-hover); }
+.rowHead { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 3px 10px; }
+.rowHead strong { min-width: 0; font-size: .84rem; }
+.rowHead span, .row small { color: var(--muted); font-size: .76rem; }
+.row small { display: block; margin-top: 4px; }
+.row p { margin: 5px 0 0; font-size: .8rem; }
+.resourceAttention { color: var(--danger, var(--text)); }
+.actionUncertain { border-color: var(--danger, var(--border)); }
+.actionWarning { color: var(--danger, var(--text)); }
+.evidence { margin-top: 6px; font-size: .8rem; }
+.evidence summary { display: list-item; min-height: 44px; padding-top: 11px; box-sizing: border-box; cursor: pointer; }
+.evidence ul { margin: 6px 0; padding-left: 20px; }
+.evidence code { overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.actions button, .section > button, .disclosure > button { min-height: 44px; }
+.workLink { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-top: 3px; color: var(--text); font-size: .8rem; }
+.settings { padding: 2px 0 0; font-size: .82rem; }
+.settings p { margin: 5px 0; }
+.settings ul { margin: 5px 0 0; padding-left: 20px; }
+.settingsLabel { display: block; margin-top: 10px; font-weight: 600; }
+.authoritySelect { display: block; width: 100%; min-height: 44px; margin-top: 5px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; }
+.authoritySelect:disabled { opacity: .65; }
+.grantLabel { display: flex; align-items: flex-start; gap: 9px; min-height: 44px; margin-top: 7px; cursor: pointer; line-height: 1.4; }
+.grantLabel input { flex: 0 0 auto; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--focus); }
+.grantLabel span { min-width: 0; }
+@media (max-width: 430px) {
+  .rowHead { display: block; }
+  .rowHead span { display: block; margin-top: 4px; }
+}

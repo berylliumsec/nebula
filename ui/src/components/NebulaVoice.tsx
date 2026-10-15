@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Code2, Info, Play, Radio, RefreshCw, Target, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { VoiceWorkDetail, VoiceWorkRoster } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { selectDelegatedVoiceTurns, type VoiceTranscriptPart } from "./voiceTranscript";
 import styles from "./NebulaVoice.module.css";
 
 type Phase = "connecting" | "listening" | "speaking" | "reconnecting" | "error" | "closing";
-type Fragment = { delta: string; start_ms: number; end_ms: number };
 type VoiceEvent = {
   type?: string;
   delta?: string;
@@ -20,6 +20,7 @@ type Connection = { peer: RTCPeerConnection; channel: RTCDataChannel; microphone
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 const spokenResult = (text: string) => text.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[`*_#]/g, "").slice(0, 400);
+const captionPreview = (text: string) => text.length > 100 ? `…${text.slice(-72).trimStart()}` : text;
 
 export function MicrophoneIcon({ muted = false, size = 19 }: { muted?: boolean; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v5m-4 0h8" />{muted && <path d="M3 3l18 18" strokeWidth="2.5" />}</svg>;
@@ -66,6 +67,12 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   const [speakerDeviceId, setSpeakerDeviceId] = useState("default");
   const [callerCaption, setCallerCaption] = useState("");
   const [assistantCaption, setAssistantCaption] = useState("");
+  const [callerExpanded, setCallerExpanded] = useState(false);
+  const [assistantExpanded, setAssistantExpanded] = useState(false);
+  const inputPanelId = useId();
+  const speakerPanelId = useId();
+  const callerCaptionId = useId();
+  const assistantCaptionId = useId();
   const [work, setWork] = useState<VoiceWorkRoster>();
   const [workError, setWorkError] = useState("");
   const [selected, setSelected] = useState<{ kind: "chats" | "missions"; id: string }>();
@@ -74,6 +81,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   const [delegatedStatus, setDelegatedStatus] = useState("");
   const audio = useRef<HTMLAudioElement>(null);
   const orb = useRef<HTMLDivElement>(null);
+  const inputToggle = useRef<HTMLButtonElement>(null);
+  const speakerToggle = useRef<HTMLButtonElement>(null);
   const audioMeter = useRef<{ context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; silence: GainNode; frame: number } | undefined>(undefined);
   const screen = useRef<HTMLDivElement>(null);
   const exitButton = useRef<HTMLButtonElement>(null);
@@ -82,9 +91,15 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   const generation = useRef(0);
   const mounted = useRef(true);
   const closing = useRef(false);
-  const fragments = useRef<Fragment[]>([]);
+  const fragments = useRef<VoiceTranscriptPart[]>([]);
+  const transcript = useRef<VoiceTranscriptPart[]>([]);
+  const transcriptSequence = useRef(0);
+  const captionPosition = useRef<{ speaker: VoiceTranscriptPart["speaker"]; endMs: number } | undefined>(undefined);
   const lastInputAt = useRef(0);
+  const lastInputSequence = useRef(0);
   const delegatedThrough = useRef(0);
+  const lastCoreResult = useRef<{ endMs: number; text: string } | undefined>(undefined);
+  const unroutedTimer = useRef<number | undefined>(undefined);
   const delegationIds = useRef(new Set<string>());
   const taskQueue = useRef(Promise.resolve());
   const projectAtConnection = useRef(project.id);
@@ -186,26 +201,67 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     if (channel?.readyState === "open") channel.send(JSON.stringify(event));
   }, []);
 
+  const persistTurns = useCallback(async (turns: VoiceTranscriptPart[][], attempt: number) => {
+    let result: string | undefined;
+    for (const turn of turns) {
+      if (!mounted.current || closing.current || attempt !== generation.current || projectAtConnection.current !== project.id) return result;
+      const request = turn.map((part) => part.delta).join("").trim();
+      if (!request) continue;
+      const endMs = Math.max(...turn.map((part) => part.endMs));
+      // Reserve the transcript boundary before awaiting Core, so a later Live
+      // delegation cannot send this same user turn twice.
+      delegatedThrough.current = Math.max(delegatedThrough.current, endMs);
+      setDelegatedStatus(`Checking: ${request.slice(0, 110)}`);
+      result = await onDelegate(request);
+      lastCoreResult.current = { endMs, text: result?.trim() || "Nebula could not confirm that request. Please check the work status and try again." };
+    }
+    return result;
+  }, [onDelegate, project.id]);
+
+  const flushUnroutedSpeech = useCallback((attempt: number, expectedInputSequence: number) => {
+    taskQueue.current = taskQueue.current.then(async () => {
+      if (!mounted.current || closing.current || attempt !== generation.current
+        || projectAtConnection.current !== project.id || lastInputSequence.current !== expectedInputSequence) return;
+      const turns = selectDelegatedVoiceTurns(transcript.current, delegatedThrough.current, Number.MAX_SAFE_INTEGER);
+      if (!turns.length) return;
+      try {
+        await persistTurns(turns, attempt);
+        if (mounted.current && attempt === generation.current) {
+          setDelegatedStatus("Nebula saved your speech");
+          void refreshWork();
+        }
+      } catch (caught) {
+        logCaughtDiagnostic("interface.voice.unrouted_speech_failed", "Speech without a Live delegation could not be saved to Butler.", caught, "voice-work");
+        if (mounted.current && attempt === generation.current) {
+          setError("That speech could not be saved to your Butler conversation. Please repeat it.");
+          setDelegatedStatus("Speech not saved");
+        }
+      }
+    });
+  }, [persistTurns, project.id, refreshWork]);
+
   const delegate = useCallback(async (id: string, offsetMs: number, attempt: number) => {
     // Live delegation carries an ID and time, not the user's words. Allow late
     // transcript fragments to arrive, then use only new speech for this request.
     const started = Date.now();
     while (Date.now() - started < 1800) {
-      const heard = fragments.current.some((part) => part.end_ms > delegatedThrough.current && part.start_ms <= offsetMs + 700);
+      const heard = fragments.current.some((part) => part.endMs > delegatedThrough.current && part.startMs <= offsetMs + 700);
       if (heard && Date.now() - lastInputAt.current >= 450) break;
       await sleep(100);
     }
     if (!mounted.current || closing.current || attempt !== generation.current || projectAtConnection.current !== project.id) return;
-    const chunks = fragments.current.filter((part) => part.end_ms > delegatedThrough.current && part.start_ms <= offsetMs + 700);
-    const request = chunks.map((part) => part.delta).join("").trim();
-    if (chunks.length) delegatedThrough.current = Math.max(delegatedThrough.current, ...chunks.map((part) => part.end_ms));
-    if (!request) {
-      sendEvent({ type: "session.commentary.append", event_id: `voice_unclear_${crypto.randomUUID()}`, delegation_id: id, content: "I didn't catch enough of that request. Please say it again." });
+    const turns = selectDelegatedVoiceTurns(transcript.current, delegatedThrough.current, offsetMs);
+    if (!turns.length) {
+      const previous = lastCoreResult.current;
+      const content = previous && offsetMs >= previous.endMs && offsetMs - previous.endMs < 2_500
+        ? previous.text : "I didn't catch enough of that request. Please say it again.";
+      sendEvent({ type: "session.commentary.append", event_id: `voice_unclear_${crypto.randomUUID()}`, delegation_id: id, content: spokenResult(content) });
       return;
     }
-    setDelegatedStatus(`Checking: ${request.slice(0, 110)}`);
     try {
-      const result = await onDelegate(request);
+      // Earlier direct Live answers and speech captured while another request
+      // ran become their own saved Butler turns before this delegated reply.
+      const result = await persistTurns(turns, attempt);
       if (!mounted.current || closing.current || attempt !== generation.current || projectAtConnection.current !== project.id) return;
       sendEvent({
         type: "session.commentary.append", event_id: `voice_result_${crypto.randomUUID()}`,
@@ -222,7 +278,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         content: `Nebula could not finish the request: ${message.slice(0, 240)}. Please retry or check the work status.` });
       setDelegatedStatus("Request failed. Try again.");
     }
-  }, [onDelegate, project.id, refreshWork, sendEvent]);
+  }, [persistTurns, project.id, refreshWork, sendEvent]);
 
   const handleEvent = useCallback((event: VoiceEvent) => {
     if (event.type === "session.started") {
@@ -237,13 +293,28 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     } else if (event.type === "session.input_transcript.delta" && typeof event.delta === "string") {
       const start = event.start_ms ?? 0;
       const end = event.end_ms ?? start;
-      fragments.current.push({ delta: event.delta, start_ms: start, end_ms: end });
+      const part: VoiceTranscriptPart = { speaker: "user", delta: event.delta, startMs: start, endMs: end, sequence: ++transcriptSequence.current };
+      fragments.current.push(part);
       fragments.current = fragments.current.slice(-100);
+      transcript.current.push(part);
+      transcript.current = transcript.current.slice(-160);
       lastInputAt.current = Date.now();
-      setCallerCaption((current) => (current + event.delta).slice(-480));
+      lastInputSequence.current = part.sequence;
+      window.clearTimeout(unroutedTimer.current);
+      const attempt = generation.current;
+      unroutedTimer.current = window.setTimeout(() => flushUnroutedSpeech(attempt, part.sequence), 1_600);
+      const fresh = captionPosition.current?.speaker !== "user" || start - captionPosition.current.endMs > 1_200;
+      captionPosition.current = { speaker: "user", endMs: end };
+      setCallerCaption((current) => (fresh ? event.delta! : current + event.delta!).slice(-480));
       setPhase("listening");
     } else if (event.type === "session.output_transcript.delta" && typeof event.delta === "string") {
-      setAssistantCaption((current) => (current + event.delta).slice(-480));
+      const start = event.start_ms ?? 0;
+      const end = event.end_ms ?? start;
+      transcript.current.push({ speaker: "assistant", delta: event.delta, startMs: start, endMs: end, sequence: ++transcriptSequence.current });
+      transcript.current = transcript.current.slice(-160);
+      const fresh = captionPosition.current?.speaker !== "assistant" || start - captionPosition.current.endMs > 1_200;
+      captionPosition.current = { speaker: "assistant", endMs: end };
+      setAssistantCaption((current) => (fresh ? event.delta! : current + event.delta!).slice(-480));
       setPhase("speaking");
       if (!remoteTrack.current) {
         setSpeakerPanelOpen(true);
@@ -258,7 +329,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     } else if (event.type === "error") {
       setError(event.error?.message || "The voice service reported an error. Try reconnecting if it persists.");
     }
-  }, [delegate, onExit, release]);
+  }, [delegate, flushUnroutedSpeech, onExit, release]);
 
   const connect = useCallback(async (initial?: Promise<MediaStream>, selectedDeviceId = preferredMicrophone.current) => {
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -268,10 +339,16 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     }
     const attempt = ++generation.current;
     closing.current = false;
+    window.clearTimeout(unroutedTimer.current);
     release();
     fragments.current = [];
+    transcript.current = [];
+    transcriptSequence.current = 0;
+    captionPosition.current = undefined;
     lastInputAt.current = 0;
+    lastInputSequence.current = 0;
     delegatedThrough.current = 0;
+    lastCoreResult.current = undefined;
     delegationIds.current.clear();
     setPhase("connecting");
     setError("");
@@ -283,6 +360,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     setMicrophoneMuted(false);
     setCallerCaption("");
     setAssistantCaption("");
+    setCallerExpanded(false);
+    setAssistantExpanded(false);
     try {
       const microphone = await (initial ?? navigator.mediaDevices.getUserMedia({ audio: {
         echoCancellation: true,
@@ -389,6 +468,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     return () => {
       mounted.current = false;
       ++generation.current;
+      window.clearTimeout(unroutedTimer.current);
       document.body.style.overflow = oldOverflow;
       release();
     };
@@ -533,12 +613,13 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         <p className={styles.phase} role="status">{microphoneMuted && phase !== "error" ? "Microphone off" : phaseLabel}</p>
         <div className={styles.controls}>
           <button type="button" onClick={toggleMicrophone} disabled={!connection.current || phase === "closing"} title={microphoneMuted ? "Turn microphone on" : "Turn microphone off"} aria-label={microphoneMuted ? "Turn microphone on" : "Turn microphone off"}><MicrophoneIcon muted={microphoneMuted} /></button>
-          <button type="button" onClick={() => { const next = !microphonePanelOpen; setMicrophonePanelOpen(next); if (next) { setSpeakerPanelOpen(false); void refreshMicrophones(); } }} disabled={phase === "closing"} title="Microphone input" aria-label="Microphone input" aria-expanded={microphonePanelOpen}><MicrophoneIcon size={16} /><span>Input</span></button>
-          <button type="button" onClick={() => { const next = !speakerPanelOpen; setSpeakerPanelOpen(next); if (next) { setMicrophonePanelOpen(false); void inspectSpeaker(); } }} disabled={phase === "closing"} title="Speaker output" aria-label="Speaker output" aria-expanded={speakerPanelOpen}><SpeakerIcon /><span>Speaker</span></button>
+          <button ref={inputToggle} type="button" onClick={() => { const next = !microphonePanelOpen; setMicrophonePanelOpen(next); if (next) { setSpeakerPanelOpen(false); void refreshMicrophones(); } }} disabled={phase === "closing"} title="Microphone input" aria-label="Microphone input" aria-controls={inputPanelId} aria-expanded={microphonePanelOpen}><MicrophoneIcon size={16} /><span>Input</span>{microphonePanelOpen ? <ChevronUp size={15} aria-hidden="true" /> : <ChevronDown size={15} aria-hidden="true" />}</button>
+          <button ref={speakerToggle} type="button" onClick={() => { const next = !speakerPanelOpen; setSpeakerPanelOpen(next); if (next) { setMicrophonePanelOpen(false); void inspectSpeaker(); } }} disabled={phase === "closing"} title="Speaker output" aria-label="Speaker output" aria-controls={speakerPanelId} aria-expanded={speakerPanelOpen}><SpeakerIcon /><span>Speaker</span>{speakerPanelOpen ? <ChevronUp size={15} aria-hidden="true" /> : <ChevronDown size={15} aria-hidden="true" />}</button>
           {(phase === "error" || phase === "reconnecting") && <button type="button" onClick={() => void connect()} title="Reconnect voice" aria-label="Reconnect voice"><RefreshCw size={19} /><span>Reconnect</span></button>}
         </div>
-        {microphonePanelOpen && <div className={styles.speakerPanel} role="group" aria-label="Microphone input">
-          <p role="status">{microphoneMessage || `Using ${microphoneLabel || "the system microphone"}. The egg should move when you talk.`}</p>
+        {delegatedStatus && <p className={styles.delegated} role="status">{delegatedStatus}</p>}
+        {microphonePanelOpen && <div id={inputPanelId} className={styles.speakerPanel} role="group" aria-label="Microphone input">
+          <div className={styles.panelStatus}><p role="status">{microphoneMessage || `Using ${microphoneLabel || "the system microphone"}. The egg should move when you talk.`}</p><button type="button" title="Collapse input settings" aria-label="Collapse input settings" onClick={() => { inputToggle.current?.focus(); setMicrophonePanelOpen(false); }}><ChevronUp size={17} aria-hidden="true" /></button></div>
           <label>Input device
             <select value={microphoneDeviceId} onChange={(event) => chooseMicrophone(event.target.value)}>
               <option value="default">System default</option>
@@ -549,8 +630,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
             <button type="button" onClick={() => void refreshMicrophones()}><RefreshCw size={16} aria-hidden="true" />Refresh inputs</button>
           </div>
         </div>}
-        {speakerPanelOpen && <div className={styles.speakerPanel} role="group" aria-label="Speaker audio">
-          <p role="status">{speakerMessage || "Speaker stream connected. If silent, check the output device and volume."}</p>
+        {speakerPanelOpen && <div id={speakerPanelId} className={styles.speakerPanel} role="group" aria-label="Speaker audio">
+          <div className={styles.panelStatus}><p role="status">{speakerMessage || "Speaker stream connected. If silent, check the output device and volume."}</p><button type="button" title="Collapse speaker settings" aria-label="Collapse speaker settings" onClick={() => { speakerToggle.current?.focus(); setSpeakerPanelOpen(false); }}><ChevronUp size={17} aria-hidden="true" /></button></div>
           {typeof audio.current?.setSinkId === "function" && speakerDevices.length > 0 && <label>Output device
             <select value={speakerDeviceId} onChange={(event) => void chooseSpeaker(event.target.value)}>
               <option value="default">System default</option>
@@ -563,8 +644,16 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
           </div>
         </div>}
         {error && <p className={styles.error} role="alert">{error}</p>}
-        <div className={styles.captions} aria-live="polite"><p><small>You</small>{callerCaption || "Speak to ask about this project or direct its work."}</p><p><small>Nebula</small>{assistantCaption || "Ready for a conversation."}</p></div>
-        {delegatedStatus && <p className={styles.delegated} role="status">{delegatedStatus}</p>}
+        <div className={styles.captions} aria-label="Voice transcript">
+          <div className={styles.captionCard}>
+            <div className={styles.captionHead}><small>You</small>{callerCaption.length > 100 && <button type="button" title={callerExpanded ? "Collapse your transcript" : "Show full You transcript"} aria-label={callerExpanded ? "Collapse your transcript" : "Show full You transcript"} aria-expanded={callerExpanded} aria-controls={callerCaptionId} onClick={() => setCallerExpanded((value) => !value)}>{callerExpanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}</button>}</div>
+            <p id={callerCaptionId} className={callerExpanded ? styles.captionFull : callerCaption.length > 100 ? styles.captionPreview : undefined} aria-live="polite">{callerCaption ? callerExpanded ? callerCaption : captionPreview(callerCaption) : "Speak to ask about this project or direct its work."}</p>
+          </div>
+          <div className={styles.captionCard}>
+            <div className={styles.captionHead}><small>Nebula</small>{assistantCaption.length > 100 && <button type="button" title={assistantExpanded ? "Collapse Nebula transcript" : "Show full Nebula transcript"} aria-label={assistantExpanded ? "Collapse Nebula transcript" : "Show full Nebula transcript"} aria-expanded={assistantExpanded} aria-controls={assistantCaptionId} onClick={() => setAssistantExpanded((value) => !value)}>{assistantExpanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}</button>}</div>
+            <p id={assistantCaptionId} className={assistantExpanded ? styles.captionFull : assistantCaption.length > 100 ? styles.captionPreview : undefined} aria-live="polite">{assistantCaption ? assistantExpanded ? assistantCaption : captionPreview(assistantCaption) : "Ready for a conversation."}</p>
+          </div>
+        </div>
       </section>
       <aside className={styles.work} aria-label="Project work">
         <div className={styles.workHeader}><h2>Project work</h2><button type="button" title="Refresh work status" aria-label="Refresh work status" onClick={() => void refreshWork()}><RefreshCw size={17} /></button></div>

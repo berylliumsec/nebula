@@ -230,6 +230,7 @@
     "chat": {"label": "Assistant chat", "operation": "Chat turn", "destination": "/?view=chat", "help_article": "provider-model"},
     "knowledge": {"label": "Project sources", "operation": "Knowledge retrieval", "destination": "/project?view=sources", "help_article": "diagnostics"},
     "harnesses": {"label": "Agent harnesses", "operation": "Harness turn", "destination": "/settings#advanced-settings", "help_article": "provider-model"},
+    "butler": {"label": "Butler", "operation": "Project oversight", "destination": "/?view=chat", "help_article": "provider-model"},
     "missions": {"label": "Missions", "operation": "Mission run", "destination": "/?view=missions", "help_article": "provider-model"},
     "runtime": {"label": "Automation runtime", "operation": "Runtime operation", "destination": "/settings#advanced-settings", "help_article": "automation-runtime"},
     "debugger": {"label": "Code debugger", "operation": "Debugger operation", "destination": "/?view=code", "help_article": "automation-runtime"},
