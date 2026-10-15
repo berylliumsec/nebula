@@ -295,12 +295,15 @@ class ButlerRecoveryAgent:
         packet = self._packet(case)
         async with asyncio.timeout(MODEL_TIMEOUT_SECONDS):
             if backend == ChatBackend.HARNESS:
-                profile = self.store.get(HarnessProfile, profile_id)
-                if not profile.enabled or model not in profile.capabilities.models:
+                harness_profile = self.store.get(HarnessProfile, profile_id)
+                if (
+                    not harness_profile.enabled
+                    or model not in harness_profile.capabilities.models
+                ):
                     raise ValueError("Butler's configured harness model is unavailable")
-                if not profile.privacy.local_only and not (
-                    profile.privacy.permits_sensitive_data
-                    and profile.privacy.auto_share_tool_results
+                if not harness_profile.privacy.local_only and not (
+                    harness_profile.privacy.permits_sensitive_data
+                    and harness_profile.privacy.auto_share_tool_results
                 ):
                     raise ValueError(
                         "Butler's harness is not authorized for unattended project tool results"
@@ -321,17 +324,19 @@ class ButlerRecoveryAgent:
                 return (turn.response or "")[:1000], backend, profile_id, model, turn.id
             if backend != ChatBackend.PROVIDER:
                 raise ValueError("Butler's configured runtime is unsupported")
-            profile = self.store.get(ProviderProfile, profile_id)
-            if not profile.enabled or not profile.tools_verified_for(model):
+            provider_profile = self.store.get(ProviderProfile, profile_id)
+            if not provider_profile.enabled or not provider_profile.tools_verified_for(
+                model
+            ):
                 raise ValueError("Butler's provider model is not verified for tools")
-            if not profile.is_local and not (
-                profile.privacy.permits_sensitive_data
-                and profile.privacy.auto_share_tool_results
+            if not provider_profile.is_local and not (
+                provider_profile.privacy.permits_sensitive_data
+                and provider_profile.privacy.auto_share_tool_results
             ):
                 raise ValueError(
                     "Butler's provider is not authorized for unattended project tool results"
                 )
-            provider = self.provider_factory(profile)
+            provider = self.provider_factory(provider_profile)
             validate_engagement_provider_privacy(
                 self.store, self.store.get(Engagement, case.engagement_id), provider
             )
@@ -373,7 +378,7 @@ class ButlerRecoveryAgent:
                 )
                 provider.require(request)
                 response = await provider.complete(request)
-                if response.provider_id != profile.id:
+                if response.provider_id != provider_profile.id:
                     raise ValueError("Butler provider identity changed")
                 if not response.tool_calls:
                     return response.text[:1000], backend, profile_id, model, None
@@ -813,14 +818,17 @@ class ButlerRecoveryService:
             consumed = self.capture_events(project_id, worker_id)
             if consumed < 100:
                 break
-        for case in self.store.find_entities(
+        for verifying_case in self.store.find_entities(
             ButlerRecoveryCase,
             {"status": "verifying"},
             engagement_id=project_id,
             limit=10,
         ):
-            if case.next_check_at is None or case.next_check_at <= utc_now():
-                self.verify_follow_up(case)
+            if (
+                verifying_case.next_check_at is None
+                or verifying_case.next_check_at <= utc_now()
+            ):
+                self.verify_follow_up(verifying_case)
         if self.agent is None:
             return
         case = self._claim_case(project_id, worker_id)

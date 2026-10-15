@@ -1668,15 +1668,16 @@ class ToolBroker:
     async def _record_subagent_failure(
         self, call: PersistedToolCall, error: BaseException
     ) -> None:
+        ledger = self.ledger
         if call.tool_name != "subagent.start" or not isinstance(
-            self.ledger, StoreToolLedger
+            ledger, StoreToolLedger
         ):
             return
 
         def save() -> None:
             from .butler_recovery import record_subagent_start_failure
 
-            with self.ledger.store.transaction(immediate=True) as transaction:
+            with ledger.store.transaction(immediate=True) as transaction:
                 record_subagent_start_failure(transaction, call, error)
 
         try:
