@@ -25,6 +25,11 @@ def test_settings_api_discovers_existing_routes_and_rejects_other_core_workflows
         for item in operations
     )
     assert any(item["path"] == "/api/v1/providers/{entity_id}" for item in operations)
+    assert any(
+        item["path"] == "/api/v1/voice/settings" and item["method"] == "PATCH"
+        for item in operations
+    )
+    assert not any(item["path"] == "/api/v1/voice/session" for item in operations)
     assert not any(
         "/chat/" in item["path"] or "/test-turn" in item["path"] for item in operations
     )
@@ -78,6 +83,31 @@ def test_settings_api_saves_only_selected_project_and_reads_back(tmp_path):
                 path=f"engagements/{other.id}/scope",
                 body={"allow_all_targets": True},
             )
+
+    asyncio.run(journey())
+
+
+def test_settings_api_discovers_and_reads_back_core_wide_voice_timeout(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    gateway = SettingsAssistantApi(
+        create_app(store, auth_token="test-token"), "test-token"
+    )
+    schema = gateway.schema(path="voice/settings", method="PATCH")
+    assert schema["path"] == "/api/v1/voice/settings"
+    assert schema["request_body"]
+
+    async def journey():
+        current = await gateway.request(project.id, method="GET", path="voice/settings")
+        assert current["result"] == {"auto_pause_seconds": 20, "revision": 0}
+        saved = await gateway.request(
+            project.id,
+            method="PATCH",
+            path="voice/settings",
+            body={"expected_revision": 0, "auto_pause_seconds": 10},
+        )
+        assert saved["read_back"] is True
+        assert saved["result"] == {"auto_pause_seconds": 10, "revision": 1}
 
     asyncio.run(journey())
 

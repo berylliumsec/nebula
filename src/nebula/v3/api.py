@@ -317,6 +317,7 @@ from .domain import (
     AutomationSession,
     AutomationSessionStatus,
     VpnProfile,
+    ButlerVoiceSettings,
     ToolSuggestionSettings,
     ToolSuggestionTest,
     WebSearchEngine,
@@ -1107,6 +1108,11 @@ class VoiceSessionRequest(NebulaModel):
         str,
         StringConstraints(strip_whitespace=False, min_length=16, max_length=65_536),
     ]
+
+
+class ButlerVoiceSettingsUpdate(NebulaModel):
+    expected_revision: int = Field(ge=0)
+    auto_pause_seconds: Literal[10, 20, 30, 60]
 
 
 class ChatImageUploadRequest(NebulaModel):
@@ -11841,21 +11847,78 @@ def create_app(
             detail="GPT-Live needs a direct OpenAI API key. Configure an enabled OpenAI provider or set OPENAI_API_KEY on the Nebula host, then retry.",
         )
 
+    def voice_settings() -> ButlerVoiceSettings:
+        try:
+            return store.get(ButlerVoiceSettings, "butler-voice")
+        except NotFoundError:
+            return ButlerVoiceSettings(id="butler-voice", revision=1)
+
+    def voice_settings_response(
+        settings: ButlerVoiceSettings, *, saved: bool
+    ) -> dict[str, int]:
+        return {
+            "auto_pause_seconds": settings.auto_pause_seconds,
+            "revision": settings.revision if saved else 0,
+        }
+
+    @app.get(
+        f"{API_PREFIX}/voice/settings",
+        tags=["voice"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_voice_settings() -> dict[str, int]:
+        try:
+            settings = store.get(ButlerVoiceSettings, "butler-voice")
+        except NotFoundError:
+            return {"auto_pause_seconds": 20, "revision": 0}
+        return voice_settings_response(settings, saved=True)
+
+    @app.patch(
+        f"{API_PREFIX}/voice/settings",
+        tags=["voice"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_voice_settings(
+        request: ButlerVoiceSettingsUpdate,
+    ) -> dict[str, int]:
+        try:
+            current = store.get(ButlerVoiceSettings, "butler-voice")
+        except NotFoundError:
+            if request.expected_revision != 0:
+                raise ConflictError("voice settings revision conflict")
+            try:
+                saved = store.create(
+                    ButlerVoiceSettings(
+                        id="butler-voice", auto_pause_seconds=request.auto_pause_seconds
+                    )
+                )
+            except ConflictError:
+                raise ConflictError("voice settings revision conflict")
+        else:
+            saved = store.update(
+                ButlerVoiceSettings,
+                current.id,
+                {"auto_pause_seconds": request.auto_pause_seconds},
+                expected_revision=request.expected_revision,
+            )
+        return voice_settings_response(saved, saved=True)
+
     @app.post(
         f"{API_PREFIX}/voice/session",
         tags=["voice"],
         dependencies=[Depends(require_auth)],
     )
-    async def start_voice_session(request: VoiceSessionRequest) -> dict[str, str]:
+    async def start_voice_session(request: VoiceSessionRequest) -> dict[str, str | int]:
         project = store.get(Engagement, request.engagement_id)
         if not request.sdp.startswith("v=0\r\n"):
             raise HTTPException(
                 status_code=422, detail="A WebRTC SDP offer is required"
             )
         try:
-            return await create_live_session(
+            result = await create_live_session(
                 api_key=_live_api_key(), project_name=project.name, sdp=request.sdp
             )
+            return {**result, "auto_pause_seconds": voice_settings().auto_pause_seconds}
         except httpx.HTTPStatusError as exc:
             upstream_status = exc.response.status_code
             emit_diagnostic(
