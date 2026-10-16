@@ -60,12 +60,15 @@ from .event_history import (
 from .domain import (
     AgentAttempt,
     AgentRun,
+    Approval,
     Artifact,
     ChatGoal,
     ChatMessage,
+    ChatQueue,
     ChatTurn,
     ENTITY_MODEL_BY_KIND,
     Entity,
+    HarnessInteraction,
     OperationEvent,
     RunBackend,
     ToolCall,
@@ -330,7 +333,7 @@ class StoreTransaction:
         self.session.flush()
         if entity.entity_kind in {"chat_sessions", "chat_turns"}:
             self.chat_activity_changed = True
-        if entity.entity_kind in {"approvals", "harness_interactions", "chat_queues"}:
+        if isinstance(entity, (Approval, HarnessInteraction, ChatQueue)):
             from .butler_attention import record_attention_transition
 
             record_attention_transition(self, None, entity)
@@ -432,14 +435,17 @@ class StoreTransaction:
             raise
         updated_goal = updated if isinstance(updated, ChatGoal) else None
         updated_turn = updated if isinstance(updated, ChatTurn) else None
-        attention_entity = (
-            updated
-            if model.entity_kind in {"approvals", "harness_interactions", "chat_queues"}
-            else None
-        )
-        before_attention = (
-            model.model_validate(row.payload) if attention_entity is not None else None
-        )
+        attention_entity: Approval | HarnessInteraction | ChatQueue | None = None
+        before_attention: Approval | HarnessInteraction | ChatQueue | None = None
+        if isinstance(updated, Approval):
+            attention_entity = updated
+            before_attention = Approval.model_validate(row.payload)
+        elif isinstance(updated, HarnessInteraction):
+            attention_entity = updated
+            before_attention = HarnessInteraction.model_validate(row.payload)
+        elif isinstance(updated, ChatQueue):
+            attention_entity = updated
+            before_attention = ChatQueue.model_validate(row.payload)
         goal_transition = (
             updated_goal is not None and previous_status != updated_goal.status.value
         )

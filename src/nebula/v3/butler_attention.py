@@ -233,12 +233,18 @@ def record_attention_transition(
 def reconcile_attention(store: NebulaStore) -> None:
     """Recover pending work created before this watcher was installed or restarted."""
 
-    for model in (Approval, HarnessInteraction, ChatQueue):
-        for entity in store.iter_readable_entities(model):
-            if not _attention_items(entity):
-                continue
-            with store.transaction() as transaction:
-                record_attention_transition(transaction, None, entity)
+    def reconcile_entity(entity: Approval | HarnessInteraction | ChatQueue) -> None:
+        if not _attention_items(entity):
+            return
+        with store.transaction() as transaction:
+            record_attention_transition(transaction, None, entity)
+
+    for approval in store.iter_readable_entities(Approval):
+        reconcile_entity(approval)
+    for interaction in store.iter_readable_entities(HarnessInteraction):
+        reconcile_entity(interaction)
+    for queue in store.iter_readable_entities(ChatQueue):
+        reconcile_entity(queue)
 
 
 def record_completed_goal_turn(transaction: StoreTransaction, turn: ChatTurn) -> None:
