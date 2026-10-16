@@ -6731,6 +6731,167 @@ test.describe("Butler Voice saved conversation", () => {
   });
 });
 
+test.describe("Butler Voice live close receipt", () => {
+  test.use({ignoreHTTPSErrors: true});
+
+  test("assistant upgrade Butler Voice receives real session.closed and final duration on production HTTPS LAN Core", async ({page}, testInfo) => {
+    test.skip(process.env.NEBULA_LIVE_VOICE_CHECK !== "1", "A bounded, explicitly opted-in paid GPT-Live check");
+    test.setTimeout(90_000);
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), tls: true});
+    const api = await playwrightRequest.newContext({
+      baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+      ignoreHTTPSErrors: true,
+    });
+    await withOwnedCleanup(async () => {
+      const created = await api.post("engagements", {data: {
+        name: "Bounded Butler Voice close check", description: "Disposable Live receipt", client_name: null,
+        status: "active", tags: [], workspace_path: null, metadata: {},
+      }});
+      expect(created.ok(), await created.text()).toBe(true);
+      const projectId = ((await created.json()) as {id: string}).id;
+      await page.goto(core.origin);
+      expect(await page.evaluate(() => isSecureContext)).toBe(true);
+      const offerSdp = await page.evaluate(async () => {
+        const context = new AudioContext();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const destination = context.createMediaStreamDestination();
+        gain.gain.value = 0;
+        oscillator.connect(gain).connect(destination);
+        oscillator.start();
+        const peer = new RTCPeerConnection();
+        peer.addTrack(destination.stream.getAudioTracks()[0], destination.stream);
+        const channel = peer.createDataChannel("oai-events");
+        const events: Array<{type: string; reason?: string; usage?: {seconds?: number}}> = [];
+        channel.addEventListener("message", ({data}) => {
+          const event = JSON.parse(String(data)) as {type: string; reason?: string; usage?: {seconds?: number}};
+          if (["session.started", "session.usage.updated", "session.closed"].includes(event.type)) events.push(event);
+        });
+        Object.assign(window, {__butlerLiveCheck: {context, oscillator, peer, channel, events}});
+        await peer.setLocalDescription(await peer.createOffer());
+        if (peer.iceGatheringState !== "complete") await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("Live offer ICE gathering timed out")), 10_000);
+          peer.addEventListener("icegatheringstatechange", () => {
+            if (peer.iceGatheringState === "complete") {clearTimeout(timeout); resolve();}
+          });
+        });
+        return peer.localDescription?.sdp;
+      });
+      expect(offerSdp).toMatch(/^v=0\r\n/);
+      try {
+        const response = await api.post("voice/session", {data: {engagement_id: projectId, sdp: offerSdp}});
+        expect(response.ok(), await response.text()).toBe(true);
+        const session = await response.json() as {session_id: string; sdp: string; auto_pause_seconds: number};
+        expect(session.auto_pause_seconds).toBe(20);
+        await page.evaluate(async (sdp) => {
+          const state = (window as Window & {__butlerLiveCheck?: {peer: RTCPeerConnection}}).__butlerLiveCheck;
+          if (!state) throw new Error("Live check transport is unavailable");
+          await state.peer.setRemoteDescription({type: "answer", sdp});
+        }, session.sdp);
+        await expect.poll(() => page.evaluate(() => {
+          const state = (window as Window & {__butlerLiveCheck?: {events: Array<{type: string}>}}).__butlerLiveCheck;
+          return state?.events.some(event => event.type === "session.started") ?? false;
+        }), {timeout: 10_000}).toBe(true);
+        await page.waitForTimeout(1_200);
+        await page.evaluate(() => {
+          const state = (window as Window & {__butlerLiveCheck?: {channel: RTCDataChannel}}).__butlerLiveCheck;
+          if (state?.channel.readyState !== "open") throw new Error("Live data channel closed before session.close");
+          state.channel.send(JSON.stringify({type: "session.close", event_id: `voice_close_${crypto.randomUUID()}`}));
+        });
+        await expect.poll(() => page.evaluate(() => {
+          const state = (window as Window & {__butlerLiveCheck?: {events: Array<{type: string; reason?: string; usage?: {seconds?: number}}>}}).__butlerLiveCheck;
+          return state?.events.find(event => event.type === "session.closed") ?? null;
+        }), {timeout: 15_000}).not.toBeNull();
+        const receipt = await page.evaluate(() => {
+          const state = (window as Window & {__butlerLiveCheck?: {events: Array<{type: string; reason?: string; usage?: {seconds?: number}}>}}).__butlerLiveCheck;
+          return state?.events.find(event => event.type === "session.closed") ?? null;
+        });
+        expect(receipt?.reason).toBe("close_requested");
+        expect(receipt?.usage?.seconds).toEqual(expect.any(Number));
+        await testInfo.attach("butler-voice-live-close", {body: JSON.stringify({
+          origin: core.origin, sessionId: session.session_id, closeReason: receipt?.reason,
+          durationSeconds: receipt?.usage?.seconds, transport: "real GPT-Live WebRTC",
+        }), contentType: "application/json"});
+      } finally {
+        await page.evaluate(async () => {
+          const state = (window as Window & {__butlerLiveCheck?: {
+            context: AudioContext; oscillator: OscillatorNode; peer: RTCPeerConnection; channel: RTCDataChannel;
+          }}).__butlerLiveCheck;
+          if (!state) return;
+          if (state.channel.readyState === "open") state.channel.send(JSON.stringify({type: "session.close"}));
+          state.oscillator.stop();
+          state.peer.close();
+          await state.context.close();
+        }).catch(() => undefined);
+      }
+    }, [
+      {name: "API context", dispose: () => api.dispose()},
+      {name: "Core fixture", dispose: () => stopRealCore(core)},
+    ]);
+  });
+});
+
+test.describe("Butler Voice settings", () => {
+  test.use({ignoreHTTPSErrors: true});
+
+  test("assistant upgrade Butler Voice timeout persists across projects on production HTTPS LAN Core", async ({page}, testInfo) => {
+    test.setTimeout(120_000);
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), tls: true});
+    const api = await playwrightRequest.newContext({
+      baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}, ignoreHTTPSErrors: true,
+    });
+    await withOwnedCleanup(async () => {
+      const projects = [];
+      for (const name of ["Voice setting first", "Voice setting second"]) {
+        const response = await api.post("engagements", {data: {
+          name, description: "Synthetic Voice setting project", client_name: null,
+          status: "active", tags: [], workspace_path: null, metadata: {},
+        }});
+        expect(response.ok(), await response.text()).toBe(true);
+        projects.push((await response.json() as {id: string}).id);
+      }
+      const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+      const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+      expect(entry).toBeTruthy();
+      expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+      await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projects[0]);
+      await pairRealCoreBrowser(page, core, "Butler Voice setting LAN browser", {requireReady: false});
+      await page.goto(`${core.origin}/projects/${projects[0]}/workbench?view=chat`);
+      await openNebulaAssistantFromShell(page);
+      let butler = page.getByRole("dialog", {name: "Butler"});
+      await butler.getByRole("button", {name: "Butler settings"}).click();
+      let timeout = butler.getByRole("combobox", {name: "Pause Voice after"});
+      await expect(timeout).toBeEnabled();
+      await expect(timeout).toHaveValue("20");
+      await timeout.selectOption("30");
+      await expect(butler.getByText("Saved for the next Voice session on this Core.")).toBeVisible();
+      expect((await (await api.get("voice/settings")).json() as {auto_pause_seconds: number}).auto_pause_seconds).toBe(30);
+      await page.goto(`${core.origin}/projects/${projects[1]}/workbench?view=chat`);
+      await openNebulaAssistantFromShell(page);
+      butler = page.getByRole("dialog", {name: "Butler"});
+      await butler.getByRole("button", {name: "Butler settings"}).click();
+      timeout = butler.getByRole("combobox", {name: "Pause Voice after"});
+      await expect(timeout).toHaveValue("30");
+      await page.reload();
+      await openNebulaAssistantFromShell(page);
+      butler = page.getByRole("dialog", {name: "Butler"});
+      await butler.getByRole("button", {name: "Butler settings"}).click();
+      await expect(butler.getByRole("combobox", {name: "Pause Voice after"})).toHaveValue("30");
+      await page.goto(`${core.origin}/settings#butler-settings`);
+      butler = page.getByRole("dialog", {name: "Butler"});
+      await expect(butler.getByRole("combobox", {name: "Pause Voice after"})).toHaveValue("30");
+      expect((await new AxeBuilder({page}).include('[aria-label="Butler settings"]').analyze()).violations).toEqual([]);
+      await testInfo.attach("butler-voice-settings-https-lan", {body: JSON.stringify({
+        origin: core.origin, buildAsset: entry, project: testInfo.project.name, viewport: page.viewportSize(),
+        sharedTimeoutSeconds: 30, projects: projects.length,
+      }), contentType: "application/json"});
+    }, [
+      {name: "API context", dispose: () => api.dispose()},
+      {name: "Core fixture", dispose: () => stopRealCore(core)},
+    ]);
+  });
+});
+
 test("assistant upgrade Butler watches a goal and surfaces an agent-reported machine incident on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
