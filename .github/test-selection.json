@@ -1,27 +1,22 @@
 {
-  "change_digest": "a85bd00edda23f8eb5b44472bcce57768b8578b8df63ace2d04c252f6ead10ce",
-  "reviewed_by": "Codex Butler review-event workflow review",
-  "reason": "Core now records pending approval, harness question, queued follow-up review, and completed goal-turn signals for Butler. Selected Python files cover durable event and incident lifecycle, semantic review, Act authority, queue and approval integration. The Butler oversight component and its existing production LAN journey cover visible attention and navigation across desktop and mobile browser profiles.",
-  "exclusions": "No native shell, media, or voice transport changed. Full suites, unrelated UI journeys, and physical-device installation are excluded. The selected LAN browser journey uses a disposable Core and an inert provider stub; live deployment is verified separately.",
+  "change_digest": "ddece2cbbade1602bdc9209a64ff70f614b0f53565eba094b9ec2c264a62a90a",
+  "reviewed_by": "Codex focused queue review",
+  "reason": "The harness queue worker drops Butler identity when preparing a saved follow-up. Two focused regressions cover Butler dispatch after worker reconnection and early rejection of a mismatched request; an ordinary harness queue regression protects existing behavior. The real-Core production LAN queue journey covers persisted controls in desktop, compact desktop, emulated Android Chromium, and emulated iPhone WebKit profiles.",
+  "exclusions": "No frontend source, native shell, or voice transport changed, so no frontend or native test is selected. The selected real-Core browser journey uses a local provider stub rather than a live external harness; Butler dispatch is exercised with a real SQLite store and fake harness. Unrelated browser journeys, full suites, and physical-device installation are excluded.",
   "expected_tests": {
-    "python": 88,
-    "frontend": 21,
+    "python": 3,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_butler_attention.py",
-    "tests/v3/test_butler_review.py",
-    "tests/v3/test_butler_recovery.py",
-    "tests/v3/test_butler_oversight.py",
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_approval_continuation.py"
+    "tests/v3/test_chat_queue.py::test_harness_queue_uses_durable_turn_and_selected_context",
+    "tests/v3/test_chat_queue.py::test_queued_butler_follow_up_dispatches_after_worker_reconnect",
+    "tests/v3/test_chat_queue.py::test_butler_queue_rejects_ordinary_follow_up_at_enqueue"
   ],
-  "frontend": [
-    "ui/src/components/ButlerOversight.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:butler-oversight"
+    "area:assistant-queue-core"
   ]
 }

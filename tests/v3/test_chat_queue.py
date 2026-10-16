@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+from fastapi import HTTPException
 from tests.v3.test_chat import FakeProvider, _profile
 from nebula.v3.chat import ChatService, ChatCompletionRequest, ChatRuntimeSwitchRequest
 from nebula.v3.chat_queue import ChatQueueService, QueueWrite, link_queue_turn
@@ -494,6 +495,103 @@ def test_harness_queue_uses_durable_turn_and_selected_context(tmp_path):
         await runtime.shutdown()
 
     asyncio.run(run())
+
+
+def test_queued_butler_follow_up_dispatches_after_worker_reconnect(tmp_path):
+    from tests.v3.test_harnesses import _runtime
+    from nebula.v3.domain import HarnessSession, HarnessTurn
+
+    async def run():
+        store, project, profile, _, _, runtime = _runtime(tmp_path)
+        chat, _, first = runtime.prepare_chat(
+            engagement_id=project.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="First Butler question",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            control_assistant=True,
+        )
+        await runtime.start_chat_turn(first.id)
+        service = ChatQueueService(store, None, runtime)
+        queued = service.write(
+            chat.id,
+            QueueWrite(
+                action="enqueue",
+                expected_revision=0,
+                idempotency_key="butler-follow-up",
+                request=ChatCompletionRequest(
+                    backend="harness",
+                    control_assistant=True,
+                    harness_profile_id=profile.id,
+                    engagement_id=project.id,
+                    session_id=chat.id,
+                    model=chat.model,
+                    messages=[{"role": "user", "content": "Second Butler question"}],
+                    include_knowledge=False,
+                ),
+            ),
+        )
+        assert queued.items[0]["status"] == "queued"
+        # A new drainer must be able to use the saved request without browser state.
+        reconnected = ChatQueueService(store, None, runtime)
+        for _ in range(100):
+            await reconnected.step(reconnected.get(chat.id))
+            if reconnected.get(chat.id).items[0]["status"] == "complete":
+                break
+            await asyncio.sleep(0.01)
+        item = reconnected.get(chat.id).items[0]
+        assert item["status"] == "complete", item
+        assert not reconnected.get(chat.id).paused
+        turn = store.get(HarnessTurn, item["harness_turn_id"])
+        assert "You are Butler, the second-in-command" in turn.prompt
+        assert (
+            store.get(HarnessSession, turn.harness_session_id).metadata[
+                "control_assistant"
+            ]
+            is True
+        )
+        assert store.get(ChatTurn, item["turn_id"]).status.value == "complete"
+        assert len(store.find_entities(ChatTurn, {"session_id": chat.id})) == 2
+        await runtime.shutdown()
+
+    asyncio.run(run())
+
+
+def test_butler_queue_rejects_ordinary_follow_up_at_enqueue(tmp_path):
+    from tests.v3.test_harnesses import _runtime
+
+    store, project, profile, _, _, runtime = _runtime(tmp_path)
+    chat, _, _ = runtime.prepare_chat(
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="First Butler question",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        control_assistant=True,
+    )
+    service = ChatQueueService(store, None, runtime)
+    with pytest.raises(HTTPException, match="Butler conversation"):
+        service.write(
+            chat.id,
+            QueueWrite(
+                action="enqueue",
+                expected_revision=0,
+                idempotency_key="wrong-assistant",
+                request=ChatCompletionRequest(
+                    backend="harness",
+                    harness_profile_id=profile.id,
+                    engagement_id=project.id,
+                    session_id=chat.id,
+                    model=chat.model,
+                    messages=[{"role": "user", "content": "Wrong assistant mode"}],
+                ),
+            ),
+        )
+    assert service.get(chat.id).items == []
 
 
 def test_harness_follow_up_can_carry_a_newly_picked_model(tmp_path):
