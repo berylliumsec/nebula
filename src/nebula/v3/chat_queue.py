@@ -248,6 +248,13 @@ class ChatQueueService:
                 raise HTTPException(
                     422, "Follow-up must use this conversation and project"
                 )
+            if (
+                session.metadata.get("control_assistant") is True
+            ) != request.control_assistant:
+                raise HTTPException(
+                    422,
+                    "Butler conversation and follow-up must use the same assistant mode",
+                )
             expected_profile = (
                 session.harness_profile_id
                 if session.backend == ChatBackend.HARNESS
@@ -663,6 +670,7 @@ class ChatQueueService:
                     provider_subagent=request.harness_provider_subagent(),
                     pending_provider_subagent=request.harness_pending_provider_subagent(),
                     allow_agent_messaging=request.allow_agent_messaging,
+                    control_assistant=request.control_assistant,
                     queue_claim=claim,
                 )
                 self.harness.start_chat_turn(turn.id)
