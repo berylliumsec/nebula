@@ -14,19 +14,21 @@ function timeLabel(value?: string): string | undefined {
   return time.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function workUrl(projectId: string, sessionId?: string): string | undefined {
+function workUrl(projectId: string, sessionId?: string, missionId?: string): string | undefined {
+  if (missionId) return `/projects/${encodeURIComponent(projectId)}/workbench?view=missions&mission=${encodeURIComponent(missionId)}`;
   return sessionId
     ? `/projects/${encodeURIComponent(projectId)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`
     : undefined;
 }
 
-function WorkLink({ projectId, sessionId, onNavigate, label = "Open chat" }: {
+function WorkLink({ projectId, sessionId, missionId, onNavigate, label = "Open chat" }: {
   projectId: string;
   sessionId?: string;
+  missionId?: string;
   onNavigate?(path: string): void;
   label?: string;
 }) {
-  const href = workUrl(projectId, sessionId);
+  const href = workUrl(projectId, sessionId, missionId);
   if (!href) return null;
   return <a className={styles.workLink} href={href} onClick={(event) => {
     if (!onNavigate) return;
@@ -65,6 +67,7 @@ function IncidentRow({ incident, projectId, goals, onNavigate, onAcknowledge, ac
   compact?: boolean;
 }) {
   const affectedGoals = goals.filter((goal) => incident.goalIds.includes(goal.goalId));
+  const missionId = incident.evidenceRefs.find((ref) => ref.kind === "mission")?.id;
   return <li className={`${styles.row} ${compact ? styles.compactIncident : ""}`}>
     <div className={styles.rowHead}><strong>{incident.summary}</strong><span>{incident.status.replaceAll("_", " ")}</span></div>
     {!compact && <small>{incident.source} · {incident.verificationState.replaceAll("_", " ")}{incident.updatedAt ? ` · ${timeLabel(incident.updatedAt) ?? "Time unknown"}` : ""}</small>}
@@ -74,6 +77,7 @@ function IncidentRow({ incident, projectId, goals, onNavigate, onAcknowledge, ac
     {incident.evidenceSummary.length > 0 && <details className={styles.evidence}><summary>Agent-reported evidence · {incident.evidenceSummary.length}</summary><ul>{incident.evidenceSummary.map((item, index) => <li key={`${incident.id}-reported-${index}`}>{item}</li>)}</ul></details>}
     {!compact && incident.evidenceRefs.length > 0 && <details className={styles.evidence}><summary>Evidence references</summary><ul>{incident.evidenceRefs.map((item) => <li key={`${item.kind}-${item.id}`}>{item.kind.replaceAll("_", " ")} · <code>{item.id}</code></li>)}</ul></details>}
     <div className={styles.actions}>{incident.sessionIds.map((sessionId, index) => <WorkLink key={sessionId} projectId={projectId} sessionId={sessionId} onNavigate={onNavigate} label={incident.sessionIds.length > 1 ? `Open affected chat ${index + 1}` : "Open chat"} />)}
+      {missionId && <WorkLink projectId={projectId} missionId={missionId} onNavigate={onNavigate} label="Open mission" />}
       {incident.status === "open" && <button className="button quiet" type="button" disabled={acknowledging || !canAcknowledge} title={!canAcknowledge ? "Reconnect to Core to acknowledge" : undefined} onClick={() => onAcknowledge(incident)}>{acknowledging ? "Acknowledging…" : "Acknowledge"}</button>}</div>
     {!canAcknowledge && incident.status === "open" && <small>Reconnect to Core to acknowledge this incident.</small>}
   </li>;

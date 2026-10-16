@@ -15,6 +15,8 @@ from uuid import uuid4
 from jsonschema import Draft202012Validator, ValidationError
 
 from .domain import (
+    Approval,
+    ApprovalStatus,
     ChatMessage,
     ChatGoal,
     ChatRole,
@@ -189,8 +191,40 @@ class ButlerCapabilities:
         return case
 
     def _check_background_change_reason(
-        self, case: ButlerRecoveryCase, name: str
+        self, case: ButlerRecoveryCase, name: str, arguments: dict[str, Any]
     ) -> None:
+        if name == "nebula.work.decide_approval":
+            if (
+                case.signal != "review.approval_requested"
+                or arguments.get("decision") != "approve"
+            ):
+                raise ValueError(
+                    "background approval requires the exact pending review signal"
+                )
+            from .butler_oversight import ButlerEventPayload
+            from .butler_recovery import ButlerRecoveryService
+
+            event = ButlerRecoveryService(self._store).source_event(case)
+            payload = ButlerEventPayload.model_validate(event.payload)
+            approval_id = str(arguments.get("action_id") or "")
+            if not any(
+                ref.kind == "approval" and ref.id == approval_id
+                for ref in payload.evidence_refs
+            ):
+                raise ValueError(
+                    "background Butler may decide only the triggering approval"
+                )
+            approval = self._store.get(Approval, approval_id)
+            if (
+                approval.engagement_id != self._project_id
+                or approval.status != ApprovalStatus.PENDING
+                or approval.risk_class not in {RiskClass.LOCAL_READ, RiskClass.PASSIVE}
+                or approval.revision != arguments.get("expected_revision")
+            ):
+                raise ValueError(
+                    "approval is stale, outside this project, or requires operator review"
+                )
+            return
         if case.signal != "agent.subagent_start_failed":
             return
         from .butler_oversight import ButlerEventPayload
@@ -601,7 +635,7 @@ class ButlerCapabilities:
             if change and name not in _BACKGROUND_CHANGES:
                 raise ValueError("this operation is unavailable to background Butler")
             if change:
-                self._check_background_change_reason(case, name)
+                self._check_background_change_reason(case, name, payload)
             if change and name in {
                 "nebula.work.set_chat_settings",
                 "nebula.work.message_chat",

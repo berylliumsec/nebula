@@ -11,7 +11,7 @@ const overview = {
     goal_id: "goal-main", session_id: "chat-main", parent_goal_id: null,
     objective: "Investigate the parser", status: "running", actor_role: "main_agent",
     progress_due_at: "2026-10-15T15:00:00Z",
-    coverage: { report_capability: "unavailable", reason: "Validated progress reports and turn-output review are not connected yet; Watch currently sees goal lifecycle only." },
+    coverage: { report_capability: "turn_output_only", reason: "Completed goal turns receive bounded semantic review. Structured harness progress reports are not connected yet." },
   }, {
     goal_id: "goal-child", session_id: "chat-child", parent_goal_id: "goal-main",
     objective: "Check the decoder", status: "running", actor_role: "subagent",
@@ -28,6 +28,25 @@ function client(request: ReturnType<typeof vi.fn>): ApiClient {
 }
 
 describe("ButlerOversight", () => {
+  it("opens the affected mission from a pending review incident", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ...overview,
+      capabilities: { ...overview.capabilities, incidents: true },
+      summary: { ...overview.summary, open_incidents: 1 },
+      incidents: [{ id: "review-1", incident_key: "review:approval:approval-1:approval-1", revision: 1,
+        status: "open", summary: "An agent request needs approval.", source: "pending_approval",
+        verification_state: "core_observed", evidence_refs: [
+          { kind: "approval", id: "approval-1", project_id: "project-a" },
+          { kind: "mission", id: "mission-1", project_id: "project-a" },
+        ], session_ids: [], goal_ids: [] }],
+    });
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" compact />);
+    const incident = (await screen.findByText("An agent request needs approval.")).closest("li")!;
+    expect(within(incident).getByRole("link", { name: "Open mission" })).toHaveAttribute(
+      "href", "/projects/project-a/workbench?view=missions&mission=mission-1",
+    );
+  });
+
   it("shows Act recovery status and keeps past checks behind disclosure", async () => {
     const request = vi.fn().mockResolvedValue({
       ...overview,
@@ -91,7 +110,7 @@ describe("ButlerOversight", () => {
     await user.click(screen.getByText(/^Watched goals/));
     const watched = screen.getByText("Investigate the parser").closest("li")!;
     expect(within(watched).getByText("Main agent · running")).toBeVisible();
-    expect(within(watched).getByText(/Goal lifecycle only.*Watch currently sees goal lifecycle only/)).toBeVisible();
+    expect(within(watched).getByText(/Turn output only.*Completed goal turns receive bounded semantic review/)).toBeVisible();
     const child = screen.getByText("Check the decoder").closest("li")!;
     expect(within(child).getByText("Subagent · running")).toBeVisible();
     expect(within(child).getByText("Reports through main agent · Investigate the parser")).toBeVisible();

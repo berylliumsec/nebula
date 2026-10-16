@@ -26,6 +26,7 @@ from .butler_oversight import (
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerGoalWatch,
+    ButlerDecision,
     ButlerProjectState,
     ButlerRecoveryCase,
     ChatBackend,
@@ -62,7 +63,14 @@ if TYPE_CHECKING:
 
 PERIODIC_INTERVAL = timedelta(minutes=15)
 IMMEDIATE_EVENTS = frozenset(
-    {"agent.subagent_start_failed", "agent.attention_reported", "goal.blocked"}
+    {
+        "agent.subagent_start_failed",
+        "agent.attention_reported",
+        "goal.blocked",
+        "review.approval_requested",
+        "review.question_requested",
+        "review.queue_requested",
+    }
 )
 PERIODIC_EVENTS = frozenset(
     {
@@ -87,6 +95,11 @@ _INSTRUCTIONS = (
     "A failed subagent.start from a harness can be fixed by selecting a verified "
     "provider model for the parent chat's next turn, clearing an incompatible "
     "subagent harness profile, and asking the parent to retry the same bounded work. "
+    "For a review request, read the exact saved item and current project state. "
+    "You may approve only the approval that triggered this case if Core classifies "
+    "it as local_read or passive and the request fits existing scope. Other "
+    "approvals and secret questions stay visible for the operator. A queue item "
+    "needs inspection before any retry; do not repeat uncertain side effects. "
     "Do not route an explicit task or safety-policy refusal to a more permissive "
     "provider. Do not expand execution or network scope, enable a new provider, or "
     "claim a queued follow-up means the task succeeded. If evidence is insufficient, "
@@ -518,7 +531,11 @@ class ButlerRecoveryService:
     def _case_for_event(
         self, project_id: str, event: OperationEvent, policy: ButlerAuthorityPolicy
     ) -> ButlerRecoveryCase | None:
-        if event.event_type not in IMMEDIATE_EVENTS | PERIODIC_EVENTS:
+        decision_case = event.event_type == "butler.decision_recorded"
+        if (
+            event.event_type not in IMMEDIATE_EVENTS | PERIODIC_EVENTS
+            and not decision_case
+        ):
             return None
         # Enabling Act never retroactively authorizes action on an old event.
         if event.occurred_at < policy.updated_at:
@@ -526,6 +543,18 @@ class ButlerRecoveryService:
         payload = ButlerEventPayload.model_validate(event.payload)
         if payload.project_id != project_id:
             return None
+        if decision_case:
+            refs = [ref for ref in payload.evidence_refs if ref.kind == "decision"]
+            if len(refs) != 1:
+                return None
+            decision = self.store.get(ButlerDecision, refs[0].id)
+            if (
+                decision.engagement_id != project_id
+                or decision.status != "reviewed"
+                or decision.choice != "escalate"
+                or decision.source_event_type != "agent.turn_completed"
+            ):
+                return None
         tool_ref = next(
             (ref for ref in payload.evidence_refs if ref.kind == "tool_call"), None
         )
@@ -535,8 +564,10 @@ class ButlerRecoveryService:
         return ButlerRecoveryCase(
             id=recovery_case_id(project_id, event.id),
             engagement_id=project_id,
-            trigger="immediate" if event.event_type in IMMEDIATE_EVENTS else "periodic",
-            signal=event.event_type,
+            trigger="immediate"
+            if event.event_type in IMMEDIATE_EVENTS or decision_case
+            else "periodic",
+            signal="review.agent_requested" if decision_case else event.event_type,
             source_event_id=event.id,
             source_event_sequence=event.sequence,
             source_session_id=payload.session_id,

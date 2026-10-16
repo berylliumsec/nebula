@@ -436,7 +436,8 @@ def test_project_overview_and_event_pages_do_not_expose_other_project(tmp_path):
     assert overview["watched_goals"][0]["goal_id"] == alpha.id
     assert overview["watched_goals"][0]["actor_role"] == "main_agent"
     assert (
-        overview["watched_goals"][0]["coverage"]["report_capability"] == "unavailable"
+        overview["watched_goals"][0]["coverage"]["report_capability"]
+        == "turn_output_only"
     )
     assert beta.id not in str(overview)
 
@@ -908,6 +909,9 @@ def test_overview_pages_watches_and_prioritizes_open_incidents(tmp_path, monkeyp
         "harness_quota_resources": 0,
         "decisions": 0,
         "actions": 0,
+        "recovery_cases": 0,
+        "recovery_attention": 0,
+        "recovery_active": 0,
     }
     assert len(first_page["watched_goals"]) == 2
     assert len(first_page["incidents"]) == 2

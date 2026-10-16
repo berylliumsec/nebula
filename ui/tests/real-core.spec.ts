@@ -344,9 +344,10 @@ async function openProjectSwitcherFromShell(page: Page) {
 
 async function openNebulaAssistantFromShell(page: Page) {
   await expect(page.locator(".app-shell")).toBeVisible();
+  const butlerLauncherName = /^(Open|Show) Butler(?:;|$)/;
   const mobileLauncher = page.getByRole("navigation", { name: "Mobile operator navigation" })
-    .getByRole("button", { name: /^(Open|Show) Butler$/ });
-  const launcher = page.getByRole("button", { name: /^(Open|Show) Butler$/ }).first();
+    .getByRole("button", { name: butlerLauncherName });
+  const launcher = page.getByRole("button", { name: butlerLauncherName }).first();
   const topMenu = page.getByRole("button", { name: "Open top menu" });
   await expect.poll(async () => await mobileLauncher.isVisible()
     || await launcher.isVisible()
@@ -359,6 +360,9 @@ async function openNebulaAssistantFromShell(page: Page) {
     await topMenu.focus();
     await expect(launcher).toBeVisible();
   }
+  // Quiet Lens gives its contour pointer events while it has keyboard focus.
+  // Move focus to the revealed control before using the pointer on it.
+  await launcher.focus();
   await launcher.click();
 }
 
@@ -6741,6 +6745,47 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     await expect(restored.getByRole("checkbox", {name: /Allow urgent pause of a running main goal/})).toBeChecked();
     const offeredTools = stub.requests.flatMap(item => Array.isArray(item.tools) ? item.tools as Array<{function?: {name?: string}}> : []);
     expect(offeredTools.some(tool => tool.function?.name === "report_attention")).toBe(true);
+    // Add a saved approval to the disposable Core and verify Butler discovers
+    // it without a Butler chat turn. This request is never executed.
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const approvalId = "butler-review-approval-fixture";
+    const seedApproval = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import Approval, RiskClass, ToolCallOrigin",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "store.create(Approval(id=sys.argv[3], engagement_id=sys.argv[2], run_id='synthetic-run', origin=ToolCallOrigin.CHAT, chat_session_id=sys.argv[4], risk_class=RiskClass.WORKSPACE_WRITE, exact_request={'tool_name': 'fixture.write'}, policy_rationale='Fixture review', requested_by='fixture-agent'))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId, approvalId, created.session.id], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
+    });
+    expect(seedApproval.status, seedApproval.error?.message ?? seedApproval.stderr).toBe(0);
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/butler/overview`);
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {summary: {open_incidents: number}}).summary.open_incidents;
+    }).toBe(1);
+    await restored.getByRole("button", {name: "Refresh Butler oversight"}).click();
+    await expect(restored.getByText("An agent request needs approval.")).toBeVisible();
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    const pendingAfterReload = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
+    await pendingAfterReload.getByRole("button", {name: /Oversight/}).click();
+    await expect(pendingAfterReload.getByText("An agent request needs approval.")).toBeVisible();
+    const resolveApproval = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import Approval, ApprovalStatus, utc_now",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "item = store.get(Approval, sys.argv[2])",
+      "store.update(Approval, item.id, {'status': ApprovalStatus.REJECTED, 'decided_at': utc_now()}, expected_revision=item.revision)",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), approvalId], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
+    });
+    expect(resolveApproval.status, resolveApproval.error?.message ?? resolveApproval.stderr).toBe(0);
+    await pendingAfterReload.getByRole("button", {name: "Refresh Butler oversight"}).click();
+    await expect(pendingAfterReload.getByText("An agent request needs approval.")).toHaveCount(0);
     await testInfo.attach("butler-oversight-lan", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), goalId: created.goal.id}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},

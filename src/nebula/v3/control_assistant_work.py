@@ -2599,7 +2599,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.decide_approval",
-        "Approve, reject, or stop one exact pending chat or mission request after the operator explicitly directs that decision. Read nebula.work.approval first and pass its revision. A saved approval is not proof that the work finished.",
+        "Approve, reject, or stop one exact pending chat or mission request after the operator explicitly directs that decision. Under project Act authority, background Butler may approve only its triggering local-read or passive request after reading the exact approval. Pass its revision. A saved approval is not proof that the work finished.",
         DECIDE_APPROVAL_SCHEMA,
         False,
     ),
