@@ -1,15 +1,17 @@
 {
-  "change_digest": "98471e3dfcad49080220bdf6a6eec964aeae866f4621acdbd7dad96d6b77f4a6",
-  "reviewed_by": "Codex Butler README voice setup review",
-  "reason": "This change adds a Butler getting-started lead and documents the OpenAI API key required for GPT-Live Voice, its server-side use, separate Codex delegation, and API charges. Only README prose changes; links, rendered Markdown, and the diff are checked directly.",
-  "exclusions": "No Python, frontend runtime, native, or Playwright tests exercise README prose, so all four test layers are omitted. Full suites and unrelated workflows are excluded. The cited OpenAI setup guidance and current Nebula credential path were checked directly.",
+  "change_digest": "697e1b51e046a74129b54b5b15cf6aa4da53c39d8a23c75a197687e90ccc2b44",
+  "reviewed_by": "Codex documentation cleanup review",
+  "reason": "Remove unreferenced historical documentation and mockup assets, add a current documentation index, and remove deleted paths from the product-knowledge source exclusions. The selected product-knowledge tests verify the rebuilt source digest, operator-help retrieval, and Chroma synchronization.",
+  "exclusions": "No operator UI, Core API, native shell, or browser workflow changes. Frontend, native, and Playwright tests are omitted; full suites and unrelated feature tests are excluded. Relative documentation links and the final diff are checked directly.",
   "expected_tests": {
-    "python": 0,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_product_knowledge.py"
+  ],
   "frontend": [],
   "native": [],
   "playwright": []
