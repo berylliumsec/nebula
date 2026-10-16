@@ -6383,6 +6383,122 @@ test("assistant upgrade control assistant starts project work on production LAN 
   ]);
 });
 
+test("assistant upgrade Butler briefs named agent evidence on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const question = "What has Parser review worked on in the last 6 hours? Show evidence and the next research step.";
+  const seedAnswer = "Static map identified one length check; controlled execution is next.";
+  let projectId = "";
+  let sessionId = "";
+  const stub = await startLocalModelStub({
+    responseContent: seedAnswer,
+    toolCall: body => {
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+      const lastUser = messages.map(message => message.role).lastIndexOf("user");
+      if (messages[lastUser]?.content !== question) return undefined;
+      const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+      if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "agent activity timeline last hours"}};
+      if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.timeline"}};
+      if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {
+        operation: "nebula.work.timeline", arguments: {agent: "Parser review", hours: 6, limit: 10},
+      }};
+      return undefined;
+    },
+  });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {
+      name: "Butler timeline LAN acceptance", description: "Synthetic research project", client_name: null,
+      status: "active", tags: [], workspace_path: null, metadata: {},
+    }});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    projectId = ((await projectResponse.json()) as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler timeline model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const seed = await api.post("chat/completions", {data: {
+      backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+      messages: [{role: "user", content: "Map the parser boundary before attempting execution."}],
+      include_knowledge: false, stream: false,
+    }});
+    expect(seed.ok(), await seed.text()).toBe(true);
+    sessionId = ((await seed.json()) as {session_id: string}).session_id;
+    let titleStatus = 409;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await (await api.get(`chat-sessions/${sessionId}`)).json() as {revision: number};
+      const renamed = await api.patch(`chat-sessions/${sessionId}`, {data: {
+        title: "Parser review", expected_revision: current.revision,
+      }});
+      titleStatus = renamed.status();
+      if (renamed.ok() || titleStatus !== 409) break;
+    }
+    expect(titleStatus).toBe(200);
+    const savedMessages = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{id: string; content: string}>;
+    const answerId = savedMessages.find(message => message.content === seedAnswer)?.id;
+    expect(answerId).toBeTruthy();
+    stub.responseContent = `In the last 6 hours, Parser review recorded a static map and one length check (source ${answerId}). Controlled execution is the next step; there is no verified exploit result. [Open Parser review](/projects/${projectId}/workbench?view=chat&session=${sessionId})`;
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler timeline LAN browser");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const butler = page.getByRole("dialog", {name: "Butler"});
+    await expect(butler.getByRole("group", {name: "Assistant work requests"})).toBeVisible({timeout: 30_000});
+    await butler.getByRole("textbox", {name: "Ask Butler a question"}).fill(question);
+    const send = butler.getByRole("button", {name: "Send to Butler"});
+    await expect(send).toBeEnabled();
+    await send.click();
+    await expect(butler.getByText(/static map and one length check/)).toBeVisible({timeout: 45_000});
+    const timelineCall = stub.requests.find(body => {
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+      return messages.some(message => message.role === "tool" && typeof message.content === "string"
+        && message.content.includes("butler_operation") && message.content.includes("nebula.work.timeline"));
+    });
+    expect(timelineCall, "Butler's final model step must receive the real timeline receipt").toBeTruthy();
+    const toolMessages = timelineCall!.messages as Array<{role?: string; content?: unknown}>;
+    const receiptText = toolMessages.find(message => message.role === "tool" && typeof message.content === "string"
+      && message.content.includes("butler_operation") && message.content.includes("nebula.work.timeline"))!.content as string;
+    const receipt = JSON.parse(receiptText) as {butler_operation: string; has_more: boolean; events: Array<{detail: string; source_id: string}>};
+    expect(receipt.butler_operation).toBe("nebula.work.timeline");
+    expect(receipt.has_more).toBe(false);
+    expect(receipt.events.some(event => event.detail.includes(seedAnswer) && event.source_id === answerId)).toBe(true);
+    await expect(butler.getByText(`source ${answerId}`, {exact: false})).toBeVisible();
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    const saved = page.getByRole("dialog", {name: "Butler"});
+    const source = saved.getByRole("link", {name: "Open Parser review"});
+    await expect(source).toBeVisible();
+    await expect(source).toHaveAttribute("href", new RegExp(`session=${sessionId}$`));
+    if ((page.viewportSize()?.width ?? 1440) <= 760) await source.tap();
+    else {await source.focus(); await source.press("Enter");}
+    await expect(page).toHaveURL(new RegExp(`session=${sessionId}$`));
+    await expect(page.getByText(seedAnswer, {exact: true})).toBeVisible();
+    await testInfo.attach("butler-timeline-lan", {body: JSON.stringify({
+      origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(),
+      buildAsset: entry, assetSha256: build.assets[entry!], targetSession: sessionId,
+    }), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler saved table stays readable after reload on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});

@@ -35,6 +35,7 @@ from .chat_goals import (
 from .chat_queue import ChatQueueService, QueueWrite
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
 from .chat_subagents import is_subagent_session
+from .butler_timeline import ButlerTimeline
 from .domain import (
     AgentRun,
     Approval,
@@ -75,6 +76,22 @@ EMPTY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {},
+}
+TIMELINE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "agent": {"type": "string", "minLength": 1, "maxLength": 200},
+        "hours": {"type": "integer", "minimum": 1, "maximum": 720},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 80},
+        "cursor": {"type": "string", "minLength": 1, "maxLength": 2000},
+    },
+    "anyOf": [
+        {"required": ["session_id"]},
+        {"required": ["agent"]},
+        {"required": ["cursor"]},
+    ],
 }
 CATALOG_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -480,6 +497,7 @@ class ControlAssistantWork:
         self.token = token
         self.goals = ChatGoalService(store, harness)
         self.schedules = ChatScheduleService(store)
+        self.timeline = ButlerTimeline(store)
 
     def _project(self, project_id: str) -> Engagement:
         return self.store.get(Engagement, project_id)
@@ -2418,6 +2436,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.timeline",
+        "Read a named Assistant and its delegated agents over the last hours from saved Core evidence. Accept session_id from overview or agent title; ambiguous names return choices. Page with next_cursor until has_more is false before a thorough brief. Report observed actions, repeated attempts, blockers, evidence and next steps; treat agent reports as claims and quiet gaps as unknown, not proof of wasted time.",
+        TIMELINE_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.goals",
         "List Core-owned conversation goals and separately labelled read-only native harness goal snapshots in this project. Use offset to page older goals.",
         PAGE_SCHEMA,
@@ -2689,6 +2713,8 @@ async def dispatch_work_tool(
         return work.overview(project_id)
     if name == "nebula.work.chat":
         return work.chat_detail(project_id, arguments.get("session_id"))
+    if name == "nebula.work.timeline":
+        return work.timeline.read(project_id, arguments)
     if name == "nebula.work.goals":
         return work.goals_overview(project_id, arguments.get("offset", 0))
     if name == "nebula.work.goal":
