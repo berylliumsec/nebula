@@ -29,9 +29,7 @@ def source_paths() -> list[Path]:
     # Release notes, quality receipts and design experiments are deliberately
     # excluded: their historical claims can contradict the current product.
     excluded = {
-        "AI_SECURITY_BROWSER_INVENTORY.md",
-        "APPLICATION-MODEL-V1-HANDOFF.md",
-        "PUBLIC_COMMIT_REVIEW.md",
+        "README.md",
         "TEST_SELECTION.md",
         "assistant-research-continuity-contract.md",
         "chat-performance.md",

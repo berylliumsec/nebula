@@ -67,6 +67,6 @@ npm --prefix ui ci
 npm --prefix ui run dev:desktop
 ```
 
-## More
+## Documentation
 
-[Nebula 3 guide](docs/NEBULA3.md) · [Usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md) · [Automation runtime](docs/AUTOMATION-RUNTIME.md) · [Diagnostics](docs/NEBULA3_DIAGNOSTICS.md) · [Release notes](docs/releases/)
+Start with the [Nebula 3 guide](docs/NEBULA3.md) or [usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md). The [documentation index](docs/README.md) groups setup, integrations, troubleshooting, technical reference, and release information.
