@@ -330,6 +330,10 @@ class StoreTransaction:
         self.session.flush()
         if entity.entity_kind in {"chat_sessions", "chat_turns"}:
             self.chat_activity_changed = True
+        if entity.entity_kind in {"approvals", "harness_interactions", "chat_queues"}:
+            from .butler_attention import record_attention_transition
+
+            record_attention_transition(self, None, entity)
         return entity
 
     def add_all(self, entities: Sequence[Entity]) -> Sequence[Entity]:
@@ -428,6 +432,14 @@ class StoreTransaction:
             raise
         updated_goal = updated if isinstance(updated, ChatGoal) else None
         updated_turn = updated if isinstance(updated, ChatTurn) else None
+        attention_entity = (
+            updated
+            if model.entity_kind in {"approvals", "harness_interactions", "chat_queues"}
+            else None
+        )
+        before_attention = (
+            model.model_validate(row.payload) if attention_entity is not None else None
+        )
         goal_transition = (
             updated_goal is not None and previous_status != updated_goal.status.value
         )
@@ -435,7 +447,6 @@ class StoreTransaction:
             updated_turn is not None
             and previous_status != "complete"
             and updated_turn.status.value == "complete"
-            and updated_turn.backend.value == "provider"
             and updated_turn.goal_id is not None
         )
         before_goal = None
@@ -489,10 +500,18 @@ class StoreTransaction:
 
             assert before_goal is not None
             record_goal_transition(self, before_goal, updated_goal)
-        if completed_goal_turn and updated_turn is not None:
-            from .butler_tool_failures import record_completed_provider_turn
+        if attention_entity is not None:
+            from .butler_attention import record_attention_transition
 
-            record_completed_provider_turn(self, updated_turn)
+            record_attention_transition(self, before_attention, attention_entity)
+        if completed_goal_turn and updated_turn is not None:
+            from .butler_attention import record_completed_goal_turn
+
+            record_completed_goal_turn(self, updated_turn)
+            if updated_turn.backend.value == "provider":
+                from .butler_tool_failures import record_completed_provider_turn
+
+                record_completed_provider_turn(self, updated_turn)
         if (
             isinstance(updated, AgentAttempt)
             and isinstance(previous_tokens, int)

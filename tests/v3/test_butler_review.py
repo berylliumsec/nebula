@@ -32,16 +32,21 @@ from nebula.v3.butler_review import (
     review_pending,
 )
 from nebula.v3.butler_memory import ButlerMemoryService
+from nebula.v3.butler_authority import policy_id
 from nebula.v3.butler_precedent import read_precedents
+from nebula.v3.butler_recovery import ButlerRecoveryService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalUpdate, GoalWrite
 from nebula.v3.domain import (
+    ButlerAuthorityPolicy,
     ButlerDecision,
     ButlerGoalWatch,
     ButlerIncident,
     ButlerProjectState,
+    ButlerRecoveryCase,
     ChatBackend,
     ChatGoal,
     ChatMessage,
+    ChatRole,
     ChatSession,
     ChatTokenUsage,
     ChatTurn,
@@ -153,6 +158,7 @@ def test_meaningful_event_filter_is_narrow():
         "agent.progress_reported",
         "agent.attention_reported",
         "agent.plan_changed",
+        "agent.turn_completed",
         "goal.progress_overdue",
         "goal.plan_changed",
         "goal.blocked",
@@ -342,6 +348,62 @@ def test_escalation_opens_one_project_incident_with_cited_evidence_and_replays_c
     assert [item.event_type for item in _events(restarted)].count(
         "incident.opened"
     ) == 1
+
+
+def test_saved_agent_review_request_wakes_act_once_with_turn_evidence(tmp_path):
+    _, store, _, goal, worker = _setup(tmp_path)
+    policy = store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id("project"), engagement_id="project", authority="act"
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id="project",
+            session_id=goal.session_id,
+            goal_id=goal.id,
+            provider_profile_id="provider",
+            model="model-a",
+        )
+    )
+    message = store.create(
+        ChatMessage(
+            engagement_id="project",
+            session_id=goal.session_id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="Please review this evidence and decide whether I should continue.",
+        )
+    )
+    store.update(
+        ChatTurn,
+        turn.id,
+        {"status": ChatTurnStatus.COMPLETE, "final_message_id": message.id},
+        expected_revision=turn.revision,
+    )
+
+    reviewer = CitingReviewer(choice="escalate")
+    decision = asyncio.run(review_pending(store, "project", worker.worker_id, reviewer))
+    assert decision is not None and decision.source_event_type == "agent.turn_completed"
+    assert reviewer.calls[0].event_summary.endswith(message.content)
+    decision_event = next(
+        event
+        for event in _events(store)
+        if event.event_type == "butler.decision_recorded"
+    )
+    assert {ref["kind"] for ref in decision_event.payload["evidence_refs"]} == {
+        "decision",
+        "chat_turn",
+    }
+    recovery = ButlerRecoveryService(store)
+    assert recovery.capture_events("project", worker.worker_id) > 0
+    assert recovery.capture_events("project", worker.worker_id) == 0
+    cases = store.find_entities(ButlerRecoveryCase, {}, engagement_id="project")
+    assert [item.signal for item in cases] == ["review.agent_requested"]
+    case = cases[0]
+    assert case.signal == "review.agent_requested"
+    assert case.source_turn_id == turn.id
+    assert case.authority_revision == policy.revision
 
 
 def test_repeated_escalation_updates_existing_concern_without_duplicate(tmp_path):

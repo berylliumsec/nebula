@@ -95,6 +95,10 @@ class ButlerEvidenceRef(NebulaModel):
         "chat_turn",
         "harness_turn",
         "tool_call",
+        "approval",
+        "harness_interaction",
+        "chat_queue",
+        "mission",
         "artifact",
         "resource",
         "agent_report",
@@ -248,8 +252,8 @@ def _entity_in_transaction(
 
 def _coverage_reason() -> str:
     return (
-        "Validated progress reports and turn-output review are not connected yet; "
-        "Watch currently sees goal lifecycle only."
+        "Completed goal turns receive bounded semantic review. Structured harness "
+        "progress reports are not connected yet."
     )
 
 
@@ -280,6 +284,7 @@ def _watch_for_goal(
         status=goal.status,
         progress_due_at=now + PROGRESS_INTERVAL if running else None,
         deadline_generation=1 if running else 0,
+        report_capability="turn_output_only",
         coverage_reason=(
             "Watch was restored from the current goal after Core restart; "
             "earlier goal events may be unavailable. " + _coverage_reason()
@@ -388,6 +393,8 @@ def record_goal_transition(
                 if running
                 else prior.overdue_emitted_generation,
                 "closed_at": None,
+                "report_capability": "turn_output_only",
+                "coverage_reason": _coverage_reason(),
             },
             expected_revision=prior.revision,
         )
@@ -902,6 +909,9 @@ class ButlerOversightService:
     async def startup(self) -> None:
         self._loop = asyncio.get_running_loop()
         await asyncio.to_thread(self.reconcile_watches)
+        from .butler_attention import reconcile_attention
+
+        await asyncio.to_thread(reconcile_attention, self.store)
         for state in self.store.iter_readable_entities(ButlerProjectState):
             self._wake_on_loop(state.engagement_id)
 

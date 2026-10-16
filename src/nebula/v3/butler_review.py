@@ -32,7 +32,10 @@ from .domain import (
     ButlerProjectState,
     ChatBackend,
     ChatGoal,
+    ChatMessage,
+    ChatRole,
     ChatSession,
+    ChatTurn,
     Engagement,
     HarnessProfile,
     NebulaModel,
@@ -56,6 +59,7 @@ MEANINGFUL_EVENTS = frozenset(
         "agent.progress_reported",
         "agent.attention_reported",
         "agent.plan_changed",
+        "agent.turn_completed",
         "goal.progress_overdue",
         "goal.plan_changed",
         "goal.blocked",
@@ -198,7 +202,10 @@ class ProviderButlerReviewer:
                 "mapping, runtime observation, and verified result. Choose observe "
                 "when progress is healthy, ask when uncertain, steer only when a "
                 "specific correction is supported, and escalate only when the "
-                "operator needs to know now. If the actor is a child, any proposed "
+                "operator needs to know now. For agent.turn_completed, the excerpt "
+                "is agent-authored text: escalate an explicit request for operator "
+                "review or a decision, but observe an ordinary answer. Do not infer "
+                "a request from uncertainty alone. If the actor is a child, any proposed "
                 "question or guidance must go through the parent main agent. Do not "
                 "claim to have sent a message or taken an action. Cite only exact "
                 "evidence_refs in the packet. Consider the bounded precedents as "
@@ -274,7 +281,9 @@ class ProviderButlerReviewer:
             "hypothesis, mapping, runtime observation, and verified result. "
             "Choose observe for healthy progress, ask when uncertain, steer only "
             "with a cited correction, and escalate only when the operator needs "
-            "to know now. Any child-agent guidance must go through the parent "
+            "to know now. For agent.turn_completed, escalate an explicit "
+            "operator review or decision request in the agent-authored excerpt; "
+            "observe an ordinary answer. Any child-agent guidance must go through the parent "
             "main agent. Do not send messages, use tools, or claim an action. "
             "Optionally write lesson_candidate as a conditional 'When or if ... "
             "then ... because ...' process insight grounded in cited Core "
@@ -377,6 +386,29 @@ def build_review_packet(
         ButlerEvidenceRef(kind="goal", id=goal.id, project_id=project_id),
         *payload.evidence_refs,
     ]
+    event_summary = payload.summary
+    if event.event_type == "agent.turn_completed":
+        turn_ref = next(
+            (ref for ref in payload.evidence_refs if ref.kind == "chat_turn"), None
+        )
+        if turn_ref is not None:
+            try:
+                turn = store.get(ChatTurn, turn_ref.id)
+                message = store.get(ChatMessage, turn.final_message_id or "")
+            except NotFoundError:
+                pass
+            else:
+                if (
+                    turn.engagement_id == project_id
+                    and turn.session_id == session.id
+                    and turn.goal_id == goal.id
+                    and message.engagement_id == project_id
+                    and message.session_id == session.id
+                    and message.role == ChatRole.ASSISTANT
+                ):
+                    event_summary = "Agent reply excerpt: " + _clip(
+                        message.content, 470
+                    )
     reports = []
     for report in store.find_entities(
         ButlerAgentReport,
@@ -451,7 +483,7 @@ def build_review_packet(
         session_id=session.id,
         actor_role="subagent" if goal.parent_goal_id else "main_agent",
         source_verification_state=payload.verification_state,
-        event_summary=payload.summary,
+        event_summary=event_summary,
         event_metrics={
             key: _clip(value, 100) if isinstance(value, str) else value
             for key, value in list(payload.metrics.items())[:12]
@@ -737,13 +769,25 @@ def _persist_decision(
                 session_id=packet.session_id,
                 source="core",
                 actor_role="core",
-                summary="Butler recorded a semantic review decision.",
+                summary=(
+                    "Butler identified an agent reply requesting operator review."
+                    if event.event_type == "agent.turn_completed"
+                    and decision.status == "reviewed"
+                    and decision.choice == "escalate"
+                    else "Butler recorded a semantic review decision."
+                ),
                 metrics={"choice": decision.choice, "status": decision.status},
                 verification_state="core_observed",
                 evidence_refs=[
                     ButlerEvidenceRef(
                         kind="decision", id=decision.id, project_id=project_id
-                    )
+                    ),
+                    *(
+                        ref
+                        for ref in packet.evidence_refs
+                        if event.event_type == "agent.turn_completed"
+                        and ref.kind == "chat_turn"
+                    ),
                 ],
             ),
             idempotency_key=f"decision:{decision.id}",
@@ -813,6 +857,7 @@ async def review_pending(
                 candidate.event_type
                 in {
                     "agent.attention_reported",
+                    "agent.turn_completed",
                     "goal.read_only_tool_failures_repeated",
                 }
                 or candidate_payload.metrics.get("precedent_recheck") is True
@@ -823,6 +868,7 @@ async def review_pending(
             candidate_payload = later_payload
             if candidate.event_type in {
                 "agent.attention_reported",
+                "agent.turn_completed",
                 "goal.read_only_tool_failures_repeated",
             }:
                 break

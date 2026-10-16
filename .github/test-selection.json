@@ -1,18 +1,27 @@
 {
-  "change_digest": "697e1b51e046a74129b54b5b15cf6aa4da53c39d8a23c75a197687e90ccc2b44",
-  "reviewed_by": "Codex documentation cleanup review",
-  "reason": "Remove unreferenced historical documentation and mockup assets, add a current documentation index, and remove deleted paths from the product-knowledge source exclusions. The selected product-knowledge tests verify the rebuilt source digest, operator-help retrieval, and Chroma synchronization.",
-  "exclusions": "No operator UI, Core API, native shell, or browser workflow changes. Frontend, native, and Playwright tests are omitted; full suites and unrelated feature tests are excluded. Relative documentation links and the final diff are checked directly.",
+  "change_digest": "ad74e1907d5240c364ff91fecf5b7c552243ac64b40633b19a423db9460dda48",
+  "reviewed_by": "Codex Butler review-event workflow review",
+  "reason": "Core now records pending approval, harness question, queued follow-up review, and completed goal-turn signals for Butler. Selected Python files cover durable event and incident lifecycle, semantic review, Act authority, queue and approval integration. The Butler oversight component and its existing production LAN journey cover visible attention and navigation across desktop and mobile browser profiles.",
+  "exclusions": "No native shell, media, or voice transport changed. Full suites, unrelated UI journeys, and physical-device installation are excluded. The selected LAN browser journey uses a disposable Core and an inert provider stub; live deployment is verified separately.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 88,
+    "frontend": 21,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_product_knowledge.py"
+    "tests/v3/test_butler_attention.py",
+    "tests/v3/test_butler_review.py",
+    "tests/v3/test_butler_recovery.py",
+    "tests/v3/test_butler_oversight.py",
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_approval_continuation.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ButlerOversight.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "butler-oversight"
+  ]
 }
