@@ -80,6 +80,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const lastScroll = useRef({ visible: false, messages: [] as ChatMessage[], attentionCount: 0, loadingHistory: false });
   const catalogRef = useRef<HTMLDetailsElement>(null);
   const voiceSettingsRequest = useRef(0);
+  const settingsProjectId = useRef(engagement?.id);
   const destinationCatalogRef = useRef<HTMLDetailsElement>(null);
   const runtime = sessionRuntime ?? defaultModelRuntime(providers, harnesses);
   const storageKey = engagement ? `nebula.control-assistant.session.${engagement.id}` : undefined;
@@ -125,7 +126,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSessionId(undefined);
     setSessionRuntime(undefined);
     setSessionConfig(undefined);
-    setSettingsOpen(false);
+    if (settingsProjectId.current && engagement?.id && settingsProjectId.current !== engagement.id) setSettingsOpen(false);
+    if (engagement?.id) settingsProjectId.current = engagement.id;
     setSettingsRevision(undefined);
     setSettingsError("");
     setSettingsStatus("");

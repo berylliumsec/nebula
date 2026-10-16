@@ -11847,11 +11847,8 @@ def create_app(
             detail="GPT-Live needs a direct OpenAI API key. Configure an enabled OpenAI provider or set OPENAI_API_KEY on the Nebula host, then retry.",
         )
 
-    def voice_settings() -> ButlerVoiceSettings:
-        try:
-            return store.get(ButlerVoiceSettings, "butler-voice")
-        except NotFoundError:
-            return ButlerVoiceSettings(id="butler-voice", revision=1)
+    def voice_settings() -> ButlerVoiceSettings | None:
+        return next(iter(store.list_entities(ButlerVoiceSettings, limit=1)), None)
 
     def voice_settings_response(
         settings: ButlerVoiceSettings, *, saved: bool
@@ -11867,9 +11864,8 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_voice_settings() -> dict[str, int]:
-        try:
-            settings = store.get(ButlerVoiceSettings, "butler-voice")
-        except NotFoundError:
+        settings = voice_settings()
+        if settings is None:
             return {"auto_pause_seconds": 20, "revision": 0}
         return voice_settings_response(settings, saved=True)
 
@@ -11881,9 +11877,8 @@ def create_app(
     async def update_voice_settings(
         request: ButlerVoiceSettingsUpdate,
     ) -> dict[str, int]:
-        try:
-            current = store.get(ButlerVoiceSettings, "butler-voice")
-        except NotFoundError:
+        current = voice_settings()
+        if current is None:
             if request.expected_revision != 0:
                 raise ConflictError("voice settings revision conflict")
             try:
@@ -11918,7 +11913,11 @@ def create_app(
             result = await create_live_session(
                 api_key=_live_api_key(), project_name=project.name, sdp=request.sdp
             )
-            return {**result, "auto_pause_seconds": voice_settings().auto_pause_seconds}
+            settings = voice_settings()
+            return {
+                **result,
+                "auto_pause_seconds": settings.auto_pause_seconds if settings else 20,
+            }
         except httpx.HTTPStatusError as exc:
             upstream_status = exc.response.status_code
             emit_diagnostic(

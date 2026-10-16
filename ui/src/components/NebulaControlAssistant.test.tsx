@@ -78,6 +78,25 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Pause Voice after" })).toHaveValue("10"));
   });
 
+  it("keeps Core-wide Voice settings open while the selected project first loads", async () => {
+    const user = userEvent.setup();
+    const api = {
+      getControlAssistantSession: vi.fn().mockResolvedValue(null),
+      getButlerVoiceSettings: vi.fn().mockResolvedValue({ autoPauseSeconds: 30, revision: 1 }),
+    };
+    let workspace = { api, engagement: undefined as { id: string; name: string } | undefined, providers: [], harnesses: [] };
+    vi.mocked(useWorkspace).mockImplementation(() => workspace as unknown as ReturnType<typeof useWorkspace>);
+    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>;
+    const view = render(assistant());
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.click(screen.getByRole("button", { name: "Butler settings" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Pause Voice after" })).toHaveValue("30"));
+    workspace = { ...workspace, engagement: { id: "project", name: "Project" } };
+    view.rerender(assistant());
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Butler" })).toHaveTextContent("Project"));
+    expect(screen.getByRole("combobox", { name: "Pause Voice after" })).toHaveValue("30");
+  });
+
   it("offers project work prompts and sends a status request through the control conversation", async () => {
     const user = userEvent.setup();
     const streamChat = vi.fn().mockResolvedValue({
