@@ -395,7 +395,7 @@ def build_review_packet(
             try:
                 turn = store.get(ChatTurn, turn_ref.id)
                 message = store.get(ChatMessage, turn.final_message_id or "")
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: a saved turn or reply was removed before review.
                 pass
             else:
                 if (
