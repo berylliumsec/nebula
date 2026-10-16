@@ -36,6 +36,7 @@ Settings assistant and the complete destination catalog.
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets | Core sessions, turns, queues and runs | Tool unit and real Core |
+| Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 
@@ -95,6 +96,13 @@ The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
 `nebula.work.stop_mission`. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
+`nebula.work.timeline` accepts a listed conversation ID or an Assistant title and
+a bounded number of hours. Ambiguous titles return selectable conversations. The
+read-only result pages saved messages, provider tool steps, selected harness
+activity, delegated-agent lifecycle and schema-checked goal reports. Each row
+has a source ID, time, and conversation link. Butler follows the cursor before
+calling a brief thorough, distinguishes agent-reported progress from observed
+execution, and treats unrecorded intervals as unknown rather than idle time.
 A requested chat follow-up is saved to Core's durable queue. Live steering is
 available only for an active harness chat or harness mission. A provider chat
 can receive a queued next message; a provider mission cannot be live-steered.
