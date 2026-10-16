@@ -2204,7 +2204,7 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-reloadTest("stabilization Butler Voice stays active until explicit exit", async ({ page }) => {
+reloadTest("stabilization Butler Voice pauses and resumes without losing project work", async ({ page }) => {
   test.setTimeout(60_000);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   const provider = {
@@ -2215,11 +2215,13 @@ reloadTest("stabilization Butler Voice stays active until explicit exit", async 
   await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
   await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["voice-work-model"] } }));
   await page.addInitScript(() => {
+    const state = window as Window & { __nebulaVoiceAudioActive?: boolean };
+    state.__nebulaVoiceAudioActive = true;
     const track = { enabled: true, stop() {} };
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => ({ getAudioTracks: () => [track], getTracks: () => [track] }) } });
     class Meter {
       createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
-      createAnalyser() { return { fftSize: 512, connect() {}, disconnect() {}, getByteTimeDomainData(samples: Uint8Array) { samples.fill(180); } }; }
+      createAnalyser() { return { fftSize: 512, connect() {}, disconnect() {}, getByteTimeDomainData(samples: Uint8Array) { samples.fill(state.__nebulaVoiceAudioActive ? 180 : 128); } }; }
       createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} }; }
       destination = {};
       async resume() {}
@@ -2248,9 +2250,10 @@ reloadTest("stabilization Butler Voice stays active until explicit exit", async 
     Object.defineProperty(window, "RTCPeerConnection", { configurable: true, value: Peer });
   });
   let rejectReconnect = false;
+  let liveSessions = 0;
   await page.route("**/api/v1/voice/session", route => rejectReconnect
     ? route.fulfill({ status: 503, json: { detail: "GPT-Live needs a direct OpenAI API key." } })
-    : route.fulfill({ status: 200, json: { session_id: "live-test", sdp: "answer" } }));
+    : route.fulfill({ status: 200, json: { session_id: `live-test-${++liveSessions}`, sdp: "answer", auto_pause_seconds: 10 } }));
   await page.route(/\/api\/v1\/voice\/work(?:\/.*)?\?/, route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chats/chat-voice")) return route.fulfill({ status: 200, json: { id: "chat-voice", title: "Surface review", url: "/chat", recent_messages: [{ role: "assistant", content: "Reviewing current scope" }] } });
@@ -2272,7 +2275,7 @@ reloadTest("stabilization Butler Voice stays active until explicit exit", async 
   await expect(voice.getByText("Reviewing current scope")).toBeVisible();
   await voice.getByRole("button", { name: "Speaker output" }).click();
   await expect(voice.getByRole("group", { name: "Speaker audio" })).toContainText("No speaker stream is connected");
-  await expect(voice.getByRole("button", { name: "Reconnect voice" })).toBeVisible();
+  await expect(voice.getByRole("button", { name: "Pause to reconnect" })).toBeVisible();
   await voice.getByRole("button", { name: "Collapse speaker settings" }).click();
   const input = voice.getByRole("button", { name: "Microphone input" });
   await input.click();
@@ -2326,13 +2329,22 @@ reloadTest("stabilization Butler Voice stays active until explicit exit", async 
   if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
     const exit = await voice.getByRole("button", { name: "Exit voice mode" }).boundingBox();
     expect(orb!.y).toBeGreaterThanOrEqual(exit!.y + exit!.height);
-    rejectReconnect = true;
-    await voice.getByRole("button", { name: "Reconnect voice" }).click();
+  }
+  await page.evaluate(() => { (window as Window & { __nebulaVoiceAudioActive?: boolean }).__nebulaVoiceAudioActive = false; });
+  await expect(voice.getByRole("status").filter({ hasText: "Voice paused" })).toBeVisible({ timeout: 15_000 });
+  await expect(voice.getByRole("button", { name: /Surface review/ })).toBeVisible();
+  expect(liveSessions).toBe(1);
+  if (page.viewportSize()!.width <= 760) rejectReconnect = true;
+  await voice.getByRole("button", { name: "Resume Voice" }).click();
+  if (rejectReconnect) {
     await expect(voice.getByRole("alert")).toContainText("direct OpenAI API key");
     await voice.evaluate(element => { element.scrollTop = 0; });
     const errorOrb = await voice.getByTestId("voice-orb").boundingBox();
     const errorExit = await voice.getByRole("button", { name: "Exit voice mode" }).boundingBox();
     expect(errorOrb!.y).toBeGreaterThanOrEqual(errorExit!.y + errorExit!.height);
+  } else {
+    await expect(voice.getByRole("status").filter({ hasText: "Listening" })).toBeVisible();
+    expect(liveSessions).toBe(2);
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const close = voice.getByRole("button", { name: "Exit voice mode" });

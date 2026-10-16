@@ -31,6 +31,8 @@ With a configured model or harness, Butler can answer questions, review the sele
 
 **Voice setup:** GPT-Live requires a direct OpenAI API key. Add an enabled OpenAI provider with a key in Nebula Settings, or set `OPENAI_API_KEY` on the Nebula host. Nebula keeps the key on the host to start the voice session; your device then exchanges audio with OpenAI over WebRTC. Voice sessions incur OpenAI API charges. Butler can delegate work to a Codex harness, but Codex access does not provide the GPT-Live key. See [OpenAI's GPT-Live WebRTC setup](https://developers.openai.com/api/docs/guides/voice-webrtc#before-you-start).
 
+Voice pauses after 20 seconds of quiet by default; change this Core-wide timeout in Butler settings. Pausing ends the paid GPT-Live session, and **Resume Voice** starts a new one. Butler work already submitted continues in its saved chat.
+
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="docs/images/butler-voice-sample.png">
   <img src="docs/images/butler-voice-sample.gif" width="100%" alt="Butler Voice in an illustrative Northstar API Review project: the listening orb moves as an operator asks it to start an authentication review, then Butler replies and the new assistant appears in Project work.">

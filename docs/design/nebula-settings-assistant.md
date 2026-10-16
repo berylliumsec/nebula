@@ -33,6 +33,7 @@ Settings assistant and the complete destination catalog.
 | Change target and URL scope | A request for all destinations saves the selected project's URL, network and port scope while retaining unrelated policy fields; Allow all is a separate permission bypass | Core scope revision and assistant browser receipt | Component, browser, real Core and LAN |
 | Start the headless security browser | An explicit start request asks Core to establish the selected project's session and reports the observed status or startup error | Core agent-security session | API, browser, real Core and LAN |
 | Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
+| Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets | Core sessions, turns, queues and runs | Tool unit and real Core |
@@ -40,7 +41,7 @@ Settings assistant and the complete destination catalog.
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 
-The setting catalog lists every Settings section. Dedicated actions handle
+The setting catalog lists every Settings section and Butler's Voice control. Dedicated actions handle
 device appearance, provider and harness default models, post-tool preferences,
 project execution mode, target scope and headless browser sessions. For other
 Core-backed settings, `nebula.settings.api_schema` lists only the current build's
