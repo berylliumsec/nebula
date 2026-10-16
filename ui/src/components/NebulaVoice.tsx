@@ -259,7 +259,9 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       meter.frame = window.requestAnimationFrame(tick);
     } catch (caught) {
       logCaughtDiagnostic("interface.voice.output_meter_setup_failed", "The speaker activity meter could not be created.", caught, "voice-output");
-      void created?.close().catch(() => undefined);
+      void created?.close().catch((closeError) => {
+        logCaughtDiagnostic("interface.voice.output_meter_cleanup_failed", "The speaker activity meter could not close after setup failed.", closeError, "voice-output");
+      });
     }
   }, []);
 

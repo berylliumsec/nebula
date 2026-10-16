@@ -220,6 +220,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       const saved = await api.getButlerVoiceSettings();
       if (request === voiceSettingsRequest.current) setVoiceSettings(saved);
     } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.voice_settings_load_failed", message: "Voice settings could not be loaded.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
       if (request === voiceSettingsRequest.current) setVoiceSettingsError(caught instanceof Error ? caught.message : "Could not load Voice settings. Reopen Butler settings to retry.");
     } finally {
       if (request === voiceSettingsRequest.current) setVoiceSettingsBusy(false);
@@ -243,7 +244,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     } catch (caught) {
       if (request === voiceSettingsRequest.current) {
         setVoiceSettingsError(caught instanceof Error ? caught.message : "Could not save Voice settings. Choose a timeout again.");
-        try { setVoiceSettings(await api.getButlerVoiceSettings()); }
+        try {
+          const refreshed = await api.getButlerVoiceSettings();
+          if (request === voiceSettingsRequest.current) setVoiceSettings(refreshed);
+        }
         catch (refreshError) { void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.voice_settings_refresh_failed", message: "Voice settings could not be refreshed after a failed save.", outcome: "failure", stage: "settings", retryable: true, exception: refreshError }); }
       }
     } finally {
