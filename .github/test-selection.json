@@ -1,5 +1,5 @@
 {
-  "change_digest": "a534ba73ed5a254b4b3c04ab87361635e42e84cb74429c23cf48c2cf1c14e739",
+  "change_digest": "36129231847c748fdf9499268c7da9b99c172b94449666d6dcdda21f9a664658",
   "reviewed_by": "Codex Butler review-event workflow review",
   "reason": "Core now records pending approval, harness question, queued follow-up review, and completed goal-turn signals for Butler. Selected Python files cover durable event and incident lifecycle, semantic review, Act authority, queue and approval integration. The Butler oversight component and its existing production LAN journey cover visible attention and navigation across desktop and mobile browser profiles.",
   "exclusions": "No native shell, media, or voice transport changed. Full suites, unrelated UI journeys, and physical-device installation are excluded. The selected LAN browser journey uses a disposable Core and an inert provider stub; live deployment is verified separately.",
