@@ -11,7 +11,7 @@ import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeCon
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
-import { REASONING_EFFORTS, type ChatAssistantConfig, type ChatMessage } from "../api/types";
+import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatMessage, type VoicePauseSeconds } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
@@ -59,6 +59,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [settingsError, setSettingsError] = useState("");
   const [settingsStatus, setSettingsStatus] = useState("");
   const [settingsRevision, setSettingsRevision] = useState<number>();
+  const [voiceSettings, setVoiceSettings] = useState<ButlerVoiceSettings>();
+  const [voiceSettingsBusy, setVoiceSettingsBusy] = useState(false);
+  const [voiceSettingsError, setVoiceSettingsError] = useState("");
+  const [voiceSettingsStatus, setVoiceSettingsStatus] = useState("");
   const [effortDraft, setEffortDraft] = useState("");
   const [cyberDraft, setCyberDraft] = useState<ChatAssistantConfig["harnessCyberAccessProgram"]>("automatic");
   const [busy, setBusy] = useState(false);
@@ -75,6 +79,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const transcript = useRef<HTMLDivElement>(null);
   const lastScroll = useRef({ visible: false, messages: [] as ChatMessage[], attentionCount: 0, loadingHistory: false });
   const catalogRef = useRef<HTMLDetailsElement>(null);
+  const voiceSettingsRequest = useRef(0);
   const destinationCatalogRef = useRef<HTMLDetailsElement>(null);
   const runtime = sessionRuntime ?? defaultModelRuntime(providers, harnesses);
   const storageKey = engagement ? `nebula.control-assistant.session.${engagement.id}` : undefined;
@@ -206,9 +211,51 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const selectedModelOptions = selectedHarness?.modelOptions?.find((item) => item.model === selectedSettingsRuntime?.model);
   const cyberChoices = selectedHarness?.kind === "codex_app_server" ? selectedModelOptions?.cyberAccessPrograms ?? [] : [];
 
+  const loadVoiceSettings = async () => {
+    if (!api || typeof api.getButlerVoiceSettings !== "function") return;
+    const request = ++voiceSettingsRequest.current;
+    setVoiceSettingsBusy(true);
+    setVoiceSettingsError("");
+    try {
+      const saved = await api.getButlerVoiceSettings();
+      if (request === voiceSettingsRequest.current) setVoiceSettings(saved);
+    } catch (caught) {
+      if (request === voiceSettingsRequest.current) setVoiceSettingsError(caught instanceof Error ? caught.message : "Could not load Voice settings. Reopen Butler settings to retry.");
+    } finally {
+      if (request === voiceSettingsRequest.current) setVoiceSettingsBusy(false);
+    }
+  };
+
+  const saveVoiceSettings = async (seconds: VoicePauseSeconds) => {
+    if (!api || !voiceSettings || voiceSettingsBusy) return;
+    const request = ++voiceSettingsRequest.current;
+    setVoiceSettingsBusy(true);
+    setVoiceSettingsError("");
+    setVoiceSettingsStatus("");
+    try {
+      const saved = await api.updateButlerVoiceSettings(voiceSettings.revision, seconds);
+      const observed = await api.getButlerVoiceSettings();
+      if (observed.revision !== saved.revision || observed.autoPauseSeconds !== seconds) throw new Error("Core did not confirm the new Voice timeout. Reopen settings and retry.");
+      if (request === voiceSettingsRequest.current) {
+        setVoiceSettings(observed);
+        setVoiceSettingsStatus("Saved for the next Voice session on this Core.");
+      }
+    } catch (caught) {
+      if (request === voiceSettingsRequest.current) {
+        setVoiceSettingsError(caught instanceof Error ? caught.message : "Could not save Voice settings. Choose a timeout again.");
+        try { setVoiceSettings(await api.getButlerVoiceSettings()); }
+        catch (refreshError) { void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.voice_settings_refresh_failed", message: "Voice settings could not be refreshed after a failed save.", outcome: "failure", stage: "settings", retryable: true, exception: refreshError }); }
+      }
+    } finally {
+      if (request === voiceSettingsRequest.current) setVoiceSettingsBusy(false);
+    }
+  };
+
   const openSettings = async () => {
     if (settingsOpen) { setSettingsOpen(false); return; }
     setSettingsOpen(true);
+    setVoiceSettingsStatus("");
+    void loadVoiceSettings();
     setSettingsError("");
     setSettingsStatus("");
     let config = sessionConfig;
@@ -239,6 +286,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
     setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
   };
+
+  useEffect(() => {
+    const openVoiceSettings = () => {
+      setOpen(true);
+      setHidden(false);
+      if (!settingsOpen) void openSettings();
+      else void loadVoiceSettings();
+    };
+    window.addEventListener("nebula:open-butler-settings", openVoiceSettings);
+    return () => window.removeEventListener("nebula:open-butler-settings", openVoiceSettings);
+  });
 
   const saveSettings = async () => {
     if (!api || !selectedSettingsRuntime || settingsBusy || busy) return;
@@ -784,7 +842,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <div className={styles.identity}><strong>Butler</strong><small>{engagement?.name ?? "Choose a project"}</small></div>
       <button className={`icon-button subtle ${styles.voiceButton}`} type="button" aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} /><span className={styles.voiceLabel}>Start Voice</span></button>
       <button className={`icon-button subtle ${styles.hideButton}`} type="button" aria-label="Hide Butler" title="Hide Butler" onClick={() => setHidden(true)}><Minimize2 size={18} /></button>
-      <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen} aria-controls="butler-settings" title="Butler settings" disabled={!api || !engagement || !runtime || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
+      <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen} aria-controls="butler-settings" title="Butler settings" disabled={!api || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
       <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setSettingsOpen(false); }}><X size={18} /></button>
     </div>
     <div ref={body} className={styles.body}>
@@ -800,6 +858,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           {settingsStatus && <p role="status">{settingsStatus}</p>}
           {settingsError && <p role="alert">{settingsError}</p>}
         </form>
+        <div className={styles.voiceSettings}>
+          <label htmlFor="butler-voice-timeout">Pause Voice after</label>
+          <select id="butler-voice-timeout" aria-label="Pause Voice after" value={voiceSettings?.autoPauseSeconds ?? 20} disabled={!voiceSettings || voiceSettingsBusy} onChange={(event) => void saveVoiceSettings(Number(event.target.value) as VoicePauseSeconds)}>
+            {[10, 20, 30, 60].map((seconds) => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
+          </select>
+          <small>Shared by all projects. Applies to the next connection.</small>
+          {voiceSettingsBusy && <p role="status">Loading Voice timeout…</p>}
+          {voiceSettingsStatus && <p role="status">{voiceSettingsStatus}</p>}
+          {voiceSettingsError && <p role="alert">{voiceSettingsError}</p>}
+        </div>
       </section>}
       {!hidden && engagement && <div className={styles.butlerWorkspace}>
         <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />

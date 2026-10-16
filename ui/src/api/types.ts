@@ -1709,6 +1709,13 @@ export interface ProviderUpdateRequest {
 
 export type ChatRole = "user" | "assistant" | "system";
 
+export type VoicePauseSeconds = 10 | 20 | 30 | 60;
+
+export interface ButlerVoiceSettings {
+  autoPauseSeconds: VoicePauseSeconds;
+  revision: number;
+}
+
 export interface VoiceWorkRoster {
   project: { id: string; name: string };
   chats: { id: string; title: string; backend: string; model: string; state: string; url: string }[];
