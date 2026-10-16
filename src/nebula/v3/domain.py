@@ -1038,6 +1038,11 @@ class ToolSuggestionSettings(Entity):
         return value
 
 
+class ButlerVoiceSettings(Entity):
+    entity_kind: ClassVar[str] = "butler_voice_settings"
+    auto_pause_seconds: Literal[10, 20, 30, 60] = 20
+
+
 class WebSearchEngine(StringEnum):
     DUCKDUCKGO = "duckduckgo"
     BRAVE = "brave"
@@ -5428,6 +5433,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     NotebookRun,
     VpnProfile,
     ToolSuggestionSettings,
+    ButlerVoiceSettings,
     WebSearchSettings,
     AutomationSession,
     CommandExecution,

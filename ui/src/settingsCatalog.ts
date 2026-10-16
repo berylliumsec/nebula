@@ -12,6 +12,15 @@ export interface SettingCatalogEntry {
 
 export const settingCatalog: SettingCatalogEntry[] = [
   {
+    id: "settings.butler-voice",
+    label: "Butler Voice timeout",
+    description: "Pause paid Voice sessions after quiet time; open the compact control in Butler settings",
+    category: "Models",
+    scope: "Workspace",
+    target: "butler-settings",
+    keywords: ["butler", "voice", "gpt-live", "pause", "mute", "timeout", "cost", "seconds"],
+  },
+  {
     id: "settings.usage",
     label: "Usage and credits",
     description: "See provider and harness balances, rate limits, and Nebula activity",

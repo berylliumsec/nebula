@@ -6,9 +6,11 @@ import { logCaughtDiagnostic } from "../diagnostics";
 import { selectDelegatedVoiceTurns, type VoiceTranscriptPart } from "./voiceTranscript";
 import styles from "./NebulaVoice.module.css";
 
-type Phase = "connecting" | "listening" | "speaking" | "reconnecting" | "error" | "closing";
+type Phase = "connecting" | "listening" | "speaking" | "reconnecting" | "error" | "closing" | "paused";
+type CloseReason = "idle" | "muted" | "background" | "reconnect" | "exit";
 type VoiceEvent = {
   type?: string;
+  reason?: string;
   delta?: string;
   start_ms?: number;
   end_ms?: number;
@@ -79,11 +81,13 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   const [detail, setDetail] = useState<VoiceWorkDetail>();
   const [detailError, setDetailError] = useState("");
   const [delegatedStatus, setDelegatedStatus] = useState("");
+  const [pauseMessage, setPauseMessage] = useState("");
   const audio = useRef<HTMLAudioElement>(null);
   const orb = useRef<HTMLDivElement>(null);
   const inputToggle = useRef<HTMLButtonElement>(null);
   const speakerToggle = useRef<HTMLButtonElement>(null);
   const audioMeter = useRef<{ context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; silence: GainNode; frame: number } | undefined>(undefined);
+  const outputMeter = useRef<{ context: AudioContext; source: MediaStreamAudioSourceNode; analyser: AnalyserNode; silence: GainNode; frame: number } | undefined>(undefined);
   const screen = useRef<HTMLDivElement>(null);
   const exitButton = useRef<HTMLButtonElement>(null);
   const connection = useRef<Connection | undefined>(undefined);
@@ -91,6 +95,14 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   const generation = useRef(0);
   const mounted = useRef(true);
   const closing = useRef(false);
+  const closeReason = useRef<CloseReason | undefined>(undefined);
+  const closeTimer = useRef<number | undefined>(undefined);
+  const pauseSeconds = useRef(20);
+  const lastActivityAt = useRef(Date.now());
+  const lastPlaybackAt = useRef(0);
+  const playbackStats = useRef<{ connection: Connection; energy: number } | undefined>(undefined);
+  const statsInFlight = useRef(false);
+  const mutePending = useRef(false);
   const fragments = useRef<VoiceTranscriptPart[]>([]);
   const transcript = useRef<VoiceTranscriptPart[]>([]);
   const transcriptSequence = useRef(0);
@@ -131,8 +143,11 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   }, [api, project.id]);
 
   const release = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = undefined;
     const active = connection.current;
     connection.current = undefined;
+    playbackStats.current = undefined;
     remoteTrack.current = undefined;
     const meter = audioMeter.current;
     audioMeter.current = undefined;
@@ -145,6 +160,17 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         logCaughtDiagnostic("interface.voice.meter_close_failed", "The microphone level meter could not close cleanly.", caught, "voice-input");
       });
     }
+    const playback = outputMeter.current;
+    outputMeter.current = undefined;
+    if (playback) {
+      window.cancelAnimationFrame(playback.frame);
+      playback.source.disconnect();
+      playback.analyser.disconnect();
+      playback.silence.disconnect();
+      void playback.context.close().catch((caught) => {
+        logCaughtDiagnostic("interface.voice.output_meter_close_failed", "The speaker activity meter could not close cleanly.", caught, "voice-output");
+      });
+    }
     orb.current?.style.setProperty("--voice-scale", "1");
     orb.current?.style.setProperty("--voice-rise", "0px");
     if (!active) return;
@@ -155,7 +181,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   }, []);
 
   const startMicrophoneMeter = useCallback((microphone: MediaStream) => {
-    if (!window.AudioContext || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
+    if (!window.AudioContext) return;
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
     let created: AudioContext | undefined;
     try {
       const context = created = new AudioContext();
@@ -175,11 +202,15 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         if (audioMeter.current !== meter) return;
         analyser.getByteTimeDomainData(samples);
         const energy = samples.reduce((sum, sample) => sum + ((sample - 128) / 128) ** 2, 0) / samples.length;
-        const target = microphone.getAudioTracks().some((track) => track.enabled)
-          ? Math.min(1, Math.max(0, (Math.sqrt(energy) - 0.018) * 9)) : 0;
+        const inputEnabled = microphone.getAudioTracks().some((track) => track.enabled);
+        const amplitude = Math.sqrt(energy);
+        if (inputEnabled && amplitude > 0.045) lastActivityAt.current = Date.now();
+        const target = inputEnabled ? Math.min(1, Math.max(0, (amplitude - 0.018) * 9)) : 0;
         level = level * 0.64 + target * 0.36;
-        orb.current?.style.setProperty("--voice-scale", (1 + level * 0.11).toFixed(3));
-        orb.current?.style.setProperty("--voice-rise", `${(-level * 8).toFixed(1)}px`);
+        if (!reducedMotion) {
+          orb.current?.style.setProperty("--voice-scale", (1 + level * 0.11).toFixed(3));
+          orb.current?.style.setProperty("--voice-rise", `${(-level * 8).toFixed(1)}px`);
+        }
         meter.frame = window.requestAnimationFrame(tick);
       };
       void context.resume().catch((caught) => {
@@ -196,6 +227,44 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     }
   }, []);
 
+  const startOutputMeter = useCallback((stream: MediaStream) => {
+    if (!window.AudioContext) return;
+    let created: AudioContext | undefined;
+    try {
+      const context = created = new AudioContext();
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      const silence = context.createGain();
+      silence.gain.value = 0;
+      source.connect(analyser);
+      analyser.connect(silence);
+      silence.connect(context.destination);
+      const samples = new Uint8Array(analyser.fftSize);
+      const meter = { context, source, analyser, silence, frame: 0 };
+      outputMeter.current = meter;
+      const tick = () => {
+        if (outputMeter.current !== meter) return;
+        analyser.getByteTimeDomainData(samples);
+        const energy = samples.reduce((sum, sample) => sum + ((sample - 128) / 128) ** 2, 0) / samples.length;
+        if (Math.sqrt(energy) > 0.012) {
+          lastPlaybackAt.current = Date.now();
+          lastActivityAt.current = lastPlaybackAt.current;
+        }
+        meter.frame = window.requestAnimationFrame(tick);
+      };
+      void context.resume().catch((caught) => {
+        logCaughtDiagnostic("interface.voice.output_meter_resume_failed", "The speaker activity meter could not start.", caught, "voice-output");
+      });
+      meter.frame = window.requestAnimationFrame(tick);
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.output_meter_setup_failed", "The speaker activity meter could not be created.", caught, "voice-output");
+      void created?.close().catch((closeError) => {
+        logCaughtDiagnostic("interface.voice.output_meter_cleanup_failed", "The speaker activity meter could not close after setup failed.", closeError, "voice-output");
+      });
+    }
+  }, []);
+
   const sendEvent = useCallback((event: Record<string, unknown>) => {
     const channel = connection.current?.channel;
     if (channel?.readyState === "open") channel.send(JSON.stringify(event));
@@ -204,7 +273,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   const persistTurns = useCallback(async (turns: VoiceTranscriptPart[][], attempt: number) => {
     let result: string | undefined;
     for (const turn of turns) {
-      if (!mounted.current || closing.current || attempt !== generation.current || projectAtConnection.current !== project.id) return result;
+      if (!mounted.current || attempt !== generation.current || projectAtConnection.current !== project.id) return result;
       const request = turn.map((part) => part.delta).join("").trim();
       if (!request) continue;
       const endMs = Math.max(...turn.map((part) => part.endMs));
@@ -213,14 +282,14 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       delegatedThrough.current = Math.max(delegatedThrough.current, endMs);
       setDelegatedStatus(`Checking: ${request.slice(0, 110)}`);
       result = await onDelegate(request);
-      lastCoreResult.current = { endMs, text: result?.trim() || "Nebula could not confirm that request. Please check the work status and try again." };
+      if (attempt === generation.current) lastCoreResult.current = { endMs, text: result?.trim() || "Nebula could not confirm that request. Please check the work status and try again." };
     }
     return result;
   }, [onDelegate, project.id]);
 
   const flushUnroutedSpeech = useCallback((attempt: number, expectedInputSequence: number) => {
     taskQueue.current = taskQueue.current.then(async () => {
-      if (!mounted.current || closing.current || attempt !== generation.current
+      if (!mounted.current || attempt !== generation.current
         || projectAtConnection.current !== project.id || lastInputSequence.current !== expectedInputSequence) return;
       const turns = selectDelegatedVoiceTurns(transcript.current, delegatedThrough.current, Number.MAX_SAFE_INTEGER);
       if (!turns.length) return;
@@ -282,14 +351,23 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
 
   const handleEvent = useCallback((event: VoiceEvent) => {
     if (event.type === "session.started") {
+      lastActivityAt.current = Date.now();
       setPhase("listening");
       setError("");
     } else if (event.type === "session.closed") {
-      const didExit = closing.current;
+      const reason = closeReason.current;
+      closeReason.current = undefined;
       closing.current = false;
       release();
-      if (didExit) onExit();
-      else { setPhase("error"); setError("The voice connection ended. Select Reconnect to continue."); }
+      if (reason === "exit") onExit();
+      else if (reason && (!event.reason || event.reason === "close_requested")) {
+        setPhase("paused");
+        setPauseMessage(reason === "idle" ? `Paused after ${pauseSeconds.current} seconds of quiet. Project work continues.`
+          : reason === "muted" ? "Microphone off. Voice paused; project work continues."
+            : reason === "reconnect" ? "Voice paused after connection trouble. Project work continues."
+              : "Voice paused while this page was in the background. Project work continues.");
+        setError("");
+      } else { setPhase("error"); setError("The voice connection ended unexpectedly. Select Resume Voice to start a new session."); }
     } else if (event.type === "session.input_transcript.delta" && typeof event.delta === "string") {
       const start = event.start_ms ?? 0;
       const end = event.end_ms ?? start;
@@ -299,6 +377,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       transcript.current.push(part);
       transcript.current = transcript.current.slice(-160);
       lastInputAt.current = Date.now();
+      lastActivityAt.current = lastInputAt.current;
       lastInputSequence.current = part.sequence;
       window.clearTimeout(unroutedTimer.current);
       const attempt = generation.current;
@@ -308,6 +387,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       setCallerCaption((current) => (fresh ? event.delta! : current + event.delta!).slice(-480));
       setPhase("listening");
     } else if (event.type === "session.output_transcript.delta" && typeof event.delta === "string") {
+      lastPlaybackAt.current = Date.now();
+      lastActivityAt.current = lastPlaybackAt.current;
       const start = event.start_ms ?? 0;
       const end = event.end_ms ?? start;
       transcript.current.push({ speaker: "assistant", delta: event.delta, startMs: start, endMs: end, sequence: ++transcriptSequence.current });
@@ -339,8 +420,16 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     }
     const attempt = ++generation.current;
     closing.current = false;
+    closeReason.current = undefined;
+    mutePending.current = false;
+    const previousChannel = connection.current?.channel;
+    if (previousChannel?.readyState === "open") {
+      previousChannel.send(JSON.stringify({ type: "session.close", event_id: `voice_close_${crypto.randomUUID()}` }));
+    }
     window.clearTimeout(unroutedTimer.current);
     release();
+    lastActivityAt.current = Date.now();
+    lastPlaybackAt.current = 0;
     fragments.current = [];
     transcript.current = [];
     transcriptSequence.current = 0;
@@ -351,6 +440,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     lastCoreResult.current = undefined;
     delegationIds.current.clear();
     setPhase("connecting");
+    setPauseMessage("");
     setError("");
     setPlaybackBlocked(false);
     setSpeakerPanelOpen(false);
@@ -404,7 +494,9 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       peer.addEventListener("track", (event) => {
         if (!audio.current || connection.current !== current || attempt !== generation.current || event.track.kind !== "audio") return;
         remoteTrack.current = event.track;
-        audio.current.srcObject = new MediaStream([event.track]);
+        const output = new MediaStream([event.track]);
+        audio.current.srcObject = output;
+        startOutputMeter(output);
         audio.current.muted = false;
         audio.current.volume = 1;
         setSpeakerMessage("");
@@ -422,7 +514,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         else if (peer.connectionState === "connected") setPhase((currentPhase) => currentPhase === "reconnecting" ? "listening" : currentPhase);
       });
       channel.addEventListener("message", ({ data }) => {
-        if (attempt !== generation.current) return;
+        if (attempt !== generation.current || connection.current !== current) return;
         try { handleEvent(JSON.parse(String(data)) as VoiceEvent); }
         catch (caught) {
           logCaughtDiagnostic("interface.voice.event_invalid", "A voice event could not be read.", caught, "voice-connection");
@@ -443,6 +535,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       const result = await api.startVoiceSession(project.id, sdp);
       if (attempt !== generation.current) return;
       current.sessionId = result.session_id;
+      pauseSeconds.current = result.auto_pause_seconds ?? 20;
+      lastActivityAt.current = Date.now();
       projectAtConnection.current = project.id;
       await peer.setRemoteDescription({ type: "answer", sdp: result.sdp });
     } catch (caught) {
@@ -457,7 +551,36 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       }
       else setError(caught instanceof Error ? caught.message : "Voice could not start. Select Reconnect to try again.");
     }
-  }, [api, handleEvent, project.id, refreshMicrophones, release, startMicrophoneMeter]);
+  }, [api, handleEvent, project.id, refreshMicrophones, release, startMicrophoneMeter, startOutputMeter]);
+
+  const closeSession = useCallback((reason: CloseReason) => {
+    if (closing.current) return;
+    const active = connection.current;
+    if (!active) {
+      if (reason === "exit") onExit();
+      return;
+    }
+    active.microphone.getAudioTracks().forEach((track) => { track.enabled = false; });
+    closing.current = true;
+    closeReason.current = reason;
+    setPhase("closing");
+    const unconfirmed = () => {
+      if (connection.current !== active || closeReason.current !== reason) return;
+      closeReason.current = undefined;
+      closing.current = false;
+      release();
+      setPhase("error");
+      setError("Could not confirm that GPT-Live closed. The device connection was released; check usage before resuming.");
+    };
+    if (active.channel.readyState !== "open") { unconfirmed(); return; }
+    try {
+      active.channel.send(JSON.stringify({ type: "session.close", event_id: `voice_close_${crypto.randomUUID()}` }));
+      closeTimer.current = window.setTimeout(unconfirmed, 15_000);
+    } catch (caught) {
+      logCaughtDiagnostic("interface.voice.close_failed", "The voice close request could not be sent.", caught, "voice-connection");
+      unconfirmed();
+    }
+  }, [onExit, release]);
 
   useEffect(() => {
     mounted.current = true;
@@ -470,12 +593,63 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
       ++generation.current;
       window.clearTimeout(unroutedTimer.current);
       document.body.style.overflow = oldOverflow;
+      const channel = connection.current?.channel;
+      if (channel?.readyState === "open") {
+        try { channel.send(JSON.stringify({ type: "session.close", event_id: `voice_close_${crypto.randomUUID()}` })); }
+        catch (caught) { logCaughtDiagnostic("interface.voice.unmount_close_failed", "Voice could not request closure during navigation.", caught, "voice-connection"); }
+      }
       release();
     };
     // Voice mode is one session per selected project; a changed project is
     // handled by the explicit project effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const checkActivity = async () => {
+      const active = connection.current;
+      if (!active?.sessionId || closing.current || statsInFlight.current) return;
+      if (typeof active.peer.getStats === "function") {
+        statsInFlight.current = true;
+        try {
+          const reports = await Promise.race([active.peer.getStats(), sleep(200).then(() => undefined)]);
+          if (reports && connection.current === active) {
+            let energy = 0;
+            reports.forEach((raw) => {
+              const stat = raw as RTCStats & { kind?: string; mediaType?: string; totalAudioEnergy?: number };
+              if (stat.type === "inbound-rtp" && (stat.kind === "audio" || stat.mediaType === "audio")) energy += stat.totalAudioEnergy ?? 0;
+            });
+            const previous = playbackStats.current;
+            if (previous?.connection === active && energy - previous.energy > 0.00001) {
+              lastPlaybackAt.current = Date.now();
+              lastActivityAt.current = lastPlaybackAt.current;
+            }
+            playbackStats.current = { connection: active, energy };
+          }
+        } catch (caught) {
+          logCaughtDiagnostic("interface.voice.playback_stats_failed", "Voice playback activity could not be measured from WebRTC.", caught, "voice-output");
+        } finally { statsInFlight.current = false; }
+      }
+      if (connection.current !== active || closing.current) return;
+      const now = Date.now();
+      const playbackActive = now - lastPlaybackAt.current < 1_100;
+      if (mutePending.current) {
+        if (!playbackActive) closeSession("muted");
+      } else if (now - lastActivityAt.current >= pauseSeconds.current * 1_000 && !playbackActive) {
+        closeSession("idle");
+      }
+    };
+    const background = () => { if (document.hidden) closeSession("background"); };
+    const pageHide = () => closeSession("background");
+    const interval = window.setInterval(() => void checkActivity(), 500);
+    document.addEventListener("visibilitychange", background);
+    window.addEventListener("pagehide", pageHide);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", background);
+      window.removeEventListener("pagehide", pageHide);
+    };
+  }, [closeSession]);
 
   useEffect(() => {
     void refreshWork();
@@ -486,6 +660,8 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
   useEffect(() => {
     if (projectAtConnection.current === project.id) return;
     ++generation.current;
+    const channel = connection.current?.channel;
+    if (channel?.readyState === "open") channel.send(JSON.stringify({ type: "session.close", event_id: `voice_close_${crypto.randomUUID()}` }));
     release();
     setPhase("error");
     setError(`The selected project changed to ${project.name}. Select Reconnect to use voice in this project.`);
@@ -509,28 +685,21 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     return () => controller.abort();
   }, [api, project.id, selected]);
 
-  const exit = () => {
-    if (closing.current) return;
-    closing.current = true;
-    setPhase("closing");
-    const channel = connection.current?.channel;
-    if (channel?.readyState === "open") {
-      channel.send(JSON.stringify({ type: "session.close", event_id: `voice_close_${crypto.randomUUID()}` }));
-      window.setTimeout(() => { if (closing.current && mounted.current) { closing.current = false; release(); onExit(); } }, 5000);
-    } else { closing.current = false; release(); onExit(); }
-  };
+  const exit = () => closeSession("exit");
 
   const toggleMicrophone = () => {
-    const next = !microphoneMuted;
-    connection.current?.microphone.getAudioTracks().forEach((track) => { track.enabled = !next; });
-    setMicrophoneMuted(next);
+    if (microphoneMuted) return;
+    connection.current?.microphone.getAudioTracks().forEach((track) => { track.enabled = false; });
+    mutePending.current = true;
+    setMicrophoneMuted(true);
+    if (Date.now() - lastPlaybackAt.current >= 1_100) closeSession("muted");
   };
 
   const chooseMicrophone = (id: string) => {
     preferredMicrophone.current = id === "default" ? undefined : id;
     setMicrophoneDeviceId(id);
-    setMicrophoneMessage("Switching microphone…");
-    void connect(undefined, preferredMicrophone.current);
+    setMicrophoneMessage("Input selected. Resume Voice to use it.");
+    closeSession("muted");
   };
 
   const inspectSpeaker = async () => {
@@ -588,7 +757,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     }
   };
 
-  const phaseLabel = phase === "connecting" ? "Connecting" : phase === "speaking" ? "Speaking" : phase === "listening" ? "Listening" : phase === "reconnecting" ? "Reconnecting" : phase === "closing" ? "Ending voice" : "Connection needs attention";
+  const phaseLabel = phase === "connecting" ? "Connecting" : phase === "speaking" ? "Speaking" : phase === "listening" ? "Listening" : phase === "reconnecting" ? "Reconnecting" : phase === "closing" ? "Ending voice" : phase === "paused" ? "Voice paused" : "Connection needs attention";
 
   return <div ref={screen} className={styles.screen} role="dialog" aria-modal="true" aria-label="Butler Voice" onKeyDown={(event) => {
     if (event.key === "Escape") { event.preventDefault(); exit(); }
@@ -610,13 +779,15 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
     <div className={styles.layout}>
       <section className={styles.center} aria-label="Voice conversation">
         <div ref={orb} data-testid="voice-orb" className={`${styles.orb} ${phase === "speaking" ? styles.speaking : ""}`} aria-hidden="true"><div /></div>
-        <p className={styles.phase} role="status">{microphoneMuted && phase !== "error" ? "Microphone off" : phaseLabel}</p>
+        <p className={styles.phase} role="status">{microphoneMuted && phase !== "error" && phase !== "paused" ? "Microphone off" : phaseLabel}</p>
         <div className={styles.controls}>
-          <button type="button" onClick={toggleMicrophone} disabled={!connection.current || phase === "closing"} title={microphoneMuted ? "Turn microphone on" : "Turn microphone off"} aria-label={microphoneMuted ? "Turn microphone on" : "Turn microphone off"}><MicrophoneIcon muted={microphoneMuted} /></button>
+          <button type="button" onClick={toggleMicrophone} disabled={!connection.current || microphoneMuted || phase === "closing"} title={microphoneMuted ? "Microphone off" : "Turn microphone off"} aria-label={microphoneMuted ? "Microphone off" : "Turn microphone off"}><MicrophoneIcon muted={microphoneMuted} /></button>
           <button ref={inputToggle} type="button" onClick={() => { const next = !microphonePanelOpen; setMicrophonePanelOpen(next); if (next) { setSpeakerPanelOpen(false); void refreshMicrophones(); } }} disabled={phase === "closing"} title="Microphone input" aria-label="Microphone input" aria-controls={inputPanelId} aria-expanded={microphonePanelOpen}><MicrophoneIcon size={16} /><span>Input</span>{microphonePanelOpen ? <ChevronUp size={15} aria-hidden="true" /> : <ChevronDown size={15} aria-hidden="true" />}</button>
           <button ref={speakerToggle} type="button" onClick={() => { const next = !speakerPanelOpen; setSpeakerPanelOpen(next); if (next) { setMicrophonePanelOpen(false); void inspectSpeaker(); } }} disabled={phase === "closing"} title="Speaker output" aria-label="Speaker output" aria-controls={speakerPanelId} aria-expanded={speakerPanelOpen}><SpeakerIcon /><span>Speaker</span>{speakerPanelOpen ? <ChevronUp size={15} aria-hidden="true" /> : <ChevronDown size={15} aria-hidden="true" />}</button>
-          {(phase === "error" || phase === "reconnecting") && <button type="button" onClick={() => void connect()} title="Reconnect voice" aria-label="Reconnect voice"><RefreshCw size={19} /><span>Reconnect</span></button>}
+          {(phase === "paused" || (phase === "error" && !connection.current)) && <button type="button" onClick={() => void connect()} title="Resume Voice" aria-label="Resume Voice"><RefreshCw size={19} /><span>Resume Voice</span></button>}
+          {(phase === "reconnecting" || (phase === "error" && connection.current)) && <button type="button" onClick={() => closeSession("reconnect")} title="Pause Voice" aria-label="Pause Voice"><RefreshCw size={19} /><span>Pause Voice</span></button>}
         </div>
+        {phase === "paused" && <p className={styles.delegated} role="status">{pauseMessage}</p>}
         {delegatedStatus && <p className={styles.delegated} role="status">{delegatedStatus}</p>}
         {microphonePanelOpen && <div id={inputPanelId} className={styles.speakerPanel} role="group" aria-label="Microphone input">
           <div className={styles.panelStatus}><p role="status">{microphoneMessage || `Using ${microphoneLabel || "the system microphone"}. The egg should move when you talk.`}</p><button type="button" title="Collapse input settings" aria-label="Collapse input settings" onClick={() => { inputToggle.current?.focus(); setMicrophonePanelOpen(false); }}><ChevronUp size={17} aria-hidden="true" /></button></div>
@@ -640,7 +811,7 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
           </label>}
           <div className={styles.speakerActions}>
             <button type="button" onClick={() => void inspectSpeaker()}><Play size={16} aria-hidden="true" />{playbackBlocked ? "Play audio" : "Check speaker"}</button>
-            <button type="button" onClick={() => void connect()}><RefreshCw size={16} aria-hidden="true" />Reconnect voice</button>
+            <button type="button" onClick={() => closeSession("muted")}><RefreshCw size={16} aria-hidden="true" />Pause to reconnect</button>
           </div>
         </div>}
         {error && <p className={styles.error} role="alert">{error}</p>}
@@ -678,6 +849,6 @@ export function NebulaVoice({ api, project, initialMicrophone, onDelegate, onExi
         </div>}
       </aside>
     </div>
-    <footer className={styles.footer}><Radio size={16} aria-hidden="true" /><span>Keep talking. Voice stays on until you exit.</span><Info size={15} aria-hidden="true" /></footer>
+    <footer className={styles.footer}><Radio size={16} aria-hidden="true" /><span>Voice pauses after {pauseSeconds.current} seconds of quiet. Resume starts a new session.</span><Info size={15} aria-hidden="true" /></footer>
   </div>;
 }

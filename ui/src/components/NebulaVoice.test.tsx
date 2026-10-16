@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
@@ -14,6 +14,7 @@ class FakeChannel extends EventTarget {
 
 class FakePeer extends EventTarget {
   static latest: FakePeer;
+  static energy = 0;
   channel = new FakeChannel();
   iceGatheringState = "complete";
   connectionState = "connected";
@@ -25,10 +26,12 @@ class FakePeer extends EventTarget {
   async createOffer() { return { type: "offer", sdp: "v=0\r\nclient-offer" }; }
   async setLocalDescription() {}
   async setRemoteDescription(value: RTCSessionDescriptionInit) { this.remoteDescription = value; }
+  async getStats() { return { forEach: (visit: (value: Record<string, unknown>) => void) => visit({ type: "inbound-rtp", kind: "audio", totalAudioEnergy: FakePeer.energy }) }; }
   close() {}
 }
 
-const microphone = { getTracks: () => [{ stop: vi.fn() }], getAudioTracks: () => [{ enabled: true }] } as unknown as MediaStream;
+const microphoneTrack = { enabled: true, stop: vi.fn() };
+const microphone = { getTracks: () => [microphoneTrack], getAudioTracks: () => [microphoneTrack] } as unknown as MediaStream;
 const roster = {
   project: { id: "project", name: "Project" },
   chats: [{ id: "chat", title: "Surface review", backend: "harness", model: "model", state: "working", url: "/chat" }],
@@ -39,13 +42,15 @@ const roster = {
 
 describe("Butler Voice", () => {
   beforeEach(() => {
+    FakePeer.energy = 0;
+    microphoneTrack.enabled = true;
     vi.stubGlobal("RTCPeerConnection", FakePeer);
     Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(microphone) } });
   });
-  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-  it("connects once, shows project work, delegates transcript text, and stays open until Exit", async () => {
+  it("connects once, shows project work, and exits before the timeout", async () => {
     const user = userEvent.setup();
     const onDelegate = vi.fn().mockResolvedValue("Started a chat. Core saved it.");
     const onExit = vi.fn();
@@ -75,6 +80,158 @@ describe("Butler Voice", () => {
     expect(FakePeer.latest.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
     await act(async () => FakePeer.latest.channel.emit({ type: "session.closed" }));
     expect(onExit).toHaveBeenCalledOnce();
+  });
+
+  it("pauses after the configured quiet period, retains work, and resumes with a new Live session", async () => {
+    vi.useFakeTimers();
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer", auto_pause_seconds: 10 }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    const onExit = vi.fn();
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={vi.fn()} onExit={onExit} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(api.startVoiceSession).toHaveBeenCalledOnce();
+    const first = FakePeer.latest;
+    act(() => first.channel.emit({ type: "session.started" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_500); });
+    expect(first.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    act(() => first.channel.emit({ type: "session.closed" }));
+    expect(screen.getByText("Paused after 10 seconds of quiet. Project work continues.")).toBeVisible();
+    expect(screen.getByText("Surface review")).toBeVisible();
+    expect(onExit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Resume Voice" }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(api.startVoiceSession).toHaveBeenCalledTimes(2);
+    expect(FakePeer.latest).not.toBe(first);
+  });
+
+  it("uses playback energy, not only transcripts, to defer auto-pause", async () => {
+    vi.useFakeTimers();
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer", auto_pause_seconds: 10 }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(api.startVoiceSession).toHaveBeenCalledOnce();
+    const peer = FakePeer.latest;
+    act(() => peer.channel.emit({ type: "session.started" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(9_500); });
+    FakePeer.energy = 0.2;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+    expect(peer.channel.sent).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(9_000); });
+    expect(peer.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+  });
+
+  it("mutes immediately and closes after current reply playback", async () => {
+    vi.useFakeTimers();
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer", auto_pause_seconds: 20 }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(api.startVoiceSession).toHaveBeenCalledOnce();
+    const peer = FakePeer.latest;
+    act(() => peer.channel.emit({ type: "session.output_transcript.delta", delta: "Speaking now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn microphone off" }));
+    expect(microphoneTrack.enabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Microphone off" })).toBeDisabled();
+    expect(peer.channel.sent).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+    expect(peer.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    act(() => peer.channel.emit({ type: "session.closed" }));
+    expect(screen.getByText("Microphone off. Voice paused; project work continues.")).toBeVisible();
+  });
+
+  it("pauses slow delegated work and never speaks its late result into a replacement session", async () => {
+    vi.useFakeTimers();
+    let finishWork: (value: string) => void = () => undefined;
+    const pending = new Promise<string>((resolve) => { finishWork = resolve; });
+    const onDelegate = vi.fn().mockReturnValue(pending);
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer", auto_pause_seconds: 10 }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={onDelegate} onExit={vi.fn()} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(api.startVoiceSession).toHaveBeenCalledOnce();
+    const first = FakePeer.latest;
+    act(() => {
+      first.channel.emit({ type: "session.input_transcript.delta", delta: "Start a slow review", start_ms: 100, end_ms: 500 });
+      first.channel.emit({ type: "session.delegation.created", offset_ms: 700, delegation: { id: "slow", target: "client" } });
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(onDelegate).toHaveBeenCalledWith("Start a slow review");
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_500); });
+    expect(first.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    act(() => first.channel.emit({ type: "session.closed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume Voice" }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const replacement = FakePeer.latest;
+    await act(async () => finishWork("The slow review is saved."));
+    expect(first.channel.sent).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.commentary.append" })]));
+    expect(replacement.channel.sent).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.commentary.append" })]));
+  });
+
+  it("pauses on backgrounding and marks an unconfirmed close as a connection error", async () => {
+    vi.useFakeTimers();
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer", auto_pause_seconds: 20 }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(api.startVoiceSession).toHaveBeenCalledOnce();
+    const first = FakePeer.latest;
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(first.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_100); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not confirm that GPT-Live closed");
+    expect(screen.queryByText(/Voice paused; project work continues/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Resume Voice" }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    act(() => first.channel.emit({ type: "session.closed" }));
+    expect(screen.getByRole("dialog", { name: "Butler Voice" })).toBeVisible();
+    expect(FakePeer.latest).not.toBe(first);
+  });
+
+  it("does not label a reported connection loss as a confirmed pause", async () => {
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer", auto_pause_seconds: 20 }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Turn microphone off" }));
+    act(() => FakePeer.latest.channel.emit({ type: "session.closed", reason: "connection_lost" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("ended unexpectedly");
+    expect(screen.queryByText("Microphone off. Voice paused; project work continues.")).not.toBeInTheDocument();
+  });
+
+  it("waits for a disconnected session to close before offering a replacement", async () => {
+    const api = {
+      startVoiceSession: vi.fn().mockResolvedValue({ session_id: "live_1", sdp: "answer", auto_pause_seconds: 20 }),
+      getVoiceWorkRoster: vi.fn().mockResolvedValue(roster),
+    } as unknown as ApiClient;
+    render(<NebulaVoice api={api} project={{ id: "project", name: "Project" }} onDelegate={vi.fn()} onExit={vi.fn()} />);
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledOnce());
+    const first = FakePeer.latest;
+    act(() => {
+      first.connectionState = "disconnected";
+      first.dispatchEvent(new Event("connectionstatechange"));
+    });
+    expect(screen.queryByRole("button", { name: "Resume Voice" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Pause Voice" }));
+    expect(first.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    expect(api.startVoiceSession).toHaveBeenCalledOnce();
+    act(() => first.channel.emit({ type: "session.closed", reason: "close_requested" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume Voice" }));
+    await waitFor(() => expect(api.startVoiceSession).toHaveBeenCalledTimes(2));
   });
 
   it("keeps captions on the latest exchange and persists prior direct speech as its own Butler turn", async () => {
@@ -158,7 +315,7 @@ describe("Butler Voice", () => {
     await act(async () => FakePeer.latest.channel.emit({ type: "session.output_transcript.delta", delta: "Hello there." }));
     expect(screen.getByText("Hello there.")).toBeVisible();
     expect(screen.getByRole("group", { name: "Speaker audio" })).toHaveTextContent("no speaker stream arrived");
-    expect(screen.getByRole("button", { name: "Reconnect voice" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Pause to reconnect" })).toBeVisible();
   });
 
   it("keeps live captions visible while long transcripts and input settings collapse independently", async () => {
@@ -253,6 +410,10 @@ describe("Butler Voice", () => {
     await user.click(screen.getByRole("button", { name: "Microphone input" }));
     expect(screen.getByRole("group", { name: "Microphone input" })).toHaveTextContent("Using iPhone Microphone");
     await user.selectOptions(screen.getByRole("combobox", { name: "Input device" }), "mac");
+    expect(currentTrack.enabled).toBe(false);
+    expect(FakePeer.latest.channel.sent).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.close" })]));
+    await act(async () => FakePeer.latest.channel.emit({ type: "session.closed" }));
+    await user.click(screen.getByRole("button", { name: "Resume Voice" }));
     await waitFor(() => expect(getUserMedia).toHaveBeenCalledWith({ audio: {
       echoCancellation: true, noiseSuppression: true, deviceId: { exact: "mac" },
     } }));

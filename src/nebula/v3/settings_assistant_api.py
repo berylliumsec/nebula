@@ -22,7 +22,7 @@ _GLOBAL_SETTINGS = re.compile(
     r"^/api/v1/(?:"
     r"providers|harnesses|mcp-servers|ssh-environments|"
     r"runner-profiles|vpn-profiles|operator-profiles|credentials|skills|"
-    r"integrations|automation/runtime|diagnostics/settings|"
+    r"integrations|automation/runtime|diagnostics/settings|voice/settings|"
     r"auth/(?:pairings|devices)|setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )

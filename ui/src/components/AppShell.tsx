@@ -90,6 +90,10 @@ export function AppShell() {
   }, [quietLens]);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
+    if (entry.id === "settings.butler-voice") {
+      window.dispatchEvent(new Event("nebula:open-butler-settings"));
+      return;
+    }
     setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
   }, []);
   const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => {

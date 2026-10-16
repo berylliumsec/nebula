@@ -21,6 +21,8 @@ import type {
   ChatSessionAssistantSettingsRequest,
   ChatStreamEvent,
   ChatTurn,
+  ButlerVoiceSettings,
+  VoicePauseSeconds,
   VoiceWorkRoster,
   VoiceWorkDetail,
   PendingChatTurnStatus,
@@ -9443,7 +9445,18 @@ export class ApiClient {
     }).then(mapChatSession);
   }
 
-  startVoiceSession(engagementId: string, sdp: string, signal?: AbortSignal): Promise<{ session_id: string; sdp: string }> {
+  getButlerVoiceSettings(): Promise<ButlerVoiceSettings> {
+    return this.request<{ auto_pause_seconds: VoicePauseSeconds; revision: number }>("voice/settings")
+      .then((value) => ({ autoPauseSeconds: value.auto_pause_seconds, revision: value.revision }));
+  }
+
+  updateButlerVoiceSettings(expectedRevision: number, autoPauseSeconds: VoicePauseSeconds): Promise<ButlerVoiceSettings> {
+    return this.request<{ auto_pause_seconds: VoicePauseSeconds; revision: number }>("voice/settings", {
+      method: "PATCH", body: JSON.stringify({ expected_revision: expectedRevision, auto_pause_seconds: autoPauseSeconds }),
+    }).then((value) => ({ autoPauseSeconds: value.auto_pause_seconds, revision: value.revision }));
+  }
+
+  startVoiceSession(engagementId: string, sdp: string, signal?: AbortSignal): Promise<{ session_id: string; sdp: string; auto_pause_seconds: VoicePauseSeconds }> {
     return this.request("voice/session", {
       method: "POST", signal,
       body: JSON.stringify({ engagement_id: engagementId, sdp }),

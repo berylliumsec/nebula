@@ -166,19 +166,25 @@
       {"area":"butler-oversight","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler watches a goal and surfaces an agent-reported machine incident on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "nebula-voice": [
-      {"area":"nebula-voice","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"compact","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
-      {"area":"nebula-voice","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice stays active until explicit exit","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"compact","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},
+      {"area":"nebula-voice","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler Voice timeout persists across projects on production HTTPS LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"nebula-voice","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler Voice timeout persists across projects on production HTTPS LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"nebula-voice","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler Voice timeout persists across projects on production HTTPS LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"nebula-voice","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler Voice keeps two spoken turns in one saved conversation on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"nebula-voice","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler Voice keeps two spoken turns in one saved conversation on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"nebula-voice","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler Voice keeps two spoken turns in one saved conversation on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "nebula-voice-live": [
+      {"area":"nebula-voice-live","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler Voice receives real session.closed and final duration on production HTTPS LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "notebook-file-index": [
       {"area":"notebook-file-index","project":"desktop","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file: file index connects from a host file and survives reload","runtime":"mock","shard":"1/1"},

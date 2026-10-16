@@ -43,6 +43,60 @@ describe("NebulaControlAssistant", () => {
     Object.defineProperty(window, "isSecureContext", { configurable: true, value: secure });
   });
 
+  it("saves the Core-wide Voice timeout independently and restores it after a failed change", async () => {
+    const user = userEvent.setup();
+    let saved = { autoPauseSeconds: 20 as 10 | 20 | 30 | 60, revision: 0 };
+    const getButlerVoiceSettings = vi.fn().mockImplementation(async () => saved);
+    const updateButlerVoiceSettings = vi.fn().mockImplementation(async (revision: number, seconds: 10 | 20 | 30 | 60) => {
+      if (seconds === 60) throw new Error("Voice settings changed on another device.");
+      expect(revision).toBe(saved.revision);
+      saved = { autoPauseSeconds: seconds, revision: revision + 1 };
+      return saved;
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(null), getButlerVoiceSettings, updateButlerVoiceSettings },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.click(screen.getByRole("button", { name: "Butler settings" }));
+    const timeout = await screen.findByRole("combobox", { name: "Pause Voice after" });
+    await waitFor(() => expect(timeout).toBeEnabled());
+    expect(timeout).toHaveValue("20");
+    await user.selectOptions(timeout, "30");
+    expect(await screen.findByText("Saved for the next Voice session on this Core.")).toBeVisible();
+    expect(updateButlerVoiceSettings).toHaveBeenCalledWith(0, 30);
+    expect(timeout).toHaveValue("30");
+    await user.selectOptions(timeout, "60");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Voice settings changed on another device.");
+    expect(timeout).toHaveValue("30");
+    saved = { autoPauseSeconds: 10, revision: 2 };
+    await user.click(screen.getByRole("button", { name: "Butler settings" }));
+    await user.click(screen.getByRole("button", { name: "Butler settings" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Pause Voice after" })).toHaveValue("10"));
+  });
+
+  it("keeps Core-wide Voice settings open while the selected project first loads", async () => {
+    const user = userEvent.setup();
+    const api = {
+      getControlAssistantSession: vi.fn().mockResolvedValue(null),
+      getButlerVoiceSettings: vi.fn().mockResolvedValue({ autoPauseSeconds: 30, revision: 1 }),
+    };
+    let workspace = { api, engagement: undefined as { id: string; name: string } | undefined, providers: [], harnesses: [] };
+    vi.mocked(useWorkspace).mockImplementation(() => workspace as unknown as ReturnType<typeof useWorkspace>);
+    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>;
+    const view = render(assistant());
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.click(screen.getByRole("button", { name: "Butler settings" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Pause Voice after" })).toHaveValue("30"));
+    workspace = { ...workspace, engagement: { id: "project", name: "Project" } };
+    view.rerender(assistant());
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Butler" })).toHaveTextContent("Project"));
+    expect(screen.getByRole("combobox", { name: "Pause Voice after" })).toHaveValue("30");
+  });
+
   it("offers project work prompts and sends a status request through the control conversation", async () => {
     const user = userEvent.setup();
     const streamChat = vi.fn().mockResolvedValue({

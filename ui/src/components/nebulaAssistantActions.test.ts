@@ -38,6 +38,9 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({ ...event, capability: "nebula_settings_open_1234567890abcdef",
       receipt: { state: "pending_browser_apply", client_action: { kind: "open_setting", setting_id: "appearance" } } }))
       .toMatchObject({ kind: "open_setting", setting: { id: "settings.appearance" } });
+    expect(settingClientAction({ ...event, capability: "nebula.settings.open",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "open_setting", setting_id: "butler-voice" } } }))
+      .toMatchObject({ kind: "open_setting", setting: { id: "settings.butler-voice" } });
     expect(settingClientAction({ ...event, capability: "nebula.navigate.open",
       receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "projects" } } }))
       .toMatchObject({ kind: "navigate", destination: { id: "projects" } });

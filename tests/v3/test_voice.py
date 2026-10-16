@@ -115,7 +115,11 @@ def test_voice_session_uses_direct_openai_credential_and_roster_is_project_bound
         json={"engagement_id": first.id, "sdp": offer},
     )
     assert response.status_code == 200, response.text
-    assert response.json() == {"session_id": "live_456", "sdp": "answer"}
+    assert response.json() == {
+        "session_id": "live_456",
+        "sdp": "answer",
+        "auto_pause_seconds": 20,
+    }
     assert observed == {
         "api_key": "direct-key",
         "project_name": "First",
@@ -129,6 +133,85 @@ def test_voice_session_uses_direct_openai_credential_and_roster_is_project_bound
         headers=headers,
     )
     assert foreign.status_code == 404
+
+
+def test_voice_settings_default_validation_conflict_persistence_and_projects(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "private-key")
+    database = tmp_path / "core.db"
+    store = NebulaStore(database)
+    first = store.create(Engagement(name="First"))
+    second = store.create(Engagement(name="Second"))
+
+    async def fake_live(*, api_key: str, project_name: str, sdp: str):
+        return {"session_id": f"live_{project_name}", "sdp": "answer"}
+
+    monkeypatch.setattr("nebula.v3.api.create_live_session", fake_live)
+    client = TestClient(create_app(store, auth_token="test-token"))
+    headers = {"Authorization": "Bearer test-token"}
+    assert client.get("/api/v1/voice/settings").status_code == 401
+    assert (
+        client.patch(
+            "/api/v1/voice/settings",
+            json={"expected_revision": 0, "auto_pause_seconds": 30},
+        ).status_code
+        == 401
+    )
+    assert client.get("/api/v1/voice/settings", headers=headers).json() == {
+        "auto_pause_seconds": 20,
+        "revision": 0,
+    }
+    for seconds in (0, 15, 90, "never"):
+        assert (
+            client.patch(
+                "/api/v1/voice/settings",
+                headers=headers,
+                json={"expected_revision": 0, "auto_pause_seconds": seconds},
+            ).status_code
+            == 422
+        )
+    assert (
+        client.patch(
+            "/api/v1/voice/settings",
+            headers=headers,
+            json={"expected_revision": 1, "auto_pause_seconds": 30},
+        ).status_code
+        == 409
+    )
+    saved = client.patch(
+        "/api/v1/voice/settings",
+        headers=headers,
+        json={"expected_revision": 0, "auto_pause_seconds": 30},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json() == {"auto_pause_seconds": 30, "revision": 1}
+    assert (
+        client.patch(
+            "/api/v1/voice/settings",
+            headers=headers,
+            json={"expected_revision": 0, "auto_pause_seconds": 10},
+        ).status_code
+        == 409
+    )
+    for project in (first, second):
+        response = client.post(
+            "/api/v1/voice/session",
+            headers=headers,
+            json={"engagement_id": project.id, "sdp": "v=0\r\nclient-offer"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["auto_pause_seconds"] == 30
+    assert client.patch(
+        "/api/v1/voice/settings",
+        headers=headers,
+        json={"expected_revision": 1, "auto_pause_seconds": 60},
+    ).json() == {"auto_pause_seconds": 60, "revision": 2}
+    restarted = TestClient(create_app(NebulaStore(database), auth_token="test-token"))
+    assert restarted.get("/api/v1/voice/settings", headers=headers).json() == {
+        "auto_pause_seconds": 60,
+        "revision": 2,
+    }
 
 
 def test_voice_session_reports_missing_key_and_rejects_non_offer(tmp_path, monkeypatch):
