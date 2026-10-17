@@ -695,6 +695,9 @@ CUSTOM_RESOURCES = {
     "butler_decisions",
     "butler_authority_policies",
     "butler_actions",
+    "butler_issue_destinations",
+    "butler_issue_scans",
+    "butler_issue_candidates",
     "butler_recovery_cases",
     "butler_agent_reports",
     "butler_account_credits",
@@ -2653,6 +2656,12 @@ def create_app(
         store, control_assistant_work, memory_service=butler_memory_service
     )
     butler_oversight.authority_service = butler_authority
+    from .butler_improvements import ButlerImprovementService
+
+    butler_improvements = ButlerImprovementService(
+        store, harness_runtime, credentials, mcp_probes
+    )
+    butler_oversight.improvement_service = butler_improvements
     from .butler_recovery import ButlerRecoveryAgent, ButlerRecoveryService
 
     butler_oversight.recovery_service = ButlerRecoveryService(
@@ -2683,6 +2692,7 @@ def create_app(
     app.state.store = store
     app.state.butler_oversight = butler_oversight
     app.state.butler_authority = butler_authority
+    app.state.butler_improvements = butler_improvements
     app.state.openrouter_credit_observer = openrouter_credit_observer
     app.state.harness_quota_observer = harness_quota_observer
     app.state.butler_memory_service = butler_memory_service
@@ -11511,6 +11521,13 @@ def create_app(
 
     app.include_router(
         authority_router(butler_authority),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+    from .butler_improvements import improvements_router
+
+    app.include_router(
+        improvements_router(butler_improvements, butler_oversight.notify),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )

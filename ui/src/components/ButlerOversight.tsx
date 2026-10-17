@@ -5,6 +5,7 @@ import type { ButlerAction, ButlerAuthority, ButlerAuthorityPolicy, ButlerDecisi
 import { acknowledgeButlerIncident, butlerResourceKey, getButlerAuthority, updateButlerAuthority } from "../api/butlerOverview";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useButlerOverview } from "./useButlerOverview";
+import { ButlerIssues } from "./ButlerIssues";
 import styles from "./ButlerOversight.module.css";
 
 function timeLabel(value?: string): string | undefined {
@@ -107,10 +108,11 @@ function ActionRow({ action, projectId, onNavigate }: {
 }) {
   const kind = action.actionType === "request_parent_status" ? "Parent status request" : "Urgent main-goal pause";
   const when = timeLabel(action.finishedAt ?? action.startedAt ?? action.createdAt);
-  return <li className={`${styles.row} ${action.status === "uncertain" ? styles.actionUncertain : ""}`}>
+  return <li className={`${styles.row} ${action.status === "uncertain" || action.status === "held" ? styles.actionUncertain : ""}`}>
     <div className={styles.rowHead}><strong>{action.summary}</strong><span>{action.status.replaceAll("_", " ")}</span></div>
     <small>{kind}{action.verificationState ? ` · ${action.verificationState.replaceAll("_", " ")}` : ""}{when ? ` · ${when}` : ""}</small>
     {action.status === "uncertain" && <p className={styles.actionWarning}>Core cannot confirm whether this action was delivered. Check the parent chat or goal before taking another action.</p>}
+    {action.status === "held" && <p className={styles.actionWarning}>Parent guidance was held because immediate delivery was unavailable. Review the parent chat before sending it manually.</p>}
     <WorkLink projectId={projectId} sessionId={action.targetSessionId ?? action.sourceSessionId} onNavigate={onNavigate} label="Open parent chat" />
   </li>;
 }
@@ -295,11 +297,11 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
   const [expanded, setExpanded] = useState(!compact);
   const incidentsAvailable = overview?.capabilities.incidents ?? false;
   const decisionsAvailable = overview?.capabilities.decisions ?? false;
-  const uncertainActions = overview?.actions.filter((action) => action.status === "uncertain") ?? [];
+  const uncertainActions = overview?.actions.filter((action) => action.status === "uncertain" || action.status === "held") ?? [];
   const recoveryAttention = overview?.recoveryCases.filter((item) => item.status === "needs_attention" || item.status === "uncertain") ?? [];
   const recoveryActive = overview?.recoveryCases.filter((item) => ["observed", "investigating", "verifying"].includes(item.status)) ?? [];
   const recoverySettled = overview?.recoveryCases.filter((item) => !recoveryAttention.includes(item) && !recoveryActive.includes(item)) ?? [];
-  const otherActions = overview?.actions.filter((action) => action.status !== "uncertain") ?? [];
+  const otherActions = overview?.actions.filter((action) => action.status !== "uncertain" && action.status !== "held") ?? [];
   const shownActions = [...uncertainActions, ...otherActions.slice(0, 3)];
   const olderActions = otherActions.slice(3);
   const canAcknowledge = !!api && coreState === "online";
@@ -415,6 +417,7 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
       </div>}
 
       <AuthorityEditor api={api} projectId={projectId} coreState={coreState} overview={overview} onSaved={refresh} />
+      <ButlerIssues api={api} projectId={projectId} online={coreState === "online"} />
     </>}
   </section>;
 }
