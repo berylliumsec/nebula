@@ -44,6 +44,7 @@ import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, mergeRecentListedSessions, reconcileListedSessions } from "./chatSessionList";
 import { nextSideChatNumber, sideChatForConversation, sideChatsForConversation, sideChatTabLabel } from "./sideChatSelection";
 import { appendSideToolTab, clearSideToolTabs, removeSideToolTab, sideToolLabel, sideToolTabs, type SideToolKind, type SideToolTab } from "./sidePanelTabs";
+import { SideToolSurface } from "./SideToolSurface";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
@@ -7074,11 +7075,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           )}
           {view === "chat" && sidePanelOpen && sideChatSplit.resizeHandle}
           {view === "chat" && sideChatId && <MemoizedSideChat key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} sideChatTabs={sideChats} onSelectSideChat={sideChatActions.select} onSelectToolTab={sideChatActions.selectTool} onBackToMainChat={sideChatActions.back} onCloseSideChat={sideChatActions.close} onShowConversations={sideChatActions.showConversations} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={sideChatActions.unavailable} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} />}
-          {!shellOnly && api && engagement && toolTabs.length > 0 && <section id="side-tool-panel" className="side-tool-panel" role={activeToolTab && view === "chat" ? "region" : undefined} aria-label={activeToolTab && view === "chat" ? `${sideToolLabel(activeToolTab)} beside chat` : undefined} data-active={Boolean(activeToolTab && view === "chat")} hidden={!sidePanelOpen || view !== "chat"}>
-            <header className="side-chat-header"><div><strong>{activeToolTab ? sideToolLabel(activeToolTab) : "Side panels"}</strong><small>{activeToolTab?.kind === "code" ? "Workspace files" : "Beside this conversation"}</small></div>{activeToolTab && <button className="icon-button subtle" type="button" aria-label={`Close ${sideToolLabel(activeToolTab)} tab`} title={`Close ${sideToolLabel(activeToolTab)} tab`} onClick={() => sideChatActions.closeTool(activeToolTab.id)}><X size={16} aria-hidden="true" /></button>}</header>
+          {!shellOnly && api && engagement && toolTabs.length > 0 && <SideToolSurface activeTab={activeToolTab} visible={sidePanelOpen && view === "chat"} onClose={sideChatActions.closeTool}>
             <SidePanelTabs idPrefix="side-tools" sideChats={sideChats} toolTabs={toolTabs} activeSideId={sideChatId} activeToolId={activeToolId} onSelectSideChat={sideChatActions.select} onSelectTool={sideChatActions.selectTool} />
             {toolTabs.map(tab => <div key={tab.id} id={`side-tool-content-${tab.id}`} className={`side-tool-content side-tool-${tab.kind}`} role="tabpanel" aria-labelledby={`side-tools-tool-${tab.id}`} hidden={activeToolId !== tab.id}>{renderSideToolContent(tab)}</div>)}
-          </section>}
+          </SideToolSurface>}
         </section>
 
         {!shellOnly && (view === "chat" || view === "browser") && projectSnapshot !== "closed" && engagement && <ProjectSnapshotPanel
