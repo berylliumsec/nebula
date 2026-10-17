@@ -28,8 +28,11 @@ test("older conversation link restores after the recent page wins a Core read ra
     expect(pairResponse.ok(), await pairResponse.text()).toBe(true);
     const pairing = await pairResponse.json() as {secret: string; confirmation_code: string};
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    // PairingGate clears the fragment before redeeming, then reloads the page.
+    // Wait for that reload so it cannot abort the older-conversation navigation.
+    const pairedLoad = page.waitForEvent("load");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await page.waitForURL(url => !url.hash, {waitUntil: "load"});
+    await pairedLoad;
 
     let exactReads = 0;
     let terminalBootstrapReads = 0;
