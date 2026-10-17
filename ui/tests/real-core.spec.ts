@@ -4541,6 +4541,117 @@ test("assistant upgrade real Core keeps queued controls reachable and durable", 
   ]);
 });
 
+test("assistant upgrade image attachment reaches the model and survives a LAN reload", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Image acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      capabilities: {vision: true},
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 131072}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const started = await api.post("chat/completions", {data: {
+      backend: "provider", provider_id: provider.id, model: "security-model",
+      engagement_id: projects[0].id, messages: [{role: "user", content: "Hello"}],
+      include_knowledge: false, stream: false,
+    }});
+    expect(started.ok(), await started.text()).toBe(true);
+    const chat = await started.json() as {session_id: string};
+    const url = `${core.origin}/?view=chat&session=${chat.session_id}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(url);
+
+    const attachImage = page.getByRole("button", {name: "Attach image or file", exact: true});
+    await attachImage.focus();
+    await attachImage.click();
+    const dialog = page.getByRole("dialog", {name: "Attach to next message"});
+    await expect(dialog.getByRole("button", {name: "Images from this device"})).toBeEnabled();
+    await dialog.getByRole("button", {name: "Images from this device"}).click();
+    await page.getByLabel("Choose image attachments").setInputFiles({
+      name: "mac-settings.png", mimeType: "image/png",
+      buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64"),
+    });
+    await expect(page.getByRole("list", {name: "Image attachments"})).toBeVisible();
+    await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Describe this Mac settings screenshot.");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.operator img.chat-content-image")).toHaveAttribute("alt", "mac-settings.png");
+    await expect.poll(() => stub.requests.some(request => JSON.stringify(request).includes("data:image/png;base64,"))).toBe(true);
+    await expect.poll(async () => {
+      const messages = await (await api.get(`chat/sessions/${chat.session_id}/messages`)).json() as Array<{content_blocks?: Array<{type: string; artifact_id?: string}>}>;
+      return messages.some(message => message.content_blocks?.some(block => block.type === "image" && Boolean(block.artifact_id)));
+    }).toBe(true);
+
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator img.chat-content-image")).toHaveAttribute("alt", "mac-settings.png");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await testInfo.attach("real-core-image-attachment", {body: await page.screenshot(), contentType: "image/png"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
+test("assistant upgrade Butler screenshot reaches the model and survives a LAN reload", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({responseContent: "I can see the Mac settings screen."});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projectResponse = await api.post("engagements", {data: {
+      name: "Butler image acceptance", description: "", client_name: null,
+      status: "active", tags: [], workspace_path: null, metadata: {},
+    }});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = ((await projectResponse.json()) as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler image model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      capabilities: {vision: true},
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 131072}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler image LAN browser");
+    await page.goto(`${core.origin}/settings`);
+    await openNebulaAssistantFromShell(page);
+    const butler = page.getByRole("dialog", {name: "Butler"});
+    await butler.getByRole("button", {name: "Attach image to Butler"}).click();
+    await butler.getByLabel("Choose images for Butler").setInputFiles({
+      name: "mac-settings.png", mimeType: "image/png",
+      buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64"),
+    });
+    await expect(butler.getByRole("list", {name: "Butler image attachments"})).toBeVisible();
+    await expect(butler.getByRole("list", {name: "Butler image attachments"}).getByAltText("mac-settings.png")).toBeVisible();
+    await butler.getByRole("textbox", {name: "Ask Butler a question"}).fill("Explain the setting in this screenshot.");
+    await butler.getByRole("button", {name: "Send to Butler"}).click();
+    await expect(butler.getByText("I can see the Mac settings screen.")).toBeVisible({timeout: 45_000});
+    await expect.poll(() => stub.requests.some(request => JSON.stringify(request).includes("data:image/png;base64,"))).toBe(true);
+    const sessionResponse = await api.get(`chat/control-assistant/session?engagement_id=${encodeURIComponent(projectId)}`);
+    expect(sessionResponse.ok(), await sessionResponse.text()).toBe(true);
+    const sessionId = ((await sessionResponse.json()) as {id: string}).id;
+    await expect.poll(async () => {
+      const messages = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{content_blocks?: Array<{type: string; artifact_id?: string}>}>;
+      return messages.some(message => message.content_blocks?.some(block => block.type === "image" && Boolean(block.artifact_id)));
+    }).toBe(true);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    const restored = page.getByRole("dialog", {name: "Butler"});
+    await expect(restored.getByRole("log", {name: "Butler conversation"}).getByAltText("mac-settings.png")).toBeVisible();
+    await expect(restored.getByText("I can see the Mac settings screen.")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-image-real-core", {body: await page.screenshot(), contentType: "image/png"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
   // WebKit's production-LAN pass can spend more than a minute covering the
   // complete durable-conversation lifecycle on shared CI runners.
@@ -4582,7 +4693,7 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(page.locator(".assistant-search ol li")).toHaveCount(1);
     await page.getByRole("button", {name: "Close transcript search", exact: true}).click();
     await expect(page.locator(".assistant-search")).toHaveCount(0);
-    const attachFiles = page.getByRole("button", {name: "Attach files", exact: true});
+    const attachFiles = page.getByRole("button", {name: "Attach image or file", exact: true});
     await attachFiles.focus();
     await attachFiles.click();
     await page.locator(".assistant-attachment-dialog input[type=file]").setInputFiles({name: "review.txt", mimeType: "text/plain", buffer: Buffer.from("Exact attachment preview\n")});
