@@ -67,7 +67,7 @@ jobs:
         run: |
           if test "$EVENT_NAME" = pull_request; then
             python scripts/test_selection.py --baseline "$BASELINE_SHA" --candidate "$CANDIDATE_SHA" --output "$RUNNER_TEMP/reviewed-tests.json"
-            EXPLICIT_SELECTION="$(jq -r 'if (.playwright|length)==0 then "none" else .playwright|join(",") end' "$RUNNER_TEMP/reviewed-tests.json")"
+            EXPLICIT_SELECTION="$(jq -r 'if (.playwright|length)==0 then "none" else .playwright|map("entry:" + .)|join(",") end' "$RUNNER_TEMP/reviewed-tests.json")"
             REVIEW_REASON="$(jq -r '.reason + " Exclusions: " + .exclusions' "$RUNNER_TEMP/reviewed-tests.json")"
           fi
           args=(

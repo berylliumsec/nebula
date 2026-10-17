@@ -1,21 +1,36 @@
 {
-  "change_digest": "0bc4db082b92a5bf66f55a2d0ad79c77ced2e3824e94ce9f46499d182c8e199d",
-  "reviewed_by": "Codex focused review for post-pairing navigation race",
-  "reason": "The older-conversation LAN navigation test waited only for the pairing fragment to disappear, but PairingGate clears that fragment before redeeming and then reloads the page. The test now waits for the real post-redemption load before opening the deep link. Collect the exact real-Core test in its catalogued desktop and narrow Chromium entries.",
-  "exclusions": "No production source, Python, frontend unit, or native behavior changed. Unrelated browser journeys and full suites are excluded. The selected test uses a disposable real-Core fixture with the production UI bundle at a non-loopback LAN origin. This test has no catalogued WebKit entry; physical devices are unavailable.",
+  "change_digest": "a6e6dbf2a7339ef1b7c7eb8afece88041a94d2cac21c9b5a440bc3d7074f8716",
+  "reviewed_by": "Codex focused review for ripgrep workspace text search",
+  "reason": "Seven collected Python cases cover the Core search route, symlink confinement, directory exclusions, descriptor bounds, ripgrep/Python parity, process failure fallback, result-limit counts, and the small-file threshold. Eight collected real-Core browser entries cover production Code search at desktop and emulated mobile widths on a LAN origin, including the workflow's exact-entry selector handoff.",
+  "exclusions": "No frontend source or native behavior changed. Unrelated Python and browser suites are excluded. Physical-device testing is unavailable; the permanent mobile Playwright profiles provide emulation evidence only.",
   "expected_tests": {
-    "python": 0,
+    "python": 7,
     "frontend": 0,
     "native": 0,
-    "playwright": 2
+    "playwright": 8
   },
-  "python": [],
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_workspace.py::test_workspace_search_is_recursive_bounded_and_never_follows_symlinks",
+    "tests/v3/test_workspace.py::test_workspace_search_opens_one_directory_at_a_time",
+    "tests/v3/test_workspace.py::test_workspace_search_skips_generated_directories",
+    "tests/v3/test_workspace.py::test_workspace_text_search_ripgrep_preserves_python_results",
+    "tests/v3/test_workspace.py::test_workspace_text_search_pins_files_and_falls_back_on_rg_failure",
+    "tests/v3/test_workspace.py::test_workspace_text_search_limit_keeps_original_file_count",
+    "tests/v3/test_workspace.py::test_workspace_text_search_uses_python_for_small_files"
+  ],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:navigation-deeplink/desktop",
-    "entry:navigation-deeplink/narrow"
-  ],
-  "python_browser": false,
-  "python_node": false
+    "workspace-text-search-core/assistant-real-desktop",
+    "workspace-text-search-core/assistant-real-compact",
+    "workspace-text-search-core/assistant-real-chromium-320",
+    "workspace-text-search-core/assistant-real-chromium-390",
+    "workspace-text-search-core/assistant-real-chromium-430",
+    "workspace-text-search-core/assistant-real-webkit-320",
+    "workspace-text-search-core/assistant-real-webkit-390",
+    "workspace-text-search-core/assistant-real-webkit-430"
+  ]
 }
