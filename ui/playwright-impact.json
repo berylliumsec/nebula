@@ -960,6 +960,7 @@
     ],
     "navigation-loading": [
       {"area":"navigation-loading","project":"desktop","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
+      {"area":"navigation-loading","project":"compact","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
       {"area":"navigation-loading","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
       {"area":"navigation-loading","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
       {"area":"navigation-loading","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching loads recent history before older conversations and leaves Terminal idle","runtime":"mock","shard":"1/1"},
