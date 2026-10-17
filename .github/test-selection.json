@@ -1,29 +1,39 @@
 {
-  "change_digest": "bb4492a7b2d11a6d78b6635e6198a84d86bc4a0aecc4825219559b36747f65e3",
-  "reviewed_by": "Codex focused review for follow-up queue disclosure",
-  "reason": "The queue panel now lets operators collapse a needs-attention follow-up and reopen it while retaining the status summary. Five collected component cases cover default disclosure, attention, transition, reconciliation, and edit interaction. Eight collected browser cases cover the queue journey at desktop 1440/1024 and emulated Chromium/WebKit phone widths of 320/390/430. Four collected real-Core cases cover durable review state, reload, and production LAN controls at desktop and emulated 390 px phones.",
-  "exclusions": "No backend or native code changed, so Python and native tests are excluded. Unrelated UI and browser suites and full suites are excluded. Physical-device testing is unavailable locally and is not claimed.",
+  "change_digest": "bb556141188ee68ff4fa0139f19f5b930579621db043c78509770b3c86f4e561",
+  "reviewed_by": "Codex review of harness goal recovery and Butler context routing",
+  "reason": "Two collected Python cases cover queue priority and the completed-turn/profile-revision/review handoff. The two affected frontend files contain 41 collected cases covering Butler context selection, send, failed retry, and existing conversation behavior. Eight harness-goal and eight Butler-context catalog entries exercise production-LAN real-Core workflows on desktop and emulated 320/390/430 px Chromium and WebKit profiles, including saved-turn context and reload.",
+  "exclusions": "Native code did not change. Provider-goal, unrelated chat, storage, Voice, and full suites are excluded. Real-Core browser cases use isolated Core instances, inert model/harness fixtures, and a production bundle; no external research workload or physical device is involved.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 5,
+    "python": 2,
+    "frontend": 41,
     "native": 0,
-    "playwright": 12
+    "playwright": 16
   },
-  "python": [],
-  "frontend": ["ui/src/components/ChatQueuePanel.test.tsx"],
+  "python": [
+    "tests/v3/test_harness_chat_goals.py::test_queued_operator_follow_up_takes_priority_over_goal_dispatch",
+    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff"
+  ],
+  "frontend": [
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/state/WorkbenchDraftContext.navigation.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:assistant-queue-reconciliation/desktop",
-    "entry:assistant-queue-reconciliation/compact",
-    "entry:assistant-queue-reconciliation/mobile-chromium-small",
-    "entry:assistant-queue-reconciliation/mobile-chromium-ledger-390",
-    "entry:assistant-queue-reconciliation/mobile-chromium-wide",
-    "entry:assistant-queue-reconciliation/mobile-webkit-small",
-    "entry:assistant-queue-reconciliation/mobile-webkit",
-    "entry:assistant-queue-reconciliation/mobile-webkit-wide",
-    "entry:assistant-queue-core/assistant-real-desktop",
-    "entry:assistant-queue-core/assistant-real-compact",
-    "entry:assistant-queue-core/assistant-real-chromium-390",
-    "entry:assistant-queue-core/assistant-real-webkit-390"
+    "entry:harness-goal/assistant-real-desktop",
+    "entry:harness-goal/assistant-real-compact",
+    "entry:harness-goal/assistant-real-chromium-320",
+    "entry:harness-goal/assistant-real-chromium-390",
+    "entry:harness-goal/assistant-real-chromium-430",
+    "entry:harness-goal/assistant-real-webkit-320",
+    "entry:harness-goal/assistant-real-webkit-390",
+    "entry:harness-goal/assistant-real-webkit-430",
+    "entry:butler-context/assistant-real-desktop",
+    "entry:butler-context/assistant-real-compact",
+    "entry:butler-context/assistant-real-chromium-320",
+    "entry:butler-context/assistant-real-chromium-390",
+    "entry:butler-context/assistant-real-chromium-430",
+    "entry:butler-context/assistant-real-webkit-320",
+    "entry:butler-context/assistant-real-webkit-390",
+    "entry:butler-context/assistant-real-webkit-430"
   ]
 }

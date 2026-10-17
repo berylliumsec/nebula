@@ -53,6 +53,7 @@
     {"name": "settings-assistant-full-control", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/assistantSettingsMutations.ts", "src/nebula/v3/settings_assistant_api.py", "src/nebula/v3/settings_assistant_tools.py", "src/nebula/v3/agent_security_tools.py"], "areas": ["settings-assistant-full-control"]},
     {"name": "control-assistant-work", "patterns": ["src/nebula/v3/control_assistant_work.py", "src/nebula/v3/settings_assistant_tools.py", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["control-assistant-work"]},
     {"name": "butler-timeline", "patterns": ["src/nebula/v3/butler_timeline.py"], "areas": ["butler-timeline"]},
+    {"name": "butler-context", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/state/WorkbenchDraftContext.tsx", "ui/src/components/selection/SelectionActionsProvider.tsx"], "areas": ["butler-context"]},
     {"name": "butler-response-table", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["butler-response-table"]},
     {"name": "butler-oversight", "patterns": ["src/nebula/v3/butler_oversight.py", "src/nebula/v3/butler_review.py", "src/nebula/v3/butler_authority.py", "src/nebula/v3/butler_recovery.py", "src/nebula/v3/butler_improvements.py", "ui/src/components/ButlerOversight.tsx", "ui/src/components/ButlerIssues.tsx", "ui/src/components/ButlerOversight.module.css"], "areas": ["butler-oversight"]},
     {"name": "nebula-voice", "patterns": ["src/nebula/v3/live_voice.py", "ui/src/components/NebulaVoice.tsx", "ui/src/components/NebulaVoice.module.css", "ui/src/components/voiceTranscript.ts", "docs/design/nebula-voice.md"], "areas": ["nebula-voice"]},
@@ -151,6 +152,16 @@
       {"area":"butler-timeline","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler briefs named agent evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-timeline","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler briefs named agent evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-timeline","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler briefs named agent evidence on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-context": [
+      {"area":"butler-context","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-context","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-context","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-context","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-context","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-context","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-context","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-context","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler selected context reaches its saved turn on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-response-table": [
       {"area":"butler-response-table","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler saved table stays readable after reload on production LAN Core","runtime":"real-core","shard":"1/1"}
