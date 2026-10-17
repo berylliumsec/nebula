@@ -15,7 +15,8 @@ from nebula.v3.chat_goals import (
     GoalUpdate,
     GoalWrite,
 )
-from nebula.v3.chat import ChatService
+from nebula.v3.chat import ChatCompletionRequest, ChatService
+from nebula.v3.chat_queue import ChatQueueService, QueueWrite
 from nebula.v3.domain import (
     ChatBackend,
     ChatGoalStatus,
@@ -293,12 +294,104 @@ def test_queued_operator_follow_up_takes_priority_over_goal_dispatch(tmp_path):
             await runtime.dispatch_running_goal(created.session.id, "Automatic work")
             is None
         )
+        assert await runtime.reconcile_idle_running_goals() == []
+        assert await runtime.reconcile_idle_running_goals() == []
         assert store.list_session_entities(ChatTurn, created.session.id) == []
         store.update(
             ChatQueue, queue.id, {"items": []}, expected_revision=queue.revision
         )
-        assert await runtime.dispatch_running_goal(created.session.id, "Automatic work")
+        assert await runtime.reconcile_idle_running_goals() == []
+        assert await runtime.reconcile_idle_running_goals() == [created.goal.id]
         await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_reviewed_follow_up_releases_completed_harness_goal_handoff(tmp_path):
+    async def scenario() -> None:
+        store, _engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+
+        class WaitingConnection(FakeConnection):
+            async def run_turn(
+                self, prompt: str, *, model: str, images=None
+            ) -> AsyncIterator[HarnessEvent]:
+                async for event in super().run_turn(prompt, model=model, images=images):
+                    yield event
+                    if event.type == "started" and len(self.prompts) == 1:
+                        first_started.set()
+                        await release_first.wait()
+
+        async def open_waiting(request):
+            connection = WaitingConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_waiting
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=2)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        assert await runtime.dispatch_running_goal(created.session.id, "First work")
+        await asyncio.wait_for(first_started.wait(), timeout=5)
+
+        queue_service = ChatQueueService(store, None, runtime)
+        queued = queue_service.write(
+            created.session.id,
+            QueueWrite(
+                action="enqueue",
+                expected_revision=0,
+                idempotency_key="while-first-turn-runs",
+                request=ChatCompletionRequest(
+                    backend="harness",
+                    harness_profile_id=profile.id,
+                    engagement_id=created.session.engagement_id,
+                    session_id=created.session.id,
+                    model=created.session.model,
+                    messages=[{"role": "user", "content": "Queued operator follow-up"}],
+                    include_knowledge=False,
+                ),
+            ),
+        )
+        release_first.set()
+        for _ in range(300):
+            turns = store.list_session_entities(ChatTurn, created.session.id)
+            if (
+                turns
+                and turns[0].status == ChatTurnStatus.COMPLETE
+                and not runtime._chat_turn_tasks
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("first harness goal turn did not settle")
+        assert goals.get(created.session.id).status == ChatGoalStatus.RUNNING
+        assert len(turns) == 1
+        assert queue_service.get(created.session.id).items[0]["status"] == "queued"
+
+        # A successful turn updates profile health evidence and its revision.
+        # The queued operator request must be reviewed, while the goal resumes.
+        assert (
+            store.get(HarnessProfile, profile.id).revision
+            > queued.items[0]["profile_revision"]
+        )
+        await queue_service.step(queue_service.get(created.session.id))
+        reviewed = queue_service.get(created.session.id)
+        assert reviewed.paused
+        assert reviewed.items[0]["status"] == "needs_review"
+        assert await runtime.reconcile_idle_running_goals() == []
+        assert await runtime.reconcile_idle_running_goals() == [created.goal.id]
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        assert len(store.list_session_entities(ChatTurn, created.session.id)) == 2
+        assert len(adapter.connections[0].prompts) == 2
+        assert "Queued operator follow-up" not in adapter.connections[0].prompts[1]
+        assert (
+            queue_service.get(created.session.id).items[0]["status"] == "needs_review"
+        )
         await runtime.shutdown()
 
     asyncio.run(scenario())
