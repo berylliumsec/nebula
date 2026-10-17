@@ -827,6 +827,43 @@ reloadTest("assistant upgrade links open workspace files and websites in the mat
   await expect(code.getByRole("tab", { name: "Code 1" })).toHaveAttribute("aria-selected", "true");
   await expect(code.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
   await expect(code.locator(".code-editor-panel")).toContainText("second line");
+  const splitBounds = await code.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return [bounds.left, bounds.top, bounds.width, bounds.height].map(Math.round);
+  });
+  const expandCode = code.getByRole("button", { name: "Expand Code 1 to full screen" });
+  expectTouchTarget((await expandCode.boundingBox())?.width, "Expand Code 1");
+  expectTouchTarget((await expandCode.boundingBox())?.height, "Expand Code 1");
+  await expandCode.click();
+  const expandedCode = page.getByRole("dialog", { name: "Code 1 full screen" });
+  await expect(expandedCode).toBeVisible();
+  await expect(expandedCode.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+  const fillsViewport = () => expandedCode.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return Math.abs(bounds.left) <= 1 && Math.abs(bounds.top) <= 1
+      && Math.abs(bounds.width - window.innerWidth) <= 1 && Math.abs(bounds.height - window.innerHeight) <= 1;
+  });
+  await expect.poll(fillsViewport).toBe(true);
+  expect((await new AxeBuilder({ page }).include("#side-tool-panel > .side-chat-header").analyze()).violations).toEqual([]);
+  await expandedCode.getByRole("button", { name: "Restore Code 1 to split view" }).click();
+  await expect(code).toBeVisible();
+  await expect.poll(() => code.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return [bounds.left, bounds.top, bounds.width, bounds.height].map(Math.round);
+  })).toEqual(splitBounds);
+  const portraitViewport = page.viewportSize();
+  if (portraitViewport && portraitViewport.width <= 430) {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await code.getByRole("button", { name: "Expand Code 1 to full screen" }).click();
+    await expect.poll(fillsViewport).toBe(true);
+    await expandedCode.getByRole("button", { name: "Restore Code 1 to split view" }).click();
+    await expect(code).toBeVisible();
+    await page.setViewportSize(portraitViewport);
+  }
+  await code.getByRole("button", { name: "Expand Code 1 to full screen" }).click();
+  await page.keyboard.press("Escape");
+  await expect(code).toBeVisible();
+  await expect(code.getByRole("button", { name: "Expand Code 1 to full screen" })).toBeFocused();
   await page.reload();
   await expect(code.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
   await code.getByRole("button", { name: "Close Code 1 tab" }).click();
