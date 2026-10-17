@@ -4949,6 +4949,18 @@ test("assistant upgrade multiple side chats and linked code survive production L
     await expect(code.getByRole("tab", {name: "Code 1"})).toHaveAttribute("aria-selected", "true");
     await expect(code.getByRole("textbox", {name: "File path"})).toHaveValue("notes/review.md");
     await expect(code.locator(".code-editor-panel")).toContainText("second line");
+    await code.getByRole("button", {name: "Expand Code 1 to full screen"}).click();
+    const expandedCode = page.getByRole("dialog", {name: "Code 1 full screen"});
+    await expect(expandedCode).toBeVisible();
+    await expect.poll(() => expandedCode.evaluate(element => {
+      const bounds = element.getBoundingClientRect();
+      return Math.abs(bounds.left) <= 1 && Math.abs(bounds.top) <= 1
+        && Math.abs(bounds.width - window.innerWidth) <= 1 && Math.abs(bounds.height - window.innerHeight) <= 1;
+    })).toBe(true);
+    await expect(expandedCode.getByRole("textbox", {name: "File path"})).toHaveValue("notes/review.md");
+    await testInfo.attach("code-fullscreen-production-lan", {body: await page.screenshot(), contentType: "image/png"});
+    await expandedCode.getByRole("button", {name: "Restore Code 1 to split view"}).click();
+    await expect(code).toBeVisible();
     await expect(page.locator(".session-workspace.side-tool-active")).toBeVisible();
     await code.getByRole("tab", {name: "Side 2"}).click();
     await expect(pane.getByRole("tab", {name: "Side 2"})).toHaveAttribute("aria-selected", "true");
