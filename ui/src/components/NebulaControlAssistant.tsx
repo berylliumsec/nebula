@@ -607,6 +607,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setHidden(true);
       onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(saved.session.id)}`);
     } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.image_runtime_navigation_failed", message: "Butler could not open the image model selector.", outcome: "failure", stage: "chat-media", retryable: true, exception: caught });
       setError(caught instanceof Error ? caught.message : "Could not open Butler's model selector. Retry after reconnecting.");
     }
   };
@@ -865,7 +866,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
               const detail = caught instanceof Error ? caught.message : "Butler could not send the image.";
               setError(`${detail} The image remains attached. Check Butler's saved conversation before retrying.`);
             }
-          } catch {
+          } catch (historyError) {
+            void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.image_send_history_check_failed", message: "Butler could not verify whether the image was saved after the send failed.", outcome: "failure", stage: "chat-media", retryable: true, exception: historyError });
             setDraft(prompt);
             setError("Butler's send failed, and its saved state could not be checked. Reopen this conversation before retrying.");
           }
