@@ -43,6 +43,14 @@
 .settingList button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-width: 0; text-align: left; }
 .settingList small { font-size: .72rem; color: var(--muted); }
 .themes { border-top: 1px solid var(--border); padding-top: 8px; }
+.contextPack { min-height: 0; max-height: 180px; overflow: auto; padding: 8px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
+.contextHeading, .contextItem { display: flex; align-items: center; gap: 8px; }
+.contextHeading { justify-content: space-between; color: var(--muted); }
+.contextItems { display: grid; gap: 2px; }
+.contextItem details { flex: 1; min-width: 0; }
+.contextItem summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.contextItem p { max-height: 100px; margin: 4px 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.contextNotice { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 4px 12px; color: var(--muted); font-size: .82rem; }
 .composer { display: flex; align-items: end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {

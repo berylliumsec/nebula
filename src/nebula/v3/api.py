@@ -2551,6 +2551,16 @@ def create_app(
                     # Its scans run off the event loop and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
+                    try:
+                        await harness_runtime.reconcile_idle_running_goals()
+                    except Exception as exc:
+                        record_caught_exception(
+                            "harnesses",
+                            "harnesses.goal_recovery_tick_failed",
+                            "A running harness goal reconciliation pass failed; the next pass retries.",
+                            exc,
+                            stage="goal-recovery",
+                        )
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),

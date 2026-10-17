@@ -265,6 +265,11 @@ JSONRPC_INVALID_REQUEST = -32600
 # previous one completes. A goal that stays active without one is left alone.
 CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS = 15.0
 GROK_SESSION_LIST_TIMEOUT_SECONDS = 30.0
+_HARNESS_GOAL_CONTINUE_INSTRUCTION = (
+    "Review the active Nebula goal and its completion criteria. Continue concrete work now. "
+    "If all criteria are met, give an evidence-backed completion summary. "
+    "Do not stop merely to report status."
+)
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 # A gateway call answers this long before the harness's own tool timeout, so
@@ -8509,6 +8514,9 @@ class HarnessRuntimeService:
         self._mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._scheduled_mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._chat_turn_tasks: dict[str, asyncio.Task[None]] = {}
+        # Require two identical idle observations before recovering a running
+        # goal, so a turn still being prepared can take its durable claim.
+        self._idle_goal_observations: dict[str, tuple[int, str | None, int | None]] = {}
         # Followers of a turn wait on its signal instead of polling the ledger;
         # an entry lives only while some follower holds it.
         self._activity_signals: weakref.WeakValueDictionary[str, asyncio.Event] = (
@@ -11489,10 +11497,101 @@ class HarnessRuntimeService:
             return
         await self.dispatch_running_goal(
             turn.session_id,
-            "Review the active Nebula goal and its completion criteria. Continue concrete work now. "
-            "If all criteria are met, give an evidence-backed completion summary. "
-            "Do not stop merely to report status.",
+            _HARNESS_GOAL_CONTINUE_INSTRUCTION,
         )
+
+    async def reconcile_idle_running_goals(self) -> list[str]:
+        """Recover harness goals whose turn handoff no longer has an owner.
+
+        A queued follow-up may have owned the next turn when the prior turn
+        settled, then become paused for review. Its request must not be sent,
+        but the still-running goal must continue. This pass also repairs that
+        state after Core restarts.
+        """
+
+        candidates = await asyncio.to_thread(self._idle_running_goal_candidates)
+        observed: dict[str, tuple[int, str | None, int | None]] = {}
+        acted: list[str] = []
+        for goal, latest in candidates:
+            key = (
+                goal.revision,
+                latest.id if latest is not None else None,
+                latest.revision if latest is not None else None,
+            )
+            if self._idle_goal_observations.get(goal.id) != key:
+                observed[goal.id] = key
+                continue
+            if latest is None or latest.status == ChatTurnStatus.COMPLETE:
+                if await self.dispatch_running_goal(
+                    goal.session_id, _HARNESS_GOAL_CONTINUE_INSTRUCTION
+                ):
+                    acted.append(goal.id)
+                continue
+            self._pause_goal(
+                goal.session_id,
+                f"The goal's latest response ended {latest.status.value} and "
+                "nothing is running for it. Review that response, then resume the goal.",
+            )
+            acted.append(goal.id)
+        self._idle_goal_observations = observed
+        return acted
+
+    def _idle_running_goal_candidates(self) -> list[tuple[ChatGoal, ChatTurn | None]]:
+        """Find harness goals with no turn, child, or queued follow-up to await."""
+
+        from .chat_goals import ChatGoalService
+
+        goals = ChatGoalService(self.store)
+        found: list[tuple[ChatGoal, ChatTurn | None]] = []
+        for goal in self.store.iter_readable_entities(
+            ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
+        ):
+            if goal.execution_claim_id is not None:
+                continue
+            try:
+                session = self.store.get(ChatSession, goal.session_id)
+                if (
+                    session.backend != ChatBackend.HARNESS
+                    or "archived_at" in session.metadata
+                ):
+                    continue
+                self._assert_chat_turn_available(goal.session_id)
+                if goals.has_working_subagents(goal.session_id):
+                    continue
+                try:
+                    queue = self.store.get(ChatQueue, "chat-queue-" + goal.session_id)
+                except (
+                    NotFoundError
+                ):  # diagnostic-expected: most chats have no follow-up queue
+                    queue = None
+                if queue and any(
+                    item["status"] in {"claiming", "sending"}
+                    or (item["status"] == "queued" and not queue.paused)
+                    for item in queue.items
+                ):
+                    continue
+                latest = self.store.list_session_entities(
+                    ChatTurn, goal.session_id, newest_first=True, limit=1
+                )
+                if latest and latest[0].harness_turn_id:
+                    harness_turn_id = latest[0].harness_turn_id
+                    task = self._chat_turn_tasks.get(harness_turn_id)
+                    if task is not None and not task.done():
+                        continue
+                    harness_turn = self.store.get(HarnessTurn, harness_turn_id)
+                    if harness_turn.status in {
+                        HarnessTurnStatus.QUEUED,
+                        HarnessTurnStatus.RUNNING,
+                        HarnessTurnStatus.WAITING_APPROVAL,
+                    }:
+                        continue
+            except (NotFoundError, ChatHistoryConflict, ConflictError):
+                # diagnostic-expected: a concurrent writer or missing record is not evidence of an idle goal.
+                # A concurrent send, removed record, or inconsistent child
+                # graph needs its own recovery path; never infer an idle goal.
+                continue
+            found.append((goal, latest[0] if latest else None))
+        return found
 
     async def dispatch_running_goal(
         self, session_id: str, instruction: str
