@@ -6921,6 +6921,21 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     }});
     expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
     const projectId = ((await projectResponse.json()) as {id: string}).id;
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seedIssueTools = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import HarnessProfile, HarnessKind, McpServerProfile, McpTransport, McpCapabilitySnapshot, McpToolSnapshot",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "store.create(HarnessProfile(id='butler-ui-codex', name='Fixture Codex', kind=HarnessKind.CODEX_APP_SERVER, executable='/usr/bin/true', default_model='codex-test', enabled=True))",
+      "tools = [McpToolSnapshot(name=name, input_schema={'type': 'object'}) for name in ('issue_target', 'issue_find', 'issue_create')]",
+      "store.create(McpServerProfile(id='butler-ui-mcp', name='fixture_issues', transport=McpTransport.STDIO, command='/usr/bin/true', enabled=True, trusted_stdio=True, capabilities=McpCapabilitySnapshot(tools=tools)))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db")], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
+    });
+    expect(seedIssueTools.status, seedIssueTools.error?.message ?? seedIssueTools.stderr).toBe(0);
     const providerResponse = await api.post("providers", {data: {
       name: "Goal report model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
@@ -6962,20 +6977,28 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     await oversight.getByRole("button", {name: "Add issue destination"}).click();
     await expect(oversight.getByLabel("Host Codex reviewer")).toBeVisible();
     await expect(oversight.getByRole("checkbox", {name: /Automatically publish drafts/})).not.toBeChecked();
-    await oversight.getByRole("button", {name: "Cancel"}).click();
-    const repository = path.resolve(import.meta.dirname, "../..");
-    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
-    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    await oversight.getByLabel("Publisher").selectOption("mcp");
+    await oversight.getByLabel("Name", {exact: true}).fill("Fixture issues");
+    await oversight.getByLabel("Host Codex reviewer").selectOption("butler-ui-codex");
+    await oversight.getByLabel("Trusted MCP server").selectOption("butler-ui-mcp");
+    await oversight.getByLabel("Repository owner/name").fill("fixture/private");
+    await oversight.getByRole("checkbox", {name: "Enabled"}).uncheck();
+    await oversight.getByRole("button", {name: "Save destination"}).click();
+    await expect(oversight.getByText("fixture/private · MCP")).toBeVisible();
+    const destinationsResponse = await api.get(`engagements/${projectId}/butler/issues`);
+    expect(destinationsResponse.ok(), await destinationsResponse.text()).toBe(true);
+    const destinations = (await destinationsResponse.json() as {destinations: Array<{id: string; repository: string; enabled: boolean}>}).destinations;
+    const issueDestination = destinations.find(item => item.repository === "fixture/private");
+    expect(issueDestination).toMatchObject({enabled: false});
     const seedIssues = spawnSync(python, ["-c", [
       "import sys",
-      "from nebula.v3.domain import ButlerIssueDestination, ButlerIssueCandidate",
+      "from nebula.v3.domain import ButlerIssueCandidate",
       "from nebula.v3.storage import NebulaStore",
       "store = NebulaStore(sys.argv[1])",
-      "destination = store.create(ButlerIssueDestination(id='butler-ui-fixture-destination', engagement_id=sys.argv[2], name='Fixture issues', repository='fixture/private', publisher='mcp', mcp_profile_id='fixture-tool', review_profile_id='fixture-codex', enabled=False))",
-      "common = dict(engagement_id=sys.argv[2], destination_id=destination.id, source_kind='chat_turn', source_id='fixture-turn', confidence='hypothesis', public_independent=False, body='A saved selection disappears after a refresh in the sample workflow.', reproduction='Create a sample item, select it, then refresh the browser.')",
+      "common = dict(engagement_id=sys.argv[2], destination_id=sys.argv[3], source_kind='chat_turn', source_id='fixture-turn', confidence='hypothesis', public_independent=False, body='A saved selection disappears after a refresh in the sample workflow.', reproduction='Create a sample item, select it, then refresh the browser.')",
       "store.create(ButlerIssueCandidate(**common, dedup_key='a'*64, problem_key='selection-refresh', title='Selection disappears on refresh', status='held', reason='public_reproduction_not_independent'))",
       "store.create(ButlerIssueCandidate(**common, dedup_key='b'*64, problem_key='export-sample', title='Sample export fails', status='published', issue_id='1', issue_url='https://github.com/fixture/private/issues/1'))",
-    ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId], {
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId, issueDestination!.id], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
     });
     expect(seedIssues.status, seedIssues.error?.message ?? seedIssues.stderr).toBe(0);
@@ -7040,6 +7063,8 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     await openNebulaAssistantFromShell(page);
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await restored.getByRole("button", {name: /Oversight/}).click();
+    await expect(restored.getByText("fixture/private · MCP")).toBeVisible();
+    await expect(restored.getByRole("list", {name: "Held improvement drafts"}).getByText("Selection disappears on refresh")).toBeVisible();
     await restored.locator("summary").filter({hasText: /Agent-reported evidence/}).click();
     await expect(restored.getByText("SSH timed out.")).toBeVisible();
     await expect(restored.getByRole("heading", {name: /Needs attention/})).toContainText("1 acknowledged");
