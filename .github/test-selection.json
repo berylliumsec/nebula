@@ -1,18 +1,30 @@
 {
-  "change_digest": "be1232d911ee996f76e3e651744183d87174f7102dd72167379a8ed9383b2884",
-  "reviewed_by": "Codex reconciliation of Butler live feedback with image attachments on current main",
-  "reason": "The Butler component and composer changed on both branches. Thirty-eight collected component cases cover live status, pending-turn recovery, image upload and delivery, image model changes, context selection, and existing client actions. The two selected browser areas contain 31 collected cases: 8 live-status mock cases, 3 live-status real-Core LAN cases, 16 image-capability mock cases, 2 side-chat toolbar cases, and 2 image-delivery real-Core LAN cases. They exercise the combined Butler entry point across desktop Chromium and emulated mobile Chromium and WebKit, plus durable recovery in the production bundle. The production UI build is checked separately.",
-  "exclusions": "No Python or native source changed, so Python and native tests are excluded. Unrelated UI journeys and full suites are excluded. Real-Core cases use disposable Core instances and controlled local model stubs on a non-loopback LAN origin. Physical Mac and phone browsers are unavailable in this environment.",
+  "change_digest": "f876d7e0204a975d796c3d3dd83304e3306d4147f3c9a86f968c795082b7d956",
+  "reviewed_by": "Codex focused review for chat side tool fullscreen and restore",
+  "reason": "The Code 1 side pane gains a fullscreen control that preserves its mounted editor, active tab, and saved split width. Two collected component cases cover draft continuity, Escape, focus, background inertness, and close. Eight collected interface cases cover the linked-file journey and responsive fullscreen geometry in desktop Chromium and emulated mobile Chromium and WebKit, including landscape resizing. Three collected real-Core cases cover the same visible Code pane on a production non-loopback LAN origin with a durable file and reload.",
+  "exclusions": "No Python or native behavior changed. Unrelated UI journeys and full suites are excluded. Mock browser cases use a development server; real-Core cases use disposable Core instances and the production UI bundle on a LAN origin. Physical devices are not available in this environment.",
   "expected_tests": {
     "python": 0,
-    "frontend": 38,
+    "frontend": 2,
     "native": 0,
-    "playwright": 31
+    "playwright": 11
   },
   "python": [],
-  "frontend": ["ui/src/components/NebulaControlAssistant.test.tsx"],
+  "frontend": ["ui/src/pages/SideToolSurface.test.tsx"],
   "native": [],
-  "playwright": ["area:butler-live-feedback", "area:chat-image-attachments"],
+  "playwright": [
+    "entry:assistant-links/desktop",
+    "entry:assistant-links/compact",
+    "entry:assistant-links/mobile-chromium-small",
+    "entry:assistant-links/mobile-chromium-ledger-390",
+    "entry:assistant-links/mobile-chromium-wide",
+    "entry:assistant-links/mobile-webkit-small",
+    "entry:assistant-links/mobile-webkit",
+    "entry:assistant-links/mobile-webkit-wide",
+    "entry:side-chat-panels/assistant-real-desktop",
+    "entry:side-chat-panels/assistant-real-chromium-390",
+    "entry:side-chat-panels/assistant-real-webkit-390"
+  ],
   "python_browser": false,
   "python_node": false
 }

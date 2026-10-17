@@ -29,6 +29,8 @@
 .side-chat-tabs > button[aria-selected="true"]::after { position: absolute; right: 12px; bottom: 3px; left: 12px; height: 2px; border-radius: 2px; background: var(--blue-bright); content: ""; }
 .side-chat-tabs > button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .side-tool-panel { z-index: 4; display: flex; grid-column: 3; grid-row: 1 / span 2; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border-soft); background: var(--canvas); }
+.session-layout.chat .session-workspace:has(> .side-tool-panel.is-fullscreen) { container: normal; }
+.side-tool-panel.is-fullscreen { position: fixed; z-index: 90; inset: 0; width: 100vw; height: 100dvh; max-width: none; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); border: 0; overscroll-behavior: contain; }
 .side-tool-panel[data-active="false"], .session-workspace.side-tool-active > .side-chat-pane { visibility: hidden; }
 .side-tool-panel[hidden], .side-tool-content[hidden] { display: none !important; }
 .side-tool-content { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
