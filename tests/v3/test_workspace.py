@@ -9,6 +9,7 @@ import subprocess
 import pytest
 from fastapi.testclient import TestClient
 
+import nebula.v3.workspace as workspace_module
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
@@ -1031,6 +1032,119 @@ def test_workspace_search_skips_generated_directories(tmp_path):
         engagement.id, "needle", mode="text", path="node_modules"
     )
     assert [match.path for match in explicit.matches] == ["node_modules/pkg/index.js"]
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
+def test_workspace_text_search_ripgrep_preserves_python_results(tmp_path, monkeypatch):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    padding = "padding\n" * 3_000
+    for index in range(70):
+        (root / f"file-{index:02d}.txt").write_text(
+            "unrelated\n" + padding, encoding="utf-8"
+        )
+    (root / "file-00.txt").write_text("Straße\n" + padding, encoding="utf-8")
+    (root / "file-01.txt").write_text("a+b and SS\n" + padding, encoding="utf-8")
+    (root / "file-02.txt").write_text("first\rsecond ss\n" + padding, encoding="utf-8")
+    (root / "file-03.txt").write_bytes(b"ss\x00binary" + padding.encode())
+    (root / "file-04.txt").write_bytes(b"ss\xffinvalid" + padding.encode())
+    (root / "file-69.txt").write_text("last SS\n" + padding, encoding="utf-8")
+    (root / "node_modules").mkdir()
+    (root / "node_modules" / "hidden.txt").write_text("SS\n", encoding="utf-8")
+
+    real_candidates = workspace_module._ripgrep_candidates
+    calls = []
+
+    def counted_candidates(*args):
+        calls.append(args)
+        return real_candidates(*args)
+
+    monkeypatch.setattr(workspace_module, "_ripgrep_candidates", counted_candidates)
+    accelerated = {
+        query: workspace.search(engagement.id, query, mode="text").model_dump()
+        for query in ("ss", "a+b", "unrelated")
+    }
+    assert calls
+    monkeypatch.setattr(workspace_module.shutil, "which", lambda _name: None)
+    fallback = {
+        query: workspace.search(engagement.id, query, mode="text").model_dump()
+        for query in accelerated
+    }
+    assert accelerated == fallback
+    assert [(match["path"], match["line"]) for match in accelerated["ss"]["matches"]] == [
+        ("file-00.txt", 1),
+        ("file-01.txt", 1),
+        ("file-02.txt", 2),
+        ("file-69.txt", 1),
+    ]
+    assert accelerated["ss"]["skipped_directories"] == 1
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
+def test_workspace_text_search_pins_files_and_falls_back_on_rg_failure(
+    tmp_path, monkeypatch
+):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    target = root / "target.txt"
+    target.write_text("inside needle\n" + "padding\n" * 3_000, encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside needle\n", encoding="utf-8")
+    real_candidates = workspace_module._ripgrep_candidates
+
+    def replace_path(*args):
+        target.rename(root / "moved.txt")
+        target.symlink_to(outside)
+        return real_candidates(*args)
+
+    monkeypatch.setattr(workspace_module, "_ripgrep_candidates", replace_path)
+    pinned = workspace.search(engagement.id, "needle", mode="text")
+    assert [(match.path, match.preview) for match in pinned.matches] == [
+        ("target.txt", "inside needle")
+    ]
+
+    monkeypatch.setattr(workspace_module, "_ripgrep_candidates", real_candidates)
+    calls = 0
+
+    def time_out(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(workspace_module.subprocess, "run", time_out)
+    recovered = workspace.search(engagement.id, "needle", mode="text")
+    assert [match.path for match in recovered.matches] == ["moved.txt"]
+    assert calls == 1
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
+def test_workspace_text_search_limit_keeps_original_file_count(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    padding = "padding\n" * 3_000
+    for index in range(70):
+        (root / f"file-{index:02d}.txt").write_text(
+            ("needle\n" if index == 0 else "other\n") + padding,
+            encoding="utf-8",
+        )
+    result = workspace.search(engagement.id, "needle", mode="text", limit=1)
+    assert [match.path for match in result.matches] == ["file-00.txt"]
+    assert result.scanned_files == 1
+    assert result.truncated is True
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
+def test_workspace_text_search_uses_python_for_small_files(tmp_path, monkeypatch):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / "small.txt").write_text("one needle\n", encoding="utf-8")
+
+    def unexpected_ripgrep(*_args):
+        raise AssertionError("small files should use Python without spawning ripgrep")
+
+    monkeypatch.setattr(workspace_module, "_ripgrep_candidates", unexpected_ripgrep)
+    result = workspace.search(engagement.id, "needle", mode="text")
+    assert [(match.path, match.line) for match in result.matches] == [("small.txt", 1)]
 
 
 def test_workspace_upload_success_records_no_handled_exceptions(tmp_path, monkeypatch):
