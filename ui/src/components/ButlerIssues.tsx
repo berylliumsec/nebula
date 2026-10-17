@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { HarnessProfile, McpServerProfile } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import styles from "./ButlerOversight.module.css";
 
 type Destination = {
@@ -49,7 +50,10 @@ export function ButlerIssues({ api, projectId, online }: { api?: ApiClient; proj
       setResult({ destinations: next.destinations ?? [], candidates: next.candidates ?? [], held_scans: next.held_scans ?? [] });
       setError("");
     } catch (caught) {
-      if (!signal?.aborted) setError(caught instanceof Error ? caught.message : "Could not load improvement issues.");
+      if (!signal?.aborted) {
+        void logCaughtDiagnostic("interface.butler_issues.load_failed", "Butler issue records could not be loaded.", caught, "butler");
+        setError(caught instanceof Error ? caught.message : "Could not load improvement issues.");
+      }
     }
   };
 
@@ -67,7 +71,12 @@ export function ButlerIssues({ api, projectId, online }: { api?: ApiClient; proj
     let active = true;
     void Promise.all([api.listHarnesses(), api.listMcpServers()]).then(([nextHarnesses, nextServers]) => {
       if (active) { setHarnesses(nextHarnesses); setServers(nextServers); }
-    }).catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load runtimes."); });
+    }).catch((caught) => {
+      if (active) {
+        void logCaughtDiagnostic("interface.butler_issues.runtimes_failed", "Issue review runtimes could not be listed.", caught, "butler");
+        setError(caught instanceof Error ? caught.message : "Could not load runtimes.");
+      }
+    });
     return () => { active = false; };
   }, [formOpen, api, online]);
 
@@ -80,7 +89,10 @@ export function ButlerIssues({ api, projectId, online }: { api?: ApiClient; proj
       );
       setRepositories(page === 1 ? next.repositories : [...repositories, ...next.repositories]);
       setHasMoreRepos(next.has_more); setRepoPage(page); setError("");
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not list repositories."); }
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_issues.repositories_failed", "Issue repositories could not be listed.", caught, "butler");
+      setError(caught instanceof Error ? caught.message : "Could not list repositories.");
+    }
     finally { setBusy(false); }
   };
 
@@ -93,7 +105,10 @@ export function ButlerIssues({ api, projectId, online }: { api?: ApiClient; proj
       setDraft((current) => ({ ...current, credential_ref: saved.reference }));
       setSecret("");
       await loadRepositories(saved.reference);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save GitHub credential."); }
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_issues.credential_failed", "The issue credential could not be saved.", caught, "butler");
+      setError(caught instanceof Error ? caught.message : "Could not save GitHub credential.");
+    }
     finally { setBusy(false); }
   };
 
@@ -108,7 +123,10 @@ export function ButlerIssues({ api, projectId, online }: { api?: ApiClient; proj
       }) });
       setFormOpen(false); setEditing(undefined); setDraft(blank); setRepositories([]); setError("");
       await refresh();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save destination."); }
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_issues.destination_failed", "The issue destination could not be saved.", caught, "butler");
+      setError(caught instanceof Error ? caught.message : "Could not save destination.");
+    }
     finally { setBusy(false); }
   };
 
@@ -120,7 +138,10 @@ export function ButlerIssues({ api, projectId, online }: { api?: ApiClient; proj
         method: "PATCH", body: JSON.stringify({ ...revision, expected_revision: revising.revision }),
       });
       setRevising(undefined); setError(""); await refresh();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not revise draft."); }
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_issues.revision_failed", "The local issue draft could not be revised.", caught, "butler");
+      setError(caught instanceof Error ? caught.message : "Could not revise draft.");
+    }
     finally { setBusy(false); }
   };
 

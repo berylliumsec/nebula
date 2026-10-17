@@ -1,5 +1,5 @@
 {
-  "change_digest": "f9ff0e84e459a3f7df82e205004ea607d65d9c00e66af4e0043553c688ea5897",
+  "change_digest": "b76213aa9191c5c7834804b3e9eecc74a2d4cabc009699faf6420baac880b4d2",
   "reviewed_by": "Codex focused Butler immediate delivery and improvement issue review",
   "reason": "Immediate parent guidance, Butler recovery receipts, isolated host Codex issue review, public disclosure checks, immutable destination routing, and the Butler issue UI changed. The selected 63 Python cases cover Butler action/recovery/work, issue publication, and review scheduling. The selected 23 component cases cover the oversight surface and issue destination/draft interactions. Eight real-Core browser cases cover the Butler entry and issue configuration disclosure at desktop and 320-430 px mobile Chromium/WebKit production LAN profiles.",
   "exclusions": "No native code changed, so no native tests are selected. Unrelated chat, storage, voice, and browser suites are excluded; the selected Butler and work files cover the changed interfaces. External issue creation in a disposable repository and physical-device testing are separate acceptance checks and do not expand the automated test scope. Full suites are excluded.",
