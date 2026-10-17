@@ -26,7 +26,7 @@ from time import perf_counter_ns
 
 from fastapi.testclient import TestClient
 import lmdb
-from sqlalchemy import insert
+from sqlalchemy import event, insert
 
 from nebula.v3.api import create_app
 from nebula.v3.chat import ChatHistoryConflict, ChatService
@@ -625,6 +625,12 @@ def main() -> None:
     parser.add_argument("--reads", type=int, default=200)
     parser.add_argument("--writes", type=int, default=80)
     parser.add_argument(
+        "--sqlite-synchronous",
+        choices=("normal", "full"),
+        default="normal",
+        help="SQLite WAL commit synchronization for the message store",
+    )
+    parser.add_argument(
         "--lmdb-durability",
         choices=("full", "metadata-deferred", "buffered"),
         default="full",
@@ -641,6 +647,26 @@ def main() -> None:
         metadata_path = root / "lmdb-metadata.db"
         lmdb_path = root / "messages.lmdb"
         sqlite_store = NebulaStore(sqlite_path)
+        if args.sqlite_synchronous == "full":
+            # Core installs NORMAL on connect. Override it for this disposable
+            # comparison, then discard connections opened during bootstrap.
+            def sync_wal_on_commit(dbapi_connection, _connection_record) -> None:
+                dbapi_connection.execute("PRAGMA synchronous=FULL")
+
+            event.listen(sqlite_store.database.engine, "connect", sync_wal_on_commit)
+            sqlite_store.database.engine.dispose()
+        with sqlite_store.database.engine.connect() as connection:
+            sqlite_journal_mode = connection.exec_driver_sql(
+                "PRAGMA journal_mode"
+            ).scalar_one()
+            sqlite_synchronous = connection.exec_driver_sql(
+                "PRAGMA synchronous"
+            ).scalar_one()
+        expected_synchronous = 2 if args.sqlite_synchronous == "full" else 1
+        if sqlite_journal_mode != "wal" or sqlite_synchronous != expected_synchronous:
+            raise AssertionError(
+                f"SQLite WAL sync mismatch: {sqlite_journal_mode=} {sqlite_synchronous=}"
+            )
         metadata_store = NebulaStore(metadata_path)
         hybrid = HybridMessages(
             lmdb_path, metadata_store, durability=args.lmdb_durability
@@ -703,6 +729,11 @@ def main() -> None:
                     "platform": platform.platform(),
                 },
                 "lmdb_durability": args.lmdb_durability,
+                "sqlite_durability": {
+                    "journal_mode": sqlite_journal_mode,
+                    "synchronous": args.sqlite_synchronous,
+                    "pragma_value": sqlite_synchronous,
+                },
                 "seed_both_seconds": seed_seconds,
                 "files_bytes": {
                     "sqlite_current_total": _sqlite_bytes(sqlite_path),

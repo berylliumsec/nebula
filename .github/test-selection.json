@@ -1,7 +1,7 @@
 {
-  "change_digest": "2c606cdbc0810e8215796e9c9f85ca5b0b2b036de5dae9b52249081ef517cf6c",
+  "change_digest": "d465555e3b651609a79a106e90db80aacbd685b53cc6bae9bf6b98aa9ab14441",
   "reviewed_by": "Codex focused diff review for expanded chat storage benchmark",
-  "reason": "The diff adds disposable SQLite versus LMDB benchmark scripts, four expanded raw receipts, and reports. Three collected Python cases verify the indexed chat lookup projection and query plan, existing-database migration, and histories longer than a storage page. The expanded script itself checks matching message, cursor, and authenticated API results for each throwaway store while measuring reads, writes, and concurrent access.",
+  "reason": "The diff adds disposable SQLite versus LMDB benchmark scripts, five expanded raw receipts, and reports. Three collected Python cases verify the indexed chat lookup projection and query plan, existing-database migration, and histories longer than a storage page. The expanded script checks matching message, cursor, and authenticated API results while measuring reads, writes, and concurrent access, including a SQLite FULL versus LMDB full commit-sync follow-up.",
   "exclusions": "No production Core or UI source, browser behavior, frontend, or native code changed. The benchmarks use warm local synthetic databases and a FastAPI TestClient, not a production bundle, real network, physical device, or live operator data. Unrelated Python tests and browser, frontend, and native projects are excluded; a full suite is not authorized.",
   "expected_tests": {
     "python": 3,

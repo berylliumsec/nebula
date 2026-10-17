@@ -33,6 +33,11 @@ stores are disposable. No production storage code was changed.
   documentation](https://www.sqlite.org/pragma.html#pragma_synchronous) says
   `synchronous=NORMAL` maintains consistency but may lose recent commits after
   a power loss or operating-system crash.
+- A follow-up run overrides **only the disposable SQLite message store** to
+  WAL `synchronous=FULL` while keeping LMDB at `full`. The script verifies the
+  SQLite PRAGMAs before seeding. Both then sync on commit, although they use
+  different storage formats and write paths. Production Core remains at
+  `synchronous=NORMAL`.
 - Every paired page, full-chat, point-read, and authenticated API result is
   checked for equality. The API measurement uses authenticated FastAPI
   `TestClient` requests for messages and then pending turn, with the prototype
@@ -70,8 +75,30 @@ counts, p95, p99, maxima, environment versions, and file sizes.
 
 The message request gained **1.464 ms** and the two-request sequence gained
 **1.586 ms**. LMDB's fully synced isolated append took about **21 times** the
-current SQLite time in this run. The LMDB write prototype omits some Core
-behavior, so this is not an upper bound on integrated LMDB write latency.
+current SQLite time in this run. **That 21× figure compares different commit
+sync settings; it is not an engine-only write comparison.** The LMDB write
+prototype also omits some Core behavior, so this is not an upper bound on
+integrated LMDB write latency.
+
+### Matched commit-sync follow-up at 100,000 messages
+
+SQLite WAL `synchronous=FULL` syncs the WAL at each commit. With that setting
+enabled only in the throwaway SQLite message store, the follow-up produced:
+
+| Operation | SQLite FULL | LMDB full | Samples |
+| --- | ---: | ---: | ---: |
+| Append message | 7.511 | 11.127 | 80 |
+| Edit message | 5.722 | 11.289 | 79 |
+| Delete message | 9.472 | 12.619 | 20 |
+| Recent 61-message page | 1.938 | 0.860 | 200 |
+| Messages then pending-turn requests | 7.668 | 6.276 | 100 |
+
+The append gap is **1.48×** with per-commit sync on both sides. This supports
+commit synchronization as the main reason for the original 21× gap, though
+separate runs on a shared host cannot assign the entire difference to that one
+setting. LMDB still lost these matched write measurements. The prototype's
+missing Core transaction side effects continue to favor LMDB; this is not a
+production write-throughput claim.
 
 ### Commit-setting sensitivity at 100,000 messages
 
@@ -115,7 +142,9 @@ allocation would have additional operational costs not captured here.
 **Keep indexed SQLite for now.** LMDB is faster on every measured read, but its
 gain at the authenticated two-request chat load is roughly **1.4–1.6 ms**. At
 the two LMDB settings that sync message data on each commit, measured writes
-are slower. The one setting that wins writes has a different, weaker crash
+are slower against the current SQLite path; with both stores syncing each
+commit, LMDB append is still about **1.5× slower**, rather than 21×. The one
+setting that wins writes has a different, weaker crash
 recovery contract, and the two-store prototype has no atomic transaction with
 Core's SQLite session metadata. These measurements do not justify a production
 storage migration for the chat-loading symptom.
@@ -139,6 +168,7 @@ PYTHONPATH=src python scripts/benchmark_chat_storage_workloads.py --sessions 200
 PYTHONPATH=src python scripts/benchmark_chat_storage_workloads.py --sessions 200 --messages-per-session 500 --reads 200 --writes 80 --lmdb-durability metadata-deferred --output expanded-100k-metadata-deferred.json
 PYTHONPATH=src python scripts/benchmark_chat_storage_workloads.py --sessions 200 --messages-per-session 500 --reads 200 --writes 80 --lmdb-durability buffered --output expanded-100k-buffered.json
 PYTHONPATH=src python scripts/benchmark_chat_storage_workloads.py --sessions 1000 --messages-per-session 500 --reads 100 --writes 40 --lmdb-durability full --output expanded-500k-full.json
+PYTHONPATH=src python scripts/benchmark_chat_storage_workloads.py --sessions 200 --messages-per-session 500 --reads 200 --writes 80 --sqlite-synchronous full --lmdb-durability full --output expanded-100k-sqlite-full-lmdb-full.json
 ```
 
 The retained receipts are in `docs/benchmarks/chat-history-20261017/`.

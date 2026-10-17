@@ -1,0 +1,220 @@
+{
+  "base_commit": "599fb57",
+  "corpus": {
+    "content_bytes": {
+      "every_tenth": 4096,
+      "usual": 512
+    },
+    "messages_per_session": 500,
+    "out_of_sequence_created_at_every": 41,
+    "project_messages": 100000,
+    "reasoning_bytes_every_hundredth": 32768,
+    "sessions": 200
+  },
+  "environment": {
+    "lmdb_python": "1.4.1",
+    "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+    "python": "3.11.7",
+    "sqlite": "3.41.2"
+  },
+  "files_bytes": {
+    "lmdb_data": 274345984,
+    "lmdb_metadata_sqlite_total": 782616,
+    "sqlite_current_total": 265945248
+  },
+  "lmdb_durability": "full",
+  "measurements": {
+    "authenticated_core_api": {
+      "messages_request": {
+        "lmdb": {
+          "count": 100,
+          "max_ms": 6.009,
+          "median_ms": 3.646,
+          "p95_ms": 3.953,
+          "p99_ms": 5.248
+        },
+        "sqlite": {
+          "count": 100,
+          "max_ms": 7.371,
+          "median_ms": 5.021,
+          "p95_ms": 5.585,
+          "p99_ms": 6.966
+        }
+      },
+      "messages_then_pending_turn": {
+        "lmdb": {
+          "count": 100,
+          "max_ms": 10.314,
+          "median_ms": 6.276,
+          "p95_ms": 7.043,
+          "p99_ms": 8.377
+        },
+        "sqlite": {
+          "count": 100,
+          "max_ms": 10.687,
+          "median_ms": 7.668,
+          "p95_ms": 8.48,
+          "p99_ms": 10.54
+        }
+      }
+    },
+    "four_readers_one_writer": {
+      "lmdb": {
+        "reads": {
+          "count": 200,
+          "max_ms": 9.294,
+          "median_ms": 5.172,
+          "p95_ms": 8.08,
+          "p99_ms": 9.111
+        },
+        "wall_seconds": 0.87,
+        "writes": {
+          "count": 80,
+          "max_ms": 22.274,
+          "median_ms": 11.282,
+          "p95_ms": 16.789,
+          "p99_ms": 22.274
+        }
+      },
+      "sqlite": {
+        "reads": {
+          "count": 200,
+          "max_ms": 21.596,
+          "median_ms": 11.579,
+          "p95_ms": 16.693,
+          "p99_ms": 21.089
+        },
+        "wall_seconds": 0.691,
+        "writes": {
+          "count": 80,
+          "max_ms": 50.489,
+          "median_ms": 7.327,
+          "p95_ms": 16.54,
+          "p99_ms": 50.489
+        }
+      }
+    },
+    "isolated_writes": {
+      "append": {
+        "lmdb": {
+          "count": 80,
+          "max_ms": 21.246,
+          "median_ms": 11.127,
+          "p95_ms": 18.183,
+          "p99_ms": 21.246
+        },
+        "sqlite": {
+          "count": 80,
+          "max_ms": 28.648,
+          "median_ms": 7.511,
+          "p95_ms": 14.321,
+          "p99_ms": 28.648
+        }
+      },
+      "delete": {
+        "lmdb": {
+          "count": 20,
+          "max_ms": 17.286,
+          "median_ms": 12.619,
+          "p95_ms": 15.391,
+          "p99_ms": 17.286
+        },
+        "sqlite": {
+          "count": 20,
+          "max_ms": 52.822,
+          "median_ms": 9.472,
+          "p95_ms": 13.44,
+          "p99_ms": 52.822
+        }
+      },
+      "update": {
+        "lmdb": {
+          "count": 79,
+          "max_ms": 22.622,
+          "median_ms": 11.289,
+          "p95_ms": 17.896,
+          "p99_ms": 22.622
+        },
+        "sqlite": {
+          "count": 79,
+          "max_ms": 15.058,
+          "median_ms": 5.722,
+          "p95_ms": 12.771,
+          "p99_ms": 15.058
+        }
+      }
+    },
+    "random_reads": {
+      "full_chat": {
+        "lmdb": {
+          "count": 50,
+          "max_ms": 5.435,
+          "median_ms": 4.798,
+          "p95_ms": 5.322,
+          "p99_ms": 5.435
+        },
+        "sqlite": {
+          "count": 50,
+          "max_ms": 100.139,
+          "median_ms": 11.235,
+          "p95_ms": 99.181,
+          "p99_ms": 100.139
+        }
+      },
+      "older_page": {
+        "lmdb": {
+          "count": 200,
+          "max_ms": 1.066,
+          "median_ms": 0.881,
+          "p95_ms": 0.976,
+          "p99_ms": 1.037
+        },
+        "sqlite": {
+          "count": 200,
+          "max_ms": 3.133,
+          "median_ms": 2.351,
+          "p95_ms": 2.594,
+          "p99_ms": 2.81
+        }
+      },
+      "point_get": {
+        "lmdb": {
+          "count": 200,
+          "max_ms": 0.05,
+          "median_ms": 0.019,
+          "p95_ms": 0.022,
+          "p99_ms": 0.026
+        },
+        "sqlite": {
+          "count": 200,
+          "max_ms": 0.398,
+          "median_ms": 0.312,
+          "p95_ms": 0.322,
+          "p99_ms": 0.344
+        }
+      },
+      "recent_page": {
+        "lmdb": {
+          "count": 200,
+          "max_ms": 3.021,
+          "median_ms": 0.86,
+          "p95_ms": 0.974,
+          "p99_ms": 1.121
+        },
+        "sqlite": {
+          "count": 200,
+          "max_ms": 89.343,
+          "median_ms": 1.938,
+          "p95_ms": 2.247,
+          "p99_ms": 2.558
+        }
+      }
+    }
+  },
+  "seed_both_seconds": 16.312,
+  "sqlite_durability": {
+    "journal_mode": "wal",
+    "pragma_value": 2,
+    "synchronous": "full"
+  }
+}
