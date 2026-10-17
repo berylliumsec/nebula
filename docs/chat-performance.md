@@ -1,5 +1,8 @@
 # Chat navigation performance
 
+For the 2026-10-17 synthetic indexed SQLite, direct SQLite, and LMDB read
+comparison, see [Chat history backend comparison](chat-history-backend-benchmark.md).
+
 ## Operator contract
 
 | Journey | Visible invariant | Authority | Focused check |

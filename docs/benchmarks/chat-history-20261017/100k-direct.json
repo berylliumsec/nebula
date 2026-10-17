@@ -1,0 +1,78 @@
+{
+  "corpus": {
+    "content_bytes": 512,
+    "messages_per_session": 500,
+    "project_messages": 100000,
+    "replaced_interval": 97,
+    "selected_messages": 500,
+    "sessions": 200
+  },
+  "environment": {
+    "lmdb_python": "1.4.1",
+    "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+    "python": "3.11.7",
+    "sqlalchemy": "2.0.37",
+    "sqlite": "3.41.2"
+  },
+  "files_bytes": {
+    "lmdb_data": 212738048,
+    "sqlite_components": {
+      "database": 183132160,
+      "shm": 32768,
+      "wal": 8182352
+    },
+    "sqlite_total": 191347280
+  },
+  "gc_disabled_during_measure": false,
+  "measurement": "warm local process reads; full ChatMessage validation; no HTTP or browser rendering",
+  "repeats": {
+    "legacy": 0,
+    "nonlegacy": 30
+  },
+  "results": {
+    "lmdb_hybrid": {
+      "gc_collections": 120,
+      "gc_sample_count": 30,
+      "max_gc_ms": 4.687,
+      "max_ms": 4.687,
+      "max_no_gc_ms": null,
+      "median_ms": 4.073,
+      "min_ms": 3.954,
+      "p95_ms": 4.63
+    },
+    "sqlite_indexed": {
+      "gc_collections": 395,
+      "gc_sample_count": 30,
+      "max_gc_ms": 77.907,
+      "max_ms": 77.907,
+      "max_no_gc_ms": null,
+      "median_ms": 10.512,
+      "min_ms": 9.985,
+      "p95_ms": 76.355
+    },
+    "sqlite_json_direct": {
+      "gc_collections": 120,
+      "gc_sample_count": 30,
+      "max_gc_ms": 6.214,
+      "max_ms": 6.214,
+      "max_no_gc_ms": null,
+      "median_ms": 5.435,
+      "min_ms": 5.264,
+      "p95_ms": 6.198
+    },
+    "sqlite_payload_only": {
+      "gc_collections": 120,
+      "gc_sample_count": 30,
+      "max_gc_ms": 10.372,
+      "max_ms": 10.372,
+      "max_no_gc_ms": null,
+      "median_ms": 9.001,
+      "min_ms": 8.752,
+      "p95_ms": 10.109
+    }
+  },
+  "seed_seconds": 7.967,
+  "sqlite_query_plan": [
+    "(4, 0, 0, 'SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)')"
+  ]
+}

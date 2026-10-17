@@ -1,32 +1,23 @@
 {
-  "change_digest": "583f1b92be4f74710fc0e2ca159d8ee3731b712ac8014816e4d66ef61568b8ed",
-  "reviewed_by": "Codex focused review of Vulture findings and deleted Python code",
-  "reason": "Twelve collected Python cases cover authenticated Core startup and project CRUD, chat header and subagent flows, provider message handling, harness and goal continuation, SSH environment selection, execution review, terminal parsing, and vulnerability-feed normalization. The newly merged harness-goal case covers the same command path as the removed unreachable return.",
-  "exclusions": "No frontend or native source changed, so no unit tests at those layers are selected. No browser workflow changed, so no Playwright entry is selected; a disposable LAN Core with the candidate production bundle is exercised manually. Unrelated Python tests and full suites are excluded.",
+  "change_digest": "b7ac17dcc680139ce10b35ba18c031ad07a662bb80c766d730c4a63678b18fa6",
+  "reviewed_by": "Codex focused diff review for chat history backend benchmark",
+  "reason": "The diff adds a reproducible throwaway benchmark, raw receipts, and a report comparing the already merged session-indexed SQLite read with direct SQLite JSON and LMDB candidates. Three collected Python cases verify index projection and query plan, existing-database migration, and histories longer than a storage page. Benchmark smoke runs verify equal transcripts for full and 61-message page reads.",
+  "exclusions": "No Core or UI production source, browser behavior, frontend, or native code changed. The benchmark measures warm local database reads and model validation; unrelated Python tests, browser projects, native tests, HTTP, rendering, write throughput, and physical devices are excluded.",
   "expected_tests": {
-    "python": 12,
+    "python": 3,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python_versions": [
-    "3.12"
+    "3.11"
   ],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
-    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
-    "tests/v3/test_chat_polling_cost.py::test_headers_reread_only_the_turn_that_changed",
-    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result",
-    "tests/v3/test_chat.py::test_plain_stream_recovers_an_unrequested_tool_call",
-    "tests/v3/test_providers.py::test_openai_compatible_uses_chat_completions_shape",
-    "tests/v3/test_harness_commands.py::test_grok_goal_continues_vendor_turns_until_goal_is_complete",
-    "tests/v3/test_ssh_environments.py::test_chat_selection_defaults_to_enabled_hosts_and_rejects_disabled",
-    "tests/v3/test_executions.py::test_reviewed_execution_is_exact_isolated_redacted_and_idempotent",
-    "tests/v3/test_terminal_history.py::test_nonce_bound_frames_capture_only_command_result_and_detect_truncation",
-    "tests/v3/test_intelligence.py::test_nvd_exact_version_cpe_normalizes_to_a_version_not_an_open_range",
-    "tests/v3/test_harness_chat_goals.py::test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing"
+    "tests/v3/test_chat_switch_performance.py::test_chat_lookup_projection_tracks_writes_orders_history_and_uses_index",
+    "tests/v3/test_chat_session_lookup_migration.py::test_chat_session_lookup_backfills_and_downgrades_without_touching_payloads",
+    "tests/v3/test_chat.py::test_session_history_paginates_beyond_storage_page_limit"
   ],
   "frontend": [],
   "native": [],

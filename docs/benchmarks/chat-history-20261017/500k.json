@@ -1,0 +1,49 @@
+{
+  "corpus": {
+    "content_bytes": 512,
+    "messages_per_session": 500,
+    "project_messages": 500000,
+    "replaced_interval": 97,
+    "selected_messages": 500,
+    "sessions": 1000
+  },
+  "environment": {
+    "lmdb_python": "1.4.1",
+    "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+    "python": "3.11.7",
+    "sqlalchemy": "2.0.37",
+    "sqlite": "3.41.2"
+  },
+  "files_bytes": {
+    "lmdb_data": 1063710720,
+    "sqlite_components": {
+      "database": 919441408,
+      "shm": 32768,
+      "wal": 14827912
+    },
+    "sqlite_total": 934302088
+  },
+  "measurement": "warm local process reads; full ChatMessage validation; no HTTP or browser rendering",
+  "repeats": {
+    "indexed_and_lmdb": 30,
+    "legacy": 0
+  },
+  "results": {
+    "lmdb_hybrid": {
+      "max_ms": 4.711,
+      "median_ms": 4.134,
+      "min_ms": 3.906,
+      "p95_ms": 4.693
+    },
+    "sqlite_indexed": {
+      "max_ms": 80.395,
+      "median_ms": 10.877,
+      "min_ms": 10.449,
+      "p95_ms": 78.261
+    }
+  },
+  "seed_seconds": 244.973,
+  "sqlite_query_plan": [
+    "(3, 0, 0, 'SEARCH entities USING COVERING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)')"
+  ]
+}
