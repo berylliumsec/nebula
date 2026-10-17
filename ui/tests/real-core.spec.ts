@@ -6523,6 +6523,87 @@ test("assistant upgrade Butler briefs named agent evidence on production LAN Cor
   ]);
 });
 
+test("assistant upgrade Butler selected context reaches its saved turn on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const stub = await startLocalModelStub({ responseContent: "Butler source detail for the next turn." });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", { data: {
+      name: "Butler context LAN acceptance", description: "Synthetic context project", client_name: null,
+      status: "active", tags: [], workspace_path: null, metadata: {},
+    } });
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = ((await projectResponse.json()) as { id: string }).id;
+    const providerResponse = await api.post("providers", { data: {
+      name: "Butler context model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model", options: { context_window: 32768 } },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string; revision: number };
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: { model: "security-model", expected_revision: provider.revision },
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler context LAN browser");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const butler = page.getByRole("dialog", { name: "Butler" });
+    const composer = butler.getByRole("textbox", { name: "Ask Butler a question" });
+    await expect(composer).toBeEnabled({ timeout: 30_000 });
+    await composer.fill("Give me one detail to carry forward.");
+    await butler.getByRole("button", { name: "Send to Butler" }).click();
+    const source = butler.getByText("Butler source detail for the next turn.");
+    await expect(source).toBeVisible({ timeout: 45_000 });
+    await source.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
+      const bounds = element.getBoundingClientRect();
+      element.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true, clientX: bounds.left + Math.min(24, bounds.width / 2),
+        clientY: bounds.top + bounds.height / 2,
+      }));
+    });
+    const originalUrl = page.url();
+    await page.getByRole("button", { name: "Add context to chat" }).click();
+    await expect(butler.getByRole("region", { name: "Butler context pack" })).toContainText("1 selected context item for Butler");
+    expect(page.url()).toBe(originalUrl);
+    await expect(page.getByRole("region", { name: "Selected context pack" })).toHaveCount(0);
+    stub.responseContent = "Butler received the selected detail.";
+    await composer.fill("Use the selected detail.");
+    await butler.getByRole("button", { name: "Send to Butler" }).click();
+    await expect(butler.getByText("Butler received the selected detail.")).toBeVisible({ timeout: 45_000 });
+    await expect(butler.getByRole("region", { name: "Butler context pack" })).toHaveCount(0);
+    const sessionResponse = await api.get(`chat/control-assistant/session?engagement_id=${projectId}`);
+    expect(sessionResponse.ok(), await sessionResponse.text()).toBe(true);
+    const sessionId = ((await sessionResponse.json()) as { id: string }).id;
+    await expect.poll(async () => {
+      const saved = await api.get(`chat/sessions/${sessionId}/messages`);
+      if (!saved.ok()) return false;
+      const messages = await saved.json() as Array<{ role: string; metadata?: { context_attachments?: Array<{ text: string; source_kind: string; source_id?: string }> } }>;
+      return messages.some(message => message.role === "user" && message.metadata?.context_attachments?.some(item =>
+        item.text === "Butler source detail for the next turn." && item.source_kind === "conversation" && item.source_id === sessionId));
+    }).toBe(true);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", { name: "Butler" }).getByText("Butler received the selected detail.")).toBeVisible({ timeout: 30_000 });
+    await testInfo.attach("butler-context-lan", { body: JSON.stringify({
+      origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), sessionId,
+    }), contentType: "application/json" });
+  }, [
+    { name: "API context", dispose: () => api.dispose() },
+    { name: "model stub", dispose: () => stopLocalModelStub(stub) },
+    { name: "Core fixture", dispose: () => stopRealCore(core) },
+  ]);
+});
+
 test("assistant upgrade Butler saved table stays readable after reload on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
