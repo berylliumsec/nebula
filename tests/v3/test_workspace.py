@@ -1071,7 +1071,9 @@ def test_workspace_text_search_ripgrep_preserves_python_results(tmp_path, monkey
         for query in accelerated
     }
     assert accelerated == fallback
-    assert [(match["path"], match["line"]) for match in accelerated["ss"]["matches"]] == [
+    assert [
+        (match["path"], match["line"]) for match in accelerated["ss"]["matches"]
+    ] == [
         ("file-00.txt", 1),
         ("file-01.txt", 1),
         ("file-02.txt", 2),

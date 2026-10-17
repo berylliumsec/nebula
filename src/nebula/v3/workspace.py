@@ -1059,7 +1059,13 @@ class WorkspaceService:
                 # or cannot safely prefilter this query.
                 ripgrep = None
             try:
-                for entry_path, file_descriptor, file_count, skipped_count, size in text_batch:
+                for (
+                    entry_path,
+                    file_descriptor,
+                    file_count,
+                    skipped_count,
+                    size,
+                ) in text_batch:
                     if (
                         size >= RIPGREP_SEARCH_MIN_FILE_BYTES
                         and candidates is not None
@@ -2058,7 +2064,9 @@ def _ripgrep_candidates(
     literal = "".join(
         f"\\{char}" if char in r"\.+*?()|[]{}^$" else char for char in query
     )
-    paths = {f"/proc/self/fd/{descriptor}".encode(): descriptor for descriptor in descriptors}
+    paths = {
+        f"/proc/self/fd/{descriptor}".encode(): descriptor for descriptor in descriptors
+    }
     command = [
         executable,
         "--no-config",
@@ -2085,6 +2093,7 @@ def _ripgrep_candidates(
             timeout=RIPGREP_SEARCH_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
+        # diagnostic-expected: a failed optional prefilter falls back to Python scanning.
         return None
     if result.returncode not in {0, 1} or result.stderr:
         return None

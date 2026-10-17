@@ -1,7 +1,7 @@
 {
-  "change_digest": "994192a5be08c9cc23f757d7bab9aeb83050380bf76b42a7e4ae50fec985466c",
+  "change_digest": "a6e6dbf2a7339ef1b7c7eb8afece88041a94d2cac21c9b5a440bc3d7074f8716",
   "reviewed_by": "Codex focused review for ripgrep workspace text search",
-  "reason": "Seven collected Python cases cover the Core search route, symlink confinement, directory exclusions, descriptor bounds, ripgrep/Python parity, process failure fallback, result-limit counts, and the small-file threshold. Eight collected real-Core browser entries cover production Code search at desktop and emulated mobile widths on a LAN origin.",
+  "reason": "Seven collected Python cases cover the Core search route, symlink confinement, directory exclusions, descriptor bounds, ripgrep/Python parity, process failure fallback, result-limit counts, and the small-file threshold. Eight collected real-Core browser entries cover production Code search at desktop and emulated mobile widths on a LAN origin, including the workflow's exact-entry selector handoff.",
   "exclusions": "No frontend source or native behavior changed. Unrelated Python and browser suites are excluded. Physical-device testing is unavailable; the permanent mobile Playwright profiles provide emulation evidence only.",
   "expected_tests": {
     "python": 7,
