@@ -264,6 +264,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
                 .flatMap((item) => item.id && outcomes[item.id]
                   ? [item, { role: "assistant" as const, content: outcomes[item.id] }]
                   : [item]));
+              const savedImageIds = new Set(history.flatMap((item) => item.role === "user"
+                ? item.contentBlocks?.flatMap((block) => block.type === "image" && block.artifactId ? [block.artifactId] : []) ?? []
+                : []));
+              setPendingImages((current) => current.filter((image) => !image.artifactId || !savedImageIds.has(image.artifactId)));
               setTurnFeedback(undefined);
               needsSavedTurnReload.current = false;
             }
@@ -837,7 +841,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     let effectiveConfig: ChatAssistantConfig | undefined;
     try {
       const saved = await getSavedSessionForTurn();
-      if (controller.signal.aborted) { setBusy(false); return; }
+      if (controller.signal.aborted) {
+        setBusy(false);
+        setTurnFeedback(undefined);
+        if (abort.current === controller) abort.current = undefined;
+        return;
+      }
       effectiveSessionId = saved.session.id;
       effectiveConfig = saved.config;
     } catch (caught) {
@@ -857,6 +866,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (hasImages && !selectedRuntimeAcceptsImages) {
       setImageHelp(true);
       setError("Butler's saved model changed and cannot receive images. Your attachments are still ready.");
+      setBusy(false);
+      setTurnFeedback(undefined);
+      if (abort.current === controller) abort.current = undefined;
       return;
     }
     const turnOptions = assistantTurnOptions(selectedRuntime, harnesses);

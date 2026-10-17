@@ -87,6 +87,37 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control"));
   });
 
+  it("keeps an image ready when the saved Butler model loses image support", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: vi.fn(() => "blob:model-change-preview")});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const streamChat = vi.fn();
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, model: "text-model"}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null),
+        getChatAssistantConfig: vi.fn().mockResolvedValue({settings: {backend: "harness", profileId: "local", model: "text-model"}}),
+        uploadChatImage: vi.fn().mockResolvedValue({artifactId: "original", previewArtifactId: "preview", mediaType: "image/png", width: 1, height: 1}),
+        fetchChatImagePreview: vi.fn().mockResolvedValue(new Blob(["png"], {type: "image/png"})), streamChat},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model", "text-model"], modelOptions: [
+          {model: "model", imageInput: true, reasoningEfforts: [], serviceTiers: []},
+          {model: "text-model", imageInput: false, reasoningEfforts: [], serviceTiers: []}], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.upload(screen.getByLabelText("Choose images for Butler") as HTMLInputElement,
+      new File(["png"], "settings.png", {type: "image/png"}));
+    await screen.findByRole("list", {name: "Butler image attachments"});
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Explain this screenshot.");
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("saved model changed");
+    expect(streamChat).not.toHaveBeenCalled();
+    expect(screen.getByRole("list", {name: "Butler image attachments"})).toBeVisible();
+    expect(screen.getByRole("textbox", {name: "Ask Butler a question"})).toBeEnabled();
+    expect(screen.queryByRole("button", {name: "Stop assistant response"})).not.toBeInTheDocument();
+  });
+
   it("keeps an unsaved Butler image ready after a confirmed send failure", async () => {
     const user = userEvent.setup();
     Object.defineProperty(URL, "createObjectURL", {configurable: true, value: vi.fn(() => "blob:retry-preview")});
