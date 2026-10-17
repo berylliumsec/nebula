@@ -1,27 +1,29 @@
 {
-  "change_digest": "11a52494d37dcf427af32dd2223b0fd9b6b4a4af56e05b3041c3d12f31a66239",
-  "reviewed_by": "Codex review of the Workbench conversation pagination control",
-  "reason": "The diff changes the older-conversations control layout and its existing paging journey. Eight collected interface cases check single-line geometry, touch size, failure retry, and page loading in desktop Chromium 1440/1024 plus emulated Chromium and WebKit 320/390/430. Two collected production-LAN real-Core cases check keyboard loading of the durable older page in desktop and narrow Chromium. The shared CSS, test files, and manifest addition were reviewed for this focused selection.",
-  "exclusions": "No backend, native code, or data transformation changed, so Python, native, and frontend unit tests are excluded. Unrelated interface and full suites are excluded. The browser tests use emulated mobile profiles; no physical device is available. No external model or harness work is run.",
+  "change_digest": "82006df79990c497c260311d5cdedd910e16e2d8ff3f86e4d30fffcb7686bc31",
+  "reviewed_by": "Codex focused review of Butler and analyst image attachments",
+  "reason": "The two selected component files contain 38 collected cases and cover visible image discovery, supported and unsupported runtimes, upload and send failure recovery, cross-project isolation, preview, and the image content block passed to Butler. The image catalog entry contains 16 collected mock browser capability cases across desktop Chromium and emulated mobile Chromium and WebKit, two collected side-chat toolbar cases, and two disposable real-Core LAN cases that verify model delivery and durable reload for Butler and analyst chat. The production UI build is checked separately. Three collected Python cases verify the existing harness artifact boundary and Codex app-server image request serialization used by an image-capable Butler.",
+  "exclusions": "No Python or native source changed; only the two existing harness image boundaries are selected. Unrelated chat, provider, Voice, storage, and full suites are excluded. Real-Core cases use disposable local Core and model stub instances, a production bundle, and a non-loopback LAN origin. Physical Mac and iPhone browser checks are unavailable in this environment.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 3,
+    "frontend": 38,
     "native": 0,
-    "playwright": 10
+    "playwright": 20
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_harnesses.py::test_harness_images_validate_ownership_and_persist_references",
+    "tests/v3/test_harness_adapters.py::test_codex_turn_controls_use_structured_skill_and_planning_mode"
+  ],
+  "frontend": [
+    "ui/src/components/ChatAttachments.test.tsx",
+    "ui/src/components/NebulaControlAssistant.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:navigation-loading/desktop",
-    "entry:navigation-loading/compact",
-    "entry:navigation-loading/mobile-chromium-small",
-    "entry:navigation-loading/mobile-chromium-ledger-390",
-    "entry:navigation-loading/mobile-chromium-wide",
-    "entry:navigation-loading/mobile-webkit-small",
-    "entry:navigation-loading/mobile-webkit",
-    "entry:navigation-loading/mobile-webkit-wide",
-    "entry:navigation-deeplink/desktop",
-    "entry:navigation-deeplink/narrow"
+    "area:chat-image-attachments"
+  ],
+  "python_browser": false,
+  "python_node": false,
+  "python_versions": [
+    "3.11"
   ]
 }

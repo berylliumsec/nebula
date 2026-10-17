@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { GripHorizontal, Minimize2, Send, Settings2, Square, X } from "lucide-react";
+import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode } from "react";
+import { GripHorizontal, Image, Minimize2, Send, Settings2, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
@@ -13,7 +13,7 @@ import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeCon
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
-import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatMessage, type VoicePauseSeconds } from "../api/types";
+import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type VoicePauseSeconds } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
@@ -21,6 +21,7 @@ import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import { MicrophoneIcon, NebulaVoice } from "./NebulaVoice";
 import { ButlerMemory } from "./ButlerMemory";
 import { ButlerOversight } from "./ButlerOversight";
+import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
 import { useButlerOverview } from "./useButlerOverview";
 import styles from "./NebulaControlAssistant.module.css";
 
@@ -52,6 +53,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [query, setQuery] = useState("");
   const [destinationQuery, setDestinationQuery] = useState("");
   const [draft, setDraft] = useState("");
+  const [pendingImages, setPendingImages] = useState<ChatContentBlock[]>([]);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [memoryRefreshRevision, setMemoryRefreshRevision] = useState(0);
   const [suggestions, setSuggestions] = useState<SettingCatalogEntry[]>([]);
@@ -78,6 +82,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const abort = useRef<AbortController | undefined>(undefined);
   const activeTurn = useRef<{ turnId?: string; harnessTurnId?: string }>({});
   const input = useRef<HTMLTextAreaElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
+  const activeImageProject = useRef(engagement?.id);
+  activeImageProject.current = engagement?.id;
   const panel = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
@@ -87,6 +94,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const settingsProjectId = useRef(engagement?.id);
   const destinationCatalogRef = useRef<HTMLDetailsElement>(null);
   const runtime = sessionRuntime ?? defaultModelRuntime(providers, harnesses);
+  const imageInputSupported = runtime?.kind === "provider"
+    ? Boolean(providers.find((item) => item.id === runtime.id)?.capabilities?.includes("vision"))
+    : Boolean(harnesses.find((item) => item.id === runtime?.id)?.modelOptions?.find((item) => item.model === runtime?.model)?.imageInput);
   const storageKey = engagement ? `nebula.control-assistant.session.${engagement.id}` : undefined;
   const actionOutcomesKey = storageKey ? `${storageKey}.action-outcomes` : undefined;
   const { overview: attentionOverview, refresh: refreshAttention } = useButlerOverview(engagement ? api : undefined, engagement?.id ?? "", coreState);
@@ -136,6 +146,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSettingsError("");
     setSettingsStatus("");
     setMessages([]);
+    setPendingImages([]);
+    setUploadingImage(false);
+    setImageHelp(false);
     setSuggestions([]);
     setError("");
     setLoadingHistory(false);
@@ -539,12 +552,73 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       : `Choose a project in All projects to open ${destination.label}.`;
   };
 
+  const attachImageFiles = async (files: File[]) => {
+    if (!files.length || uploadingImage || busy || loadingHistory) return;
+    if (!api || !engagement) { setError("Choose a project before attaching an image."); return; }
+    if (!imageInputSupported) { setImageHelp(true); return; }
+    const projectId = engagement.id;
+    const remaining = 4 - pendingImages.length;
+    if (remaining <= 0) { setError("Butler can receive up to four images in one message. Remove one to add another."); return; }
+    setUploadingImage(true);
+    setError("");
+    try {
+      for (const file of files.slice(0, remaining)) {
+        if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error(`${file.name} must be a PNG, JPEG, or WebP image.`);
+        if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} exceeds 20 MiB.`);
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.onload = () => resolve(String(reader.result));
+          reader.readAsDataURL(file);
+        });
+        if (activeImageProject.current !== projectId) return;
+        const saved = await api.uploadChatImage({
+          engagementId: projectId,
+          filename: file.name,
+          mediaType: file.type as "image/png" | "image/jpeg" | "image/webp",
+          contentBase64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+        });
+        if (activeImageProject.current !== projectId) return;
+        setPendingImages((current) => [...current, {
+          type: "image", artifactId: saved.artifactId, mediaType: saved.mediaType,
+          alt: file.name, metadata: {preview_artifact_id: saved.previewArtifactId, width: saved.width, height: saved.height},
+        }]);
+      }
+      if (activeImageProject.current === projectId && files.length > remaining) setError(`Attached ${remaining} images. Butler can receive up to four in one message.`);
+    } catch (caught) {
+      if (activeImageProject.current === projectId) {
+        void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.image_upload_failed", message: "A Butler image could not be attached.", outcome: "failure", stage: "chat-media", retryable: true, exception: caught});
+        setError(caught instanceof Error ? caught.message : "The image could not be attached. Choose it again to retry.");
+      }
+    } finally { if (activeImageProject.current === projectId) setUploadingImage(false); }
+  };
+
+  const pasteImages = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    void attachImageFiles(files);
+  };
+
+  const openImageRuntimeChoice = async () => {
+    if (!api || !engagement) return;
+    try {
+      const saved = await getSavedSessionForTurn();
+      setHidden(true);
+      onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(saved.session.id)}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not open Butler's model selector. Retry after reconnecting.");
+    }
+  };
+
   const send = async (currentText = draft) => {
-    const prompt = currentText.trim();
-    if (!prompt || busy || loadingHistory) return;
+    const prompt = currentText.trim() || (pendingImages.length ? "Attached image" : "");
+    if (!prompt || busy || loadingHistory || uploadingImage) return;
+    const hasImages = pendingImages.length > 0;
+    if (hasImages && !imageInputSupported) { setImageHelp(true); return; }
     setSuggestions([]);
     const requestedTheme = themeChange(prompt);
-    if (requestedTheme) {
+    if (!hasImages && requestedTheme) {
       setDraft("");
       setError("");
       setBusy(true);
@@ -561,12 +635,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       return;
     }
-    if (isThemeChangeCommand(prompt)) {
+    if (!hasImages && isThemeChangeCommand(prompt)) {
       setError("I couldn't identify that theme. Choose one in Settings → Appearance.");
       return;
     }
     const modeChange = projectModeChange(prompt);
-    if (modeChange) {
+    if (!hasImages && modeChange) {
       if (!api || !engagement) { setError("Choose a project to change its execution mode."); return; }
       setDraft("");
       setError("");
@@ -586,7 +660,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
     const scopeChange = projectScopeChange(prompt);
     const headlessChange = headlessSessionChange(prompt);
-    if (scopeChange || headlessChange) {
+    if (!hasImages && (scopeChange || headlessChange)) {
       if (!api || !engagement) { setError("Choose a project before changing its policy or browser session."); return; }
       setDraft("");
       setError("");
@@ -611,20 +685,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       return;
     }
     const destination = destinationToOpen(prompt);
-    if (destination) {
+    if (!hasImages && destination) {
       setDraft("");
       const confirmation = openDestination(destination);
       setMessages((current) => [...current, { role: "user", content: prompt }, { role: "assistant", content: confirmation }]);
       return;
     }
     const setting = settingToOpen(prompt);
-    if (setting) {
+    if (!hasImages && setting) {
       setDraft("");
       onOpenSetting(setting);
       setHidden(true);
       return;
     }
-    if (isSettingNavigationRequest(prompt) && (!api || !engagement || !runtime || settingNavigationCandidates(prompt).length > 0)) {
+    if (!hasImages && isSettingNavigationRequest(prompt) && (!api || !engagement || !runtime || settingNavigationCandidates(prompt).length > 0)) {
       const candidates = settingNavigationCandidates(prompt);
       setDraft("");
       setError("");
@@ -656,6 +730,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const selectedRuntime = effectiveConfig
       ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
       : runtime;
+    const selectedRuntimeAcceptsImages = selectedRuntime.kind === "provider"
+      ? Boolean(providers.find((item) => item.id === selectedRuntime.id)?.capabilities?.includes("vision"))
+      : Boolean(harnesses.find((item) => item.id === selectedRuntime.id)?.modelOptions?.find((item) => item.model === selectedRuntime.model)?.imageInput);
+    if (hasImages && !selectedRuntimeAcceptsImages) {
+      setImageHelp(true);
+      setError("Butler's saved model changed and cannot receive images. Your attachments are still ready.");
+      return;
+    }
     const turnOptions = assistantTurnOptions(selectedRuntime, harnesses);
     const selectedToolRuntime: ToolSharingRuntime | undefined = selectedRuntime.kind === "provider"
       ? (() => { const profile = providers.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "provider", profile } : undefined; })()
@@ -683,7 +765,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     activeTurn.current = {};
     setBusy(true);
     setError("");
-    setMessages((current) => [...current, { role: "user", content: prompt }]);
+    const outgoingUser: ChatMessage = { role: "user", content: prompt,
+      ...(hasImages ? {contentBlocks: [{type: "text" as const, text: prompt}, ...pendingImages]} : {}),
+    };
+    setMessages((current) => [...current, outgoingUser]);
     setDraft("");
     const appliedCallIds = new Set<string>();
     const confirmations: string[] = [];
@@ -714,7 +799,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         subagentHarnessId: effectiveConfig?.subagentHarnessProfileId,
         subagentModel: effectiveConfig?.subagentModel,
         subagentReasoningEffort: effectiveConfig?.subagentReasoningEffort,
-        messages: [{ role: "user", content: prompt }],
+        messages: [outgoingUser],
         contextAttachments: contextAttachments.length ? contextAttachments : undefined,
         toolsEnabled: effectiveConfig?.toolsEnabled ?? false,
         allowCloudToolResults,
@@ -750,6 +835,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         });
       }
       if (result?.message) {
+        setPendingImages([]);
         if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
         confirmations.push(...workReceipts.filter(({ url }) => !result.message.content.includes(url)).map(({ content }) => content));
         if (result.message.id && confirmations.length && actionOutcomesKey) {
@@ -764,8 +850,29 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     } catch (caught) {
       if (!controller.signal.aborted) {
         void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.turn_failed", message: "The assistant could not answer.", outcome: "failure", stage: "turn", retryable: true, exception: caught });
-        setDraft(prompt);
-        setError(caught instanceof Error ? caught.message : "The assistant could not answer. Try again.");
+        if (hasImages) {
+          try {
+            const history = await api.listChatMessages(effectiveSessionId);
+            const saved = history.some((message) => message.role === "user" && message.contentBlocks?.some((block) =>
+              block.type === "image" && pendingImages.some((image) => image.artifactId === block.artifactId)));
+            if (saved) {
+              setMessages(history.filter((message) => message.role === "user" || message.role === "assistant"));
+              setPendingImages([]);
+              setError("Butler saved your image, but the response failed. Reopen this conversation to check its status.");
+            } else {
+              setMessages((current) => current.filter((message) => message !== outgoingUser));
+              setDraft(prompt);
+              const detail = caught instanceof Error ? caught.message : "Butler could not send the image.";
+              setError(`${detail} The image remains attached. Check Butler's saved conversation before retrying.`);
+            }
+          } catch {
+            setDraft(prompt);
+            setError("Butler's send failed, and its saved state could not be checked. Reopen this conversation before retrying.");
+          }
+        } else {
+          setDraft(prompt);
+          setError(caught instanceof Error ? caught.message : "The assistant could not answer. Try again.");
+        }
       }
     } finally { setBusy(false); }
   };
@@ -903,7 +1010,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           : destination ? <a href={href} onClick={(event) => { event.preventDefault(); openDestination(destination); }}>{children}</a>
           : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); setHidden(true); }}>{children}</a>
           : <a href={href} {...props}>{children}</a>;
-      } }}>{message.content}</ReactMarkdown></div>)}</div>
+      } }}>{message.content}</ReactMarkdown>{api && message.contentBlocks?.filter((block) => block.type === "image").map((block, imageIndex) => <AuthenticatedChatImage key={`${block.artifactId ?? "image"}-${imageIndex}`} api={api} block={block} className={styles.transcriptImage} />)}</div>)}</div>
       {engagement && runtime && !loadingHistory && <details className={styles.catalog} open={messages.length === 0}>
         <summary>Work I can help with</summary>
         <div className={styles.quickActions} role="group" aria-label="Assistant work requests">
@@ -930,7 +1037,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <div className={styles.contextItems}>{butlerDrafts.map((item, index) => <div className={styles.contextItem} key={`${item.source.kind}:${item.source.id ?? ""}:${index}`}><details><summary>{item.source.label}{item.truncated ? " · shortened" : ""}</summary><p>{item.text}</p></details><button type="button" className="icon-button subtle" aria-label={`Remove ${item.source.label} from Butler context`} title={`Remove ${item.source.label}`} disabled={busy} onClick={() => context?.removeButlerDraft(index)}><X size={16} /></button></div>)}</div>
     </section>}
     {context?.butlerDraftNotice && <div className={styles.contextNotice} role="status"><span>{context.butlerDraftNotice}</span><button type="button" className="icon-button subtle" aria-label="Dismiss Butler context notice" title="Dismiss Butler context notice" onClick={() => context.clearButlerDraftNotice()}><X size={16} /></button></div>}
-    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about work, start an assistant or mission, or change a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
+    {pendingImages.length > 0 && <div className={styles.imageTray} role="list" aria-label="Butler image attachments">{pendingImages.map((block, index) => <div className={styles.imageItem} role="listitem" key={`${block.artifactId}-${index}`}>{api && <AuthenticatedChatImage api={api} block={block} className={styles.attachedImage} />}<span title={block.alt}>{block.alt}</span><button className="icon-button subtle" type="button" aria-label={`Remove ${block.alt ?? "image"}`} disabled={busy} onClick={() => setPendingImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}><X size={16} /></button></div>)}</div>}
+    {uploadingImage && <p className={styles.imageStatus} role="status">Attaching image…</p>}
+    {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}
+    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><input ref={imageInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp" aria-label="Choose images for Butler" onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; void attachImageFiles(files); }} /><button className="icon-button subtle" type="button" aria-label="Attach image to Butler" title="Attach image to Butler" aria-describedby={imageHelp && !imageInputSupported ? "butler-image-help" : undefined} disabled={!api || !engagement || busy || loadingHistory || uploadingImage} onClick={() => imageInputSupported ? imageInput.current?.click() : setImageHelp(true)}><Image size={18} /></button><textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about work, start an assistant or mission, or change a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={(!draft.trim() && !pendingImages.length) || (pendingImages.length > 0 && (!api || !engagement || !runtime || !imageInputSupported)) || (!pendingImages.length && !isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory || uploadingImage}><Send size={18} /></button>}</form>
   </div> : null;
 
   const attentionLabel = `${attentionCount} open incident${attentionCount === 1 ? "" : "s"} ${attentionCount === 1 ? "needs" : "need"} attention in the selected project`;
