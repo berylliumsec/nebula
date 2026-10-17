@@ -6709,7 +6709,6 @@ async def _run_harness_command(
             # authoritative for the longer-lived workflow, so keep executing in
             # the same session until Grok reports a terminal or paused state.
             native_command = "/goal resume"
-        return
     yield HarnessEvent(
         type="started",
         vendor=vendor,

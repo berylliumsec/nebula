@@ -1555,17 +1555,6 @@ class SubagentService:
                 details[f"{key}_total"] = len(found)
         return details
 
-    def _model_view(
-        self, record: ChatSubagent, *, include_result: bool
-    ) -> dict[str, Any]:
-        """What the parent model sees of one subagent, with its whole report."""
-
-        payload = self._header(record)
-        if include_result and record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
-            payload["report"] = record.result or None
-            payload.update(self._report_details(record))
-        return payload
-
     @staticmethod
     def _message_item(
         header: dict[str, Any], message: ChatSubagentMessage

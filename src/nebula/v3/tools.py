@@ -408,14 +408,6 @@ def _legacy_action_receipt(
     )
 
 
-class ToolExecutionCancelled(asyncio.CancelledError):
-    """Carry partial captured evidence through cooperative cancellation."""
-
-    def __init__(self, result: ToolExecutionResult) -> None:
-        super().__init__("tool execution cancelled")
-        self.result = result
-
-
 class PreparedToolCall(BaseModel):
     call: PersistedToolCall
     decision: PolicyDecision

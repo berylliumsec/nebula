@@ -11385,40 +11385,6 @@ class ChatService:
         )
 
     @staticmethod
-    def _bounded_tool_result(output: dict[str, Any]) -> str:
-        rendered = serialize_model_result(output)
-        decoded = json.loads(rendered)
-        if decoded.get("schema") != "nebula.bounded-result/v1":
-            return rendered
-        # Compatibility for trusted non-action capabilities. Executable action
-        # results reach this method only as compact v2 receipts.
-        normalized = json.loads(json.dumps(output, ensure_ascii=False, default=str))
-
-        def redact_value(value: Any) -> Any:
-            if isinstance(value, str):
-                return redact_text(value)
-            if isinstance(value, list):
-                return [redact_value(item) for item in value]
-            if isinstance(value, dict):
-                return {key: redact_value(item) for key, item in value.items()}
-            return value
-
-        raw = json.dumps(redact_value(normalized), ensure_ascii=False, sort_keys=True)
-        envelope: dict[str, Any] = {
-            "status": "complete",
-            "truncated": True,
-            "original_characters": len(raw),
-            "preview": "",
-        }
-        empty = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
-        envelope["preview"] = raw[: max(0, 8_000 - len(empty))]
-        bounded = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
-        while len(bounded) > 8_000 and envelope["preview"]:
-            envelope["preview"] = envelope["preview"][: -(len(bounded) - 8_000)]
-            bounded = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
-        return bounded
-
-    @staticmethod
     def _bounded_tool_error(status: str, detail: str) -> str:
         safe = redact_text(re.sub(r"\s+", " ", detail)).strip()[:1_000]
         return json.dumps({"status": status, "detail": safe}, sort_keys=True)

@@ -716,12 +716,6 @@ class Database:
         self.engine.dispose()
 
 
-def create_database(location: str | Path, *, echo: bool = False) -> Database:
-    """Convenience factory used by the CLI, API, and tests."""
-
-    return Database(location, echo=echo)
-
-
 class DatabaseInUseError(RuntimeError):
     """Raised when maintenance needs a database no other connection has open."""
 

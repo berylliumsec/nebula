@@ -1,13 +1,13 @@
 {
-  "change_digest": "1646f630cb6ac36c134e2f8f3a6a315975a7a1823b14012996c4283ad4c03561",
-  "reviewed_by": "Codex focused review of harness Core-goal blocking, continuation guard, and product guidance",
-  "reason": "Eight collected Python cases cover active-turn goal scoping, saved block state, automatic continuation limits, native tool activity, queued follow-up behavior, and bundled product-help digest/search/sync. Three collected real-Core browser cases exercise the harness-goal journey through the production UI on a disposable LAN Core in desktop Chromium, mobile Chromium, and mobile WebKit.",
-  "exclusions": "No frontend component or native implementation changed, so their unit suites are excluded. Unrelated Python and browser journeys are excluded. Browser tests use inert harness fixtures and emulated mobile profiles; no physical device is available.",
+  "change_digest": "583f1b92be4f74710fc0e2ca159d8ee3731b712ac8014816e4d66ef61568b8ed",
+  "reviewed_by": "Codex focused review of Vulture findings and deleted Python code",
+  "reason": "Twelve collected Python cases cover authenticated Core startup and project CRUD, chat header and subagent flows, provider message handling, harness and goal continuation, SSH environment selection, execution review, terminal parsing, and vulnerability-feed normalization. The newly merged harness-goal case covers the same command path as the removed unreachable return.",
+  "exclusions": "No frontend or native source changed, so no unit tests at those layers are selected. No browser workflow changed, so no Playwright entry is selected; a disposable LAN Core with the candidate production bundle is exercised manually. Unrelated Python tests and full suites are excluded.",
   "expected_tests": {
-    "python": 8,
+    "python": 12,
     "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,20 +15,20 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_harness_chat_goals.py::test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing",
-    "tests/v3/test_harness_chat_goals.py::test_harness_goal_agent_can_block_only_its_active_core_goal",
-    "tests/v3/test_harness_chat_goals.py::test_tool_free_harness_goal_continuations_pause_for_review",
-    "tests/v3/test_harness_chat_goals.py::test_native_tool_activity_resets_harness_goal_continuation_guard",
-    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_harness_goal_blocking",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
+    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
+    "tests/v3/test_chat_polling_cost.py::test_headers_reread_only_the_turn_that_changed",
+    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result",
+    "tests/v3/test_chat.py::test_plain_stream_recovers_an_unrequested_tool_call",
+    "tests/v3/test_providers.py::test_openai_compatible_uses_chat_completions_shape",
+    "tests/v3/test_harness_commands.py::test_grok_goal_continues_vendor_turns_until_goal_is_complete",
+    "tests/v3/test_ssh_environments.py::test_chat_selection_defaults_to_enabled_hosts_and_rejects_disabled",
+    "tests/v3/test_executions.py::test_reviewed_execution_is_exact_isolated_redacted_and_idempotent",
+    "tests/v3/test_terminal_history.py::test_nonce_bound_frames_capture_only_command_result_and_detect_truncation",
+    "tests/v3/test_intelligence.py::test_nvd_exact_version_cpe_normalizes_to_a_version_not_an_open_range",
+    "tests/v3/test_harness_chat_goals.py::test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "harness-goal/assistant-real-desktop",
-    "harness-goal/assistant-real-chromium-390",
-    "harness-goal/assistant-real-webkit-390"
-  ]
+  "playwright": []
 }
