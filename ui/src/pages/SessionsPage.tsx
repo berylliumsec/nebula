@@ -6916,7 +6916,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             })}</section>)}
             {loadingAllSessions && <p role="status">Searching saved conversations…</p>}
             {sessionQuery && !loadingAllSessions && !sidebarConversations.matchCount && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
-            {!sessionQuery && sessionNextOffset !== undefined && <button className="button quiet" type="button" disabled={loadingOlderSessions} onClick={() => void loadOlderConversations()}>{loadingOlderSessions ? "Loading older conversations…" : "Load older conversations"}</button>}
+            {!sessionQuery && sessionNextOffset !== undefined && <button className="button quiet session-list-load-more" type="button" disabled={loadingOlderSessions} onClick={() => void loadOlderConversations()}>{loadingOlderSessions ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}<span>{loadingOlderSessions ? "Loading older conversations…" : "Load older conversations"}</span></button>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
           {compact && mobileListOpen && <MobileDrawerFooter onNavigate={() => setMobileListOpen(false)} />}

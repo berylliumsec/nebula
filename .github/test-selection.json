@@ -1,39 +1,27 @@
 {
-  "change_digest": "00f4607cea055881727c105c0a5bb080efa919275229e42b87eab07ae00f1e7f",
-  "reviewed_by": "Codex review of harness goal recovery and Butler context routing",
-  "reason": "Two collected Python cases cover queue priority and the completed-turn/profile-revision/review handoff. The two affected frontend files contain 41 collected cases covering Butler context selection, send, failed retry, and existing conversation behavior. Eight harness-goal and eight Butler-context catalog entries exercise production-LAN real-Core workflows on desktop and emulated 320/390/430 px Chromium and WebKit profiles, including saved-turn context and reload.",
-  "exclusions": "Native code did not change. Provider-goal, unrelated chat, storage, Voice, and full suites are excluded. Real-Core browser cases use isolated Core instances, inert model/harness fixtures, and a production bundle; no external research workload or physical device is involved.",
+  "change_digest": "11a52494d37dcf427af32dd2223b0fd9b6b4a4af56e05b3041c3d12f31a66239",
+  "reviewed_by": "Codex review of the Workbench conversation pagination control",
+  "reason": "The diff changes the older-conversations control layout and its existing paging journey. Eight collected interface cases check single-line geometry, touch size, failure retry, and page loading in desktop Chromium 1440/1024 plus emulated Chromium and WebKit 320/390/430. Two collected production-LAN real-Core cases check keyboard loading of the durable older page in desktop and narrow Chromium. The shared CSS, test files, and manifest addition were reviewed for this focused selection.",
+  "exclusions": "No backend, native code, or data transformation changed, so Python, native, and frontend unit tests are excluded. Unrelated interface and full suites are excluded. The browser tests use emulated mobile profiles; no physical device is available. No external model or harness work is run.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 41,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 16
+    "playwright": 10
   },
-  "python": [
-    "tests/v3/test_harness_chat_goals.py::test_queued_operator_follow_up_takes_priority_over_goal_dispatch",
-    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff"
-  ],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/state/WorkbenchDraftContext.navigation.test.tsx"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:harness-goal/assistant-real-desktop",
-    "entry:harness-goal/assistant-real-compact",
-    "entry:harness-goal/assistant-real-chromium-320",
-    "entry:harness-goal/assistant-real-chromium-390",
-    "entry:harness-goal/assistant-real-chromium-430",
-    "entry:harness-goal/assistant-real-webkit-320",
-    "entry:harness-goal/assistant-real-webkit-390",
-    "entry:harness-goal/assistant-real-webkit-430",
-    "entry:butler-context/assistant-real-desktop",
-    "entry:butler-context/assistant-real-compact",
-    "entry:butler-context/assistant-real-chromium-320",
-    "entry:butler-context/assistant-real-chromium-390",
-    "entry:butler-context/assistant-real-chromium-430",
-    "entry:butler-context/assistant-real-webkit-320",
-    "entry:butler-context/assistant-real-webkit-390",
-    "entry:butler-context/assistant-real-webkit-430"
+    "entry:navigation-loading/desktop",
+    "entry:navigation-loading/compact",
+    "entry:navigation-loading/mobile-chromium-small",
+    "entry:navigation-loading/mobile-chromium-ledger-390",
+    "entry:navigation-loading/mobile-chromium-wide",
+    "entry:navigation-loading/mobile-webkit-small",
+    "entry:navigation-loading/mobile-webkit",
+    "entry:navigation-loading/mobile-webkit-wide",
+    "entry:navigation-deeplink/desktop",
+    "entry:navigation-deeplink/narrow"
   ]
 }

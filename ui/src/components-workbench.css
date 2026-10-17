@@ -609,6 +609,8 @@ kbd { font-size: 11px; }
 .chat-archived-notice > span { flex: 1; min-width: 0; }
 .chat-archived-notice > svg { flex: none; }
 .session-list nav > button { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 46px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+.session-list nav > .session-list-load-more { display: flex; width: 100%; justify-content: center; gap: 6px; white-space: nowrap; }
+.session-list-load-more > svg { flex: none; }
 .session-list nav > button:hover { background: var(--surface-hover); }
 .session-list nav > button.active { color: var(--text); background: var(--blue-muted); }
 .session-list nav > button > span { display: flex; min-width: 0; flex-direction: column; }
