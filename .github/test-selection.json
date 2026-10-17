@@ -1,8 +1,8 @@
 {
-  "change_digest": "b7ac17dcc680139ce10b35ba18c031ad07a662bb80c766d730c4a63678b18fa6",
-  "reviewed_by": "Codex focused diff review for chat history backend benchmark",
-  "reason": "The diff adds a reproducible throwaway benchmark, raw receipts, and a report comparing the already merged session-indexed SQLite read with direct SQLite JSON and LMDB candidates. Three collected Python cases verify index projection and query plan, existing-database migration, and histories longer than a storage page. Benchmark smoke runs verify equal transcripts for full and 61-message page reads.",
-  "exclusions": "No Core or UI production source, browser behavior, frontend, or native code changed. The benchmark measures warm local database reads and model validation; unrelated Python tests, browser projects, native tests, HTTP, rendering, write throughput, and physical devices are excluded.",
+  "change_digest": "2c606cdbc0810e8215796e9c9f85ca5b0b2b036de5dae9b52249081ef517cf6c",
+  "reviewed_by": "Codex focused diff review for expanded chat storage benchmark",
+  "reason": "The diff adds disposable SQLite versus LMDB benchmark scripts, four expanded raw receipts, and reports. Three collected Python cases verify the indexed chat lookup projection and query plan, existing-database migration, and histories longer than a storage page. The expanded script itself checks matching message, cursor, and authenticated API results for each throwaway store while measuring reads, writes, and concurrent access.",
+  "exclusions": "No production Core or UI source, browser behavior, frontend, or native code changed. The benchmarks use warm local synthetic databases and a FastAPI TestClient, not a production bundle, real network, physical device, or live operator data. Unrelated Python tests and browser, frontend, and native projects are excluded; a full suite is not authorized.",
   "expected_tests": {
     "python": 3,
     "frontend": 0,

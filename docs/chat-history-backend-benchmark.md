@@ -4,6 +4,9 @@ This comparison asks whether moving conversation messages to LMDB would make
 opening a saved chat materially faster than the indexed SQLite implementation
 already on main (`b67c08c`). It measures throwaway synthetic databases only.
 
+The [expanded comparison](chat-storage-expanded-benchmark.md) adds writes,
+concurrent reads, older pages, and authenticated Core requests.
+
 ## Workload and method
 
 - The corpus has either 200 chats × 500 messages (100,000 messages) or 1,000
