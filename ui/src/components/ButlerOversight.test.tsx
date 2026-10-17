@@ -24,7 +24,10 @@ const overview = {
 };
 
 function client(request: ReturnType<typeof vi.fn>): ApiClient {
-  return { request } as unknown as ApiClient;
+  const readOverview = request as unknown as (path: string, options?: unknown) => Promise<unknown>;
+  return { request: (path: string, options?: unknown) => path.endsWith("/butler/issues")
+    ? Promise.resolve({ destinations: [], candidates: [], held_scans: [] })
+    : readOverview(path, options) } as unknown as ApiClient;
 }
 
 describe("ButlerOversight", () => {

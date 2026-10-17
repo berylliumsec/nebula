@@ -69,7 +69,7 @@ export interface ButlerDecision {
 export interface ButlerAction {
   id: string;
   actionType: "request_parent_status" | "pause_urgent_machine_blocker";
-  status: "planned" | "dispatching" | "dispatched" | "applied" | "uncertain" | "cancelled";
+  status: "planned" | "dispatching" | "dispatched" | "applied" | "held" | "uncertain" | "cancelled";
   summary: string;
   goalId?: string;
   sourceSessionId?: string;
