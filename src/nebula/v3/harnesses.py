@@ -11521,7 +11521,7 @@ class HarnessRuntimeService:
                     )
                 ):
                     return False
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: an incomplete turn chain is not evidence of a stall
                 return False
         return True
 

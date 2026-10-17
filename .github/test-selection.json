@@ -1,5 +1,5 @@
 {
-  "change_digest": "16f90d3ad51f1273becd3cda793dc28c67d277656537f767e3bf5a9c8ad006ca",
+  "change_digest": "1646f630cb6ac36c134e2f8f3a6a315975a7a1823b14012996c4283ad4c03561",
   "reviewed_by": "Codex focused review of harness Core-goal blocking, continuation guard, and product guidance",
   "reason": "Eight collected Python cases cover active-turn goal scoping, saved block state, automatic continuation limits, native tool activity, queued follow-up behavior, and bundled product-help digest/search/sync. Three collected real-Core browser cases exercise the harness-goal journey through the production UI on a disposable LAN Core in desktop Chromium, mobile Chromium, and mobile WebKit.",
   "exclusions": "No frontend component or native implementation changed, so their unit suites are excluded. Unrelated Python and browser journeys are excluded. Browser tests use inert harness fixtures and emulated mobile profiles; no physical device is available.",
