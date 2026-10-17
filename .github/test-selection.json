@@ -1,27 +1,34 @@
 {
-  "change_digest": "92f6b47a016db2eddc95e6b0c6bc590b7c1b1cf153ceef0da2982b87e71379ee",
-  "reviewed_by": "Codex focused review of goal linked-turn validation and lifecycle",
-  "reason": "Three collected Python cases cover persistence and completion of the 10,001st linked goal turn, ordinary goal linkage and charging, and automatic continuation. Three collected real-Core browser entries cover the operator goal lifecycle through the production UI on LAN in desktop Chromium, emulated mobile Chromium, and emulated mobile WebKit.",
-  "exclusions": "No frontend or native implementation changed, so their unit suites are excluded. Unrelated Python and browser journeys are excluded. The browser journey covers normal goal controls; the 10,001st-turn boundary is verified by the focused durable Core regression. No physical-device test is available.",
+  "change_digest": "16f90d3ad51f1273becd3cda793dc28c67d277656537f767e3bf5a9c8ad006ca",
+  "reviewed_by": "Codex focused review of harness Core-goal blocking, continuation guard, and product guidance",
+  "reason": "Eight collected Python cases cover active-turn goal scoping, saved block state, automatic continuation limits, native tool activity, queued follow-up behavior, and bundled product-help digest/search/sync. Three collected real-Core browser cases exercise the harness-goal journey through the production UI on a disposable LAN Core in desktop Chromium, mobile Chromium, and mobile WebKit.",
+  "exclusions": "No frontend component or native implementation changed, so their unit suites are excluded. Unrelated Python and browser journeys are excluded. Browser tests use inert harness fixtures and emulated mobile profiles; no physical device is available.",
   "expected_tests": {
-    "python": 3,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 3
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_goals.py::test_goal_turn_after_ten_thousand_links_persists_and_completes",
-    "tests/v3/test_chat_goals.py::test_running_goal_is_injected_linked_and_charged_by_provider_turn",
-    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal"
+    "tests/v3/test_harness_chat_goals.py::test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing",
+    "tests/v3/test_harness_chat_goals.py::test_harness_goal_agent_can_block_only_its_active_core_goal",
+    "tests/v3/test_harness_chat_goals.py::test_tool_free_harness_goal_continuations_pause_for_review",
+    "tests/v3/test_harness_chat_goals.py::test_native_tool_activity_resets_harness_goal_continuation_guard",
+    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_harness_goal_blocking",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [],
   "native": [],
   "playwright": [
-    "provider-goal-lifecycle-core/assistant-real-desktop",
-    "provider-goal-lifecycle-core/assistant-real-chromium-390",
-    "provider-goal-lifecycle-core/assistant-real-webkit-390"
+    "harness-goal/assistant-real-desktop",
+    "harness-goal/assistant-real-chromium-390",
+    "harness-goal/assistant-real-webkit-390"
   ]
 }
