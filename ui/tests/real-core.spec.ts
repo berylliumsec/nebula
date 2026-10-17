@@ -3969,6 +3969,80 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
   ]);
 });
 
+test("assistant upgrade production workspace text search opens a real Core result", async ({ page }) => {
+  test.setTimeout(90_000);
+  const lanAddress = Object.values(networkInterfaces())
+    .flat()
+    .find((address) => address?.family === "IPv4" && !address.internal)?.address;
+  test.skip(!lanAddress, "No non-loopback IPv4 interface is available for the LAN-origin gate.");
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const projectId = (await engagementsResponse.json() as Array<{ id: string }>)[0]?.id;
+    expect(projectId).toBeTruthy();
+    const upload = await api.put(
+      `engagements/${projectId}/workspace/file?path=search-proof.py&overwrite=false`,
+      { data: Buffer.from("first line\nUniqueSearchToken = 42\n" + "padding line\n".repeat(1_500)), headers: { "Content-Type": "text/plain" } },
+    );
+    expect(upload.ok(), await upload.text()).toBe(true);
+
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    const editorReady = async () => {
+      await expect.poll(async () =>
+        await page.getByRole("complementary", { name: "Editor files" }).isVisible()
+        || await page.getByRole("textbox", { name: "Code editor" }).isVisible(),
+      { timeout: 20_000 }).toBe(true);
+    };
+    await editorReady();
+    const openFile = async () => {
+      const tab = page.getByRole("tab", { name: /search-proof\.py/ });
+      if (await tab.isVisible()) return;
+      const sidebar = page.getByRole("complementary", { name: "Editor files" });
+      if (!await sidebar.isVisible()) await page.getByRole("button", { name: "Show editor files" }).click();
+      const file = sidebar.getByRole("button", { name: /search-proof\.py/ });
+      await expect(file).toBeVisible();
+      await file.click();
+      await expect(tab).toBeVisible();
+    };
+    await openFile();
+    const openSearch = async () => {
+      const mobileTools = page.getByRole("button", { name: "More editor actions" });
+      if (await mobileTools.isVisible()) {
+        await mobileTools.click();
+        await page.getByRole("button", { name: "Search files" }).click();
+      } else {
+        await page.getByRole("button", { name: "More editor tools" }).click();
+        await page.getByLabel("Editor tools").getByRole("button", { name: "Search", exact: true }).click();
+      }
+      return page.getByRole("dialog", { name: "Search workspace text" });
+    };
+    const search = await openSearch();
+    await search.getByRole("textbox", { name: "Search workspace text" }).fill("uniquesearchtoken");
+    const result = search.getByRole("option", { name: /search-proof\.py.*Line 2, column 1/ });
+    await expect(result).toBeVisible();
+    await result.click();
+    await expect(page.getByRole("tab", { name: /search-proof\.py/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("UniqueSearchToken = 42");
+
+    await page.reload();
+    await expect(page.getByText("Pair this browser to continue")).toBeVisible();
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await editorReady();
+    await openFile();
+    const refreshedSearch = await openSearch();
+    await refreshedSearch.getByRole("textbox", { name: "Search workspace text" }).fill("uniquesearchtoken");
+    await expect(refreshedSearch.getByRole("option", { name: /search-proof\.py.*Line 2, column 1/ })).toBeVisible();
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("real Core persists a project folder chosen through the host browser", async ({ page }) => {
   test.setTimeout(60_000);
   const lanAddress = Object.values(networkInterfaces())
