@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import Field
 
 from .credentials import CredentialStore
+from .diagnostics import record_caught_exception
 from .domain import (
     ButlerIncident,
     ButlerIssueCandidate,
@@ -162,6 +163,7 @@ class ButlerImprovementService:
         try:
             scan = self.store.get(ButlerIssueScan, scan_id)
         except NotFoundError:
+            # diagnostic-expected: absence means this source has not been reviewed yet.
             return False
         if scan.status == "reviewing":
             # This project has one issue worker at a time. A receipt still in
@@ -450,7 +452,14 @@ class ButlerImprovementService:
             visibility = await self._target(
                 destination
             )  # recheck immediately before every write
-        except Exception:
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.issue_target_unavailable",
+                "The issue target could not be verified; publication was held.",
+                exc,
+                stage="issue-target",
+            )
             return self._set_candidate(
                 candidate, status="held", reason="target_visibility_unavailable"
             )
@@ -476,7 +485,14 @@ class ButlerImprovementService:
             return self._set_candidate(candidate, status="held", reason=reason)
         try:
             existing = await self._find(destination, candidate.dedup_key)
-        except Exception:
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.issue_lookup_unavailable",
+                "The issue duplicate check failed; publication was held.",
+                exc,
+                stage="issue-lookup",
+            )
             return self._set_candidate(
                 candidate, status="held", reason="duplicate_lookup_unavailable"
             )
@@ -499,7 +515,14 @@ class ButlerImprovementService:
             issue_id, issue_url = await self._create(
                 destination, candidate, title, body
             )
-        except Exception:
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.issue_create_uncertain",
+                "The issue create outcome could not be confirmed; no automatic retry is allowed.",
+                exc,
+                stage="issue-create",
+            )
             return self._set_candidate(
                 candidate, status="uncertain", reason="create_outcome_unconfirmed"
             )
@@ -567,6 +590,7 @@ class ButlerImprovementService:
             self.store.get(ButlerIssueScan, scan_id)
             return
         except NotFoundError:
+            # diagnostic-expected: the first review creates this receipt below.
             pass
         scan = self.store.create(
             ButlerIssueScan(
@@ -588,6 +612,7 @@ class ButlerImprovementService:
                     self.store.get(ButlerIssueCandidate, candidate_id)
                     continue
                 except NotFoundError:
+                    # diagnostic-expected: no matching candidate exists yet.
                     pass
                 candidate = self.store.create(
                     ButlerIssueCandidate(
@@ -618,7 +643,14 @@ class ButlerImprovementService:
                 },
                 expected_revision=scan.revision,
             )
-        except Exception:
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.issue_source_review_failed",
+                "The source review was interrupted and is held for operator attention.",
+                exc,
+                stage="issue-source-review",
+            )
             self.store.update(
                 ButlerIssueScan,
                 scan.id,
@@ -660,6 +692,7 @@ class ButlerImprovementService:
                         session = self.store.get(ChatSession, turn.session_id)
                         message = self.store.get(ChatMessage, turn.final_message_id)
                     except NotFoundError:
+                        # diagnostic-expected: an incomplete saved source is skipped without publication.
                         continue
                     if (
                         session.engagement_id != project_id

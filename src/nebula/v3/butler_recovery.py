@@ -830,6 +830,7 @@ class ButlerRecoveryService:
             try:
                 delivered = self.store.get(ChatTurn, case.delivered_turn_id)
             except NotFoundError:
+                # diagnostic-expected: the durable case records the missing turn as uncertain.
                 return self._update_case(
                     case,
                     status="uncertain",
@@ -850,6 +851,7 @@ class ButlerRecoveryService:
                     ChatQueue, "chat-queue-" + case.target_session_id
                 )
             except NotFoundError:
+                # diagnostic-expected: legacy cases retain an uncertain receipt if the queue is gone.
                 return self._update_case(
                     case,
                     status="uncertain",
