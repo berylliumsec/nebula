@@ -1528,10 +1528,6 @@ class BrokeredToolSpecialist:
         return result.output.get("timed_out") is True
 
     @classmethod
-    def _bounded_tool_result(cls, output: dict[str, Any]) -> str:
-        return serialize_model_result(output)
-
-    @classmethod
     def _result_summary(cls, tool_name: str, result: Any, status: str) -> str:
         if status == "failed":
             if (

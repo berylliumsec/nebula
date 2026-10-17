@@ -2720,10 +2720,8 @@ def create_app(
     app.state.allow_browser_diagnostic_events = allow_browser_diagnostic_events
     app.state.allow_insecure_device_pairing = allow_insecure_device_pairing
     app.state.mission_service = missions
-    app.state.delegated_mission_service = delegated_missions
     app.state.harness_runtime_service = harness_runtime
     app.state.mcp_probe_service = mcp_probes
-    app.state.operator_profile_service = operators
     app.state.credential_store = credentials
     app.state.tool_platform = tool_platform
     app.state.automation_runtime = automation_runtime
@@ -2736,7 +2734,6 @@ def create_app(
     app.state.execution_ai_service = execution_ai
     app.state.writing_ai_service = writing_ai
     app.state.scope_import_service = scope_imports
-    app.state.setup_service = setup
     app.state.terminal_command_history = terminal_commands
     app.state.executable_missions_enabled = executable_missions_enabled
     app.add_middleware(

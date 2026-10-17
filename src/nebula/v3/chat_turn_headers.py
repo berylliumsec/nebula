@@ -274,13 +274,3 @@ def turn_header(
         return None
     headers = _resolve(database, [(row.id, row.revision, row.created_at)])
     return headers[0] if headers else None
-
-
-def clear_turn_header_cache() -> None:
-    """Forget every memoized header (tests and diagnostics only)."""
-
-    with _caches_lock:
-        caches = list(_caches.values())
-    for cache in caches:
-        with cache.lock:
-            cache.entries.clear()
