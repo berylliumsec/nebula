@@ -1,29 +1,18 @@
 {
-  "change_digest": "5f46fd31242884daef8eda19e814cbd0b907876d51da1703d35ed2e1bbe52039",
-  "reviewed_by": "Codex focused review of Butler and analyst image attachments",
-  "reason": "The two selected component files contain 38 collected cases and cover visible image discovery, supported and unsupported runtimes, upload and send failure recovery, cross-project isolation, preview, and the image content block passed to Butler. The image catalog entry contains 16 collected mock browser capability cases across desktop Chromium and emulated mobile Chromium and WebKit, two collected side-chat toolbar cases, and two disposable real-Core LAN cases that verify model delivery and durable reload for Butler and analyst chat. The production UI build is checked separately. Three collected Python cases verify the existing harness artifact boundary and Codex app-server image request serialization used by an image-capable Butler. The newer main branch changes conversation pagination in shared page and browser files; its separate selection already covered pagination, and the resolved image diff still selects the image journeys across the same browser matrix.",
-  "exclusions": "No Python or native source changed; only the two existing harness image boundaries are selected. Unrelated chat, provider, Voice, storage, and full suites are excluded. Real-Core cases use disposable local Core and model stub instances, a production bundle, and a non-loopback LAN origin. Physical Mac and iPhone browser checks are unavailable in this environment.",
+  "change_digest": "be1232d911ee996f76e3e651744183d87174f7102dd72167379a8ed9383b2884",
+  "reviewed_by": "Codex reconciliation of Butler live feedback with image attachments on current main",
+  "reason": "The Butler component and composer changed on both branches. Thirty-eight collected component cases cover live status, pending-turn recovery, image upload and delivery, image model changes, context selection, and existing client actions. The two selected browser areas contain 31 collected cases: 8 live-status mock cases, 3 live-status real-Core LAN cases, 16 image-capability mock cases, 2 side-chat toolbar cases, and 2 image-delivery real-Core LAN cases. They exercise the combined Butler entry point across desktop Chromium and emulated mobile Chromium and WebKit, plus durable recovery in the production bundle. The production UI build is checked separately.",
+  "exclusions": "No Python or native source changed, so Python and native tests are excluded. Unrelated UI journeys and full suites are excluded. Real-Core cases use disposable Core instances and controlled local model stubs on a non-loopback LAN origin. Physical Mac and phone browsers are unavailable in this environment.",
   "expected_tests": {
-    "python": 3,
+    "python": 0,
     "frontend": 38,
     "native": 0,
-    "playwright": 20
+    "playwright": 31
   },
-  "python": [
-    "tests/v3/test_harnesses.py::test_harness_images_validate_ownership_and_persist_references",
-    "tests/v3/test_harness_adapters.py::test_codex_turn_controls_use_structured_skill_and_planning_mode"
-  ],
-  "frontend": [
-    "ui/src/components/ChatAttachments.test.tsx",
-    "ui/src/components/NebulaControlAssistant.test.tsx"
-  ],
+  "python": [],
+  "frontend": ["ui/src/components/NebulaControlAssistant.test.tsx"],
   "native": [],
-  "playwright": [
-    "area:chat-image-attachments"
-  ],
+  "playwright": ["area:butler-live-feedback", "area:chat-image-attachments"],
   "python_browser": false,
-  "python_node": false,
-  "python_versions": [
-    "3.11"
-  ]
+  "python_node": false
 }

@@ -58,6 +58,16 @@
 .attachedImage { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; }
 .transcriptImage { display: block; max-width: min(100%, 360px); max-height: 300px; object-fit: contain; border-radius: 8px; }
 .imageStatus { margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
+.turnStatus { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); }
+.turnStatusDot { flex: 0 0 7px; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; background: var(--blue); }
+.turnStatus[data-state="attention"] .turnStatusDot, .turnStatus[data-state="error"] .turnStatusDot { background: var(--danger, var(--text)); }
+.turnStatusText { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.turnStatusText strong { display: block; font-size: .82rem; font-weight: 600; line-height: 1.4; }
+.turnStatusText small { display: block; color: var(--muted-strong, var(--muted)); font-size: .72rem; line-height: 1.4; }
+.turnSteps { margin-top: 2px; color: var(--muted-strong, var(--muted)); font-size: .72rem; }
+.turnSteps summary { display: flex; align-items: center; min-height: 44px; width: fit-content; cursor: pointer; }
+.turnSteps ol { max-height: 120px; overflow: auto; margin: 0 0 4px; padding-left: 18px; }
+.turnSteps li + li { margin-top: 3px; }
 .composer { display: flex; align-items: end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
@@ -74,5 +84,7 @@
   .voiceLabel { display: inline; }
   .body { flex: 1; min-height: 0; }
   .transcript { max-height: none; overflow: visible; }
+  .turnStatus { flex-wrap: wrap; }
+  .turnStatus > button { margin-left: 15px; }
 }
 @media (max-width: 430px) { .catalog .settingList { grid-template-columns: 1fr; } }

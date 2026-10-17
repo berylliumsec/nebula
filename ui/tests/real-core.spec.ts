@@ -6518,6 +6518,80 @@ test("assistant upgrade control assistant starts project work on production LAN 
   ]);
 });
 
+test("assistant upgrade Butler shows live work and restores it after reload on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const answer = "The saved Butler response completed after reload.";
+  const stub = await startLocalModelStub({
+    responseContent: answer, streamDelayMs: 18_000,
+    delayedMessage: "Check current work and reply briefly", matchingDelayMs: 18_000,
+  });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {
+      name: "Butler live feedback acceptance", description: "Synthetic project", client_name: null,
+      status: "active", tags: [], workspace_path: null, metadata: {},
+    }});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = ((await projectResponse.json()) as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler feedback model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler feedback LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    let butler = page.getByRole("dialog", {name: "Butler"});
+    await butler.getByRole("textbox", {name: "Ask Butler a question"}).fill("Check current work and reply briefly");
+    await butler.getByRole("button", {name: "Send to Butler"}).click();
+    const activity = butler.getByRole("region", {name: "Butler activity"});
+    await expect(activity).toBeVisible();
+    await expect(activity).toContainText(/Preparing Butler|Starting Butler|Butler is/);
+    await expect(butler.getByRole("textbox", {name: "Ask Butler a question"})).toBeDisabled();
+    const sessionResponse = await api.get(`chat/control-assistant/session?engagement_id=${encodeURIComponent(projectId)}`);
+    expect(sessionResponse.ok(), await sessionResponse.text()).toBe(true);
+    const session = await sessionResponse.json() as {id: string};
+    await expect.poll(async () => {
+      const response = await api.get(`chat/sessions/${encodeURIComponent(session.id)}/pending-turn`);
+      return response.ok() && Boolean(await response.json());
+    }, {timeout: 20_000}).toBe(true);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    butler = page.getByRole("dialog", {name: "Butler"});
+    const restored = butler.getByRole("region", {name: "Butler activity"});
+    await expect(restored).toBeVisible({timeout: 15_000});
+    await expect(restored).toContainText(/Butler is (working|writing a reply)|Saving Butler’s reply/);
+    await expect(butler.getByRole("textbox", {name: "Ask Butler a question"})).toBeDisabled();
+    await expect(butler.getByText(answer, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect(restored).toHaveCount(0);
+    await expect(butler.getByRole("textbox", {name: "Ask Butler a question"})).toBeEnabled();
+    await testInfo.attach("butler-live-feedback-lan", {
+      body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}),
+      contentType: "application/json",
+    });
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler briefs named agent evidence on production LAN Core", async ({ page }, testInfo) => {
   test.setTimeout(150_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});

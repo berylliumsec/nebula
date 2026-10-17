@@ -2441,6 +2441,92 @@ reloadTest("stabilization Butler opens from every screen and changes this device
   await expect(page.getByRole("dialog", { name: "Butler" })).toContainText("Scratch Project is now in Host mode for new sessions");
 });
 
+reloadTest("assistant popup Butler live status follows saved work without losing the composer", async ({ page }) => {
+  await installTruthfulCore(page);
+  const sessionId = "butler-live-status";
+  const provider = {
+    ...entity, id: "butler-status-provider", name: "Butler status model", provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true,
+    model_allowlist: ["status-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "status-model" },
+  };
+  const session = { ...entity, id: sessionId, engagement_id: "scratch-project", title: "Butler",
+    backend: "provider", provider_profile_id: provider.id, model: "status-model", metadata: { control_assistant: true } };
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["status-model"] } });
+    if (path.endsWith("/chat/control-assistant/session")) return route.fulfill({ json: session });
+    if (path.endsWith(`/chat-sessions/${sessionId}/assistant-config`)) return route.fulfill({ json: {
+      session_id: sessionId, revision: 1, settings: { backend: "provider", profile_id: provider.id, model: "status-model", tools_enabled: true },
+    } });
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) return route.fulfill({ json: [] });
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) return route.fulfill({ json: null });
+    return route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    const frame = (event: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const browser = globalThis as typeof globalThis & { __butlerStatusEmit?: (event: unknown, done?: boolean) => void };
+          browser.__butlerStatusEmit = (event, done = false) => { controller.enqueue(frame(event)); if (done) controller.close(); };
+          controller.enqueue(frame({ type: "started", provider_id: "butler-status-provider", model: "status-model",
+            session_id: "butler-live-status", turn_id: "butler-status-turn" }));
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  const butler = page.getByRole("dialog", { name: "Butler" });
+  const composer = butler.getByRole("textbox", { name: "Ask Butler a question" });
+  await composer.fill("Check the agents");
+  await composer.press("Enter");
+  const activity = butler.getByRole("region", { name: "Butler activity" });
+  await expect(activity).toContainText("Butler is working");
+  await expect(composer).toBeDisabled();
+  await page.evaluate(() => (globalThis as typeof globalThis & { __butlerStatusEmit: (event: unknown) => void }).__butlerStatusEmit({
+    type: "tool_started", turn_id: "butler-status-turn", tool_call_id: "report-call",
+    capability: "nebula.work.overview", display_name: "Inspect current agent reports", arguments: {}, step: 1,
+  }));
+  await expect(activity).toContainText("Using Inspect current agent reports");
+  if (await butler.getByRole("button", { name: "Hide Butler" }).isVisible()) {
+    await butler.getByRole("button", { name: "Hide Butler" }).click();
+    await page.getByRole("button", { name: "Show Butler" }).click();
+  } else {
+    await butler.getByRole("button", { name: "Close Butler" }).click();
+    await page.getByRole("button", { name: "Open Butler" }).click();
+  }
+  await expect(activity).toContainText("Using Inspect current agent reports");
+  await page.evaluate(() => (globalThis as typeof globalThis & { __butlerStatusEmit: (event: unknown) => void }).__butlerStatusEmit({
+    type: "tool_completed", turn_id: "butler-status-turn", tool_call_id: "report-call",
+    capability: "nebula.work.overview", display_name: "Inspect current agent reports", status: "complete",
+    summary: "Read reports", evidence_ids: [], artifacts: [], step: 1,
+  }));
+  await expect(activity).toContainText("Finished Inspect current agent reports");
+  const disclosure = activity.locator("summary", { hasText: "Recent steps" });
+  expectTouchTarget((await disclosure.boundingBox())?.height, "Butler activity disclosure height");
+  await disclosure.click();
+  await expect(activity).toContainText("Using Inspect current agent reports");
+  const geometry = await activity.evaluate(element => ({right: element.getBoundingClientRect().right, scroll: element.scrollWidth, client: element.clientWidth}));
+  expect(geometry.right).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  expect(geometry.scroll - geometry.client).toBeLessThanOrEqual(1);
+  expect((await new AxeBuilder({ page }).include('[aria-label="Butler activity"]').analyze()).violations).toEqual([]);
+  await page.evaluate(() => (globalThis as typeof globalThis & { __butlerStatusEmit: (event: unknown, done?: boolean) => void }).__butlerStatusEmit({
+    type: "done", provider_id: "butler-status-provider", model: "status-model", session_id: "butler-live-status",
+    turn_id: "butler-status-turn", message: { id: "answer", role: "assistant", content: "The agents are working." },
+    usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 }, finish_reason: "stop", citations: [],
+  }, true));
+  await expect(butler.getByText("The agents are working.")).toBeVisible();
+  await expect(activity).toHaveCount(0);
+  await expect(composer).toBeEnabled();
+});
+
 reloadTest("stabilization Butler applies a model-selected device-theme tool receipt", async ({ page }) => {
   const provider = {
     ...entity, id: "provider-theme-action", name: "Theme action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
