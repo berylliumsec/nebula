@@ -4506,9 +4506,33 @@ test("assistant upgrade real Core keeps queued controls reachable and durable", 
     // The reload above proved the edit was durable. A removed follow-up stays
     // as a settled record Core no longer dispatches, so it keeps its key and a
     // digest of what was queued, not the queued request itself.
-    const durable = await (await api.get(`chat/sessions/${chat.session_id}/queue`)).json() as {items: Array<{status: string; request?: unknown; request_digest?: string}>};
+    const durable = await (await api.get(`chat/sessions/${chat.session_id}/queue`)).json() as {revision: number; items: Array<{status: string; request?: unknown; request_digest?: string}>};
     expect(durable.items).toEqual([expect.objectContaining({status: "cancelled", request_digest: expect.stringMatching(/^[0-9a-f]{64}$/)})]);
     expect(durable.items[0].request).toBeUndefined();
+    const review = await api.post(`chat/sessions/${chat.session_id}/queue`, {data: {
+      action: "enqueue", expected_revision: durable.revision, idempotency_key: "review-disclosure",
+      imported_uncertain: true, paused: true,
+      request: {
+        backend: "provider", provider_id: provider.id, model: "security-model",
+        engagement_id: projects[0].id, session_id: chat.session_id,
+        messages: [{role: "user", content: "Review this queued follow-up"}],
+        include_knowledge: false, tools_enabled: false,
+      },
+    }});
+    expect(review.ok(), await review.text()).toBe(true);
+    await page.goto(url);
+    const summary = queue.locator("summary");
+    await expect(summary).toContainText("Needs attention");
+    await expect(queue.locator("details")).toHaveAttribute("open", "");
+    if (testInfo.project.name.endsWith("-390")) await summary.tap();
+    else await summary.click();
+    await expect(queue.locator("details")).not.toHaveAttribute("open", "");
+    await expect(summary).toBeVisible();
+    await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeHidden();
+    // Re-enter through the fixture's authorized URL after the browser consumes its LAN token.
+    await page.goto(url);
+    await expect(queue.locator("details")).toHaveAttribute("open", "");
+    await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeVisible();
     await testInfo.attach("queue-controls-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: chat.session_id}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
