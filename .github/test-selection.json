@@ -1,36 +1,27 @@
 {
-  "change_digest": "a6e6dbf2a7339ef1b7c7eb8afece88041a94d2cac21c9b5a440bc3d7074f8716",
-  "reviewed_by": "Codex focused review for ripgrep workspace text search",
-  "reason": "Seven collected Python cases cover the Core search route, symlink confinement, directory exclusions, descriptor bounds, ripgrep/Python parity, process failure fallback, result-limit counts, and the small-file threshold. Eight collected real-Core browser entries cover production Code search at desktop and emulated mobile widths on a LAN origin, including the workflow's exact-entry selector handoff.",
-  "exclusions": "No frontend source or native behavior changed. Unrelated Python and browser suites are excluded. Physical-device testing is unavailable; the permanent mobile Playwright profiles provide emulation evidence only.",
+  "change_digest": "92f6b47a016db2eddc95e6b0c6bc590b7c1b1cf153ceef0da2982b87e71379ee",
+  "reviewed_by": "Codex focused review of goal linked-turn validation and lifecycle",
+  "reason": "Three collected Python cases cover persistence and completion of the 10,001st linked goal turn, ordinary goal linkage and charging, and automatic continuation. Three collected real-Core browser entries cover the operator goal lifecycle through the production UI on LAN in desktop Chromium, emulated mobile Chromium, and emulated mobile WebKit.",
+  "exclusions": "No frontend or native implementation changed, so their unit suites are excluded. Unrelated Python and browser journeys are excluded. The browser journey covers normal goal controls; the 10,001st-turn boundary is verified by the focused durable Core regression. No physical-device test is available.",
   "expected_tests": {
-    "python": 7,
+    "python": 3,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 3
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_workspace.py::test_workspace_search_is_recursive_bounded_and_never_follows_symlinks",
-    "tests/v3/test_workspace.py::test_workspace_search_opens_one_directory_at_a_time",
-    "tests/v3/test_workspace.py::test_workspace_search_skips_generated_directories",
-    "tests/v3/test_workspace.py::test_workspace_text_search_ripgrep_preserves_python_results",
-    "tests/v3/test_workspace.py::test_workspace_text_search_pins_files_and_falls_back_on_rg_failure",
-    "tests/v3/test_workspace.py::test_workspace_text_search_limit_keeps_original_file_count",
-    "tests/v3/test_workspace.py::test_workspace_text_search_uses_python_for_small_files"
+    "tests/v3/test_chat_goals.py::test_goal_turn_after_ten_thousand_links_persists_and_completes",
+    "tests/v3/test_chat_goals.py::test_running_goal_is_injected_linked_and_charged_by_provider_turn",
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal"
   ],
   "frontend": [],
   "native": [],
   "playwright": [
-    "workspace-text-search-core/assistant-real-desktop",
-    "workspace-text-search-core/assistant-real-compact",
-    "workspace-text-search-core/assistant-real-chromium-320",
-    "workspace-text-search-core/assistant-real-chromium-390",
-    "workspace-text-search-core/assistant-real-chromium-430",
-    "workspace-text-search-core/assistant-real-webkit-320",
-    "workspace-text-search-core/assistant-real-webkit-390",
-    "workspace-text-search-core/assistant-real-webkit-430"
+    "provider-goal-lifecycle-core/assistant-real-desktop",
+    "provider-goal-lifecycle-core/assistant-real-chromium-390",
+    "provider-goal-lifecycle-core/assistant-real-webkit-390"
   ]
 }
