@@ -4168,7 +4168,13 @@ class ButlerAction(Entity):
         "pause_urgent_machine_blocker",
     ]
     status: Literal[
-        "planned", "dispatching", "dispatched", "applied", "held", "uncertain", "cancelled"
+        "planned",
+        "dispatching",
+        "dispatched",
+        "applied",
+        "held",
+        "uncertain",
+        "cancelled",
     ] = "planned"
     idempotency_key: str = Field(min_length=1, max_length=200)
     report_id: str | None = Field(default=None, max_length=200)
@@ -4223,7 +4229,9 @@ class ButlerIssueCandidate(Entity):
     reproduction: str = Field(min_length=20, max_length=3000)
     confidence: Literal["hypothesis", "observed", "verified"]
     public_independent: bool = False
-    status: Literal["reviewed", "publishing", "held", "uncertain", "published"] = "reviewed"
+    status: Literal["reviewed", "publishing", "held", "uncertain", "published"] = (
+        "reviewed"
+    )
     reason: str = ""
     issue_id: str | None = None
     issue_url: str | None = None

@@ -318,8 +318,10 @@ class ButlerCapabilities:
             steps[index] = {
                 **steps[index],
                 "status": (
-                    "uncertain" if error and operation in _BACKGROUND_CHANGES
-                    else "failed" if error or result and result.get("delivery") == "held"
+                    "uncertain"
+                    if error and operation in _BACKGROUND_CHANGES
+                    else "failed"
+                    if error or result and result.get("delivery") == "held"
                     else "applied"
                 ),
                 "finished_at": utc_now().isoformat(),
@@ -328,8 +330,16 @@ class ButlerCapabilities:
             updates: dict[str, Any] = {"steps": steps}
             if error is None and operation == "nebula.work.message_chat":
                 updates["queued_item_id"] = result.get("item_id") if result else None
-                updates["delivered_turn_id"] = result.get("turn_id") if result and result.get("delivery") in {"steered", "started"} else None
-                updates["delivery_hold_reason"] = result.get("reason") if result and result.get("delivery") == "held" else None
+                updates["delivered_turn_id"] = (
+                    result.get("turn_id")
+                    if result and result.get("delivery") in {"steered", "started"}
+                    else None
+                )
+                updates["delivery_hold_reason"] = (
+                    result.get("reason")
+                    if result and result.get("delivery") == "held"
+                    else None
+                )
                 updates["target_session_id"] = arguments.get("session_id")
             transaction.update(
                 ButlerRecoveryCase,
@@ -654,9 +664,7 @@ class ButlerCapabilities:
                 name == "nebula.work.message_chat"
                 and payload.get("delivery", "next") != "immediate"
             ):
-                raise ValueError(
-                    "background Butler requires immediate parent guidance"
-                )
+                raise ValueError("background Butler requires immediate parent guidance")
             if name == "nebula.work.set_chat_settings" and self._work is not None:
                 settings = payload.get("settings")
                 if isinstance(settings, dict) and any(

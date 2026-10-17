@@ -1279,9 +1279,11 @@ class ButlerOversightService:
             await self.improvement_service.process_project(engagement_id)
         except Exception as exc:
             record_caught_exception(
-                "butler", "butler.issue_review_failed",
+                "butler",
+                "butler.issue_review_failed",
                 "Butler issue review is held until the next project check.",
-                exc, stage="issue-review",
+                exc,
+                stage="issue-review",
             )
 
     def _schedule_improvements(self, engagement_id: str) -> None:

@@ -585,7 +585,9 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
                     ],
                 )
             return ModelResponse(
-                provider_id=provider.id, model="model-a", text="Parent guidance delivered"
+                provider_id=provider.id,
+                model="model-a",
+                text="Parent guidance delivered",
             )
 
     class Work:

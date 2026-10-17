@@ -830,22 +830,45 @@ class ButlerRecoveryService:
             try:
                 delivered = self.store.get(ChatTurn, case.delivered_turn_id)
             except NotFoundError:
-                return self._update_case(case, status="uncertain", outcome="The accepted parent turn is unavailable; retry outcome is unknown.", finished_at=utc_now())
-            if delivered.engagement_id != case.engagement_id or delivered.session_id != case.target_session_id:
+                return self._update_case(
+                    case,
+                    status="uncertain",
+                    outcome="The accepted parent turn is unavailable; retry outcome is unknown.",
+                    finished_at=utc_now(),
+                )
+            if (
+                delivered.engagement_id != case.engagement_id
+                or delivered.session_id != case.target_session_id
+            ):
                 raise ValueError("recovery follow-up turn belongs to another chat")
             turn_id = delivered.id
             status = delivered.status.value
         else:
             # Legacy queued cases remain readable; they are never replayed here.
             try:
-                queue = self.store.get(ChatQueue, "chat-queue-" + case.target_session_id)
+                queue = self.store.get(
+                    ChatQueue, "chat-queue-" + case.target_session_id
+                )
             except NotFoundError:
-                return self._update_case(case, status="uncertain", outcome="The parent follow-up queue is unavailable; retry outcome is unknown.", finished_at=utc_now())
+                return self._update_case(
+                    case,
+                    status="uncertain",
+                    outcome="The parent follow-up queue is unavailable; retry outcome is unknown.",
+                    finished_at=utc_now(),
+                )
             if queue.engagement_id != case.engagement_id:
                 raise ValueError("recovery follow-up queue belongs to another project")
-            item = next((row for row in queue.items if row.get("id") == case.queued_item_id), None)
+            item = next(
+                (row for row in queue.items if row.get("id") == case.queued_item_id),
+                None,
+            )
             if item is None:
-                return self._update_case(case, status="uncertain", outcome="The parent follow-up receipt was retired before verification.", finished_at=utc_now())
+                return self._update_case(
+                    case,
+                    status="uncertain",
+                    outcome="The parent follow-up receipt was retired before verification.",
+                    finished_at=utc_now(),
+                )
             status = str(item.get("status") or "")
             turn_id = item.get("turn_id")
         if status in {"failed", "cancelled", "needs_review"}:
@@ -970,7 +993,9 @@ class ButlerRecoveryService:
         )
         if current.queued_item_id or current.delivered_turn_id:
             status = "verifying"
-            outcome = "Butler delivered parent guidance and is checking its actual result."
+            outcome = (
+                "Butler delivered parent guidance and is checking its actual result."
+            )
             next_check = utc_now() + timedelta(seconds=30)
         elif current.delivery_hold_reason:
             status = "needs_attention"

@@ -550,15 +550,22 @@ class ButlerAuthorityService:
             if current is None or current.status != "planned":
                 return
             updated = transaction.update(
-                ButlerAction, current.id,
-                {"status": "held", "outcome": {"reason": reason, "delivered": False}, "finished_at": utc_now()},
+                ButlerAction,
+                current.id,
+                {
+                    "status": "held",
+                    "outcome": {"reason": reason, "delivered": False},
+                    "finished_at": utc_now(),
+                },
                 expected_revision=current.revision,
             )
             _append_project_event(
-                transaction, engagement_id=updated.engagement_id,
+                transaction,
+                engagement_id=updated.engagement_id,
                 event_type="butler.action_held",
                 payload=self._action_event_payload(updated, "held"),
-                idempotency_key=f"action:{updated.id}:held", now=utc_now(),
+                idempotency_key=f"action:{updated.id}:held",
+                now=utc_now(),
             )
 
     def _defer_for_memory(self, action: ButlerAction) -> None:
@@ -826,9 +833,20 @@ class ButlerAuthorityService:
                     idempotency_key=action.idempotency_key,
                 )
                 if receipt["delivery"] == "held":
-                    self._finish(action, "held", {"reason": receipt["reason"], "delivered": False})
+                    self._finish(
+                        action,
+                        "held",
+                        {"reason": receipt["reason"], "delivered": False},
+                    )
                 else:
-                    self._finish(action, "dispatched", {"turn_id": receipt["turn_id"], "delivery": receipt["delivery"]})
+                    self._finish(
+                        action,
+                        "dispatched",
+                        {
+                            "turn_id": receipt["turn_id"],
+                            "delivery": receipt["delivery"],
+                        },
+                    )
             else:
                 await self.work.goal_action(
                     action.engagement_id,

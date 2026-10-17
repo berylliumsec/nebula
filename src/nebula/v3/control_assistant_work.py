@@ -2114,10 +2114,16 @@ class ControlAssistantWork:
         delivery = arguments.get("delivery", "next")
         if delivery in {"steer", "immediate"}:
             pending = self.chat.pending_turn(session.id)
-            if pending is not None and session.backend == ChatBackend.HARNESS and pending.harness_turn_id:
+            if (
+                pending is not None
+                and session.backend == ChatBackend.HARNESS
+                and pending.harness_turn_id
+            ):
                 if delivery == "immediate":
                     await self.harness.steer_turn(
-                        pending.harness_turn_id, text, actor_id="control-assistant",
+                        pending.harness_turn_id,
+                        text,
+                        actor_id="control-assistant",
                         title="Butler guidance",
                     )
                 else:
@@ -2134,7 +2140,11 @@ class ControlAssistantWork:
                     "live steering requires an active harness chat; use delivery=next to queue a follow-up"
                 )
             if pending is not None:
-                return {"session_id": session.id, "delivery": "held", "reason": "active_turn_cannot_steer"}
+                return {
+                    "session_id": session.id,
+                    "delivery": "held",
+                    "reason": "active_turn_cannot_steer",
+                }
         if delivery not in {"next", "immediate"}:
             raise ValueError("choose next, steer, or immediate delivery")
         next_settings = chat_assistant_config(self.store, session)
@@ -2205,7 +2215,11 @@ class ControlAssistantWork:
                 if prepared.turn is None:
                     raise RuntimeError("Core did not prepare a durable chat turn")
                 self.chat.start_provider_turn(prepared)
-                return {"session_id": session.id, "delivery": "started", "turn_id": prepared.turn.id}
+                return {
+                    "session_id": session.id,
+                    "delivery": "started",
+                    "turn_id": prepared.turn.id,
+                }
             _, turn, harness_turn = self.harness.prepare_chat(
                 engagement_id=project_id,
                 profile_id=next_profile,
@@ -2221,7 +2235,9 @@ class ControlAssistantWork:
                 harness_mode=next_settings["harness_mode"],
                 harness_reasoning_effort=next_settings["harness_reasoning_effort"],
                 harness_service_tier=next_settings["harness_service_tier"],
-                harness_cyber_access_program=next_settings["harness_cyber_access_program"],
+                harness_cyber_access_program=next_settings[
+                    "harness_cyber_access_program"
+                ],
             )
             self.harness.start_chat_turn(harness_turn.id)
             return {"session_id": session.id, "delivery": "started", "turn_id": turn.id}
