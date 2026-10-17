@@ -674,6 +674,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     try {
       contextAttachments = await Promise.all(butlerDrafts.map(createHashedSelectionAttachment));
     } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.context_attachment_failed", message: "Could not prepare selected Butler context.", outcome: "failure", stage: "context", retryable: true, exception: caught });
       setError(caught instanceof Error ? caught.message : "Could not prepare Butler context. Remove the selection and try again.");
       return;
     }

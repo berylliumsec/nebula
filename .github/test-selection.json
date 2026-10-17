@@ -1,5 +1,5 @@
 {
-  "change_digest": "bb556141188ee68ff4fa0139f19f5b930579621db043c78509770b3c86f4e561",
+  "change_digest": "00f4607cea055881727c105c0a5bb080efa919275229e42b87eab07ae00f1e7f",
   "reviewed_by": "Codex review of harness goal recovery and Butler context routing",
   "reason": "Two collected Python cases cover queue priority and the completed-turn/profile-revision/review handoff. The two affected frontend files contain 41 collected cases covering Butler context selection, send, failed retry, and existing conversation behavior. Eight harness-goal and eight Butler-context catalog entries exercise production-LAN real-Core workflows on desktop and emulated 320/390/430 px Chromium and WebKit profiles, including saved-turn context and reload.",
   "exclusions": "Native code did not change. Provider-goal, unrelated chat, storage, Voice, and full suites are excluded. Real-Core browser cases use isolated Core instances, inert model/harness fixtures, and a production bundle; no external research workload or physical device is involved.",

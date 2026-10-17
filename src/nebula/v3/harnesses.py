@@ -11586,6 +11586,7 @@ class HarnessRuntimeService:
                     }:
                         continue
             except (NotFoundError, ChatHistoryConflict, ConflictError):
+                # diagnostic-expected: a concurrent writer or missing record is not evidence of an idle goal.
                 # A concurrent send, removed record, or inconsistent child
                 # graph needs its own recovery path; never infer an idle goal.
                 continue
