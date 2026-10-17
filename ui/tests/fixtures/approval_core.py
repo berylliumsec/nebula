@@ -136,6 +136,29 @@ class InertConnection(HarnessConnection):
             if "FAIL_ONCE" in prompt and not failure_marker.exists():
                 failure_marker.write_text(turn.id)
                 raise HarnessTransportError("Inert goal fixture failed once")
+            block_marker = (
+                self.runtime.fixture_root / f"goal-blocked-{turn.chat_session_id}"
+            )
+            if "BLOCK_ROUTE" in prompt and not block_marker.exists():
+                offered = {
+                    tool["name"]
+                    for tool in self.runtime._gateway_catalog(self.request.session)[
+                        "tools"
+                    ]
+                }
+                if "goal.block" not in offered:
+                    raise RuntimeError("The active Core goal cannot report a blocker")
+                result = await self.runtime._gateway_call(
+                    self.request.session,
+                    "goal.block",
+                    {"reason": "Inert worker route is unavailable"},
+                )
+                if (
+                    result.get("isError")
+                    or result.get("structuredContent", {}).get("status") != "blocked"
+                ):
+                    raise RuntimeError("The Core goal blocker was not saved")
+                block_marker.write_text(turn.id)
             yield HarnessEvent(
                 type="item_upsert",
                 item_id="native-goal",

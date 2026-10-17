@@ -9960,7 +9960,7 @@ test("notebook real Core runs bundled Python on a LAN origin and restores output
 });
 
 test("assistant upgrade harness goal works on production LAN Core across new and existing chats", async ({page}, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const core = await startApprovalCore(localNetworkIpv4(), "goal");
   await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
@@ -10052,7 +10052,37 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     await expect(goalPanel).toContainText("Goal step budget is exhausted.");
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY");
     expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
-    await testInfo.attach("harness-goal-lan", {body: JSON.stringify({origin: core.origin, build: "production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), newSessionId, existingSessionId, outcome: "create, continue, native status, failure, resume, refresh, restart"}), contentType: "application/json"});
+
+    if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await addGoal("BLOCK_ROUTE until the worker route returns", 2);
+    const blockedSessionId = new URL(page.url()).searchParams.get("session")!;
+    await goalPanel.getByRole("button", {name: "Start"}).click({timeout: 10_000});
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${blockedSessionId}/goal`)).json()).status).toBe("blocked");
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY", {timeout: 20_000});
+    await expect(goalPanel).toContainText("Inert worker route is unavailable", {timeout: 20_000});
+    const blockedGoal = await (await core.api.get(`chat/sessions/${blockedSessionId}/goal`)).json() as {current_step: number; blocked_reason: string};
+    expect(blockedGoal.current_step).toBe(1);
+    expect(blockedGoal.blocked_reason).toBe("Inert worker route is unavailable");
+    await page.reload();
+    await revealGoal();
+    await expect(goalPanel).toContainText("Inert worker route is unavailable");
+    if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+    await goalPanel.getByRole("button", {name: "Resume"}).click();
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${blockedSessionId}/goal`)).json()).status).toBe("paused");
+    await expect(goalPanel).toContainText("Goal step budget is exhausted.");
+
+    if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await addGoal("TOOL_FREE_LOOP needs operator review", 8);
+    const idleSessionId = new URL(page.url()).searchParams.get("session")!;
+    await goalPanel.getByRole("button", {name: "Start"}).click({timeout: 10_000});
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${idleSessionId}/goal`)).json()).status).toBe("paused");
+    const idleGoal = await (await core.api.get(`chat/sessions/${idleSessionId}/goal`)).json() as {current_step: number; blocked_reason: string};
+    expect(idleGoal.current_step).toBe(4);
+    expect(idleGoal.blocked_reason).toContain("Three automatic goal responses");
+    await expect(goalPanel).toContainText("Three automatic goal responses");
+    await testInfo.attach("harness-goal-lan", {body: JSON.stringify({origin: core.origin, build: "production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), newSessionId, existingSessionId, blockedSessionId, idleSessionId, outcome: "create, continue, agent block, no-tool pause, native status, failure, resume, refresh, restart"}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 

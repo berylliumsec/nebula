@@ -270,6 +270,7 @@ _HARNESS_GOAL_CONTINUE_INSTRUCTION = (
     "If all criteria are met, give an evidence-backed completion summary. "
     "Do not stop merely to report status."
 )
+_GOAL_NO_TOOL_TURN_LIMIT = 3
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 # A gateway call answers this long before the harness's own tool timeout, so
@@ -548,6 +549,20 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
             "additionalProperties": False,
         },
     ),
+}
+
+_GATEWAY_GOAL_BLOCK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2_000,
+            "pattern": r"\S",
+        },
+    },
+    "required": ["reason"],
+    "additionalProperties": False,
 }
 
 
@@ -924,6 +939,11 @@ def _harness_developer_instructions(
                 }
                 for item in gateway_tools
             )
+            else ""
+        )
+        + (
+            "This turn belongs to a Core-owned goal. If concrete work cannot continue because of a real blocker, call goal.block with the reason. A blocked Work item or a native harness goal does not change the Core goal. "
+            if any(item.get("name") == "goal.block" for item in gateway_tools)
             else ""
         )
         + (
@@ -11028,7 +11048,7 @@ class HarnessRuntimeService:
                 "\n\nCore-owned Nebula goal (separate from any native harness goal):\n"
                 + json.dumps(goal_context, ensure_ascii=False)
                 + "\nContinue concrete work until the criteria are met or the goal is paused, blocked, or completed in Core. "
-                "A status-only reply does not end this goal. Give the operator a concise evidence-backed handoff when finished."
+                "A status-only reply does not end this goal. If a real blocker prevents further work, call the goal.block Nebula tool with a specific reason and verify its saved result. Blocking a Work item or a native harness goal does not block this Core goal. Give the operator a concise evidence-backed handoff when finished."
                 + _goal_time_instruction(goal, utc_now())
                 + skill_instructions(
                     SkillSnapshot.model_validate(snapshot)
@@ -11464,6 +11484,47 @@ class HarnessRuntimeService:
             ):  # diagnostic-expected: retry a concurrent goal revision
                 continue
 
+    def _goal_has_repeated_tool_free_continuations(self, goal: ChatGoal) -> bool:
+        """Bound repeated automatic replies without mistaking a native tool for prose."""
+
+        if len(goal.linked_turn_ids) < _GOAL_NO_TOOL_TURN_LIMIT:
+            return False
+        activity_kinds = (
+            "command",
+            "file_change",
+            "tool",
+            "web_search",
+            "browser",
+            "image",
+            "skill",
+            "subagent",
+        )
+        for turn_id in goal.linked_turn_ids[-_GOAL_NO_TOOL_TURN_LIMIT:]:
+            try:
+                chat_turn = self.store.get(ChatTurn, turn_id)
+                if (
+                    chat_turn.goal_id != goal.id
+                    or chat_turn.status != ChatTurnStatus.COMPLETE
+                    or not chat_turn.harness_turn_id
+                    or chat_turn.tool_call_ids
+                ):
+                    return False
+                harness_turn = self.store.get(HarnessTurn, chat_turn.harness_turn_id)
+                if (
+                    harness_turn.metadata.get("user_prompt")
+                    != _HARNESS_GOAL_CONTINUE_INSTRUCTION
+                    or harness_turn.tool_call_ids
+                    or self.store.replay_operation_events(
+                        harness_turn.id,
+                        limit=1,
+                        payload_values={"item_kind": activity_kinds},
+                    )
+                ):
+                    return False
+            except NotFoundError:  # diagnostic-expected: an incomplete turn chain is not evidence of a stall
+                return False
+        return True
+
     async def _settle_goal_turn(self, harness_turn_id: str) -> None:
         from .chat_goals import ChatGoalService
 
@@ -11640,6 +11701,16 @@ class HarnessRuntimeService:
                 # Its turn will carry this running goal and settle it normally.
                 return None
             self._assert_chat_turn_available(session_id)
+            if (
+                instruction == _HARNESS_GOAL_CONTINUE_INSTRUCTION
+                and self._goal_has_repeated_tool_free_continuations(goal)
+            ):
+                self._pause_goal(
+                    session_id,
+                    "Three automatic goal responses had no recorded tool activity. "
+                    "Review their saved replies, then resume when concrete work can continue.",
+                )
+                return None
             _, turn, harness_turn = self.prepare_chat(
                 engagement_id=chat.engagement_id,
                 profile_id=chat.harness_profile_id or "",
@@ -14238,6 +14309,30 @@ class HarnessRuntimeService:
                     }
                 )
         if not current.metadata.get("analysis_only"):
+            if turn is not None and turn.chat_turn_id and not settings_only:
+                chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+                if (
+                    chat_turn.goal_id
+                    and chat_turn.session_id == turn.chat_session_id
+                    and chat_turn.engagement_id == turn.engagement_id
+                ):
+                    tools.append(
+                        {
+                            "name": "goal.block",
+                            "description": (
+                                "Block this turn's Core-owned Nebula goal when a concrete "
+                                "blocker prevents further work. Saves the reason and stops "
+                                "automatic continuation. The operator can resume it later."
+                            ),
+                            "inputSchema": _GATEWAY_GOAL_BLOCK_SCHEMA,
+                            "annotations": {
+                                "readOnlyHint": False,
+                                "destructiveHint": False,
+                                "idempotentHint": False,
+                                "openWorldHint": False,
+                            },
+                        }
+                    )
             work_enabled = self.work.enabled(current.engagement_id)
             for name, (description, schema) in _GATEWAY_WORK_SCHEMAS.items():
                 if name != "work.agents" and not work_enabled:
@@ -14819,6 +14914,8 @@ class HarnessRuntimeService:
             return await self._gateway_subagent(session, turn, name, arguments)
         if name in _GATEWAY_AGENT_MESSAGE_NAMES:
             return await self._gateway_agent_message(session, turn, name, arguments)
+        if name == "goal.block":
+            return self._gateway_goal_block_call(turn, arguments)
         if name in _GATEWAY_WORK_SCHEMAS:
             return self._gateway_work_call(turn, name, arguments)
 
@@ -15239,6 +15336,76 @@ class HarnessRuntimeService:
                     allow_parent_source_session=True,
                 )
                 result = {"update": update.model_dump(mode="json")}
+        except Exception as exc:
+            self._finish_gateway_call(call.id, error=exc)
+            raise
+        self._finish_gateway_call(call.id, result=result)
+        serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return {
+            "content": [{"type": "text", "text": serialized}],
+            "structuredContent": result,
+            "isError": False,
+        }
+
+    def _gateway_goal_block_call(
+        self, turn: HarnessTurn, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Block only the Core goal that owns this active harness chat turn."""
+
+        from .chat_goals import ChatGoalService, GoalWrite
+
+        if not turn.chat_turn_id or not turn.chat_session_id:
+            raise HarnessConfigurationError("Only a goal chat turn can block its goal")
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.metadata.get("control_assistant") or turn.metadata.get(
+            "analysis_only"
+        ):
+            raise HarnessConfigurationError("This turn cannot block a Core goal")
+        chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+        goals = ChatGoalService(self.store)
+        goal = goals.get(turn.chat_session_id)
+        if (
+            chat_turn.goal_id != goal.id
+            or chat_turn.session_id != turn.chat_session_id
+            or chat_turn.engagement_id != turn.engagement_id
+            or goal.status != ChatGoalStatus.RUNNING
+            or goal.execution_claim_id != chat_turn.id
+        ):
+            raise ConflictError("This turn no longer owns a running Core goal")
+        reason = str(arguments["reason"]).strip()
+        if not reason:
+            raise InvalidToolArguments("A concrete blocker reason is required")
+        call = ToolCall(
+            engagement_id=turn.engagement_id,
+            run_id=chat_turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=turn.chat_session_id,
+            chat_turn_id=chat_turn.id,
+            tool_name="goal.block",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            arguments=arguments,
+            started_at=utc_now(),
+            metadata={"harness_turn_id": turn.id, "budget_class": "goal"},
+        )
+        call = self.store.reserve_tool_call(call)
+        self._attach_gateway_tool_call(turn, call.id)
+        try:
+            goals.write(
+                turn.chat_session_id,
+                GoalWrite(
+                    expected_revision=goal.revision,
+                    action="block",
+                    reason=reason,
+                ),
+            )
+            saved = goals.get(turn.chat_session_id)
+            result = {
+                "goal_id": saved.id,
+                "status": saved.status.value,
+                "blocked_reason": saved.blocked_reason,
+                "revision": saved.revision,
+            }
         except Exception as exc:
             self._finish_gateway_call(call.id, error=exc)
             raise

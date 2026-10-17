@@ -140,6 +140,20 @@ help scope does not grant filesystem commands, arbitrary MCP servers, web
 search, or permission to use settings tools from general chat. General chat
 still does not receive Nebula settings tools. When its answer cites a known
 Settings destination, the UI opens that destination as a lens on click.
+
+## Core goal troubleshooting
+
+For a Core-owned goal in a harness chat, the active agent can call `goal.block`
+with a concrete reason. Core saves the blocked goal and stops automatic
+continuations; the goal panel shows the reason and lets the operator resume.
+Blocking a Project Work item or a native harness goal does not block the Core
+goal. Core pauses a goal for review after three automatic responses with no
+recorded tool activity, so a status-only loop cannot continue indefinitely.
+The agent's block action is scoped to the goal on its active turn and cannot
+choose another conversation's goal.
+
+## Bundled product guidance
+
 The product knowledge index is generated from current top-level product
 documentation, the Settings catalog, and this contract, chunked by headings with source paths and
 content hashes, embedded locally, and packaged as a compressed text resource

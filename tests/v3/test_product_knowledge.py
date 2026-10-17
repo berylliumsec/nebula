@@ -72,6 +72,17 @@ def test_product_search_finds_other_operator_destinations(monkeypatch):
         assert any(item["heading"] == destination for item in matches), question
 
 
+def test_product_search_explains_harness_goal_blocking(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Why does blocking a Work item not stop Core goal continuation?"
+    )
+    assert any(
+        "goal.block" in str(item["text"]) and "work item" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

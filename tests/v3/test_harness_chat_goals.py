@@ -33,6 +33,7 @@ from nebula.v3.domain import (
     HarnessSession,
     HarnessTurn,
     HarnessTurnStatus,
+    ToolCall,
     utc_now,
 )
 from nebula.v3.harnesses import (
@@ -55,7 +56,10 @@ async def _wait_for_goal(
 
 
 def _new_goal(
-    goals: ChatGoalService, *, step_budget: int = 2, token_budget: int | None = None
+    goals: ChatGoalService,
+    *,
+    step_budget: int | None = 2,
+    token_budget: int | None = None,
 ):
     return goals.create_conversation(
         GoalConversationCreate(
@@ -198,6 +202,142 @@ def test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing
         assert len(adapter.connections) == 1
         assert "Core-owned Nebula goal" in adapter.connections[0].prompts[0]
         assert len(adapter.connections[0].prompts) == 2
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_harness_goal_agent_can_block_only_its_active_core_goal(tmp_path):
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=None)
+        other = _new_goal(goals, step_budget=None)
+        for item in (created, other):
+            goals.write(
+                item.session.id,
+                GoalWrite(expected_revision=item.goal.revision, action="start"),
+            )
+        observed: dict = {}
+
+        class BlockingConnection(FakeConnection):
+            async def run_turn(
+                self, prompt: str, *, model: str, images=None
+            ) -> AsyncIterator[HarnessEvent]:
+                self.prompts.append(prompt)
+                yield HarnessEvent(type="started", external_session_id="blocker")
+                session = self.request.session
+                observed["tools"] = {
+                    tool["name"] for tool in runtime._gateway_catalog(session)["tools"]
+                }
+                observed["cross_goal"] = await runtime._gateway_call(
+                    session,
+                    "goal.block",
+                    {"reason": "Missing worker route", "goal_id": other.goal.id},
+                )
+                observed["other_before"] = goals.get(other.session.id).status
+                observed["blank"] = await runtime._gateway_call(
+                    session, "goal.block", {"reason": "   "}
+                )
+                observed["blocked"] = await runtime._gateway_call(
+                    session, "goal.block", {"reason": "Missing worker route"}
+                )
+                yield HarnessEvent(
+                    type="completed", message="Waiting for the worker route"
+                )
+
+        async def open_blocking(request):
+            connection = BlockingConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_blocking
+        assert await runtime.dispatch_running_goal(created.session.id, "Investigate")
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.BLOCKED)
+        for _ in range(300):
+            if not runtime._chat_turn_tasks:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("the blocked turn did not settle")
+        assert "goal.block" in observed["tools"]
+        assert observed["cross_goal"]["isError"] is True
+        assert observed["blank"]["isError"] is True
+        assert observed["other_before"] == ChatGoalStatus.RUNNING
+        assert observed["blocked"]["isError"] is False
+        assert observed["blocked"]["structuredContent"]["status"] == "blocked"
+        assert goals.get(created.session.id).blocked_reason == "Missing worker route"
+        assert goals.get(other.session.id).status == ChatGoalStatus.RUNNING
+        assert len(store.list_session_entities(ChatTurn, created.session.id)) == 1
+        calls = store.list_session_entities(ToolCall, created.session.id)
+        assert [call.tool_name for call in calls] == ["goal.block"]
+        assert (
+            await runtime.dispatch_running_goal(created.session.id, "Automatic") is None
+        )
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_tool_free_harness_goal_continuations_pause_for_review(tmp_path):
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=None)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        assert await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        goal = goals.get(created.session.id)
+        assert goal.current_step == 4
+        assert "Three automatic goal responses" in (goal.blocked_reason or "")
+        assert len(store.list_session_entities(ChatTurn, created.session.id)) == 4
+        assert len(adapter.connections[0].prompts) == 4
+        assert await runtime.reconcile_idle_running_goals() == []
+        assert await runtime.reconcile_idle_running_goals() == []
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_native_tool_activity_resets_harness_goal_continuation_guard(tmp_path):
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=None)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+
+        class ToolConnection(FakeConnection):
+            async def run_turn(
+                self, prompt: str, *, model: str, images=None
+            ) -> AsyncIterator[HarnessEvent]:
+                self.prompts.append(prompt)
+                yield HarnessEvent(type="started", external_session_id="native-tool")
+                if len(self.prompts) == 3:
+                    yield HarnessEvent(
+                        type="item_upsert",
+                        item_id="command-1",
+                        item_kind="command",
+                        item_status="completed",
+                        title="Inspect inputs",
+                    )
+                yield HarnessEvent(type="completed", message="Saved analysis")
+
+        async def open_tool(request):
+            connection = ToolConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_tool
+        assert await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        assert goals.get(created.session.id).current_step == 6
+        assert len(adapter.connections[0].prompts) == 6
         await runtime.shutdown()
 
     asyncio.run(scenario())
