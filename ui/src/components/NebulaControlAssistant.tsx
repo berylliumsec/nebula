@@ -980,13 +980,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       else if (!controller.signal.aborted) {
         needsSavedTurnReload.current = true;
-        setAwaitingTurnResolution(true);
+        setAwaitingTurnResolution(typeof api.getPendingChatTurn === "function");
         pendingPoll.current();
       }
     } catch (caught) {
       if (!controller.signal.aborted) {
         needsSavedTurnReload.current = true;
-        setAwaitingTurnResolution(true);
+        setAwaitingTurnResolution(typeof api.getPendingChatTurn === "function");
         pendingPoll.current();
         void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.turn_failed", message: "The assistant could not answer.", outcome: "failure", stage: "turn", retryable: true, exception: caught });
         if (hasImages) {

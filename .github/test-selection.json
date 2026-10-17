@@ -1,11 +1,11 @@
 {
-  "change_digest": "bee6178203daf72120352a931d477c9f0c70ca29ef09392936b9849cd782d387",
+  "change_digest": "fd3666cbb070342916f807974edb2a01e03bb5c0be986fc872184647715f7d38",
   "reviewed_by": "Codex focused review for Butler live feedback",
-  "reason": "Butler now shows compact live progress from stream events and saved pending-turn state, blocks duplicate sends until Core confirms turn status, and restores the answer after reconnect or reload. The 32 collected component cases cover this pane and its existing client actions. Eight collected mocked browser cases cover status, disclosure, composer behavior, accessibility, and geometry at desktop and emulated Chromium/WebKit phone widths. Three collected production LAN real-Core cases cover streaming, saved pending state, reload, and completed transcript at desktop and emulated 390 px Chromium/WebKit widths.",
+  "reason": "Butler now shows compact live progress from stream events and saved pending-turn state, blocks duplicate sends until Core confirms turn status, and restores the answer after reconnect or reload. The 33 collected component cases cover this pane, Butler context selection, and existing client actions. Eight collected mocked browser cases cover status, disclosure, composer behavior, accessibility, and geometry at desktop and emulated Chromium/WebKit phone widths. Three collected production LAN real-Core cases cover streaming, saved pending state, reload, and completed transcript at desktop and emulated 390 px Chromium/WebKit widths.",
   "exclusions": "No backend or native code changed, so Python and native tests are excluded. Unrelated UI and browser journeys and full suites are excluded. Physical-device testing is unavailable locally and is not claimed.",
   "expected_tests": {
     "python": 0,
-    "frontend": 32,
+    "frontend": 33,
     "native": 0,
     "playwright": 11
   },
