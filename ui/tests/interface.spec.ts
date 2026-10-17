@@ -6001,9 +6001,9 @@ reloadTest("assistant upgrade side chat toolbar inherits saved history and resto
   const toolbarOrder = async (selector: string) => page.locator(`${selector} .chat-composer-toolbar`).evaluate(toolbar =>
     Array.from(toolbar.querySelectorAll<HTMLButtonElement>(".chat-composer-tools > button, .chat-composer-turn-actions > button"))
       .map(button => button.getAttribute("aria-label") ?? "")
-      .filter(label => label.startsWith("Open context details") || ["Results", "Project Snapshot", "Attach files", "Send message"].includes(label))
+      .filter(label => label.startsWith("Open context details") || ["Results", "Project Snapshot", "Attach image or file", "Send message"].includes(label))
       .map(label => label.startsWith("Open context details") ? "Open context details" : label));
-  const expectedToolbarOrder = ["Open context details", "Results", "Project Snapshot", "Attach files", "Send message"];
+  const expectedToolbarOrder = ["Open context details", "Results", "Project Snapshot", "Attach image or file", "Send message"];
   await expect.poll(() => toolbarOrder(".session-workspace > .chat-studio > .chat-panel")).toEqual(expectedToolbarOrder);
   const parentLoadsBeforeFork = parentMessageLoads;
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
@@ -6033,7 +6033,7 @@ reloadTest("assistant upgrade side chat toolbar inherits saved history and resto
   const toolbarGeometry = async () => sideToolbar.evaluate(toolbar => {
     const toolbarBox = toolbar.getBoundingClientRect();
     const buttons = Array.from(toolbar.querySelectorAll<HTMLButtonElement>(".chat-composer-tools > button, .chat-composer-turn-actions > button"))
-      .filter(button => ["Results", "Project Snapshot", "Attach files", "Send message"].includes(button.getAttribute("aria-label") ?? "") || button.getAttribute("aria-label")?.startsWith("Open context details"))
+      .filter(button => ["Results", "Project Snapshot", "Attach image or file", "Send message"].includes(button.getAttribute("aria-label") ?? "") || button.getAttribute("aria-label")?.startsWith("Open context details"))
       .map(button => ({ label: button.getAttribute("aria-label"), box: button.getBoundingClientRect() }));
     return { toolbar: { left: toolbarBox.left, right: toolbarBox.right }, buttons: buttons.map(({ label, box }) => ({ label, left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height })) };
   });
@@ -11815,7 +11815,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeHidden();
-  for (const name of ["Results", "Attach files"]) {
+  for (const name of ["Results", "Attach image or file"]) {
     const action = panel.getByRole("button", { name, exact: true });
     await expect(action.locator("svg")).toBeVisible();
     await expect(action).toHaveText("");
@@ -11856,6 +11856,12 @@ for (const imageInput of [true, false]) {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/harnesses") && route.request().method() === "GET") {
         await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at, authentication_state: "verified" } }] });
+      } else if (path.endsWith("/chat/control-assistant/session") && route.request().method() === "GET") {
+        await route.fulfill({json: {...entity, id: "butler-image", engagement_id: "scratch-project", title: "Butler", backend: "harness", harness_profile_id: "image-harness", model: "image-model", metadata: {control_assistant: true}}});
+      } else if (path.endsWith("/chat/sessions/butler-image/messages")) {
+        await route.fulfill({json: []});
+      } else if (path.endsWith("/chat/images/image-preview/preview")) {
+        await route.fulfill({contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64")});
       } else if (path.endsWith("/harness-sessions/image-harness-session/activity")) {
         await route.fulfill({ json: { session_id: "image-harness-session", session_status: "idle", busy: false, live: true, last_activity_at: entity.updated_at, detail: "Ready for the next message.", plan: [] } });
       } else if (path.endsWith("/chat/sessions/image-chat/messages")) {
@@ -11886,17 +11892,46 @@ for (const imageInput of [true, false]) {
       } else await route.fallback();
     });
     await openWorkspace(page, "/?view=browser", "Workbench");
+    await page.getByRole("button", {name: "Open Butler"}).click();
+    const butler = page.getByRole("dialog", {name: "Butler"});
+    const butlerAttach = butler.getByRole("button", {name: "Attach image to Butler"});
+    await expect(butlerAttach).toBeVisible();
+    const butlerTarget = await butlerAttach.boundingBox();
+    expect(butlerTarget!.width).toBeGreaterThanOrEqual(44);
+    expect(butlerTarget!.height).toBeGreaterThanOrEqual(44);
+    await butlerAttach.focus();
+    await expect(butlerAttach).toBeFocused();
+    await butlerAttach.click();
+    if (imageInput) {
+      await butler.getByLabel("Choose images for Butler").setInputFiles({name: "mac-settings.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64")});
+      await expect(butler.getByRole("list", {name: "Butler image attachments"})).toBeVisible();
+      await butler.getByRole("button", {name: "Remove mac-settings.png"}).click();
+      await expect(butler.getByRole("list", {name: "Butler image attachments"})).toHaveCount(0);
+    } else {
+      await expect(butler.getByText(/This Butler model cannot receive images/)).toBeVisible();
+    }
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      const composerBottom = await butler.getByRole("textbox", {name: "Ask Butler a question"}).evaluate(element => element.getBoundingClientRect().bottom);
+      const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
+      expect(composerBottom).toBeLessThanOrEqual(visualBottom + 1);
+    }
+    expect((await new AxeBuilder({page}).include("#nebula-assistant-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await butler.getByRole("button", {name: "Close Butler"}).click();
     const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
     if (!await panel.isVisible()) await page.getByRole("button", { name: "Assistant", exact: true }).click();
     await panel.getByRole("button", { name: "Assistant settings", exact: true }).click();
     await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
     await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("image-harness");
     await page.getByRole("button", { name: "Close assistant settings" }).click();
-    await panel.getByRole("button", { name: "Attach files", exact: true }).click();
+    await panel.getByRole("button", { name: "Attach image or file", exact: true }).click();
     const attachmentDialog = page.getByRole("dialog", { name: "Attach to next message" });
     const attach = attachmentDialog.getByRole("button", { name: "Images from this device", exact: true });
     if (!imageInput) {
-      await expect(attach).toHaveCount(0);
+      await expect(attach).toBeDisabled();
+      await expect(attachmentDialog.getByText(/This model cannot receive images/)).toBeVisible();
+      await attachmentDialog.getByRole("button", { name: "Choose an image-capable runtime" }).click();
+      await expect(page.getByRole("dialog", { name: "Assistant settings", exact: true })).toBeVisible();
       return;
     }
     await expect(attach).toBeEnabled();

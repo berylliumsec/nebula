@@ -101,7 +101,7 @@ export const guideCatalog: GuideDefinition[] = [
       {
         title: "Attach to your next message",
         body: [
-          "Attach files lets you add images or a document from this device, browse the project’s files, or attach an excerpt from a project knowledge source.",
+          "Attach image or file lets you add an image or document from this device, browse project files, or attach an excerpt from a knowledge source.",
           "You can also paste or drop images straight into the message box.",
         ],
         route: context => workbench(context, { view: "chat" }),

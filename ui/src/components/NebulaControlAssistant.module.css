@@ -51,6 +51,13 @@
 .contextItem summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .contextItem p { max-height: 100px; margin: 4px 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .contextNotice { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 4px 12px; color: var(--muted); font-size: .82rem; }
+.imageTray { display: flex; gap: 8px; max-height: 148px; overflow: auto; padding: 8px 12px; border-top: 1px solid var(--border); }
+.imageItem { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; max-width: 176px; min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 4px; }
+.imageItem span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
+.imageItem button { flex: 0 0 auto; }
+.attachedImage { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; }
+.transcriptImage { display: block; max-width: min(100%, 360px); max-height: 300px; object-fit: contain; border-radius: 8px; }
+.imageStatus { margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
 .composer { display: flex; align-items: end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {

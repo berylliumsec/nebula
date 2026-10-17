@@ -55,6 +55,7 @@
     {"name": "butler-timeline", "patterns": ["src/nebula/v3/butler_timeline.py"], "areas": ["butler-timeline"]},
     {"name": "butler-context", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/state/WorkbenchDraftContext.tsx", "ui/src/components/selection/SelectionActionsProvider.tsx"], "areas": ["butler-context"]},
     {"name": "butler-response-table", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["butler-response-table"]},
+    {"name": "chat-image-attachments", "patterns": ["ui/src/components/AuthenticatedChatImage.tsx", "ui/src/components/ChatAttachments.tsx", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["chat-image-attachments"]},
     {"name": "butler-oversight", "patterns": ["src/nebula/v3/butler_oversight.py", "src/nebula/v3/butler_review.py", "src/nebula/v3/butler_authority.py", "src/nebula/v3/butler_recovery.py", "src/nebula/v3/butler_improvements.py", "ui/src/components/ButlerOversight.tsx", "ui/src/components/ButlerIssues.tsx", "ui/src/components/ButlerOversight.module.css"], "areas": ["butler-oversight"]},
     {"name": "nebula-voice", "patterns": ["src/nebula/v3/live_voice.py", "ui/src/components/NebulaVoice.tsx", "ui/src/components/NebulaVoice.module.css", "ui/src/components/voiceTranscript.ts", "docs/design/nebula-voice.md"], "areas": ["nebula-voice"]},
     {"name": "quiet-lens", "patterns": ["ui/src/quiet-lens.css"], "areas": ["quiet-lens"]},
@@ -70,6 +71,19 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "chat-image-attachments": [
+      {"area":"chat-image-attachments","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"compact","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"browser Assistant harness image attachments follow model capability","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history","runtime":"mock","shard":"1/1"},
+      {"area":"chat-image-attachments","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade image attachment reaches the model and survives a LAN reload|assistant upgrade Butler screenshot reaches the model and survives a LAN reload","runtime":"real-core","shard":"1/1"}
+    ],
     "ios-assistant-only": [
       {"area":"ios-assistant-only","project":"desktop","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
       {"area":"ios-assistant-only","project":"compact","test_match":"tests/interface.spec.ts","grep":"iPhone assistant shell keeps chat and pending actions reachable without work tools","runtime":"mock","shard":"1/1"},
