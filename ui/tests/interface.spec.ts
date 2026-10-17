@@ -5044,6 +5044,22 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   await expect(queue.locator("li")).toHaveCount(2, {timeout: 10_000});
   await expect(queue).toContainText("First queued follow-up.");
   await expect(queue).toContainText("Needs attention");
+  const disclosure = queue.locator("details");
+  const summary = queue.locator("summary");
+  await expect(disclosure).toHaveAttribute("open", "");
+  const openHeight = await disclosure.evaluate(element => element.getBoundingClientRect().height);
+  if (testInfo.project.name.startsWith("mobile-")) await summary.tap();
+  else await summary.click();
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  const collapsedHeight = await disclosure.evaluate(element => element.getBoundingClientRect().height);
+  expect(collapsedHeight).toBeLessThan(openHeight);
+  expect(collapsedHeight).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
+  await expect(summary).toContainText("Needs attention");
+  await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeHidden();
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeVisible();
 });
 
 test("assistant live guidance steers an active Codex turn with advertised steering capabilities", async ({ page }, testInfo) => {
