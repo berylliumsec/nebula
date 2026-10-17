@@ -3979,7 +3979,7 @@ class ChatGoal(Entity):
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     elapsed_seconds: float = Field(default=0, ge=0)
     children_started: int = Field(default=0, ge=0)
-    linked_turn_ids: list[str] = Field(default_factory=list, max_length=10_000)
+    linked_turn_ids: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     active_since: datetime | None = None
     paused_at: datetime | None = None

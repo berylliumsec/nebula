@@ -556,6 +556,41 @@ def test_running_goal_is_injected_linked_and_charged_by_provider_turn(tmp_path):
         chat.prepare(request.model_copy(update={"goal_id": paused.id}))
 
 
+def test_goal_turn_after_ten_thousand_links_persists_and_completes(tmp_path):
+    store, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Finish the next goal turn",
+            completion_criteria=["The turn is saved"],
+            step_budget=10_001,
+        ),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    prior_ids = [f"prior-turn-{index}" for index in range(10_000)]
+    store.update(
+        ChatGoal,
+        running.id,
+        {"current_step": len(prior_ids), "linked_turn_ids": prior_ids},
+        expected_revision=running.revision,
+    )
+    chat = ChatService(
+        store, provider_factory=lambda _: FakeProvider("provider", local=False)
+    )
+
+    prepared = chat.prepare(_goal_request(running.id, "Finish the next turn"))
+    response = asyncio.run(chat.complete(prepared))
+
+    goal = goals.get("session")
+    turn = store.get(ChatTurn, response.turn_id)
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert goal.current_step == 10_001
+    assert len(goal.linked_turn_ids) == 10_001
+    assert goal.linked_turn_ids[-1] == turn.id
+
+
 def test_successful_provider_turn_automatically_continues_running_goal(tmp_path):
     async def scenario() -> None:
         store, goals = setup_goal(tmp_path)
