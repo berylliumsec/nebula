@@ -3746,6 +3746,7 @@ reloadTest("conversation switching loads recent history before older conversatio
   const recentOffsets: number[] = [];
   let fullReads = 0;
   let terminalBootstrapReads = 0;
+  let olderPageFailed = false;
   await page.route("**/api/v1/**", async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -3753,6 +3754,11 @@ reloadTest("conversation switching loads recent history before older conversatio
       if (url.searchParams.get("recent_first") === "true") {
         const offset = Number(url.searchParams.get("offset") ?? 0);
         recentOffsets.push(offset);
+        if (offset === 100 && !olderPageFailed) {
+          olderPageFailed = true;
+          await route.fulfill({ status: 503, json: { detail: "Older conversations are temporarily unavailable." } });
+          return;
+        }
         await route.fulfill({ json: rows.slice(offset, offset + 100) });
       } else {
         fullReads += 1;
@@ -3775,7 +3781,15 @@ reloadTest("conversation switching loads recent history before older conversatio
   const show = (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations";
   await page.getByRole("button", { name: show, exact: true }).click();
   const sidebar = page.getByRole("complementary", { name: "Conversations" });
-  await expect(sidebar.getByRole("button", { name: "Load older conversations" })).toBeVisible();
+  const loadMore = sidebar.getByRole("button", { name: "Load older conversations" });
+  await expect(loadMore).toBeVisible();
+  await expect(loadMore).toHaveCSS("display", "flex");
+  await expect(loadMore).toHaveCSS("white-space", "nowrap");
+  const loadMoreBox = await loadMore.boundingBox();
+  expectTouchTarget(loadMoreBox?.height);
+  const labelBox = await loadMore.locator("span").boundingBox();
+  expect(labelBox?.height).toBeLessThan(24);
+  expect(Math.abs((loadMoreBox?.x ?? 0) + (loadMoreBox?.width ?? 0) / 2 - ((labelBox?.x ?? 0) + (labelBox?.width ?? 0) / 2))).toBeLessThan(18);
   const oldest = sidebar.locator('.session-select[data-session-id="history-104"]');
   await expect(oldest).toHaveCount(0);
   await sidebar.getByRole("searchbox", { name: "Search conversations" }).fill("History 104");
@@ -3786,8 +3800,11 @@ reloadTest("conversation switching loads recent history before older conversatio
   await expect.poll(async () => await sidebar.isVisible() || await page.getByRole("button", { name: show, exact: true }).isVisible()).toBe(true);
   if (!await sidebar.isVisible()) await page.getByRole("button", { name: show, exact: true }).click();
   await sidebar.getByRole("button", { name: "Load older conversations" }).click();
+  await expect(sidebar.getByRole("button", { name: "Load older conversations" })).toBeEnabled();
+  await expect(oldest).toHaveCount(0);
+  await sidebar.getByRole("button", { name: "Load older conversations" }).click();
   await expect(oldest).toBeAttached();
-  expect(recentOffsets).toContain(100);
+  expect(recentOffsets.filter(offset => offset === 100)).toHaveLength(2);
   expect(terminalBootstrapReads).toBe(0);
 });
 
