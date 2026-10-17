@@ -1,29 +1,20 @@
 {
-  "change_digest": "f876d7e0204a975d796c3d3dd83304e3306d4147f3c9a86f968c795082b7d956",
-  "reviewed_by": "Codex focused review for chat side tool fullscreen and restore",
-  "reason": "The Code 1 side pane gains a fullscreen control that preserves its mounted editor, active tab, and saved split width. Two collected component cases cover draft continuity, Escape, focus, background inertness, and close. Eight collected interface cases cover the linked-file journey and responsive fullscreen geometry in desktop Chromium and emulated mobile Chromium and WebKit, including landscape resizing. Three collected real-Core cases cover the same visible Code pane on a production non-loopback LAN origin with a durable file and reload.",
-  "exclusions": "No Python or native behavior changed. Unrelated UI journeys and full suites are excluded. Mock browser cases use a development server; real-Core cases use disposable Core instances and the production UI bundle on a LAN origin. Physical devices are not available in this environment.",
+  "change_digest": "0bc4db082b92a5bf66f55a2d0ad79c77ced2e3824e94ce9f46499d182c8e199d",
+  "reviewed_by": "Codex focused review for post-pairing navigation race",
+  "reason": "The older-conversation LAN navigation test waited only for the pairing fragment to disappear, but PairingGate clears that fragment before redeeming and then reloads the page. The test now waits for the real post-redemption load before opening the deep link. Collect the exact real-Core test in its catalogued desktop and narrow Chromium entries.",
+  "exclusions": "No production source, Python, frontend unit, or native behavior changed. Unrelated browser journeys and full suites are excluded. The selected test uses a disposable real-Core fixture with the production UI bundle at a non-loopback LAN origin. This test has no catalogued WebKit entry; physical devices are unavailable.",
   "expected_tests": {
     "python": 0,
-    "frontend": 2,
+    "frontend": 0,
     "native": 0,
-    "playwright": 11
+    "playwright": 2
   },
   "python": [],
-  "frontend": ["ui/src/pages/SideToolSurface.test.tsx"],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:assistant-links/desktop",
-    "entry:assistant-links/compact",
-    "entry:assistant-links/mobile-chromium-small",
-    "entry:assistant-links/mobile-chromium-ledger-390",
-    "entry:assistant-links/mobile-chromium-wide",
-    "entry:assistant-links/mobile-webkit-small",
-    "entry:assistant-links/mobile-webkit",
-    "entry:assistant-links/mobile-webkit-wide",
-    "entry:side-chat-panels/assistant-real-desktop",
-    "entry:side-chat-panels/assistant-real-chromium-390",
-    "entry:side-chat-panels/assistant-real-webkit-390"
+    "entry:navigation-deeplink/desktop",
+    "entry:navigation-deeplink/narrow"
   ],
   "python_browser": false,
   "python_node": false
