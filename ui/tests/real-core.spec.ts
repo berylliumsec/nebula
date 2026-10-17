@@ -6957,6 +6957,32 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     const oversight = assistant.getByRole("region", {name: "Butler oversight"});
     await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("1 watched · 1 need attention");
     await oversight.getByRole("button", {name: /Oversight/}).click();
+    await expect(oversight.getByRole("heading", {name: /Improvement issues/})).toBeVisible();
+    await expect(oversight.getByText("No issue destinations configured.")).toBeVisible();
+    await oversight.getByRole("button", {name: "Add issue destination"}).click();
+    await expect(oversight.getByLabel("Host Codex reviewer")).toBeVisible();
+    await expect(oversight.getByRole("checkbox", {name: /Automatically publish drafts/})).not.toBeChecked();
+    await oversight.getByRole("button", {name: "Cancel"}).click();
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seedIssues = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ButlerIssueDestination, ButlerIssueCandidate",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "destination = store.create(ButlerIssueDestination(id='butler-ui-fixture-destination', engagement_id=sys.argv[2], name='Fixture issues', repository='fixture/private', publisher='mcp', mcp_profile_id='fixture-tool', review_profile_id='fixture-codex', enabled=False))",
+      "common = dict(engagement_id=sys.argv[2], destination_id=destination.id, source_kind='chat_turn', source_id='fixture-turn', confidence='hypothesis', public_independent=False, body='A saved selection disappears after a refresh in the sample workflow.', reproduction='Create a sample item, select it, then refresh the browser.')",
+      "store.create(ButlerIssueCandidate(**common, dedup_key='a'*64, problem_key='selection-refresh', title='Selection disappears on refresh', status='held', reason='public_reproduction_not_independent'))",
+      "store.create(ButlerIssueCandidate(**common, dedup_key='b'*64, problem_key='export-sample', title='Sample export fails', status='published', issue_id='1', issue_url='https://github.com/fixture/private/issues/1'))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
+    });
+    expect(seedIssues.status, seedIssues.error?.message ?? seedIssues.stderr).toBe(0);
+    await oversight.getByRole("button", {name: "Refresh improvement issues"}).click();
+    await expect(oversight.getByRole("list", {name: "Held improvement drafts"}).getByText("Selection disappears on refresh")).toBeVisible();
+    await oversight.locator("summary").filter({hasText: "Published issues"}).click();
+    await expect(oversight.getByRole("link", {name: "Sample export fails"})).toBeVisible();
     const viewport = page.viewportSize()!;
     const assistantBounds = await assistant.boundingBox();
     expect(assistantBounds).toBeTruthy();
@@ -7024,9 +7050,6 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     expect(offeredTools.some(tool => tool.function?.name === "report_attention")).toBe(true);
     // Add a saved approval to the disposable Core and verify Butler discovers
     // it without a Butler chat turn. This request is never executed.
-    const repository = path.resolve(import.meta.dirname, "../..");
-    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
-    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
     const approvalId = "butler-review-approval-fixture";
     const seedApproval = spawnSync(python, ["-c", [
       "import sys",
