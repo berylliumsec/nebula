@@ -826,6 +826,7 @@ class ButlerRecoveryService:
             or not case.target_session_id
         ):
             return case
+        turn_id: str | None
         if case.delivered_turn_id:
             try:
                 delivered = self.store.get(ChatTurn, case.delivered_turn_id)
@@ -872,7 +873,8 @@ class ButlerRecoveryService:
                     finished_at=utc_now(),
                 )
             status = str(item.get("status") or "")
-            turn_id = item.get("turn_id")
+            queued_turn_id = item.get("turn_id")
+            turn_id = queued_turn_id if isinstance(queued_turn_id, str) else None
         if status in {"failed", "cancelled", "needs_review"}:
             return self._update_case(
                 case,
