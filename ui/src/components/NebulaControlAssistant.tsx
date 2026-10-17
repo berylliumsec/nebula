@@ -7,6 +7,8 @@ import { defaultModelRuntime } from "../api/runtimeDefaults";
 import { logDiagnostic } from "../diagnostics";
 import type { ToolSharingRuntime } from "../api/toolSharingConsent";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useOptionalWorkbenchDrafts } from "../state/WorkbenchDraftContext";
+import { createHashedSelectionAttachment } from "./selection/selectionActions";
 import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeContext";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
@@ -41,6 +43,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
   const { api, coreState, engagement, providers, harnesses } = useWorkspace();
+  const context = useOptionalWorkbenchDrafts();
+  const butlerDrafts = context?.butlerDrafts ?? [];
   const { preference, setPreference } = useTheme();
   const confirm = useConfirmation();
   const [open, setOpen] = useState(false);
@@ -666,6 +670,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       // for this dedicated assistant; a settings instruction needs no second dialog.
       allowCloudToolResults = true;
     }
+    let contextAttachments;
+    try {
+      contextAttachments = await Promise.all(butlerDrafts.map(createHashedSelectionAttachment));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not prepare Butler context. Remove the selection and try again.");
+      return;
+    }
     const controller = new AbortController();
     abort.current = controller;
     activeTurn.current = {};
@@ -703,6 +714,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         subagentModel: effectiveConfig?.subagentModel,
         subagentReasoningEffort: effectiveConfig?.subagentReasoningEffort,
         messages: [{ role: "user", content: prompt }],
+        contextAttachments: contextAttachments.length ? contextAttachments : undefined,
         toolsEnabled: effectiveConfig?.toolsEnabled ?? false,
         allowCloudToolResults,
       }, (event) => {
@@ -737,6 +749,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         });
       }
       if (result?.message) {
+        if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
         confirmations.push(...workReceipts.filter(({ url }) => !result.message.content.includes(url)).map(({ content }) => content));
         if (result.message.id && confirmations.length && actionOutcomesKey) {
           const outcomes = readActionOutcomes(actionOutcomesKey);
@@ -842,7 +855,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
     [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up", "settings.network-scope", "settings.automation-runtime"]);
-  const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
+  const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Butler" data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
     <div className={styles.header}>
       <button className={`icon-button subtle ${styles.dragButton}`} type="button" aria-label="Move Butler" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
       <div className={styles.identity}><strong>Butler</strong><small>{engagement?.name ?? "Choose a project"}</small></div>
@@ -879,7 +892,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
         <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />
       </div>}
-      <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
+      <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation" data-selection-source-kind="conversation" data-selection-source-id={sessionId} data-selection-source-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
         const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
         const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, engagement?.id));
         const workLink = engagement && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
@@ -911,6 +924,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
       {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
     </div>
+    {butlerDrafts.length > 0 && <section className={styles.contextPack} aria-label="Butler context pack">
+      <div className={styles.contextHeading}><span>{butlerDrafts.length} selected context {butlerDrafts.length === 1 ? "item" : "items"} for Butler</span><button type="button" className="icon-button subtle" aria-label="Clear Butler context" title="Clear Butler context" disabled={busy} onClick={() => context?.clearButlerDrafts()}><X size={16} /></button></div>
+      <div className={styles.contextItems}>{butlerDrafts.map((item, index) => <div className={styles.contextItem} key={`${item.source.kind}:${item.source.id ?? ""}:${index}`}><details><summary>{item.source.label}{item.truncated ? " · shortened" : ""}</summary><p>{item.text}</p></details><button type="button" className="icon-button subtle" aria-label={`Remove ${item.source.label} from Butler context`} title={`Remove ${item.source.label}`} disabled={busy} onClick={() => context?.removeButlerDraft(index)}><X size={16} /></button></div>)}</div>
+    </section>}
+    {context?.butlerDraftNotice && <div className={styles.contextNotice} role="status"><span>{context.butlerDraftNotice}</span><button type="button" className="icon-button subtle" aria-label="Dismiss Butler context notice" title="Dismiss Butler context notice" onClick={() => context.clearButlerDraftNotice()}><X size={16} /></button></div>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about work, start an assistant or mission, or change a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
   </div> : null;
 

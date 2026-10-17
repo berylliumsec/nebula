@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,14 +16,14 @@ const state = vi.hoisted(() => {
     stopHarnessTurn: vi.fn().mockResolvedValue(undefined),
     getPendingChatTurn: vi.fn().mockResolvedValue({ id: "pending-turn" }),
   };
-  return { ...api, api };
+  return { ...api, api, projectId: "project-1" };
 });
 
 vi.mock("../api/runtime", () => ({ desktopDeviceId: () => Promise.resolve("device-current") }));
 vi.mock("./WorkspaceContext", () => ({
   useWorkspace: () => ({
     api: state.api,
-    engagement: { id: "project-1", name: "Project one" },
+    engagement: { id: state.projectId, name: "Project one" },
   }),
 }));
 
@@ -31,6 +31,41 @@ function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
 }
+
+function ContextRecipientProbe() {
+  const { assistantDrafts, butlerDrafts } = useWorkbenchDrafts();
+  return <><output data-testid="assistant-context-count">{assistantDrafts.length}</output><output data-testid="butler-context-count">{butlerDrafts.length}</output></>;
+}
+
+beforeEach(() => { state.projectId = "project-1"; });
+
+it("routes Butler selections into Butler context without changing the page or Analyst chat", async () => {
+  state.createHandoff.mockClear();
+  const app = () => <MemoryRouter initialEntries={["/projects/project-1/findings"]}>
+    <WorkbenchDraftProvider><LocationProbe /><ContextRecipientProbe />
+      <div data-selection-recipient="butler" data-selection-source-kind="conversation" data-selection-source-id="butler-session" data-selection-source-label="Butler conversation"><span>Butler's saved answer</span></div>
+    </WorkbenchDraftProvider>
+  </MemoryRouter>;
+  const view = render(app());
+  const answer = screen.getByText("Butler's saved answer");
+  const range = document.createRange();
+  range.selectNodeContents(answer);
+  document.getSelection()?.removeAllRanges();
+  document.getSelection()?.addRange(range);
+  fireEvent.pointerUp(answer);
+  await userEvent.click(screen.getByRole("button", { name: "Add context to chat" }));
+  expect(screen.getByTestId("butler-context-count")).toHaveTextContent("1");
+  expect(screen.getByTestId("assistant-context-count")).toHaveTextContent("0");
+  expect(screen.getByTestId("location")).toHaveTextContent("/projects/project-1/findings");
+  expect(state.createHandoff).not.toHaveBeenCalled();
+  state.projectId = "project-2";
+  view.rerender(app());
+  expect(screen.getByTestId("butler-context-count")).toHaveTextContent("0");
+  state.projectId = "project-1";
+  view.rerender(app());
+  expect(screen.getByTestId("butler-context-count")).toHaveTextContent("0");
+  document.getSelection()?.removeAllRanges();
+});
 
 function LateNavigation() {
   const navigate = useNavigate();

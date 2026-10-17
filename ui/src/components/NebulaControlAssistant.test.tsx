@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ChatStreamEvent } from "../api/types";
 import { ThemeProvider } from "../state/ThemeContext";
+import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
@@ -21,6 +23,52 @@ describe("NebulaControlAssistant", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.mocked(useWorkspace).mockReturnValue({ api: undefined, engagement: undefined, providers: [], harnesses: [] } as unknown as ReturnType<typeof useWorkspace>);
+  });
+
+  it("sends selected Butler text to Butler and keeps it available after a failed turn", async () => {
+    const user = userEvent.setup();
+    const response = (content: string) => ({
+      sessionId: "control", backend: "harness" as const, harnessProfileId: "local", model: "model",
+      message: { id: content, role: "assistant" as const, content },
+    });
+    const streamChat = vi.fn()
+      .mockResolvedValueOnce(response("The goal needs another turn."))
+      .mockRejectedValueOnce(new Error("Core connection failed"))
+      .mockResolvedValueOnce(response("The context reached Butler."));
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<MemoryRouter><WorkbenchDraftProvider><DialogProvider><ThemeProvider>
+      <NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} />
+    </ThemeProvider></DialogProvider></WorkbenchDraftProvider></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "What happened?{enter}");
+    const answer = await screen.findByText("The goal needs another turn.");
+    const range = document.createRange();
+    range.selectNodeContents(answer);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    fireEvent.pointerUp(answer);
+    await user.click(screen.getByRole("button", { name: "Add context to chat" }));
+    expect(screen.getByRole("region", { name: "Butler context pack" })).toHaveTextContent("1 selected context item for Butler");
+    await user.type(composer, "Use that detail.{enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
+    expect(streamChat.mock.calls[1][0].contextAttachments).toEqual([expect.objectContaining({
+      sourceKind: "conversation", sourceId: "control", sourceLabel: "Butler conversation",
+      text: "The goal needs another turn.", sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })]);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Core connection failed");
+    expect(screen.getByRole("region", { name: "Butler context pack" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Send to Butler" }));
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(3));
+    expect(streamChat.mock.calls[2][0].contextAttachments).toEqual(streamChat.mock.calls[1][0].contextAttachments);
+    expect(await screen.findByText("The context reached Butler.")).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Butler context pack" })).not.toBeInTheDocument());
   });
 
   it("opens the full-screen voice mode from its assistant button and keeps an HTTPS recovery action visible", async () => {
