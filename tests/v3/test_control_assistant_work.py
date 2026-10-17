@@ -1285,6 +1285,75 @@ def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
     asyncio.run(scenario())
 
 
+def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_queue(tmp_path, monkeypatch):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True, model_allowlist=["model-a"],
+    ))
+    session = store.create(ChatSession(
+        engagement_id=project.id, title="Main", provider_profile_id=profile.id, model="model-a",
+    ))
+    store.create(ChatQueue(
+        id="chat-queue-" + session.id, engagement_id=project.id, session_id=session.id,
+        paused=True, items=[{"id": "old", "key": "old", "status": "queued"}],
+    ))
+    work = app.state.control_assistant_work
+    calls = []
+
+    async def prepare(request):
+        calls.append(request.messages[-1].content)
+        return SimpleNamespace(turn=SimpleNamespace(id="new-turn"))
+
+    monkeypatch.setattr(work.chat, "prepare_async", prepare)
+    monkeypatch.setattr(work.chat, "start_provider_turn", lambda prepared: calls.append(prepared.turn.id))
+    result = asyncio.run(work.message_chat(project.id, {
+        "session_id": session.id, "text": "Check the checkpoint", "delivery": "immediate",
+    }))
+    assert result == {"session_id": session.id, "delivery": "started", "turn_id": "new-turn"}
+    assert calls == ["Check the checkpoint", "new-turn"]
+    assert work.queue.get(session.id).paused
+    assert [item["id"] for item in work.queue.get(session.id).items] == ["old"]
+
+
+def test_immediate_guidance_steers_active_harness_and_holds_active_provider(tmp_path, monkeypatch):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    harness = store.create(HarnessProfile(
+        name="Codex", kind=HarnessKind.CODEX_APP_SERVER, executable="/bin/true",
+    ))
+    session = store.create(ChatSession(
+        engagement_id=project.id, title="Main", backend=ChatBackend.HARNESS,
+        harness_profile_id=harness.id, harness_session_id="harness-session", model="model-a",
+    ))
+    work = app.state.control_assistant_work
+    monkeypatch.setattr(work.chat, "pending_turn", lambda _: SimpleNamespace(id="turn", harness_turn_id="harness-turn"))
+    seen = []
+
+    async def steer(turn_id, text, **kwargs):
+        seen.append((turn_id, text, kwargs["title"]))
+
+    monkeypatch.setattr(work.harness, "steer_turn", steer)
+    steered = asyncio.run(work.message_chat(project.id, {
+        "session_id": session.id, "text": "Focus on saved evidence", "delivery": "immediate",
+    }))
+    assert steered["delivery"] == "steered" and steered["turn_id"] == "turn"
+    assert seen == [("harness-turn", "Focus on saved evidence", "Butler guidance")]
+    assert work.queue.get(session.id).items == []
+
+    provider = store.create(ProviderProfile(
+        name="Local", provider_type="ollama", is_local=True, model_allowlist=["model-a"],
+    ))
+    provider_session = store.create(ChatSession(
+        engagement_id=project.id, title="Provider", provider_profile_id=provider.id, model="model-a",
+    ))
+    held = asyncio.run(work.message_chat(project.id, {
+        "session_id": provider_session.id, "text": "Check evidence", "delivery": "immediate",
+    }))
+    assert held["delivery"] == "held" and held["reason"] == "active_turn_cannot_steer"
+    assert work.queue.get(provider_session.id).items == []
+
+
 def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypatch):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))

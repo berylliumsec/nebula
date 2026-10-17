@@ -544,6 +544,23 @@ class ButlerAuthorityService:
                 now=utc_now(),
             )
 
+    def _hold(self, action: ButlerAction, reason: str) -> None:
+        with self.store.transaction(immediate=True) as transaction:
+            current = _entity(transaction, ButlerAction, action.id)
+            if current is None or current.status != "planned":
+                return
+            updated = transaction.update(
+                ButlerAction, current.id,
+                {"status": "held", "outcome": {"reason": reason, "delivered": False}, "finished_at": utc_now()},
+                expected_revision=current.revision,
+            )
+            _append_project_event(
+                transaction, engagement_id=updated.engagement_id,
+                event_type="butler.action_held",
+                payload=self._action_event_payload(updated, "held"),
+                idempotency_key=f"action:{updated.id}:held", now=utc_now(),
+            )
+
     def _defer_for_memory(self, action: ButlerAction) -> None:
         """Keep a known-undelivered action retryable while memory is unavailable."""
 
@@ -723,11 +740,11 @@ class ButlerAuthorityService:
             "request_parent_plan_reassessment",
         }:
             if not target:
-                self._cancel(action, "main_agent_unavailable")
+                self._hold(action, "main_agent_unavailable")
                 return
             target_detail = self.work.chat_detail(action.engagement_id, target)
             if target_detail.get("kind") != "main":
-                self._cancel(action, "main_agent_unavailable")
+                self._hold(action, "main_agent_unavailable")
                 return
         else:
             if detail.get("kind") != "main" or goal.parent_goal_id:
@@ -803,15 +820,15 @@ class ButlerAuthorityService:
                             "next step and checkpoint to Core. Route any child guidance through "
                             "the parent main agent and keep existing approval boundaries."
                         )
-                await self.work.message_chat(
+                receipt = await self.work.message_chat(
                     action.engagement_id,
-                    {"session_id": target, "text": text, "delivery": "next"},
+                    {"session_id": target, "text": text, "delivery": "immediate"},
                     idempotency_key=action.idempotency_key,
                 )
-                item = self._queue_item(action)
-                if item is None:
-                    raise ConflictError("queued Butler request is not visible")
-                self._finish(action, "dispatched", {"queue_item_id": item["id"]})
+                if receipt["delivery"] == "held":
+                    self._finish(action, "held", {"reason": receipt["reason"], "delivered": False})
+                else:
+                    self._finish(action, "dispatched", {"turn_id": receipt["turn_id"], "delivery": receipt["delivery"]})
             else:
                 await self.work.goal_action(
                     action.engagement_id,

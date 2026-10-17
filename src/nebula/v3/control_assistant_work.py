@@ -199,7 +199,7 @@ MESSAGE_CHAT_SCHEMA: dict[str, Any] = {
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "text": {"type": "string", "minLength": 1, "maxLength": 20000},
-        "delivery": {"type": "string", "enum": ["next", "steer"]},
+        "delivery": {"type": "string", "enum": ["next", "steer", "immediate"]},
     },
     "required": ["session_id", "text"],
 }
@@ -2112,27 +2112,31 @@ class ControlAssistantWork:
         session = self._messageable_chat(project_id, arguments.get("session_id"))
         text = _text(arguments.get("text"), "text", 20000)
         delivery = arguments.get("delivery", "next")
-        if delivery == "steer":
+        if delivery in {"steer", "immediate"}:
             pending = self.chat.pending_turn(session.id)
-            if (
-                session.backend != ChatBackend.HARNESS
-                or pending is None
-                or not pending.harness_turn_id
-            ):
+            if pending is not None and session.backend == ChatBackend.HARNESS and pending.harness_turn_id:
+                if delivery == "immediate":
+                    await self.harness.steer_turn(
+                        pending.harness_turn_id, text, actor_id="control-assistant",
+                        title="Butler guidance",
+                    )
+                else:
+                    await self.harness.steer_turn(
+                        pending.harness_turn_id, text, actor_id="control-assistant"
+                    )
+                return {
+                    "session_id": session.id,
+                    "delivery": "steered",
+                    "turn_id": pending.id,
+                }
+            if delivery == "steer":
                 raise ValueError(
                     "live steering requires an active harness chat; use delivery=next to queue a follow-up"
                 )
-            await self.harness.steer_turn(
-                pending.harness_turn_id, text, actor_id="control-assistant"
-            )
-            observed = self.chat.pending_turn(session.id)
-            return {
-                "session_id": session.id,
-                "delivery": "steered",
-                "turn_id": observed.id if observed else pending.id,
-            }
-        if delivery != "next":
-            raise ValueError("choose next or steer delivery")
+            if pending is not None:
+                return {"session_id": session.id, "delivery": "held", "reason": "active_turn_cannot_steer"}
+        if delivery not in {"next", "immediate"}:
+            raise ValueError("choose next, steer, or immediate delivery")
         next_settings = chat_assistant_config(self.store, session)
         next_backend = ChatBackend(next_settings["backend"])
         next_profile = next_settings["profile_id"]
@@ -2193,6 +2197,34 @@ class ControlAssistantWork:
             subagent_reasoning_effort=next_settings["subagent_reasoning_effort"],
             stream=True,
         )
+        if delivery == "immediate":
+            # This path deliberately bypasses the follow-up queue. Paused legacy
+            # queue entries stay visible for the operator to review.
+            if next_backend == ChatBackend.PROVIDER:
+                prepared = await self.chat.prepare_async(request)
+                if prepared.turn is None:
+                    raise RuntimeError("Core did not prepare a durable chat turn")
+                self.chat.start_provider_turn(prepared)
+                return {"session_id": session.id, "delivery": "started", "turn_id": prepared.turn.id}
+            _, turn, harness_turn = self.harness.prepare_chat(
+                engagement_id=project_id,
+                profile_id=next_profile,
+                model=next_settings["model"],
+                prompt=text,
+                chat_session_id=session.id,
+                harness_session_id=session.harness_session_id,
+                mcp_server_ids=[],
+                include_knowledge=next_settings["include_knowledge"],
+                allow_cloud_knowledge=next_settings["allow_cloud_knowledge"],
+                allow_remote_mcp=False,
+                allow_agent_messaging=next_settings["allow_agent_messaging"],
+                harness_mode=next_settings["harness_mode"],
+                harness_reasoning_effort=next_settings["harness_reasoning_effort"],
+                harness_service_tier=next_settings["harness_service_tier"],
+                harness_cyber_access_program=next_settings["harness_cyber_access_program"],
+            )
+            self.harness.start_chat_turn(harness_turn.id)
+            return {"session_id": session.id, "delivery": "started", "turn_id": turn.id}
         queue = self.queue.get(session.id)
         # Proactive Butler actions reuse a stable private key on recovery. The
         # ordinary operator-facing capability still gets a fresh key per call.

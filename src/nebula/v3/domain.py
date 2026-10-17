@@ -4168,7 +4168,7 @@ class ButlerAction(Entity):
         "pause_urgent_machine_blocker",
     ]
     status: Literal[
-        "planned", "dispatching", "dispatched", "applied", "uncertain", "cancelled"
+        "planned", "dispatching", "dispatched", "applied", "held", "uncertain", "cancelled"
     ] = "planned"
     idempotency_key: str = Field(min_length=1, max_length=200)
     report_id: str | None = Field(default=None, max_length=200)
@@ -4177,6 +4177,57 @@ class ButlerAction(Entity):
     outcome: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class ButlerIssueDestination(Entity):
+    """An operator-granted issue target for one Nebula project."""
+
+    entity_kind: ClassVar[str] = "butler_issue_destinations"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=120)
+    repository: str = Field(min_length=3, max_length=300)
+    publisher: Literal["github", "mcp"]
+    credential_ref: str | None = Field(default=None, max_length=200)
+    mcp_profile_id: str | None = Field(default=None, max_length=200)
+    review_profile_id: str = Field(min_length=1, max_length=200)
+    auto_publish: bool = False
+    enabled: bool = True
+    observe_from: datetime = Field(default_factory=utc_now)
+
+
+class ButlerIssueScan(Entity):
+    """A durable receipt that prevents a finalized source being reviewed twice."""
+
+    entity_kind: ClassVar[str] = "butler_issue_scans"
+    engagement_id: str
+    destination_id: str
+    source_kind: Literal["chat_turn", "incident"]
+    source_id: str
+    status: Literal["reviewing", "reviewed", "held"] = "reviewing"
+    reason: str = ""
+    review_turn_id: str | None = None
+
+
+class ButlerIssueCandidate(Entity):
+    """Locally retained draft and publication receipt; source text stays in Core."""
+
+    entity_kind: ClassVar[str] = "butler_issue_candidates"
+    engagement_id: str
+    destination_id: str
+    source_kind: Literal["chat_turn", "incident"]
+    source_id: str
+    dedup_key: str = Field(min_length=1, max_length=100)
+    problem_key: str = Field(min_length=3, max_length=160)
+    title: str = Field(min_length=8, max_length=200)
+    body: str = Field(min_length=30, max_length=10000)
+    reproduction: str = Field(min_length=20, max_length=3000)
+    confidence: Literal["hypothesis", "observed", "verified"]
+    public_independent: bool = False
+    status: Literal["reviewed", "publishing", "held", "uncertain", "published"] = "reviewed"
+    reason: str = ""
+    issue_id: str | None = None
+    issue_url: str | None = None
+    review_turn_id: str | None = None
 
 
 class ButlerRecoveryCase(Entity):
@@ -4210,6 +4261,8 @@ class ButlerRecoveryCase(Entity):
     model: str | None = Field(default=None, max_length=500)
     model_turn_id: str | None = Field(default=None, max_length=200)
     queued_item_id: str | None = Field(default=None, max_length=200)
+    delivered_turn_id: str | None = Field(default=None, max_length=200)
+    delivery_hold_reason: str | None = Field(default=None, max_length=200)
     target_session_id: str | None = Field(default=None, max_length=200)
     next_check_at: datetime | None = None
     started_at: datetime | None = None
@@ -5496,6 +5549,9 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerDecision,
     ButlerAuthorityPolicy,
     ButlerAction,
+    ButlerIssueDestination,
+    ButlerIssueScan,
+    ButlerIssueCandidate,
     ButlerRecoveryCase,
     ButlerAgentReport,
     ButlerAccountCredit,

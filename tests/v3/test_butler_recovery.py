@@ -578,14 +578,14 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
                                 "arguments": {
                                     "session_id": parent.id,
                                     "text": "Please retry the bounded check.",
-                                    "delivery": "next",
+                                    "delivery": "immediate",
                                 },
                             },
                         )
                     ],
                 )
             return ModelResponse(
-                provider_id=provider.id, model="model-a", text="Parent retry queued"
+                provider_id=provider.id, model="model-a", text="Parent guidance delivered"
             )
 
     class Work:
@@ -626,7 +626,8 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
 
         async def message_chat(self, project_id, arguments, *, idempotency_key):
             self.targets.append((project_id, arguments["session_id"], idempotency_key))
-            return {"item_id": "queued-1", "status": "queued"}
+            assert arguments["delivery"] == "immediate"
+            return {"delivery": "started", "turn_id": "accepted-parent-turn"}
 
     work = Work()
     agent = ButlerRecoveryAgent(
@@ -642,7 +643,7 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
     cases = store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)
     assert len(cases) == 1
     assert cases[0].status == "verifying"
-    assert cases[0].queued_item_id == "queued-1"
+    assert cases[0].delivered_turn_id == "accepted-parent-turn"
     assert [step["operation"] for step in cases[0].steps] == [
         "nebula.work.chat_settings",
         "nebula.work.set_chat_settings",
