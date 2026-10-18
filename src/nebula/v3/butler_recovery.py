@@ -1031,7 +1031,7 @@ class ButlerRecoveryService:
         return recovered
 
     def verify_follow_up(self, case: ButlerRecoveryCase) -> ButlerRecoveryCase:
-        """An accepted parent turn is intermediate; require the child's result."""
+        """Verify scheduled guidance or the child result of an immediate retry."""
 
         if (
             case.status != "verifying"
@@ -1093,6 +1093,20 @@ class ButlerRecoveryService:
                 case,
                 status="needs_attention",
                 outcome=f"The parent follow-up is {status.replace('_', ' ')}; no repair was verified.",
+                finished_at=utc_now(),
+            )
+        if (
+            case.signal == "butler.global_periodic_check"
+            and status == "complete"
+            and isinstance(turn_id, str)
+        ):
+            return self._update_case(
+                case,
+                status="resolved",
+                outcome=(
+                    "Core confirmed the scheduled parent guidance turn completed. "
+                    "Goal results remain independently tracked."
+                ),
                 finished_at=utc_now(),
             )
         if isinstance(turn_id, str):
