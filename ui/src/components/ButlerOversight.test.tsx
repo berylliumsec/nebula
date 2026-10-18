@@ -446,6 +446,27 @@ describe("ButlerOversight", () => {
     expect(screen.getByText("Reconnect to Core to change authority.")).toBeVisible();
   });
 
+  it("saves Butler's one-task planning grant separately from urgent pause", async () => {
+    const user = userEvent.setup();
+    const policy = { project_id: "project-a", authority: "watch", revision: 2, delegate_actions: [], effective_actions: [],
+      supported_actions: ["request_parent_status", "pause_urgent_machine_blocker", "force_one_task_plan"] };
+    const request = vi.fn().mockImplementation((path: string, init?: RequestInit) => path.endsWith("/overview")
+      ? Promise.resolve({...overview, capabilities: {...overview.capabilities, authority_levels: ["watch", "steer", "delegate"]}})
+      : Promise.resolve(init?.method === "PUT" ? {...policy, authority: "delegate", revision: 3,
+        delegate_actions: ["force_one_task_plan"], effective_actions: policy.supported_actions} : policy));
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Oversight settings"));
+    await user.selectOptions(await screen.findByRole("combobox", {name: "Butler authority"}), "delegate");
+    const force = screen.getByRole("checkbox", {name: /Allow Butler to require one Core plan/});
+    expect(force).not.toBeChecked();
+    await user.click(force);
+    await user.click(screen.getByRole("button", {name: "Save authority"}));
+    expect(request).toHaveBeenCalledWith("engagements/project-a/butler/authority", {
+      method: "PUT", body: JSON.stringify({authority: "delegate", delegate_actions: ["force_one_task_plan"], expected_revision: 2}),
+    });
+    expect(force).toBeChecked();
+  });
+
   it("offers a saved-policy reload after a stale authority revision", async () => {
     const user = userEvent.setup();
     let revision = 1;

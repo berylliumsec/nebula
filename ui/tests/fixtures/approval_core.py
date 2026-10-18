@@ -22,6 +22,7 @@ from nebula.v3.domain import (
     HarnessCapabilities,
     HarnessDetailedUsage,
     HarnessKind,
+    HarnessNativeCapabilities,
     HarnessProfile,
     HarnessModelOptions,
     HarnessRuntimeOption,
@@ -129,6 +130,48 @@ class InertConnection(HarnessConnection):
     async def run_turn(self, prompt, **kwargs):
         if self.request.session.engagement_id == "diagnostic":
             yield HarnessEvent(type="completed", message="OK")
+            return
+        if self.runtime.scenario == "planning_managed":
+            if self.request.session.metadata.get("planning_target_turn_id"):
+                found = await self.runtime._gateway_call(
+                    self.request.session, "workspace.find", {"query": "plan-target"}
+                )
+                if found.get("structuredContent", {}).get("matches") != [
+                    "plan-target.txt"
+                ]:
+                    raise RuntimeError(
+                        "Restricted planner did not find the synthetic file"
+                    )
+                submitted = await self.runtime._gateway_call(
+                    self.request.session,
+                    "plan.submit",
+                    {
+                        "steps": [
+                            {
+                                "action": "Read plan-target.txt",
+                                "expected_outcome": "Report the synthetic evidence",
+                            }
+                        ],
+                        "tool_names": ["workspace.read"],
+                        "files": ["plan-target.txt"],
+                        "no_file_work": False,
+                    },
+                )
+                if submitted.get("structuredContent", {}).get("phase") != "execution":
+                    raise RuntimeError("Core did not save the fixture task plan")
+                yield HarnessEvent(type="completed", message="PLANNER_COMPLETE")
+                return
+            read = await self.runtime._gateway_call(
+                self.request.session,
+                "workspace.read",
+                {"path": "plan-target.txt", "starting_line": 1, "line_count": 5},
+            )
+            if read.get("isError") or "Synthetic planner evidence" not in json.dumps(
+                read
+            ):
+                raise RuntimeError("Planned workspace read did not complete")
+            yield HarnessEvent(type="message_delta", delta="PLANNED_READ_COMPLETE")
+            yield HarnessEvent(type="completed", message="PLANNED_READ_COMPLETE")
             return
         if self.runtime.scenario == "goal":
             turn = self.runtime._active_gateway_turn(self.request.session.id)
@@ -470,10 +513,14 @@ if __name__ == "__main__":
             "agent_messaging",
             "goal",
             "navigation",
+            "planning",
+            "planning_managed",
         ],
         default="single",
     )
     args = parser.parse_args()
+    if args.scenario == "planning_managed":
+        (args.root / "plan-target.txt").write_text("Synthetic planner evidence\n")
     store = NebulaStore(args.root / "nebula.db")
     scratch_id = bootstrap_scratch_project(store)
     if args.scenario == "sidebar" and scratch_id:
@@ -529,9 +576,13 @@ if __name__ == "__main__":
         for index in range(101):
             store.create(
                 ChatSession(
-                    id="navigation-older" if index == 0 else f"navigation-recent-{index}",
+                    id="navigation-older"
+                    if index == 0
+                    else f"navigation-recent-{index}",
                     engagement_id=scratch_id,
-                    title="Older pinned context" if index == 0 else f"Recent context {index}",
+                    title="Older pinned context"
+                    if index == 0
+                    else f"Recent context {index}",
                     provider_profile_id="navigation-provider",
                     model="fixture",
                 )
@@ -540,6 +591,8 @@ if __name__ == "__main__":
     adapter = InertAdapter()
     if args.scenario == "daybreak":
         adapter.kind = HarnessKind.CODEX_APP_SERVER
+    if args.scenario == "planning_managed":
+        adapter.kind = HarnessKind.CLAUDE_AGENT_SDK
     runtime = FailureInjectionRuntime(
         store,
         credential_store=CredentialStore(),
@@ -559,13 +612,34 @@ if __name__ == "__main__":
                 name="Codex Daybreak fixture"
                 if args.scenario == "daybreak"
                 else "Approval fixture",
-                kind="codex_app_server" if args.scenario == "daybreak" else "grok_acp",
+                kind=(
+                    "codex_app_server"
+                    if args.scenario == "daybreak"
+                    else "claude_agent_sdk"
+                    if args.scenario == "planning_managed"
+                    else "grok_acp"
+                ),
                 executable="/bin/true",
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},
                 capabilities=HarnessCapabilities(
                     detailed_usage=args.scenario == "goal"
                 ),
+                native_capabilities=HarnessNativeCapabilities(
+                    shell=args.scenario in {"planning", "planning_managed"}
+                ),
+            )
+        )
+    if args.scenario == "planning_managed":
+        store.create(
+            HarnessProfile(
+                id="inert-unsupported",
+                name="Unsupported planning fixture",
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+                default_model="fixture",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+                native_capabilities=HarnessNativeCapabilities(shell=True),
             )
         )
     ssh_service = None
