@@ -211,6 +211,34 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(tmp_path):
         )
         assert resumed["project"]["status"] == "active"
 
+        draft = store.update(
+            Engagement,
+            other.id,
+            {"status": EngagementStatus.DRAFT},
+            expected_revision=store.get(Engagement, other.id).revision,
+        )
+        matches = await global_butler.search({"query": "activate draft project"})
+        assert "nebula.global.resume_project" in {
+            item["operation"] for item in matches["matches"]
+        }
+        description = await global_butler.describe(
+            {"operation": "nebula.global.resume_project"}
+        )
+        assert "draft or paused" in description["description"]
+        activated = await global_butler.invoke(
+            {
+                "operation": "nebula.global.resume_project",
+                "arguments": {
+                    "project_id": other.id,
+                    "expected_project_revision": draft.revision,
+                    "expected_authority_revision": other_policy.revision,
+                },
+            },
+            change=True,
+        )
+        assert activated["project"]["status"] == "active"
+        assert activated["resumed"] is True
+
         (folder / "BUTLER.md").write_text("Changed instructions.")
         with pytest.raises(ValueError, match="changed during this check"):
             await global_butler.invoke(
