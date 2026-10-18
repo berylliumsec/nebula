@@ -144,8 +144,13 @@ def update_chat_assistant_config(
     model = selected["model"]
     if not isinstance(profile_id, str) or not isinstance(model, str):
         raise ValueError("choose an enabled runtime and listed model")
-    if selected["planning_enabled"] and selected["harness_mode"] in {"plan", "planning"}:
-        raise ValueError("Plan before acting cannot be combined with harness Plan only mode")
+    if selected["planning_enabled"] and selected["harness_mode"] in {
+        "plan",
+        "planning",
+    }:
+        raise ValueError(
+            "Plan before acting cannot be combined with harness Plan only mode"
+        )
     if backend == "provider":
         provider_profile = store.get(ProviderProfile, profile_id)
         if (

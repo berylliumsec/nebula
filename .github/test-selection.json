@@ -1,5 +1,5 @@
 {
-  "change_digest": "dc8728ff9e44c27bca9f60a36cb1569ff645a58af2e68e5f02b96ab6b1f52d11",
+  "change_digest": "df5ce8f53acbb0803522d863808b51fe2e9692314ce68dfbb4cf09d5c60ef6d4",
   "reviewed_by": "Codex focused review of task planning, Butler authority, harness gating, and chat activity paths",
   "reason": "Thirty-seven selected Python cases cover Core planning persistence, bounded discovery, Plan only exclusion, provider and harness execution gates, missing SDK hook rejection, linked retry, distinct child plans, Butler one-task authority and timing, and product-help source sync. One hundred eighteen frontend cases cover planning request and stream transport, configured harness selection, Butler authority controls, and settings discovery. Sixteen catalogued real-Core browser entries exercise the saved switch, successful file discovery and execution after linked retry, blocked unsupported harness state, refresh, accessibility, and responsive activity display against the production bundle over synthetic LAN.",
   "exclusions": "No native code changed, so native tests are excluded. Unrelated Python and frontend suites, unrelated Playwright areas, and full suites are excluded. Physical-device Safari is unavailable; mobile WebKit runs in browser emulation. The synthetic harness fixture does not spend provider tokens or use external project data.",
