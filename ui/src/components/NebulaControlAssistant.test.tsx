@@ -545,6 +545,35 @@ describe("NebulaControlAssistant", () => {
     expect(getChatAssistantConfig).toHaveBeenCalledWith("control");
   });
 
+  it("loads saved effort after a settings deep link opens before the project is ready", async () => {
+    const saved = {
+      id: "control", engagementId: "project", backend: "harness" as const, harnessProfileId: "local", model: "model",
+      assistantConfig: {backend: "harness" as const, profileId: "local", model: "model", harnessReasoningEffort: "low"},
+    };
+    const getControlAssistantSession = vi.fn().mockResolvedValue(saved);
+    const getChatAssistantConfig = vi.fn().mockResolvedValue({sessionId: "control", revision: 2, settings: saved.assistantConfig});
+    const api = {getControlAssistantSession, getChatAssistantConfig, listChatMessages: vi.fn().mockResolvedValue([])};
+    let workspace = {api: undefined as typeof api | undefined, engagement: undefined as {id: string; name: string} | undefined,
+      providers: [], harnesses: [] as unknown[]};
+    vi.mocked(useWorkspace).mockImplementation(() => workspace as unknown as ReturnType<typeof useWorkspace>);
+    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>;
+    const view = render(assistant());
+    act(() => {window.dispatchEvent(new Event("nebula:open-butler-settings"));});
+    expect(screen.getByRole("button", {name: "Save"})).toBeDisabled();
+    expect(screen.getByText("Connect to Core to load Butler settings.")).toBeVisible();
+
+    workspace = {...workspace, api, engagement: {id: "project", name: "Project"},
+      harnesses: [{id: "local", name: "Local", kind: "codex_app_server", enabled: true, healthy: true,
+        localOnly: true, permitsSensitiveData: true, models: ["model"], defaultModel: "model",
+        modelOptions: [{model: "model", reasoningEfforts: [{id: "low", label: "Low", description: ""},
+          {id: "max", label: "Max", description: ""}], serviceTiers: []}]}]};
+    view.rerender(assistant());
+    await waitFor(() => expect(screen.getByRole("combobox", {name: "Butler effort"})).toHaveValue("low"));
+    expect(screen.getByRole("button", {name: "Save"})).toBeEnabled();
+    expect(getControlAssistantSession).toHaveBeenCalledWith("project");
+    expect(getChatAssistantConfig).toHaveBeenCalledWith("control");
+  });
+
   it("sends provider effort without Codex-only settings after Core readback", async () => {
     const user = userEvent.setup();
     const saved = {

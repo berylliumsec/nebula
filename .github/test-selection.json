@@ -1,11 +1,11 @@
 {
-  "change_digest": "49cad4a4c91c22ee6205c7c344e6fbd70d5126a2ae74403183c532c3af66f930",
-  "reviewed_by": "Codex focused review for Butler max effort parity",
-  "reason": "Ten collected Python cases cover durable Assistant settings, stale revision retry, direct next-turn settings, scheduled Butler selection and isolated harness effort, settings discovery, and product-help Chroma digest. Fifty-five component cases cover Butler controls and settings actions. Eight catalogued production-bundle LAN Core journeys cover save and refresh at desktop, compact, and Chromium/WebKit mobile widths.",
-  "exclusions": "Native code is unchanged. Unrelated Python, frontend, and browser journeys are excluded. Physical-device Safari is not available; WebKit mobile emulation is selected.",
+  "change_digest": "4a1e4d85c970fee188eb0e703034340b31f3ddbe7aff1212d936efa88db64ffa",
+  "reviewed_by": "Codex focused review for Butler settings cold-load restore",
+  "reason": "Thirty-nine collected Butler component cases cover deep-link opening before project readiness, saved Core effort readback, settings mutation, and conversation behavior. Eight catalogued production-bundle LAN Core journeys cover Butler effort save and refresh at desktop, compact, and Chromium/WebKit mobile widths.",
+  "exclusions": "Python and native behavior is unchanged. Unrelated frontend and browser journeys are excluded. Physical-device Safari is not available; WebKit mobile emulation is selected.",
   "expected_tests": {
-    "python": 10,
-    "frontend": 55,
+    "python": 0,
+    "frontend": 39,
     "native": 0,
     "playwright": 8
   },
@@ -14,23 +14,8 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_butler_instructions.py::test_global_check_uses_saved_butler_harness_effort",
-    "tests/v3/test_harnesses.py::test_global_butler_analysis_opens_gateway_using_its_harness_session",
-    "tests/v3/test_control_assistant_work.py::test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message",
-    "tests/v3/test_control_assistant_work.py::test_chat_settings_api_reads_back_durable_next_turn_choice",
-    "tests/v3/test_control_assistant_work.py::test_butler_settings_api_saves_advertised_max_effort",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_effort_setting",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
-    "tests/v3/test_settings_assistant_tools.py::test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them"
-  ],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/CompactSettingsList.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts"
-  ],
+  "python": [],
+  "frontend": ["ui/src/components/NebulaControlAssistant.test.tsx"],
   "native": [],
   "playwright": [
     "area:butler-effort"
