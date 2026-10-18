@@ -65,7 +65,9 @@ def _capabilities(tmp_path):
     return store, selected, own_chat, foreign_chat, capabilities
 
 
-def test_global_butler_chooses_act_projects_and_deduplicates_new_work(tmp_path):
+def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
+    tmp_path, monkeypatch
+):
     store, selected, own_chat, foreign_chat, ordinary = _capabilities(tmp_path)
     other = store.get(Engagement, foreign_chat.engagement_id)
     selected = store.update(
@@ -133,6 +135,53 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(tmp_path):
     )
 
     async def scenario():
+        guidance = await global_butler.describe(
+            {"operation": "nebula.work.message_chat"}
+        )
+        assert "delivery=immediate" in guidance["description"]
+        assert guidance["input_schema"]["properties"]["delivery"]["enum"] == [
+            "immediate"
+        ]
+        assert "delivery" in guidance["input_schema"]["required"]
+        for delivery in ("steer", "next", None):
+            arguments = {"session_id": own_chat.id, "text": "Check the proof gate"}
+            if delivery is not None:
+                arguments["delivery"] = delivery
+            with pytest.raises(ValueError, match="invalid arguments"):
+                await global_butler.invoke(
+                    {"operation": "nebula.work.message_chat", "arguments": arguments},
+                    change=True,
+                )
+        assert store.get(ButlerRecoveryCase, case.id).steps == []
+
+        async def deliver(project_id, arguments, *, idempotency_key):
+            assert project_id == selected.id
+            assert arguments["session_id"] == own_chat.id
+            assert arguments["delivery"] == "immediate"
+            assert idempotency_key.startswith(f"recovery:{case.id}:")
+            return {
+                "session_id": own_chat.id,
+                "delivery": "started",
+                "turn_id": "turn-1",
+            }
+
+        monkeypatch.setattr(ordinary._work, "message_chat", deliver)
+        receipt = await global_butler.invoke(
+            {
+                "operation": "nebula.work.message_chat",
+                "arguments": {
+                    "session_id": own_chat.id,
+                    "text": "Check the proof gate",
+                    "delivery": "immediate",
+                },
+            },
+            change=True,
+        )
+        assert receipt["delivery"] == "started"
+        saved_case = store.get(ButlerRecoveryCase, case.id)
+        assert saved_case.steps[-1]["status"] == "applied"
+        assert saved_case.delivered_turn_id == "turn-1"
+
         listed = await global_butler.invoke(
             {"operation": "nebula.global.projects", "arguments": {}}, change=False
         )

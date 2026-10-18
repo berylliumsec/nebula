@@ -555,6 +555,14 @@ class ButlerCapabilities:
         description = plugin.spec.description
         if self._background_case_id is None:
             return description
+        if plugin.spec.name == "nebula.work.message_chat":
+            return (
+                "Send parent guidance to a main assistant chat with "
+                "delivery=immediate. Core steers an active harness turn or starts "
+                "a new turn when idle. For delegated subagents and goal children, "
+                "message the parent main agent. A held result is not delivered; "
+                "inspect the Core receipt before claiming a handoff."
+            )
         return (
             description.replace(
                 "after explicit operator instruction",
@@ -569,6 +577,26 @@ class ButlerCapabilities:
                 "when needed to repair the observed project work under Act authority",
             )
         )
+
+    def _input_schema(self, plugin: AnalysisTool) -> dict[str, Any]:
+        schema = plugin.spec.input_schema
+        if (
+            self._background_case_id is None
+            or plugin.spec.name != "nebula.work.message_chat"
+        ):
+            return schema
+        return {
+            **schema,
+            "properties": {
+                **schema["properties"],
+                "delivery": {
+                    "type": "string",
+                    "enum": ["immediate"],
+                    "description": "Required for background Butler parent guidance.",
+                },
+            },
+            "required": [*schema.get("required", []), "delivery"],
+        }
 
     async def search(self, arguments: dict[str, Any]) -> dict[str, Any]:
         query = arguments.get("query", "")
@@ -639,7 +667,7 @@ class ButlerCapabilities:
         return {
             "operation": name,
             "description": self._description(plugin),
-            "input_schema": plugin.spec.input_schema,
+            "input_schema": self._input_schema(plugin),
             "read_only": self._read_only(plugin),
             "invoke_with": (
                 "nebula.capabilities.read"
@@ -664,7 +692,7 @@ class ButlerCapabilities:
         if not isinstance(payload, dict):
             raise ValueError("provide an arguments object")
         try:
-            Draft202012Validator(plugin.spec.input_schema).validate(payload)
+            Draft202012Validator(self._input_schema(plugin)).validate(payload)
         except ValidationError as exc:
             raise ValueError(
                 f"invalid arguments for {name}: {exc.message}; "
