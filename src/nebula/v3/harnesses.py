@@ -14187,7 +14187,9 @@ class HarnessRuntimeService:
             background_runtime_local=(
                 self.store.get(
                     HarnessProfile,
-                    self.store.get(HarnessSession, turn.session_id).harness_profile_id,
+                    self.store.get(
+                        HarnessSession, turn.harness_session_id
+                    ).harness_profile_id,
                 ).privacy.local_only
                 if turn is not None
                 else False
