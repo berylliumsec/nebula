@@ -150,12 +150,12 @@ def upgrade() -> None:
         select_rows.where(entities.c.kind == "chat_goals")
     ).mappings():
         payload = row["payload"]
-        sources = by_goal.get(row["id"], [])
+        goal_sources = by_goal.get(row["id"], [])
         recorded = payload.get("usage") or {}
-        source = _UsageRollup(sources)
+        source = _UsageRollup(goal_sources)
         if not source.matches(recorded):
             source = _UsageRollup(
-                [*sources, *snapshots_by_session.get(payload.get("session_id"), [])]
+                [*goal_sources, *snapshots_by_session.get(payload.get("session_id"), [])]
             )
         _write_reconciled(bind, entities, row, source, now)
 

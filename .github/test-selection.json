@@ -1,12 +1,19 @@
 {
-  "change_digest": "48340f314ad24caef2a8d0d9402ddf30f36b95fbd55884fe72153adc50944996",
+  "change_digest": "d9e6c84ad90d730920a318194897a06f839e287010fde772a68c3a6f3dc035c5",
   "reviewed_by": "Codex agent focused selection review",
-  "reason": "The provider adapter and saved ChatTurn already preserve cache tokens and billed cost; goal and subagent rollups discard those details. Four selected Python tests verify direct goal charging, budget and terminal behavior, child accrual and settlement without double charging, and a historical migration that repairs only summaries reconciled to durable source turns. A separate synthetic LAN Core check will verify the saved API view and restart persistence.",
+  "reason": "The provider adapter and saved ChatTurn already preserve cache tokens and billed cost; goal and subagent rollups discard those details. Four selected Python tests verify direct goal charging, budget and terminal behavior, child accrual and settlement without double charging, and a historical migration that repairs only summaries reconciled to durable source turns. A separate synthetic LAN Core check will verify the saved API view and restart persistence. A follow-up names the goal source list separately to satisfy Python 3.12 mypy; the same selected tests cover unchanged runtime behavior.",
   "exclusions": "No frontend, native, or Playwright tests: this changes only Core usage accounting and a data migration, without adding or changing browser controls, layouts, or client mappings. No full suite, live provider call, production-data write, or live deployment. PostgreSQL migration coverage requires an unavailable test database; the selected migration check uses SQLite.",
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
-  "expected_tests": {"python": 4, "frontend": 0, "playwright": 0, "native": 0},
+  "expected_tests": {
+    "python": 4,
+    "frontend": 0,
+    "playwright": 0,
+    "native": 0
+  },
   "python": [
     "tests/v3/test_chat_goals.py::test_charging_a_terminal_goal_records_usage_without_resurrecting_it",
     "tests/v3/test_chat_goals.py::test_goal_usage_keeps_provider_cache_and_billed_cost",
