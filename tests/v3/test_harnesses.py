@@ -52,6 +52,7 @@ from nebula.v3.domain import (
     ChatTurnStatus,
     BrowserIdentity,
     BrowserSession,
+    ButlerRecoveryCase,
     Engagement,
     HarnessCapabilities,
     HarnessDetailedUsage,
@@ -5818,6 +5819,50 @@ def test_naming_analysis_skips_the_gateway_and_command_runtime(tmp_path):
         assert captured["gateway_tools"] == ()
         # The analysis session was closed and left no gateway behind.
         assert runtime._gateways == {}
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_global_butler_analysis_opens_gateway_using_its_harness_session(tmp_path):
+    """An analysis turn has no chat session, but still owns a harness session."""
+
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        case = store.create(
+            ButlerRecoveryCase(
+                engagement_id=engagement.id,
+                trigger="periodic",
+                signal="butler.global_periodic_check",
+                source_event_id="global-event",
+                source_event_sequence=1,
+                authority_revision=1,
+                status="investigating",
+                summary="Check all eligible projects.",
+            )
+        )
+        runtime.butler_instructions_root = tmp_path
+        runtime.control_assistant_work = object()
+
+        turn = await runtime.analyze_structured(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Inspect the global work roster.",
+            butler_recovery_case_id=case.id,
+        )
+
+        assert turn.status == HarnessTurnStatus.COMPLETE
+        assert turn.chat_session_id is None
+        assert adapter.opens
+        assert "nebula.capabilities.search" in {
+            item["name"] for item in adapter.opens[0].gateway_tools
+        }
+        capabilities = runtime._butler_capabilities(
+            engagement.id, turn=turn, background_case_id=case.id
+        )
+        global_action = capabilities._actions["nebula.global.projects"]
+        assert global_action._handler.__self__.runtime_local is True
         await runtime.shutdown()
 
     asyncio.run(scenario())

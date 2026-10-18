@@ -1,35 +1,23 @@
 {
-  "change_digest": "fe8369562242875c11292c83bcdd37ae575ddc077cb4b758ff22b7e7bec1ff27",
-  "reviewed_by": "Codex focused review of Nebula-wide Butler scheduling, authority, file management API, Markdown editor, and product-help paths",
-  "reason": "Fifteen selected Python cases cover the user-owned instruction reader, global clock and capabilities, authenticated file create/update/conflict/repair, settings API discovery, and bundled Chroma source-digest sync. Thirty-six frontend cases cover Oversight, assistant action routing, and the shared Markdown editor entry, preview, save, conflict, and upload draft. The eight catalogued real-Core browser entries exercise the same scheduled and file-management journey at desktop and mobile widths with a production bundle and synthetic LAN Core.",
-  "exclusions": "No native code changed, so native tests are excluded. Unrelated Python and frontend suites, unrelated Playwright areas, and full suites are excluded. Physical-device Safari is unavailable; mobile WebKit runs in browser emulation. The inert local model verifies scheduling and roster inspection; no real provider spending or external project data is involved.",
+  "change_digest": "af644e901ab57511870d6ce6b06e7c88e0da1d7efeffe586b612d0b78a1aff09",
+  "reviewed_by": "Codex focused review of Butler harness gateway activation",
+  "reason": "Three Python cases cover the previously failing project Butler catalog, scoped Butler gateway access, and a scheduled global analysis opening its gateway with a durable harness turn. The analysis case also checks local runtime scope from the owning harness session.",
+  "exclusions": "No UI, API contract, frontend, browser, or native source changed. The selected cases exercise both affected Butler harness entry points; unrelated suites and Playwright areas are excluded. A synthetic LAN Core and the promoted simulation Core provide runtime acceptance evidence separately.",
   "expected_tests": {
-    "python": 15,
-    "frontend": 36,
+    "python": 3,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python_versions": ["3.11"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_butler_instructions.py",
-    "tests/v3/test_butler_instructions_management.py",
-    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
-    "tests/v3/test_butler_capabilities.py::test_background_act_excludes_browser_and_child_chat_changes",
-    "tests/v3/test_butler_recovery.py::test_periodic_check_is_coalesced_and_act_revocation_stops_new_cases",
-    "tests/v3/test_butler_recovery.py::test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
-    "tests/v3/test_settings_assistant_api.py::test_settings_api_discovers_and_reads_back_nebula_wide_butler_file",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_nebula_wide_butler_instructions",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_control_assistant_work.py::test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_not",
+    "tests/v3/test_harnesses.py::test_butler_harness_has_scoped_capability_gateway_and_isolated_session",
+    "tests/v3/test_harnesses.py::test_global_butler_analysis_opens_gateway_using_its_harness_session"
   ],
-  "frontend": [
-    "ui/src/components/ButlerOversight.test.tsx",
-    "ui/src/components/ButlerInstructionsSettings.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:butler-global"]
+  "playwright": []
 }
