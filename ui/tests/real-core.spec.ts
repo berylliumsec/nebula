@@ -7268,6 +7268,162 @@ test.describe("Butler Voice settings", () => {
   });
 });
 
+test("assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const replaceButlerText = async (text: string) => {
+    const editor = page.getByRole("textbox", {name: "BUTLER.md"});
+    await editor.press(testInfo.project.name.includes("webkit") ? "Meta+A" : "Control+A");
+    await page.keyboard.insertText(text);
+    for (const line of text.trim().split(/\r?\n/).filter(Boolean)) await expect(editor).toContainText(line.trim());
+  };
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({
+    responseContent: "The eligible project roster was checked; no work is due.",
+    toolCall: body => {
+      const tools = Array.isArray(body.tools) ? body.tools as Array<{function?: {name?: string}}> : [];
+      const names = tools.map(tool => tool.function?.name ?? "");
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string}> : [];
+      const completed = messages.filter(message => message.role === "tool").length;
+      if (completed > 1) return undefined;
+      const prefix = completed === 0 ? "nebula_capabilities_search" : "nebula_capabilities_read";
+      const name = names.find(value => value === prefix.replaceAll("_", ".") || value.startsWith(prefix));
+      return name ? {name, arguments: completed === 0
+        ? {query: "Nebula global projects roster"}
+        : {operation: "nebula.global.projects", arguments: {}}} : undefined;
+    },
+  });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    const servedAsset = await (await page.request.get(`${core.origin}/${entry}`)).body();
+    expect(createHash("sha256").update(servedAsset).digest("hex")).toBe(build.assets[entry!]);
+    const created = await api.post("engagements", {data: {name: "Global Butler idle fixture", status: "active"}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const project = await created.json() as {id: string};
+    const providerResponse = await api.post("providers", {data: {
+      name: "Global Butler local model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const reserved = await api.post("chat/control-assistant/session", {data: {
+      engagement_id: project.id, backend: "provider", provider_id: provider.id,
+      model: "security-model",
+    }});
+    expect(reserved.ok(), await reserved.text()).toBe(true);
+    const folder = path.join(core.dataDir, ".butler");
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Nebula-wide Butler LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/settings#butler-instructions-settings`);
+    const instructions = page.getByRole("region", {name: "Butler instructions"});
+    await expect(instructions.getByText(/No instructions file yet/)).toBeVisible();
+    const firstText = "Inspect Act projects and report only due work. Do not create anything in this fixture.\n";
+    await instructions.locator('input[type="file"]').setInputFiles({name: "BUTLER.md", mimeType: "text/markdown", buffer: Buffer.from(firstText)});
+    const butlerEditor = page.getByRole("dialog", {name: "BUTLER.md"});
+    await expect(butlerEditor.getByRole("textbox", {name: "BUTLER.md"})).toContainText(firstText.trim());
+    await butlerEditor.getByRole("button", {name: "Preview Markdown"}).click();
+    await expect(butlerEditor.getByRole("region", {name: "Markdown preview: BUTLER.md"})).toContainText(firstText.trim());
+    await page.screenshot({path: testInfo.outputPath("butler-markdown-preview.png")});
+    await butlerEditor.getByRole("button", {name: "Edit Markdown"}).click();
+    await page.screenshot({path: testInfo.outputPath("butler-markdown-editor.png")});
+    await butlerEditor.getByRole("button", {name: "Save to Core"}).click();
+    await expect(butlerEditor.getByText(/Saved on Core/)).toBeVisible();
+    await butlerEditor.getByRole("button", {name: "Close Butler editor"}).click();
+    const firstSaved = await (await api.get("butler/instructions")).json() as {status: string; content: string; sha256: string};
+    expect(firstSaved).toMatchObject({status: "ready", content: firstText});
+    const act = await api.put(`engagements/${project.id}/butler/authority`, {data: {
+      authority: "act", delegate_actions: [], expected_revision: 0,
+    }});
+    expect(act.ok(), await act.text()).toBe(true);
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${project.id}/butler/overview`);
+      expect(response.ok(), await response.text()).toBe(true);
+      return await response.json() as {global_instructions: {status: string; last_check_at?: string}; recovery_cases: Array<{signal: string; status: string}>; summary: {watched_goals: number}};
+    }, {timeout: 60_000}).toMatchObject({
+      global_instructions: {status: "ready", last_check_at: expect.any(String)},
+      summary: {watched_goals: 0},
+    });
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${project.id}/butler/overview`);
+      const overview = await response.json() as {recovery_cases: Array<{signal: string; status: string; steps: Array<{operation: string}>}>};
+      return overview.recovery_cases.find(item => item.signal === "butler.global_periodic_check")?.status;
+    }, {timeout: 60_000}).toBe("resolved");
+    const checked = await (await api.get(`engagements/${project.id}/butler/overview`)).json() as {recovery_cases: Array<{signal: string; steps: Array<{operation: string}>}>};
+    expect(checked.recovery_cases.find(item => item.signal === "butler.global_periodic_check")?.steps.map(step => step.operation)).toContain("nebula.global.projects");
+    expect(stub.requests.some(request => JSON.stringify(request).includes("Inspect Act projects and report only due work"))).toBe(true);
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const oversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
+    await oversight.getByRole("button", {name: /Oversight/}).click();
+    await oversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
+    await expect(oversight.getByText(path.join(core.dataDir, ".butler", "BUTLER.md"))).toBeVisible();
+    await expect(oversight.getByText(/Butler checks once every 15 minutes/)).toBeVisible();
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
+    await restored.getByRole("button", {name: /Oversight/}).click();
+    await restored.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
+    await expect(restored.getByText(/^Last check:/)).toBeVisible();
+    await writeFile(path.join(folder, "BUTLER.md"), "");
+    await restored.getByRole("button", {name: "Refresh Butler oversight"}).click();
+    await expect(restored.locator("summary").filter({hasText: "Nebula-wide Butler"})).toContainText("Invalid file");
+    await expect(restored.getByRole("alert").filter({hasText: "BUTLER.md is empty"})).toBeVisible();
+    await page.goto(`${core.origin}/settings#butler-instructions-settings`);
+    await expect(instructions.getByRole("alert")).toContainText("BUTLER.md is empty");
+    await instructions.getByRole("button", {name: "Open BUTLER.md in editor"}).click();
+    await replaceButlerText("Inspect Act projects after a repaired file.\n");
+    await butlerEditor.getByRole("button", {name: "Save to Core"}).click();
+    await expect(butlerEditor.getByText(/Saved on Core/)).toBeVisible();
+    const repaired = await (await api.get("butler/instructions")).json() as {status: string; sha256: string; content: string};
+    expect(repaired.status).toBe("ready");
+    const draft = "Keep this draft after a concurrent update.\n";
+    await replaceButlerText(draft);
+    const concurrent = await api.put("butler/instructions", {data: {content: "Another browser saved first.\n", expected_sha256: repaired.sha256}});
+    expect(concurrent.ok(), await concurrent.text()).toBe(true);
+    await butlerEditor.getByRole("button", {name: "Save to Core"}).click();
+    await expect(butlerEditor.getByRole("alert")).toContainText("changed elsewhere");
+    await expect(butlerEditor.getByRole("textbox", {name: "BUTLER.md"})).toContainText(draft.trim());
+    await butlerEditor.getByRole("button", {name: "Discard edits and reload"}).click();
+    await expect(butlerEditor.getByRole("region", {name: "Markdown preview: BUTLER.md"})).toContainText("Another browser saved first.");
+    await butlerEditor.getByRole("button", {name: "Edit Markdown"}).click();
+    await replaceButlerText("Inspect the current roster and continue due work.\n");
+    await butlerEditor.getByRole("button", {name: "Save to Core"}).click();
+    await expect(butlerEditor.getByText(/Saved on Core/)).toBeVisible();
+    await page.reload();
+    await instructions.getByRole("button", {name: "Open BUTLER.md in editor"}).click();
+    await expect(butlerEditor).toBeVisible();
+    await expect(butlerEditor.getByRole("region", {name: "Markdown preview: BUTLER.md"})).toContainText("Inspect the current roster and continue due work.");
+    const finalFile = await (await api.get("butler/instructions")).json() as {content: string};
+    expect(finalFile.content).toBe("Inspect the current roster and continue due work.\n");
+    const editorAccess = await new AxeBuilder({page}).include('[role="dialog"][aria-labelledby="butler-instructions-editor-title"]').withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(editorAccess.violations).toEqual([]);
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const finalOversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
+    await finalOversight.getByRole("button", {name: /Oversight/}).click();
+    await finalOversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
+    await expect(finalOversight.locator("summary").filter({hasText: "Nebula-wide Butler"})).toContainText("Ready");
+    await expect(finalOversight.getByText(/^Last check:/)).toBeVisible();
+    const access = await new AxeBuilder({page}).include('[aria-label="Butler oversight"]').withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(access.violations).toEqual([]);
+    await testInfo.attach("global-butler-lan", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, asset: entry, assetSha256: build.assets[entry!], project: testInfo.project.name, viewport: page.viewportSize(), file: "operator fixture", watchedGoals: 0}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "local model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler watches a goal and surfaces an agent-reported machine incident on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
