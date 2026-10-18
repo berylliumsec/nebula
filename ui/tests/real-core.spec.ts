@@ -8206,6 +8206,84 @@ reliabilityTest("assistant planning discovers a file and executes a saved manage
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
+reliabilityTest("assistant planning handoff links one provider draft and survives refresh on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "planning");
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    const projects = await (await core.api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0]!.id;
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Handoff acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Handoff acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+
+    const createdResponse = await core.api.post("chat/goal-conversations", {data: {
+      engagement_id: projectId, backend: "harness", harness_profile_id: "inert-fixture",
+      model: "fixture", objective: "Inspect the synthetic checkpoint", completion_criteria: ["Record evidence"],
+      tools_enabled: true, planning_enabled: true,
+    }});
+    expect(createdResponse.ok(), await createdResponse.text()).toBe(true);
+    const created = await createdResponse.json() as {session: {id: string}; goal: {id: string; revision: number}};
+    const sourceId = created.session.id;
+    const startResponse = await core.api.post(`chat/sessions/${sourceId}/goal/actions`, {data: {expected_revision: created.goal.revision, action: "start"}});
+    expect(startResponse.ok(), await startResponse.text()).toBe(true);
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${sourceId}/goal`)).json()).status, {timeout: 20_000}).toBe("paused");
+    expect(await core.receipts()).toEqual([]);
+
+    const settings = await (await core.api.get(`chat-sessions/${sourceId}/assistant-config`)).json() as {revision: number};
+    const update = await core.api.patch(`chat-sessions/${sourceId}/assistant-config`, {data: {
+      expected_revision: settings.revision,
+      settings: {backend: "provider", profile_id: "handoff-provider", model: "handoff-fixture", planning_enabled: true, tools_enabled: true},
+    }});
+    expect(update.ok(), await update.text()).toBe(true);
+    const oldGoal = await (await core.api.get(`chat/sessions/${sourceId}/goal`)).json() as {id: string; revision: number};
+    const body = {expected_revision: oldGoal.revision, reason: `Synthetic unsupported planner ${"x".repeat(1800)}`, checkpoint: "Read the inert file only", max_steps: 2, max_time_seconds: 1800};
+    const handoffResponse = await core.api.post(`chat/sessions/${sourceId}/goal/handoff`, {data: body});
+    expect(handoffResponse.ok(), await handoffResponse.text()).toBe(true);
+    const handoff = await handoffResponse.json() as {session: {id: string}; goal: {id: string; status: string}; source_goal: {metadata: Record<string, string>}; already_exists: boolean};
+    expect(handoff.already_exists).toBe(false);
+    expect(handoff.goal.status).toBe("draft");
+    expect(handoff.source_goal.metadata.handoff_target_session_id).toBe(handoff.session.id);
+    const duplicate = await (await core.api.post(`chat/sessions/${sourceId}/goal/handoff`, {data: body})).json() as {goal: {id: string}; already_exists: boolean};
+    expect(duplicate.already_exists).toBe(true);
+    expect(duplicate.goal.id).toBe(handoff.goal.id);
+
+    await page.goto(`${core.origin}/projects/${encodeURIComponent(projectId)}/workbench?view=chat&session=${encodeURIComponent(sourceId)}`);
+    const openGoal = async (linkName: string) => {
+      const panel = page.getByRole("region", {name: "Conversation goal"});
+      const reveal = page.getByRole("button", {name: "View full goal and evidence gates"});
+      // Wait for the selected session's saved goal, not the transient empty
+      // panel that can render while the chat route is still loading.
+      await expect(page.locator(".chat-goal-panel a").filter({hasText: linkName})).toHaveCount(1);
+      if (!(await panel.isVisible())) {
+        await expect(reveal).toBeVisible();
+        await reveal.focus();
+        await reveal.click({timeout: 5_000});
+      }
+      await expect(panel).toBeVisible();
+    };
+    await openGoal("Open continuation");
+    const source = page.getByRole("region", {name: "Conversation goal"});
+    await expect(source.getByRole("link", {name: "Open continuation"})).toBeVisible();
+    await expect(source.getByRole("button", {name: "Resume"})).toHaveCount(0);
+    await page.reload();
+    await openGoal("Open continuation");
+    await expect(source.getByRole("link", {name: "Open continuation"})).toBeVisible();
+    await source.getByRole("link", {name: "Open continuation"}).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(handoff.session.id);
+    await openGoal("Open source chat");
+    await expect(page.getByRole("region", {name: "Conversation goal"}).getByRole("link", {name: "Open source chat"})).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".chat-goal-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+    await testInfo.attach("goal-handoff-lan", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sourceId, targetId: handoff.session.id}), contentType: "application/json"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
 reliabilityTest("assistant upgrade new chat reuses saved Assistant settings after reload", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
