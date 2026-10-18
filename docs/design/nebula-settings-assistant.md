@@ -34,7 +34,7 @@ Settings assistant and the complete destination catalog.
 | Start the headless security browser | An explicit start request asks Core to establish the selected project's session and reports the observed status or startup error | Core agent-security session | API, browser, real Core and LAN |
 | Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
 | Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
-| Find Nebula-wide Butler instructions | The catalog opens Butler settings, which show the data-directory `.butler/BUTLER.md` path, file state and last scheduled check without creating or editing the user-owned file | Core data directory and durable Butler global clock | Tool unit, component and real Core |
+| Manage Nebula-wide Butler instructions | The catalog opens Automation → Butler instructions. The file row opens Nebula's Markdown editor with edit and rendered preview; upload opens a draft there. The API checks the loaded digest before saving and the UI reads Core back before confirming | Core data directory and durable Butler global clock | Tool unit, component and real Core browser |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets | Core sessions, turns, queues and runs | Tool unit and real Core |
@@ -43,7 +43,7 @@ Settings assistant and the complete destination catalog.
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 
 The setting catalog lists every Settings section, Butler's Voice control, and
-the Nebula-wide Butler instruction status. Dedicated actions handle
+the Nebula-wide Butler instruction editor. Dedicated actions handle
 device appearance, provider and harness default models, post-tool preferences,
 project execution mode, target scope and headless browser sessions. For other
 Core-backed settings, `nebula.settings.api_schema` lists only the current build's
@@ -157,8 +157,13 @@ choose another conversation's goal.
 ## Nebula-wide Butler instructions
 
 An operator may create one `.butler/BUTLER.md` under Core's data directory
-(`--data-dir` or `NEBULA_V3_DATA_DIR`). Nebula neither bundles nor writes this
-file. Its path and read state appear in Butler Oversight. Core reads a regular,
+(`--data-dir` or `NEBULA_V3_DATA_DIR`) through Settings → Automation → Butler
+instructions, or by placing a file on the Core host. Nebula does not bundle a
+default file. The authenticated `GET` and `PUT /api/v1/butler/instructions`
+endpoints expose the saved text and support digest-checked updates. Settings
+accepts a UTF-8 Markdown upload or direct edits and confirms the saved version
+through a fresh Core read. Its path and read state also appear in Butler
+Oversight. Core reads a regular,
 UTF-8 file without following symlinks, limits it to 32 KiB, and reads it again
 for every scheduled run. An edit or removal during a run stops later writes
 from that run; a new file version is considered at the next check.

@@ -14,11 +14,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-instructions",
     label: "Nebula-wide Butler instructions",
-    description: "Find the user-owned BUTLER.md path and scheduled Butler status",
+    description: "Upload or edit the Nebula-wide BUTLER.md file and check its status",
     category: "Automation",
     scope: "Workspace",
-    target: "butler-settings",
-    keywords: ["butler", "butler.md", ".butler", "always on", "15 minutes", "scheduled", "act", "projects", "goals"],
+    target: "butler-instructions-settings",
+    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals"],
   },
   {
     id: "settings.butler-voice",

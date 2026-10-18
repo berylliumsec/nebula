@@ -2674,6 +2674,12 @@ def create_app(
     butler_oversight.improvement_service = butler_improvements
     from .butler_recovery import ButlerRecoveryAgent, ButlerRecoveryService
 
+    butler_instructions_root = (
+        Path(execution_data_root).expanduser().resolve()
+        if execution_data_root is not None
+        else browser_root
+    )
+    harness_runtime.butler_instructions_root = butler_instructions_root
     butler_oversight.recovery_service = ButlerRecoveryService(
         store,
         ButlerRecoveryAgent(
@@ -2683,6 +2689,7 @@ def create_app(
             artifact_store=artifact_store,
             work=control_assistant_work,
             memory=butler_memory_service,
+            instructions_root=butler_instructions_root,
             settings_api=settings_assistant_api,
             notebooks=(
                 harness_runtime.mcp_service.notebook_tools.notebooks
@@ -2691,6 +2698,7 @@ def create_app(
                 else None
             ),
         ),
+        instructions_root=butler_instructions_root,
     )
     if tool_platform is not None:
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
@@ -11521,6 +11529,13 @@ def create_app(
     )
     app.include_router(
         butler_router(butler_oversight),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+    from .butler_instructions_management import butler_instructions_router
+
+    app.include_router(
+        butler_instructions_router(butler_instructions_root),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )

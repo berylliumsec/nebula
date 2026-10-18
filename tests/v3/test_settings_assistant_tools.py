@@ -93,7 +93,7 @@ def test_catalog_covers_settings_destinations_without_secrets():
         next(
             item for item in result["settings"] if item["id"] == "butler-instructions"
         )["url"]
-        == "/settings#butler-settings"
+        == "/settings#butler-instructions-settings"
     )
     assert project_policy["direct_changes"] == []
     assert {item["name"] for item in result["actions"]} == {

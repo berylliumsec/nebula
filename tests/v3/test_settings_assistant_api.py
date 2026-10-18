@@ -112,6 +112,35 @@ def test_settings_api_discovers_and_reads_back_core_wide_voice_timeout(tmp_path)
     asyncio.run(journey())
 
 
+def test_settings_api_discovers_and_reads_back_nebula_wide_butler_file(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    gateway = SettingsAssistantApi(
+        create_app(store, auth_token="test-token", execution_data_root=tmp_path),
+        "test-token",
+    )
+    schema = gateway.schema(path="butler/instructions", method="PUT")
+    assert schema["path"] == "/api/v1/butler/instructions"
+    assert schema["request_body"]
+
+    async def journey():
+        current = await gateway.request(
+            project.id, method="GET", path="butler/instructions"
+        )
+        assert current["result"]["status"] == "missing"
+        saved = await gateway.request(
+            project.id,
+            method="PUT",
+            path="butler/instructions",
+            body={"content": "Check Act projects.", "expected_sha256": None},
+        )
+        assert saved["read_back"] is True
+        assert saved["result"]["status"] == "ready"
+        assert saved["result"]["content"] == "Check Act projects."
+
+    asyncio.run(journey())
+
+
 def test_settings_api_redacts_pairing_secret(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     project = store.create(Engagement(name="Selected"))

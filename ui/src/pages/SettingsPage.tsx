@@ -18,6 +18,7 @@ import { EnvironmentSettings } from "../components/EnvironmentSettings";
 import { HarnessSettings } from "../components/HarnessSettings";
 import { RuntimeUsagePanel } from "../components/RuntimeUsagePanel";
 import { PostToolAssistantSettings } from "../components/PostToolAssistantSettings";
+import { ButlerInstructionsSettings } from "../components/ButlerInstructionsSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { THEME_OPTIONS, useTheme } from "../state/ThemeContext";
 import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
@@ -66,7 +67,7 @@ function elapsedLabel(startedAt: string | undefined, now: number): string | unde
 
 function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
   if (["usage-settings", "runtime-usage"].includes(hash)) return "usage-settings";
-  if (["automation-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
+  if (["automation-settings", "butler-instructions-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
   if (["environments-settings", "ssh-environment-settings"].includes(hash)) return "environments-settings";
   if (["integrations-settings", "storage-integration-settings", "typesafe-integration-settings", "web-search-runtime-settings"].includes(hash)) return "integrations-settings";
   if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
@@ -290,7 +291,9 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       const focusTarget = target?.matches("details") ? group.querySelector<HTMLElement>("summary") : target?.querySelector<HTMLElement>("h2, h3") ?? group.querySelector<HTMLElement>("summary");
       focusTarget?.setAttribute("tabindex", "-1");
       focusTarget?.focus({ preventScroll: true });
-      group.scrollIntoView?.({ block: "start" });
+      // Hash navigation must settle before the newly focused control can be tapped.
+      // Smooth scrolling can move a phone target between touch hit testing and click.
+      group.scrollIntoView?.({ block: "start", behavior: "instant" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [embeddedTarget, locationHash, openAdvancedGroup, settingsSection]);
@@ -867,6 +870,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       </section>
       </SettingsGroup>
       <SettingsGroup id="automation-settings" title="Automation" summary="Harnesses, follow-up, and isolated runtimes" open={openAdvancedGroup === "automation-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "automation-settings"}>
+      <ButlerInstructionsSettings api={api} previewMode={previewMode} />
       <PostToolAssistantSettings api={api} engagementId={engagement?.id} providers={providers} previewMode={previewMode} />
       <HarnessSettings />
       <AutomationRuntimeSettings />
