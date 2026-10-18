@@ -89,8 +89,7 @@ def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
         "Where do I put the Nebula-wide BUTLER.md instructions for idle projects?"
     )
     assert any(
-        ".butler/BUTLER.md" in str(item["text"])
-        and "15 minutes" in str(item["text"])
+        ".butler/BUTLER.md" in str(item["text"]) and "15 minutes" in str(item["text"])
         for item in matches
     )
 

@@ -22,13 +22,19 @@ def test_authenticated_butler_file_edit_create_reload_and_stale_conflict(tmp_pat
         assert (
             client.put(
                 "/api/v1/butler/instructions",
-                json={"content": "Wake and inspect Act projects.\n", "expected_sha256": None},
+                json={
+                    "content": "Wake and inspect Act projects.\n",
+                    "expected_sha256": None,
+                },
             ).status_code
             == 401
         )
         created = client.put(
             "/api/v1/butler/instructions",
-            json={"content": "Wake and inspect Act projects.\n", "expected_sha256": None},
+            json={
+                "content": "Wake and inspect Act projects.\n",
+                "expected_sha256": None,
+            },
             headers=headers,
         )
         assert created.status_code == 200, created.text
@@ -37,7 +43,9 @@ def test_authenticated_butler_file_edit_create_reload_and_stale_conflict(tmp_pat
         assert first["content"] == path.read_text(encoding="utf-8")
         assert read_butler_instructions(tmp_path).sha256 == first["sha256"]
         assert path.stat().st_mode & 0o777 == 0o600
-        assert client.get("/api/v1/butler/instructions", headers=headers).json() == first
+        assert (
+            client.get("/api/v1/butler/instructions", headers=headers).json() == first
+        )
         updated = client.put(
             "/api/v1/butler/instructions",
             json={
@@ -71,7 +79,10 @@ def test_butler_file_editor_repairs_invalid_content_and_rejects_unsafe_paths(tmp
         assert invalid["status"] == "invalid" and invalid["sha256"]
         repaired = client.put(
             "/api/v1/butler/instructions",
-            json={"content": "Only inspect due work.", "expected_sha256": invalid["sha256"]},
+            json={
+                "content": "Only inspect due work.",
+                "expected_sha256": invalid["sha256"],
+            },
             headers=headers,
         )
         assert repaired.status_code == 200, repaired.text

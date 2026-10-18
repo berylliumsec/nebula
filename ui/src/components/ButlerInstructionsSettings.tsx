@@ -8,6 +8,7 @@ import {ModalSurface} from "./DialogSystem";
 import {EditorMarkdownPreview} from "./EditorMarkdownPreview";
 import {announceSettingsSaved} from "./SettingsSaveFeedback";
 import {StatusChip} from "./SurfacePrimitives";
+import {logCaughtDiagnostic} from "../diagnostics/logger";
 import styles from "./ButlerInstructionsSettings.module.css";
 
 const MAX_FILE_BYTES = 32_768;
@@ -41,7 +42,9 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
         setError(undefined);
       })
       .catch((caught) => {
-        if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Could not load Butler instructions.");
+        if (controller.signal.aborted) return;
+        void logCaughtDiagnostic("interface.butler_instructions.load_failed", "Butler instructions could not be loaded.", caught, "butler");
+        setError(caught instanceof Error ? caught.message : "Could not load Butler instructions.");
       })
       .finally(() => {if (!controller.signal.aborted) setLoading(false);});
     return () => controller.abort();
@@ -79,6 +82,7 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
       setView(next.status === "ready" ? "preview" : "edit");
       setConfirmClose(false);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_instructions.reload_failed", "Butler instructions could not be reloaded.", caught, "butler");
       setError(caught instanceof Error ? caught.message : "Could not reload Butler instructions.");
     } finally {
       setLoading(false);
@@ -101,12 +105,16 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
     }
     try {
       const content = new TextDecoder("utf-8", {fatal: true}).decode(await file.arrayBuffer());
-      if (!content.trim()) throw new Error("BUTLER.md needs non-empty instructions.");
+      if (!content.trim()) {
+        setError("BUTLER.md needs non-empty instructions.");
+        return;
+      }
       setDraft(content);
       setView("edit");
       setOpen(true);
       setNotice(`Loaded ${file.name}. Review the text, then save it to Core.`);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_instructions.upload_failed", "The selected Butler file could not be read as UTF-8.", caught, "butler");
       setError(caught instanceof Error ? caught.message : "Could not read the selected file.");
     }
   };
@@ -127,6 +135,7 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
       announceSettingsSaved("Butler instructions saved on Core.");
       setNotice("Saved on Core. Butler will read this version at its next scheduled check.");
     } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_instructions.save_failed", "Butler instructions could not be confirmed on Core.", caught, "butler");
       const message = caught instanceof Error ? caught.message : "Could not save Butler instructions.";
       setError(message.includes("changed since") || message.includes("409")
         ? "BUTLER.md changed elsewhere. Your draft is still here; copy it if needed, then reload the saved file before saving."
