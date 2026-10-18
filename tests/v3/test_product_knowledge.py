@@ -72,6 +72,19 @@ def test_product_search_finds_other_operator_destinations(monkeypatch):
         assert any(item["heading"] == destination for item in matches), question
 
 
+def test_product_search_explains_mcp_directory_and_full_schema_cost(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "MCP tool directory on demand checked servers always loaded full schemas"
+    )
+    assert any(
+        "compact" in str(item["text"]).lower()
+        and "full" in str(item["text"]).lower()
+        and "schema" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_explains_harness_goal_blocking(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

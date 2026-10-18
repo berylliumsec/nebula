@@ -360,14 +360,17 @@ the Core environment, and HTTP endpoints must use HTTPS unless they are on
 loopback. Do not suggest enabling a server the operator has not reviewed, and do
 not ask the operator to paste secret values into chat.
 
-Tools from MCP servers load on demand. Instead of sending every schema with
-each request, the assistant searches them with `tool_catalog.search`, reads a
-schema with `tool_catalog.load`, and runs one through `tool_catalog.call`; the
-tool's own approval and scope rules still apply. Search runs locally on the
-Nebula host using the same embedding model as project documents, and uses
-keyword matching until that model is ready. Loading on demand is on for every
-project; a client can turn it off per project by setting `on_demand_tools` to
-false on the project scope, which sends every tool with every request again.
+Tools from unticked MCP servers load on demand. The assistant receives a compact
+directory of their names, servers, and short purposes on every routing request,
+including after chat compaction. It searches with `tool_catalog.search`, reads a
+full schema with `tool_catalog.load`, and runs one through `tool_catalog.call`;
+the tool's own approval and scope rules still apply. Ticked MCP servers and
+project-pinned tools still send their full schemas with every request. Search
+runs locally on the Nebula host using the same embedding model as project
+documents, and uses keyword matching until that model is ready. Loading on
+demand is on for every project; a client can turn it off per project by setting
+`on_demand_tools` to false on the project scope, which sends every tool with
+every request again.
 Give a server a short description of what it is for (Edit, or `description`
 in an imported file): Jev ranks servers by it, and when one of the server's
 tools is picked for a turn the assistant is told which server it comes from and
