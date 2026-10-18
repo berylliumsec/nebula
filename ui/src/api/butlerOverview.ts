@@ -2,7 +2,7 @@ import type { ApiClient } from "./client";
 
 export type ButlerAuthority = "watch" | "steer" | "delegate" | "act";
 export type ButlerActorRole = "main_agent" | "subagent";
-export type ButlerDelegateAction = "pause_urgent_machine_blocker";
+export type ButlerDelegateAction = "pause_urgent_machine_blocker" | "force_one_task_plan";
 
 export interface ButlerAuthorityPolicy {
   projectId: string;

@@ -172,6 +172,7 @@ type AuthorityEditorState = {
   policy?: ButlerAuthorityPolicy;
   draftAuthority: ButlerAuthority;
   pauseUrgentMachineBlocker: boolean;
+  forceOneTaskPlan: boolean;
   loading: boolean;
   saving: boolean;
   error?: string;
@@ -188,6 +189,7 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
 }) {
   const selectId = useId();
   const grantId = useId();
+  const planGrantId = useId();
   const [open, setOpen] = useState(false);
   const [reload, setReload] = useState(0);
   const [editor, setEditor] = useState<AuthorityEditorState>();
@@ -200,14 +202,14 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
   useEffect(() => {
     if (!open || !editable || !api || coreState !== "online") return;
     const controller = new AbortController();
-    setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false, loading: true, saving: false });
+    setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false, forceOneTaskPlan: false, loading: true, saving: false });
     void getButlerAuthority(api, projectId, controller.signal).then((policy) => {
       if (!controller.signal.aborted) setEditor({ projectId, policy, draftAuthority: policy.authority,
-        pauseUrgentMachineBlocker: policy.delegateActions.includes("pause_urgent_machine_blocker"), loading: false, saving: false });
+        pauseUrgentMachineBlocker: policy.delegateActions.includes("pause_urgent_machine_blocker"), forceOneTaskPlan: policy.delegateActions.includes("force_one_task_plan"), loading: false, saving: false });
     }).catch((caught) => {
       if (controller.signal.aborted) return;
       void logCaughtDiagnostic("interface.butler_oversight.authority_load_failed", "Butler authority could not be loaded.", caught, "butler_oversight");
-      setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false,
+      setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false, forceOneTaskPlan: false,
         loading: false, saving: false, error: caught instanceof Error ? caught.message : "Could not load saved authority." });
     });
     return () => controller.abort();
@@ -217,14 +219,16 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
     if (!api || coreState !== "online" || !current?.policy || current.saving || current.conflict) return;
     const policy = current.policy;
     const authority = current.draftAuthority;
-    const grants = (authority === "delegate" || authority === "act") && current.pauseUrgentMachineBlocker && policy.supportedActions.includes("pause_urgent_machine_blocker")
-      ? ["pause_urgent_machine_blocker" as const] : [];
+    const grants = authority === "delegate" || authority === "act" ? [
+      ...(current.pauseUrgentMachineBlocker && policy.supportedActions.includes("pause_urgent_machine_blocker") ? ["pause_urgent_machine_blocker" as const] : []),
+      ...(current.forceOneTaskPlan && policy.supportedActions.includes("force_one_task_plan") ? ["force_one_task_plan" as const] : []),
+    ] : [];
     setEditor((previous) => previous?.projectId === projectId ? { ...previous, saving: true, error: undefined, saved: false } : previous);
     try {
       const updated = await updateButlerAuthority(api, policy, authority, grants);
       if (!alive.current || updated.projectId !== projectId) return;
       setEditor({ projectId, policy: updated, draftAuthority: updated.authority,
-        pauseUrgentMachineBlocker: updated.delegateActions.includes("pause_urgent_machine_blocker"), loading: false, saving: false, saved: true });
+        pauseUrgentMachineBlocker: updated.delegateActions.includes("pause_urgent_machine_blocker"), forceOneTaskPlan: updated.delegateActions.includes("force_one_task_plan"), loading: false, saving: false, saved: true });
       await onSaved();
     } catch (caught) {
       if (!alive.current) return;
@@ -238,6 +242,7 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
 
   const supportedStatus = current?.policy?.supportedActions.includes("request_parent_status") ?? false;
   const supportedPause = current?.policy?.supportedActions.includes("pause_urgent_machine_blocker") ?? false;
+  const supportedPlanForce = current?.policy?.supportedActions.includes("force_one_task_plan") ?? false;
   const description = current?.draftAuthority === "watch" ? "Watch tracks goal state and reports incidents."
     : current?.draftAuthority === "act" ? "Act investigates project agent problems, uses available controls to repair them, and checks the result. Actions appear in Oversight."
     : current?.draftAuthority === "steer" ? supportedStatus
@@ -248,8 +253,9 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
         : supportedStatus ? "Delegate can request parent status. An urgent pause requires the separate grant below."
           : "No automatic Delegate actions are available in this build.";
   const savedGrant = current?.policy?.delegateActions.includes("pause_urgent_machine_blocker") ?? false;
+  const savedPlanGrant = current?.policy?.delegateActions.includes("force_one_task_plan") ?? false;
   const dirty = current?.policy && (current.draftAuthority !== current.policy.authority
-    || ((current.draftAuthority === "delegate" || current.draftAuthority === "act") && current.pauseUrgentMachineBlocker !== savedGrant));
+    || ((current.draftAuthority === "delegate" || current.draftAuthority === "act") && (current.pauseUrgentMachineBlocker !== savedGrant || current.forceOneTaskPlan !== savedPlanGrant)));
 
   return <details className={styles.disclosure} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>Oversight settings</summary>
@@ -263,12 +269,17 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
             const authority = event.target.value as ButlerAuthority;
             setEditor((previous) => previous?.projectId === projectId ? { ...previous, draftAuthority: authority,
               pauseUrgentMachineBlocker: (authority === "delegate" || authority === "act") && previous.pauseUrgentMachineBlocker, error: undefined, saved: false } : previous);
+            setEditor((previous) => previous?.projectId === projectId ? { ...previous, forceOneTaskPlan: (authority === "delegate" || authority === "act") && previous.forceOneTaskPlan } : previous);
           }}>{levels.map((level) => <option key={level} value={level}>{level[0].toUpperCase() + level.slice(1)}</option>)}</select>
           {!levels.includes(current.policy.authority) && <p className={styles.note}>The saved authority is unavailable in this build. Ask an administrator to review it.</p>}
           <p className={styles.note}>{description}</p>
           {(current.draftAuthority === "delegate" || current.draftAuthority === "act") && supportedPause && <label className={styles.grantLabel} htmlFor={grantId}>
             <input id={grantId} type="checkbox" checked={current.pauseUrgentMachineBlocker} disabled={coreState !== "online" || current.saving || current.conflict} onChange={(event) => setEditor((previous) => previous?.projectId === projectId ? { ...previous, pauseUrgentMachineBlocker: event.target.checked, saved: false } : previous)} />
             <span>Allow urgent pause of a running main goal after a reviewed, agent-reported machine blocker.</span>
+          </label>}
+          {(current.draftAuthority === "delegate" || current.draftAuthority === "act") && supportedPlanForce && <label className={styles.grantLabel} htmlFor={planGrantId}>
+            <input id={planGrantId} type="checkbox" checked={current.forceOneTaskPlan} disabled={coreState !== "online" || current.saving || current.conflict} onChange={(event) => setEditor((previous) => previous?.projectId === projectId ? { ...previous, forceOneTaskPlan: event.target.checked, saved: false } : previous)} />
+            <span>Allow Butler to require one Core plan after a reviewed goal plan change.</span>
           </label>}
           {current.draftAuthority === "delegate" && supportedPause && <p className={styles.note}>The pause is reversible and audited. Butler cannot approve pending requests in Delegate mode.</p>}
           {dirty && <button className="button quiet" type="button" disabled={coreState !== "online" || current.saving || current.conflict || !levels.includes(current.draftAuthority)} onClick={() => void save()}>{current.saving ? "Saving…" : "Save authority"}</button>}
