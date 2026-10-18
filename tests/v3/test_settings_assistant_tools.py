@@ -54,7 +54,7 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 20
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 21
     assert (
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"
@@ -87,6 +87,12 @@ def test_catalog_covers_settings_destinations_without_secrets():
     ] == ["device_theme"]
     assert (
         next(item for item in result["settings"] if item["id"] == "butler-voice")["url"]
+        == "/settings#butler-settings"
+    )
+    assert (
+        next(
+            item for item in result["settings"] if item["id"] == "butler-instructions"
+        )["url"]
         == "/settings#butler-settings"
     )
     assert project_policy["direct_changes"] == []

@@ -31,6 +31,22 @@ function client(request: ReturnType<typeof vi.fn>): ApiClient {
 }
 
 describe("ButlerOversight", () => {
+  it("shows the Nebula-wide user file path and refreshes its scheduled state", async () => {
+    const user = userEvent.setup();
+    const path = "/tmp/nebula-data/.butler/BUTLER.md";
+    const request = vi.fn()
+      .mockResolvedValueOnce({ ...overview, global_instructions: { status: "ready", path, last_check_at: "2026-10-18T12:00:00Z" } })
+      .mockResolvedValue({ ...overview, global_instructions: { status: "missing", path } });
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Nebula-wide Butler"));
+    expect(screen.getByText(path)).toBeVisible();
+    expect(screen.getByText(/Butler checks once every 15 minutes/)).toBeVisible();
+    expect(screen.getByText("Last check:")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh Butler oversight" }));
+    expect(await screen.findByText("No file")).toBeVisible();
+    expect(screen.getByText(path)).toBeVisible();
+  });
+
   it("opens the affected mission from a pending review incident", async () => {
     const request = vi.fn().mockResolvedValue({
       ...overview,

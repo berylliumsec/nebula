@@ -1,34 +1,32 @@
 {
-  "change_digest": "583f1b92be4f74710fc0e2ca159d8ee3731b712ac8014816e4d66ef61568b8ed",
-  "reviewed_by": "Codex focused review of Vulture findings and deleted Python code",
-  "reason": "Twelve collected Python cases cover authenticated Core startup and project CRUD, chat header and subagent flows, provider message handling, harness and goal continuation, SSH environment selection, execution review, terminal parsing, and vulnerability-feed normalization. The newly merged harness-goal case covers the same command path as the removed unreachable return.",
-  "exclusions": "No frontend or native source changed, so no unit tests at those layers are selected. No browser workflow changed, so no Playwright entry is selected; a disposable LAN Core with the candidate production bundle is exercised manually. Unrelated Python tests and full suites are excluded.",
+  "change_digest": "847edf43f0b7090db02f53d6acbd78161d905fadab1643de6d0d01f2b66f4ba1",
+  "reviewed_by": "Codex focused review of Nebula-wide Butler file, scheduler, authority, action, UI, and product-help paths",
+  "reason": "Twelve collected Python cases cover the user-owned instruction reader, one idle global clock, authenticated status, Act-scoped child-project and goal creation, existing periodic behavior, settings discovery, and bundled Chroma source-digest sync. Thirty-three frontend cases cover Oversight refresh and assistant action routing. The eight catalogued real-Core browser entries exercise the same new scheduled journey at desktop and mobile widths with a production bundle and synthetic LAN Core.",
+  "exclusions": "No native code changed, so native tests are excluded. Unrelated Python and frontend suites, unrelated Playwright areas, and full suites are excluded. Physical-device Safari is unavailable; mobile WebKit runs in browser emulation. The inert local model verifies scheduling and roster inspection; no real provider spending or external project data is involved.",
   "expected_tests": {
     "python": 12,
-    "frontend": 0,
+    "frontend": 33,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.11"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
-    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
-    "tests/v3/test_chat_polling_cost.py::test_headers_reread_only_the_turn_that_changed",
-    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result",
-    "tests/v3/test_chat.py::test_plain_stream_recovers_an_unrequested_tool_call",
-    "tests/v3/test_providers.py::test_openai_compatible_uses_chat_completions_shape",
-    "tests/v3/test_harness_commands.py::test_grok_goal_continues_vendor_turns_until_goal_is_complete",
-    "tests/v3/test_ssh_environments.py::test_chat_selection_defaults_to_enabled_hosts_and_rejects_disabled",
-    "tests/v3/test_executions.py::test_reviewed_execution_is_exact_isolated_redacted_and_idempotent",
-    "tests/v3/test_terminal_history.py::test_nonce_bound_frames_capture_only_command_result_and_detect_truncation",
-    "tests/v3/test_intelligence.py::test_nvd_exact_version_cpe_normalizes_to_a_version_not_an_open_range",
-    "tests/v3/test_harness_chat_goals.py::test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing"
+    "tests/v3/test_butler_instructions.py",
+    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
+    "tests/v3/test_butler_capabilities.py::test_background_act_excludes_browser_and_child_chat_changes",
+    "tests/v3/test_butler_recovery.py::test_periodic_check_is_coalesced_and_act_revocation_stops_new_cases",
+    "tests/v3/test_butler_recovery.py::test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_nebula_wide_butler_instructions",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ButlerOversight.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": ["area:butler-global"]
 }

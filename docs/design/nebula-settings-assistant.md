@@ -34,6 +34,7 @@ Settings assistant and the complete destination catalog.
 | Start the headless security browser | An explicit start request asks Core to establish the selected project's session and reports the observed status or startup error | Core agent-security session | API, browser, real Core and LAN |
 | Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
 | Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
+| Find Nebula-wide Butler instructions | The catalog opens Butler settings, which show the data-directory `.butler/BUTLER.md` path, file state and last scheduled check without creating or editing the user-owned file | Core data directory and durable Butler global clock | Tool unit, component and real Core |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets | Core sessions, turns, queues and runs | Tool unit and real Core |
@@ -41,7 +42,8 @@ Settings assistant and the complete destination catalog.
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 
-The setting catalog lists every Settings section and Butler's Voice control. Dedicated actions handle
+The setting catalog lists every Settings section, Butler's Voice control, and
+the Nebula-wide Butler instruction status. Dedicated actions handle
 device appearance, provider and harness default models, post-tool preferences,
 project execution mode, target scope and headless browser sessions. For other
 Core-backed settings, `nebula.settings.api_schema` lists only the current build's
@@ -151,6 +153,35 @@ goal. Core pauses a goal for review after three automatic responses with no
 recorded tool activity, so a status-only loop cannot continue indefinitely.
 The agent's block action is scoped to the goal on its active turn and cannot
 choose another conversation's goal.
+
+## Nebula-wide Butler instructions
+
+An operator may create one `.butler/BUTLER.md` under Core's data directory
+(`--data-dir` or `NEBULA_V3_DATA_DIR`). Nebula neither bundles nor writes this
+file. Its path and read state appear in Butler Oversight. Core reads a regular,
+UTF-8 file without following symlinks, limits it to 32 KiB, and reads it again
+for every scheduled run. An edit or removal during a run stops later writes
+from that run; a new file version is considered at the next check.
+
+When the file exists, Core records one Nebula-wide periodic check at least
+15 minutes after the preceding check. It can run with no running goals. A
+configured Butler chat in an Act project hosts the run. Butler reads the live
+Act-project roster and chooses where to work. Core still enforces each target
+project's Act revision and privacy boundary for reads and writes. The bounded
+global actions can resume a paused project or main goal, create and start a
+main goal, or create a managed child project under an Act parent. A child may
+receive an initial goal as part of its creation; it otherwise starts with the
+normal Watch authority. Goal and child-project creation check existing work
+before writing. The model cannot grant Act to another project, expand scope,
+or treat a pending approval or uncertain write as permission to retry.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover | Butler Oversight shows the path, file state, and last scheduled check | Core data directory and global clock | Component, real Core and browser |
+| Schedule | Exactly one global check is recorded after 15 minutes even if all goals are idle | Core global state and event stream | Core unit and real Core |
+| Choose | Butler can inspect all eligible Act projects before selecting work | Core project and authority records | Tool unit and real Core |
+| Act | A stale Act revision, removed file, local-only boundary, or stale goal revision prevents a write | Core policy, instruction digest and goal records | Core unit and real Core |
+| Reconnect | The clock and action receipts survive Core restart without duplicating a project or goal | Core database and recovery cases | Core unit and real Core |
 
 ## Bundled product guidance
 

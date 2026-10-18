@@ -1,0 +1,154 @@
+"""Nebula-wide, operator-owned Butler mandate and durable scheduled clock."""
+
+from __future__ import annotations
+
+import json
+from datetime import timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+
+from nebula.v3.api import create_app
+from nebula.v3.butler_authority import policy_id
+from nebula.v3.butler_instructions import (
+    ButlerInstructionsError,
+    MAX_INSTRUCTIONS_BYTES,
+    read_butler_instructions,
+)
+from nebula.v3.butler_oversight import project_state_id, project_stream_id
+from nebula.v3.butler_recovery import (
+    ButlerRecoveryAgent,
+    ButlerRecoveryService,
+    GLOBAL_STATE_ID,
+)
+from nebula.v3.domain import (
+    ButlerAuthorityPolicy,
+    ButlerGlobalState,
+    ButlerProjectState,
+    ButlerRecoveryCase,
+    ChatSession,
+    Engagement,
+    ProviderProfile,
+    utc_now,
+)
+from nebula.v3.storage import NebulaStore
+
+
+def _write(tmp_path, text: str = "Check idle work.") -> None:
+    folder = tmp_path / ".butler"
+    folder.mkdir(exist_ok=True)
+    (folder / "BUTLER.md").write_text(text, encoding="utf-8")
+
+
+def test_user_owned_instructions_are_optional_fresh_bounded_and_symlink_safe(tmp_path):
+    assert read_butler_instructions(tmp_path) is None
+    _write(tmp_path)
+    first = read_butler_instructions(tmp_path)
+    assert first is not None and first.text == "Check idle work."
+    _write(tmp_path, "Check projects and goals.")
+    second = read_butler_instructions(tmp_path)
+    assert second is not None and second.sha256 != first.sha256
+    _write(tmp_path, "a" * (MAX_INSTRUCTIONS_BYTES + 1))
+    with pytest.raises(ButlerInstructionsError, match="32 KiB"):
+        read_butler_instructions(tmp_path)
+    (tmp_path / ".butler" / "BUTLER.md").unlink()
+    (tmp_path / ".butler" / "BUTLER.md").symlink_to(tmp_path / "outside.md")
+    with pytest.raises(ButlerInstructionsError, match="safely read"):
+        read_butler_instructions(tmp_path)
+
+
+def test_one_global_check_wakes_idle_projects_and_persists_across_restart(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    projects = [store.create(Engagement(name=name)) for name in ("First", "Second")]
+    provider = store.create(
+        ProviderProfile(name="Fixture", provider_type="ollama", is_local=True)
+    )
+    worker_id = "worker-1"
+    for project in projects:
+        store.create(
+            ButlerAuthorityPolicy(
+                id=policy_id(project.id), engagement_id=project.id, authority="act"
+            )
+        )
+        store.create(
+            ButlerProjectState(
+                id=project_state_id(project.id),
+                engagement_id=project.id,
+                lease_owner=worker_id,
+                lease_expires_at=utc_now() + timedelta(minutes=10),
+            )
+        )
+        store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Butler",
+                model="fixture-model",
+                provider_profile_id=provider.id,
+                metadata={"control_assistant": True},
+            )
+        )
+    recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
+    assert recovery.global_status()["status"] == "missing"
+    assert not recovery.fire_global_periodic_check(projects[0].id, worker_id)
+    _write(tmp_path)
+    anchor = recovery._global_anchor()
+    assert anchor in {project.id for project in projects}
+    other = next(project.id for project in projects if project.id != anchor)
+    assert not recovery.fire_global_periodic_check(other, worker_id)
+    assert recovery.fire_global_periodic_check(anchor, worker_id)
+    assert not recovery.fire_global_periodic_check(anchor, worker_id)
+    assert not recovery.fire_periodic_check(anchor, worker_id)
+    events = store.replay_operation_events(project_stream_id(anchor))
+    assert [event.event_type for event in events] == ["butler.global_periodic_check"]
+    assert recovery.capture_events(anchor, worker_id) == 1
+    case = store.find_entities(ButlerRecoveryCase, {}, engagement_id=anchor)[0]
+    assert case.signal == "butler.global_periodic_check"
+    agent = ButlerRecoveryAgent(
+        store,
+        provider_factory=lambda _: None,
+        harness_runtime=None,
+        artifact_store=None,
+        work=None,
+        memory=object(),
+        instructions_root=tmp_path,
+    )
+    assert json.loads(agent._packet(case))["precedents"] is None
+    assert "Check idle work." in agent._global_instructions(case)
+    state = store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    assert recovery.global_status()["last_check_at"] == state.last_periodic_at
+    restarted = ButlerRecoveryService(store, instructions_root=tmp_path)
+    assert not restarted.fire_global_periodic_check(anchor, worker_id)
+    store.update(
+        ButlerGlobalState,
+        GLOBAL_STATE_ID,
+        {"last_periodic_at": utc_now() - timedelta(minutes=16)},
+        expected_revision=state.revision,
+    )
+    _write(tmp_path, "New operator instructions.")
+    with pytest.raises(ButlerInstructionsError, match="changed"):
+        agent._global_instructions(case)
+    assert restarted.fire_global_periodic_check(anchor, worker_id)
+    assert len(store.replay_operation_events(project_stream_id(anchor))) == 2
+
+
+def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    app = create_app(
+        store,
+        auth_token="test-token",
+        execution_data_root=tmp_path,
+    )
+    route = f"/api/v1/engagements/{project.id}/butler/overview"
+    with TestClient(app) as client:
+        assert client.get(route).status_code == 401
+        missing = client.get(
+            route, headers={"Authorization": "Bearer test-token"}
+        ).json()["global_instructions"]
+        assert missing["status"] == "missing"
+        assert missing["path"] == str(tmp_path / ".butler" / "BUTLER.md")
+        _write(tmp_path)
+        present = client.get(
+            route, headers={"Authorization": "Bearer test-token"}
+        ).json()["global_instructions"]
+        assert present["status"] == "needs_act_host"

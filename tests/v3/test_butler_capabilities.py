@@ -8,12 +8,17 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES, ButlerCapabilities
 from nebula.v3.butler_authority import policy_id
+from nebula.v3.butler_instructions import read_butler_instructions
+from nebula.v3.butler_oversight import ButlerEventPayload, _append_project_event
 from nebula.v3.domain import (
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
     ChatSession,
     Engagement,
     ProviderProfile,
+    EngagementStatus,
+    ChatGoal,
+    utc_now,
 )
 from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
@@ -58,6 +63,169 @@ def _capabilities(tmp_path):
         store, artifacts, selected.id, work=app.state.control_assistant_work
     )
     return store, selected, own_chat, foreign_chat, capabilities
+
+
+def test_global_butler_chooses_act_projects_and_deduplicates_new_work(tmp_path):
+    store, selected, own_chat, foreign_chat, ordinary = _capabilities(tmp_path)
+    other = store.get(Engagement, foreign_chat.engagement_id)
+    selected = store.update(
+        Engagement,
+        selected.id,
+        {"status": EngagementStatus.ACTIVE},
+        expected_revision=selected.revision,
+    )
+    other = store.update(
+        Engagement,
+        other.id,
+        {"status": EngagementStatus.ACTIVE},
+        expected_revision=other.revision,
+    )
+    selected_policy = store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(selected.id), engagement_id=selected.id, authority="act"
+        )
+    )
+    other_policy = store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(other.id), engagement_id=other.id, authority="act"
+        )
+    )
+    folder = tmp_path / ".butler"
+    folder.mkdir()
+    (folder / "BUTLER.md").write_text("Choose work from all Act projects.")
+    digest = read_butler_instructions(tmp_path).sha256
+    with store.transaction(immediate=True) as transaction:
+        event = _append_project_event(
+            transaction,
+            engagement_id=selected.id,
+            event_type="butler.global_periodic_check",
+            payload=ButlerEventPayload(
+                project_id=selected.id,
+                source="core",
+                actor_role="core",
+                summary="Global work check",
+                metrics={"instructions_sha256": digest},
+                verification_state="core_observed",
+            ),
+            idempotency_key="test-global-case",
+            now=utc_now(),
+        )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=selected.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id=event.id,
+            source_event_sequence=event.sequence,
+            authority_revision=selected_policy.revision,
+            status="investigating",
+            summary="Global work check",
+        )
+    )
+    global_butler = ButlerCapabilities(
+        store,
+        ArtifactStore(tmp_path / "artifacts"),
+        selected.id,
+        work=ordinary._work,
+        background_case_id=case.id,
+        instructions_root=tmp_path,
+        background_runtime_local=True,
+    )
+
+    async def scenario():
+        listed = await global_butler.invoke(
+            {"operation": "nebula.global.projects", "arguments": {}}, change=False
+        )
+        assert {item["id"] for item in listed["projects"]} == {
+            selected.id,
+            other.id,
+        }
+        child_args = {
+            "parent_project_id": selected.id,
+            "expected_parent_revision": selected.revision,
+            "expected_authority_revision": selected_policy.revision,
+            "name": "New investigation",
+        }
+        first = await global_butler.invoke(
+            {
+                "operation": "nebula.global.create_child_project",
+                "arguments": child_args,
+            },
+            change=True,
+        )
+        second = await global_butler.invoke(
+            {
+                "operation": "nebula.global.create_child_project",
+                "arguments": child_args,
+            },
+            change=True,
+        )
+        assert first["created"] is True and second["created"] is False
+        assert first["project"]["id"] == second["project"]["id"]
+        child = store.get(Engagement, first["project"]["id"])
+        assert child.parent_engagement_id == selected.id
+        assert child.workspace_path is None
+        assert child.status == EngagementStatus.ACTIVE
+        assert (
+            store.find_entity(ButlerAuthorityPolicy, "engagement_id", child.id) is None
+        )
+
+        goal_args = {
+            "project_id": other.id,
+            "expected_project_revision": other.revision,
+            "expected_authority_revision": other_policy.revision,
+            "backend": "provider",
+            "profile_id": own_chat.provider_profile_id,
+            "model": own_chat.model,
+            "objective": "Map the files",
+            "completion_criteria": ["Report saved"],
+        }
+        created = await global_butler.invoke(
+            {"operation": "nebula.global.create_goal", "arguments": goal_args},
+            change=True,
+        )
+        duplicate = await global_butler.invoke(
+            {"operation": "nebula.global.create_goal", "arguments": goal_args},
+            change=True,
+        )
+        assert created["goal"]["status"] == "draft"
+        assert duplicate["already_exists"] is True
+        assert store.count_entities(ChatGoal, engagement_id=other.id) == 1
+
+        paused = store.update(
+            Engagement,
+            other.id,
+            {"status": EngagementStatus.PAUSED},
+            expected_revision=other.revision,
+        )
+        resumed = await global_butler.invoke(
+            {
+                "operation": "nebula.global.resume_project",
+                "arguments": {
+                    "project_id": other.id,
+                    "expected_project_revision": paused.revision,
+                    "expected_authority_revision": other_policy.revision,
+                },
+            },
+            change=True,
+        )
+        assert resumed["project"]["status"] == "active"
+
+        (folder / "BUTLER.md").write_text("Changed instructions.")
+        with pytest.raises(ValueError, match="changed during this check"):
+            await global_butler.invoke(
+                {
+                    "operation": "nebula.global.create_child_project",
+                    "arguments": {**child_args, "name": "Forbidden after edit"},
+                },
+                change=True,
+            )
+        assert not any(
+            item.name == "Forbidden after edit"
+            for item in store.iter_readable_entities(Engagement)
+        )
+
+    asyncio.run(scenario())
 
 
 def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path):

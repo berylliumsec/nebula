@@ -126,6 +126,14 @@ export function butlerResourceKey(resource: ButlerResource): string {
 
 export interface ButlerOverview {
   projectId: string;
+  globalInstructions?: {
+    status: "ready" | "missing" | "invalid" | "needs_act_host" | "unavailable";
+    path?: string;
+    detail?: string;
+    hostProjectId?: string;
+    lastCheckAt?: string;
+    nextCheckAt?: string;
+  };
   authority: ButlerAuthority;
   authorityRevision?: number;
   delegateActions: ButlerDelegateAction[];
@@ -159,6 +167,14 @@ export interface ButlerOverview {
 
 interface WireButlerOverview {
   project_id: string;
+  global_instructions?: {
+    status: "ready" | "missing" | "invalid" | "needs_act_host" | "unavailable";
+    path?: string | null;
+    detail?: string | null;
+    host_project_id?: string | null;
+    last_check_at?: string | null;
+    next_check_at?: string | null;
+  };
   authority: ButlerAuthority;
   authority_revision?: number | null;
   delegate_actions?: ButlerDelegateAction[];
@@ -294,6 +310,14 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
   }
   return {
     projectId,
+    globalInstructions: wire.global_instructions ? {
+      status: wire.global_instructions.status,
+      path: wire.global_instructions.path ?? undefined,
+      detail: wire.global_instructions.detail ?? undefined,
+      hostProjectId: wire.global_instructions.host_project_id ?? undefined,
+      lastCheckAt: wire.global_instructions.last_check_at ?? undefined,
+      nextCheckAt: wire.global_instructions.next_check_at ?? undefined,
+    } : undefined,
     authority: wire.authority,
     authorityRevision: wire.authority_revision ?? undefined,
     delegateActions: wire.delegate_actions ?? [],

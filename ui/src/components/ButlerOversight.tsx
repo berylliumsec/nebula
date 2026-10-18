@@ -367,6 +367,15 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
     {coreState !== "online" && <p role="status" className={styles.note}>Core is offline. {overview ? "Showing the last overview from this project." : "Reconnect to see watched work."}</p>}
     {error && <div className={styles.error} role="alert"><span>Oversight could not be refreshed. {error}</span><button className="button quiet" type="button" disabled={coreState !== "online"} onClick={() => void refresh()}>Retry</button></div>}
     {overview && <>
+      {overview.globalInstructions && <details className={styles.disclosure}>
+        <summary>Nebula-wide Butler <span>{overview.globalInstructions.status === "ready" ? "Ready" : overview.globalInstructions.status === "missing" ? "No file" : overview.globalInstructions.status === "needs_act_host" ? "Needs Act" : overview.globalInstructions.status === "invalid" ? "Invalid file" : "Unavailable"}</span></summary>
+        <p className={styles.note}>Butler checks once every 15 minutes, including idle projects, and chooses where to work. Changes require Act authority in the target project.</p>
+        {overview.globalInstructions.path && <p className={styles.note}>Add your own instructions at <code>{overview.globalInstructions.path}</code>. Nebula does not create this file.</p>}
+        {overview.globalInstructions.status === "needs_act_host" && <p className={styles.note}>Set one project to Act and configure its Butler chat to host the scheduled run.</p>}
+        {overview.globalInstructions.detail && <p role="alert" className={styles.error}>{overview.globalInstructions.detail}</p>}
+        {overview.globalInstructions.lastCheckAt && <p className={styles.note}>Last check: <time dateTime={overview.globalInstructions.lastCheckAt}>{new Date(overview.globalInstructions.lastCheckAt).toLocaleString()}</time></p>}
+        {overview.globalInstructions.nextCheckAt && <p className={styles.note}>Next due: <time dateTime={overview.globalInstructions.nextCheckAt}>{new Date(overview.globalInstructions.nextCheckAt).toLocaleString()}</time></p>}
+      </details>}
       {overview.capabilities.recovery && (overview.authority === "act" || overview.summary.recoveryCases > 0) && <div className={styles.section} role="region" aria-label="Butler recovery">
         <h3>Autonomous recovery <span>{overview.summary.recoveryActive} active · {overview.summary.recoveryAttention} need attention</span></h3>
         {recoveryAttention.length + recoveryActive.length > 0 ? <ul className={styles.list}>
