@@ -226,6 +226,12 @@ startup, Core mirrors the bundled passages and their precomputed vectors into
 the local Chroma product-help collection. The source digest and passage count
 determine whether the mirror needs replacement; product help remains searchable
 from the bundled index if Chroma is unavailable.
+For MCP cost questions, the assistant explains that unticked, on-demand servers
+contribute a compact name-and-purpose directory to each provider routing request,
+while checked servers and tools pinned under Project policy contribute full
+function schemas each time. It points to Assistant settings for checked servers
+and Project policy for Always loaded tools; unchecking a global server keeps it
+available through the on-demand catalog.
 Provider turns request low effort; Core's provider adapter maps or omits that
 control for the selected model. Harness model options determine low effort and
 fast selection. An existing harness conversation may rebind to its advertised

@@ -151,14 +151,19 @@ the file wins over the Tool approval chosen for the import.
 In a provider chat, the servers ticked under MCP servers in Assistant settings
 are always sent: every usable tool they offer is in the function list of every
 request. Every other enabled, probed server with at least one usable tool is
-available on demand. Its tools are not sent with the request. A server that is
-disabled, has not been probed, or has no usable tool left is not offered and
-does not fail the turn. The on-demand servers join only a turn that already
-uses tools, such as a command-runtime chat or one with a ticked server, so a
-plain chat stays one. A harness chat hands only its ticked servers to the
+available on demand. Their full schemas are not sent with the request. A
+server that is disabled, has not been probed, or has no usable tool left is not
+offered and does not fail the turn. The on-demand servers join only a turn that
+already uses tools, such as a command-runtime chat or one with a ticked server,
+so a plain chat stays one. A harness chat hands only its ticked servers to the
 harness.
 
-Instead of on-demand tools, the assistant sees three fixed tools:
+The assistant receives a compact directory of every on-demand tool's name,
+server, and short purpose on each routing request. Nebula derives the purpose
+from the tool description supplied by the MCP server; an empty purpose means
+the server supplied none. The directory omits parameter schemas and lives in
+the request instructions, so conversation compaction does not remove it. The
+assistant also sees three fixed catalog tools:
 
 - `tool_catalog.search` finds MCP tools by what they do.
 - `tool_catalog.load` returns the full description and input schema for up to
@@ -169,9 +174,9 @@ Core runs the real tool behind `tool_catalog.call`, so its arguments are
 validated against the tool's own schema and its approval, risk, and scope rules
 apply unchanged. Transcripts, approvals, and tool cards show the real tool name.
 
-Because the list of tools sent to the model never changes during a
-conversation, the provider's prompt cache stays valid across steps and turns,
-with any provider.
+The full function list and directory stay stable across a turn, including a
+resumed turn. A later turn sees updated MCP descriptions or availability. A
+provider may cache the repeated prefix, but cache use depends on its route.
 
 Search runs on the Nebula host with the same local embedding model used for
 project documents (all-MiniLM-L6-v2 in the local Chroma index), combined with

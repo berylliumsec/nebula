@@ -1,26 +1,35 @@
 {
-  "change_digest": "0005069bd759cc24264ef9fc3d5c7472b73b8c63643c3610864c359f1c7c9d16",
-  "reviewed_by": "Codex agent focused selection review",
-  "reason": "The provider adapter and saved ChatTurn already preserve cache tokens and billed cost; goal and subagent rollups discard those details. Four selected Python tests verify direct goal charging, budget and terminal behavior, child accrual and settlement without double charging, and a historical migration that repairs only summaries reconciled to durable source turns. A separate synthetic LAN Core check will verify the saved API view and restart persistence. A follow-up names the goal source list separately for Python 3.12 mypy and applies Ruff formatting; the same selected tests cover unchanged runtime behavior.",
-  "exclusions": "No frontend, native, or Playwright tests: this changes only Core usage accounting and a data migration, without adding or changing browser controls, layouts, or client mappings. No full suite, live provider call, production-data write, or live deployment. PostgreSQL migration coverage requires an unavailable test database; the selected migration check uses SQLite.",
-  "python_versions": [
-    "3.12"
-  ],
+  "change_digest": "544a0d8d1cba7a67314273df105f1b4b0cc1dcba23ad03ed405140dbd18b7890",
+  "reviewed_by": "Codex focused review for compact MCP capability directory",
+  "reason": "Fifteen collected Python cases cover complete compact directory content, a 109-tool payload bound, stable schema-free catalog tools, selected and pinned compatibility, real routing through search/load/call, unknown-name rejection, paused-turn resume, context reserve, and bundled product guidance with Chroma digest synchronization. A separate synthetic LAN Core probe validates the provider-facing workflow.",
+  "exclusions": "No frontend component, browser-origin behavior, or native code changed. Frontend, Playwright, native, and unrelated Python suites are excluded. Physical-device testing is not applicable to this provider request construction change.",
+  "expected_tests": {
+    "python": 15,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "expected_tests": {
-    "python": 4,
-    "frontend": 0,
-    "playwright": 0,
-    "native": 0
-  },
   "python": [
-    "tests/v3/test_chat_goals.py::test_charging_a_terminal_goal_records_usage_without_resurrecting_it",
-    "tests/v3/test_chat_goals.py::test_goal_usage_keeps_provider_cache_and_billed_cost",
-    "tests/v3/test_chat_subagent_lifecycle.py::test_settle_charges_only_what_accrual_left_uncharged",
-    "tests/v3/test_cache_usage_migration.py::test_cached_usage_migration_reconciles_goals_and_settled_child_rounds"
+    "tests/v3/test_tool_catalog.py::test_always_loaded_tools_stay_out_of_the_deferred_catalog",
+    "tests/v3/test_tool_catalog.py::test_selected_sources_stay_out_of_the_deferred_catalog",
+    "tests/v3/test_tool_catalog.py::test_catalog_instructions_carry_preloaded_schemas_as_data",
+    "tests/v3/test_tool_catalog.py::test_catalog_instructions_name_each_picks_server_and_describe_it",
+    "tests/v3/test_tool_catalog.py::test_catalog_directory_uses_source_purpose_and_keeps_missing_purpose_empty",
+    "tests/v3/test_tool_catalog.py::test_large_directory_keeps_every_name_without_repeating_full_schemas",
+    "tests/v3/test_tool_catalog.py::test_catalog_digest_is_stable_for_resume",
+    "tests/v3/test_tool_catalog.py::test_tools_array_is_identical_across_search_load_and_call",
+    "tests/v3/test_tool_catalog.py::test_call_to_an_unknown_tool_is_an_error_the_model_can_correct",
+    "tests/v3/test_tool_catalog.py::test_resume_rebuilds_the_on_demand_catalog_from_the_turn",
+    "tests/v3/test_tool_catalog.py::test_prepare_keeps_an_always_loaded_tool_in_the_function_list",
+    "tests/v3/test_chat_context_assembly.py::test_the_reserve_covers_the_largest_catalog_picks_routing_can_send",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_mcp_directory_and_full_schema_cost",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [],
-  "playwright": [],
-  "native": []
+  "native": [],
+  "playwright": []
 }

@@ -243,11 +243,16 @@ def test_catalog_instructions_carry_preloaded_schemas_as_data():
         specs,
     )
     assert "On-demand tools: 3 tools" in text
+    directory = json.loads(
+        text.split("purpose means the source supplied none): ", 1)[1].split("\n", 1)[0]
+    )
+    assert {name for source in directory for name, _ in source["tools"]} == set(specs)
+    assert "input_schema" not in json.dumps(directory)
     assert f'"name":"{CREDENTIAL_TOOL}"' in text
     assert '"input_schema"' in text
     assert f'not loaded: [{{"name":"{MCP_TOOL}"}}]' in text
-    # A receipt from before sources were recorded names no servers.
-    assert '"source"' not in text and "What these sources are for" not in text
+    # The directory needs no selected-source receipt to name every tool.
+    assert "What these sources are for" not in text
     assert catalog_instructions({"deferred": []}, specs) == ""
 
 
@@ -287,7 +292,71 @@ def test_catalog_instructions_name_each_picks_server_and_describe_it():
         'as the operator described them (JSON data): [{"name":"issue-tracker",'
         '"description":"Bugs for the web app."}]'
     ) in text
-    assert "warehouse" not in text
+    # Unpicked servers remain visible in the compact directory.
+    assert '"source":"mcp:warehouse"' in text
+
+
+def test_catalog_directory_uses_source_purpose_and_keeps_missing_purpose_empty():
+    receipt_note = (
+        "\nResults are captured as artifacts and returned as a "
+        "nebula.tool-result/v2 receipt."
+    )
+    named = _spec(MCP_TOOL, "Search tracker issues by keyword." + receipt_note)
+    named = named.model_copy(update={"display_name": "issue-tracker · search_issues"})
+    unnamed = _spec(CREDENTIAL_TOOL, receipt_note, source="mcp:vault")
+    unnamed = unnamed.model_copy(update={"display_name": "vault · rotate_password"})
+    long = _spec(DATABASE_TOOL, "Query " + "records " * 50, source="mcp:warehouse")
+    long = long.model_copy(update={"display_name": "warehouse · run_sql"})
+    specs = {item.name: item for item in (long, unnamed, named)}
+
+    text = catalog_instructions({"deferred": list(reversed(specs))}, specs)
+    directory = json.loads(
+        text.split("purpose means the source supplied none): ", 1)[1]
+    )
+
+    assert [item["source"] for item in directory] == [
+        "issue-tracker",
+        "vault",
+        "warehouse",
+    ]
+    assert directory[0]["tools"] == [[MCP_TOOL, "Search tracker issues by keyword."]]
+    assert directory[1]["tools"] == [[CREDENTIAL_TOOL, ""]]
+    assert len(directory[2]["tools"][0][1]) <= 120
+    assert directory[2]["tools"][0][1].endswith("…")
+    assert "input_schema" not in text
+
+
+def test_large_directory_keeps_every_name_without_repeating_full_schemas():
+    specs = {}
+    for index in range(109):
+        name = f"mcp.synthetic.tool_{index:03d}"
+        spec = _spec(name, "Search synthetic records. " + "topic " * 250)
+        specs[name] = spec.model_copy(
+            update={
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "field " * 300}
+                    },
+                }
+            }
+        )
+
+    directory = catalog_instructions({"deferred": list(specs)}, specs)
+    full = json.dumps(
+        [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "input_schema": spec.input_schema,
+            }
+            for spec in specs.values()
+        ]
+    )
+
+    assert all(name in directory for name in specs)
+    assert "input_schema" not in directory
+    assert len(directory) < len(full) / 10
 
 
 def test_picked_sources_lists_ranked_servers_then_the_owners_of_picks():
@@ -398,6 +467,11 @@ def test_catalog_digest_is_stable_for_resume(tmp_path):
     assert first is not None and second is not None
     assert first.runtime_digest == second.runtime_digest
     assert set(first.specs) == {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL}
+    assert (
+        "enum"
+        not in first.specs[CATALOG_LOAD].input_schema["properties"]["names"]["items"]
+    )
+    assert "enum" not in first.specs[CATALOG_CALL].input_schema["properties"]["name"]
     assert catalog_components(components, deferred=[]) is None
 
 
@@ -510,6 +584,9 @@ def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
     call_tool = next(tool for tool in routing[0].tools if tool.name == CATALOG_CALL)
     assert call_tool.strict is False
     assert "On-demand tools: 1 tools" in routing[0].instructions
+    assert all("Available tool directory" in item.instructions for item in routing)
+    assert MCP_TOOL in routing[0].instructions
+    assert '"input_schema"' not in routing[0].instructions
 
     # The broker ran the real tool with the unwrapped arguments.
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
@@ -806,6 +883,14 @@ def test_resume_rebuilds_the_on_demand_catalog_from_the_turn(tmp_path, monkeypat
 
     assert service.tool_platform.calls[-1] == ["notes", "tracker"]
     assert {MCP_TOOL, NOTES_TOOL, CATALOG_CALL} <= set(resumed.tool_components.specs)
+    before = catalog_instructions(
+        prepared.turn.request_snapshot["tool_catalog"], prepared.tool_components.specs
+    )
+    after = catalog_instructions(
+        resumed.turn.request_snapshot["tool_catalog"], resumed.tool_components.specs
+    )
+    assert before == after
+    assert MCP_TOOL in after
 
 
 def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
@@ -836,11 +921,13 @@ def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
     # The pin covers the one on-demand tool and the selected server is sent
     # whole, so nothing is left to defer and the catalog tools are omitted.
     assert prepared.turn.request_snapshot["tool_catalog"] is None
-    assert set(prepared.tool_components.specs) == {
+    available = set(prepared.tool_components.specs)
+    assert {
         MCP_TOOL,
         NOTES_TOOL,
         NOTES_WRITE_TOOL_NAME,
-    }
+    } <= available
+    assert {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL}.isdisjoint(available)
 
 
 def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):
