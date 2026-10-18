@@ -133,6 +133,8 @@ import type {
   ChatCompletionRequest,
   AssistantDefaults,
   ChatGoal,
+  ChatTaskPlan,
+  ChatPlanDirective,
   ChatContentBlock,
   ChatSessionActivity,
   ChatSubagentView,
@@ -670,6 +672,8 @@ interface TranscriptRowProps {
   replacements: ReplacedMessageGroup[];
   activityItems: HarnessActivityItem[];
   toolCards: ToolLifecycleCard[];
+  taskPlan?: ChatTaskPlan;
+  planDirective?: ChatPlanDirective;
   historicalState?: "loading" | "loaded" | "failed";
   historicalError?: string;
   subagentResult?: ChatSubagentView;
@@ -728,6 +732,7 @@ function ChatSubagentTranscriptGroup({groupKey, messages, results, selectedMessa
  */
 const ChatTranscriptRow = memo(function ChatTranscriptRow({
   message, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
+  taskPlan, planDirective,
   historicalState, historicalError, subagentResult, bookmarked, interactions, answers, waitingLabel,
   harnessProgressDetail, approval, focusPendingAction,
 }: TranscriptRowProps) {
@@ -824,6 +829,16 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
     <div className="chat-message-body">
       <header>{message.role === "assistant" && <><strong>{shared.assistantSource}</strong>{shared.runtimeConfiguration && <span>{shared.runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
+      {taskPlan && <details className="chat-task-plan" open={taskPlan.phase !== "execution"}>
+        <summary><ListTodo size={15} aria-hidden="true" /> Plan before acting <span>{taskPlan.phase.replaceAll("_", " ")} · version {taskPlan.plan_version}</span></summary>
+        {taskPlan.reason && <p role="status">{taskPlan.reason}</p>}
+        {taskPlan.directive_id && <p>Butler required a plan for this task{planDirective ? `: ${planDirective.reason}` : "."}</p>}
+        {taskPlan.steps.length > 0 && <ol>{taskPlan.steps.map((step, index) => <li key={index}><strong>{step.action}</strong><small>Expected: {step.expected_outcome}</small></li>)}</ol>}
+        {taskPlan.tool_names.length > 0 && <p><strong>Tools:</strong> {taskPlan.tool_names.join(", ")}</p>}
+        {taskPlan.native_categories.length > 0 && <p><strong>Native capabilities:</strong> {taskPlan.native_categories.join(", ")}</p>}
+        <p><strong>Files:</strong> {taskPlan.no_file_work ? "No file work" : taskPlan.files.join(", ")}</p>
+        {taskPlan.unresolved_dependencies.length > 0 && <p><strong>Unresolved:</strong> {taskPlan.unresolved_dependencies.join(", ")}</p>}
+      </details>}
       {message.state === "streaming" || message.state === "waiting_approval" ? activityNode : null}
       {message.role === "assistant" && !progressContent && <HarnessThinking items={messageActivityItems} />}
       {message.role === "assistant" && !progressContent && <ThinkingDisclosure
@@ -1456,6 +1471,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [harnessId, setHarnessId] = useState("");
   const [harnessSessionId, setHarnessSessionId] = useState("");
   const [harnessMode, setHarnessMode] = useState("");
+  const [planningEnabled, setPlanningEnabled] = useState(false);
+  const [taskPlans, setTaskPlans] = useState<ChatTaskPlan[]>([]);
+  const [planDirectives, setPlanDirectives] = useState<ChatPlanDirective[]>([]);
   const [harnessReasoningEffort, setHarnessReasoningEffort] = useState("");
   // Provider-side reasoning level. "" means the model's own default, which is
   // what most turns want; Core remembers whatever the operator chose here.
@@ -1970,6 +1988,25 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   ), [savedConversations, sessionActivity, sessionQuery, expandedSubagentParents]);
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+  useEffect(() => {
+    if (!api || !sessionId) return;
+    const controller = new AbortController();
+    const refreshPlans = () => {
+      if (document.visibilityState === "hidden") return;
+      void api.getChatTaskPlans(sessionId, controller.signal).then(result => {
+        if (!controller.signal.aborted) {
+          setTaskPlans(result.plans);
+          setPlanDirectives(result.directives);
+        }
+      }).catch(error => {
+        if (!controller.signal.aborted) void logCaughtDiagnostic("interface.chat.task_plans_refresh_failed", "Task plan activity could not be refreshed.", error, "chat-planning");
+      });
+    };
+    refreshPlans();
+    const interval = window.setInterval(refreshPlans, 10_000);
+    window.addEventListener("focus", refreshPlans);
+    return () => { controller.abort(); window.clearInterval(interval); window.removeEventListener("focus", refreshPlans); };
+  }, [api, sessionId]);
   const notebookPath = view === "chat" && sideView === "notebook" && activeChatSession?.notebookPath
     ? activeChatSession.notebookPath : searchParams.get("notebook") ?? undefined;
   const chooseNotebookPath = useCallback((next: string) => updateSearchParams(params => { if (next) params.set("notebook", next); else params.delete("notebook"); }, {replace: true}), [updateSearchParams]);
@@ -1984,6 +2021,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (!activeChatSession) return;
     if (pendingSubagentSaveSessionRef.current === activeChatSession.id) return;
     const next = activeChatSession.assistantConfig;
+    setPlanningEnabled(next?.planningEnabled ?? activeChatSession.planningEnabled === true);
     if (pendingAgentMessagingSaveSessionRef.current !== activeChatSession.id) {
       setAllowAgentMessaging(next?.allowAgentMessaging ?? activeChatSession.allowAgentMessaging === true);
     }
@@ -2081,6 +2119,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessServiceTier(saved.harnessServiceTier ?? "");
     setHarnessCyberAccessProgram("");
     setHarnessMode(saved.harnessMode ?? "");
+    setPlanningEnabled(false);
     setAllowSubagents(saved.allowSubagents);
     setSubagentProviderId(saved.subagentProviderId ?? "");
     setSubagentHarnessId(saved.subagentHarnessId ?? "");
@@ -2883,6 +2922,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       harnessProfileId: runtimeKind === "harness" ? harnessId : undefined,
       model: model.trim(),
       toolsEnabled: runtimeKind === "harness" ? true : canUseTools,
+      planningEnabled,
       mcpServerIds: selectedMcpIds,
       hookIds: runtimeKind === "provider" ? selectedHookIds : [],
       // The goal's first turn is one Core starts, and it reads these from
@@ -3003,6 +3043,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessActivity(undefined);
     setHarnessActivityError(undefined);
     setHarnessProgress(undefined);
+    setTaskPlans([]);
+    setPlanDirectives([]);
     setMessages([]);
     setReplacedMessages([]);
     // The draft-key effect flushes the outgoing composer text under the
@@ -3903,6 +3945,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setChatError(undefined);
     setFailedProviderRecovery(undefined);
     setHarnessProgress(undefined);
+    setTaskPlans([]);
+    setPlanDirectives([]);
     setHarnessActivity(undefined);
     if (!preserveTranscript) { setMessages(preview?.messages ?? []); setReplacedMessages([]); }
     setToolCards(preview?.toolCards ?? []);
@@ -3927,9 +3971,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
+      setPlanningEnabled(next?.planningEnabled ?? summary.planningEnabled === true);
     }
     let authoritativeHistoryLoaded = false;
     try {
+      void api.getChatTaskPlans(id, loadController.signal).then(result => {
+        if (selectionIsCurrent()) { setTaskPlans(result.plans); setPlanDirectives(result.directives); }
+      }).catch(error => {
+        if (!loadController.signal.aborted) void logCaughtDiagnostic("interface.chat.task_plans_load_failed", "Saved task plans could not be loaded.", error, "chat-planning");
+      });
       const pendingTurnResult = api.getPendingChatTurn(id, loadController.signal).then(
         (turn) => ({turn} as const),
         (error: unknown) => ({error} as const),
@@ -4751,6 +4801,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
+      setPlanningEnabled(next?.planningEnabled ?? summary.planningEnabled === true);
     }
     // Selecting through selectSession advances the selection generation and
     // aborts any in-flight load, so an earlier selection cannot overwrite it.
@@ -4776,6 +4827,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, content: "", reasoning: "" }
         : message));
+      return;
+    }
+    if (streamEvent.type === "task_plan") {
+      setTaskPlans(current => [streamEvent.plan, ...current.filter(item => item.id !== streamEvent.plan.id)]);
       return;
     }
     // Events invalidate the durable snapshot; they never independently resolve
@@ -5398,6 +5453,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       includeKnowledge: nextSettings?.includeKnowledge ?? wantsKnowledge,
       allowCloudKnowledge: nextSettings?.allowCloudKnowledge ?? allowCloudKnowledge,
       toolsEnabled: !embeddedSideChat && (nextSettings?.toolsEnabled ?? (runtimeKind === "provider" ? canUseTools : wantsTools)),
+      planningEnabled: nextSettings?.planningEnabled ?? planningEnabled,
       allowCloudToolResults,
       allowAgentMessaging: !embeddedSideChat && allowAgentMessaging,
       harnessMode: runtimeKind === "harness" ? harnessMode || undefined : undefined,
@@ -6468,6 +6524,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const historicalTurnId = historicalHarnessTurnId(message);
     const interactions = pendingInteractionsByTurn.get(message.harnessTurnId) ?? NO_INTERACTIONS;
     const approvalHere = pendingResponse?.assistantId === message.id && pendingResponseActive ? transcriptApproval : undefined;
+    const rowTurnId = typeof message.metadata?.chat_turn_id === "string" ? message.metadata.chat_turn_id
+      : message.outcomeTurnId ?? (message.state === "streaming" || message.state === "waiting_approval" ? activeProviderTurnIdRef.current : undefined);
+    const taskPlan = message.role === "assistant" ? taskPlans.find(item => item.turn_id === rowTurnId || (message.harnessTurnId && item.harness_turn_id === message.harnessTurnId)) : undefined;
+    const planDirective = taskPlan?.directive_id ? planDirectives.find(item => item.id === taskPlan.directive_id) : undefined;
     return <ChatTranscriptRow
       key={message.runtimeId ?? message.id}
       message={message}
@@ -6481,6 +6541,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       replacements={anchoredReplacements.get(message.id) ?? NO_REPLACEMENTS}
       activityItems={activityItemsByAssistantId.get(message.id) ?? NO_ACTIVITY}
       toolCards={toolCardsByAssistantId.get(message.id) ?? NO_TOOL_CARDS}
+      taskPlan={taskPlan}
+      planDirective={planDirective}
       historicalState={historicalTurnId ? historicalActivityState[historicalTurnId] : undefined}
       historicalError={historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined}
       subagentResult={subagentResultsByMessage.get(message.id)}
@@ -6525,11 +6587,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={assistantSettingsBusy} onChange={(event) => { setHarnessServiceTier(event.target.value); void rememberAssistantDefaults({ harnessServiceTier: event.target.value || null }); setAssistantSettingsStatus("Speed updated. Applies to your next message."); void saveNextTurnSettings({harnessServiceTier: event.target.value || null}); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && (harnessCyberAccessPrograms?.length || harnessCyberAccessProgram) ? <label><span>Cyber access</span><select aria-label="Codex cyber access" value={harnessCyberAccessProgram} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => { setHarnessCyberAccessProgram(event.target.value as "" | "standard" | "daybreakBlue" | "daybreakRed"); setAssistantSettingsStatus("Cyber access updated. Applies to your next message."); void saveNextTurnSettings({harnessCyberAccessProgram: event.target.value || "automatic"}); }}><option value="">Codex automatic</option>{harnessCyberAccessProgram && !harnessCyberAccessPrograms?.includes(harnessCyberAccessProgram) && <option value={harnessCyberAccessProgram}>{harnessCyberAccessProgram} · saved</option>}{harnessCyberAccessPrograms?.map((program) => <option value={program} key={program}>{program === "standard" ? "Standard" : program === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label> : null}
                 {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && selectedHarnessModelOptions && !harnessCyberAccessPrograms?.length && !harnessCyberAccessProgram && <small role="status">This Codex runtime did not advertise a cyber access choice for this model and account.</small>}
-                {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending || assistantSettingsBusy} onChange={(event) => { setHarnessMode(event.target.value); void rememberAssistantDefaults({ harnessMode: event.target.value || null }); void saveNextTurnSettings({harnessMode: event.target.value || null}); }}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
+                {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending || assistantSettingsBusy} onChange={(event) => { const mode = event.target.value; setHarnessMode(mode); if (mode === "plan" || mode === "planning") setPlanningEnabled(false); void rememberAssistantDefaults({ harnessMode: mode || null }); void saveNextTurnSettings({harnessMode: mode || null, ...((mode === "plan" || mode === "planning") ? {planningEnabled: false} : {})}); }}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Plan only" : item.replaceAll("_", " ")}</option>)}</select></label>}
+                <label className="chat-knowledge-toggle" data-guide="plan-before-acting"><input type="checkbox" checked={planningEnabled} disabled={sending || assistantSettingsBusy || (runtimeKind === "harness" && (harnessMode === "plan" || harnessMode === "planning"))} onChange={(event) => { setPlanningEnabled(event.target.checked); void saveNextTurnSettings({planningEnabled: event.target.checked}); }} /><span><strong>Plan before acting</strong><small>Save a task plan before using tools. Work continues automatically under existing permissions.{runtimeKind === "harness" && (harnessMode === "plan" || harnessMode === "planning") ? " Turn off Plan only mode to use this setting." : ""}</small></span></label>
                 </>}
                 </div>
                 {assistantSettingsStatus && <p className="provider-dialog-note" role="status">{assistantSettingsStatus}</p>}
                 {assistantSettingsError && <p className="provider-dialog-note error" role="alert">{assistantSettingsError}</p>}
+                {planDirectives.filter(item => item.status === "pending").map(item => <p className="provider-dialog-note" role="status" key={item.id}>Butler requires a plan for {item.target_kind} {item.target_id}: {item.reason}</p>)}
                 {!shellOnly && <>{runtimeKind === "harness" && <details className="chat-advanced-session"><summary>Resume existing session</summary><label><span>Filter by name</span><input type="search" aria-label="Filter resumable sessions by name" value={externalSessionQuery} placeholder="Search Codex or Grok sessions" onChange={(event) => setExternalSessionQuery(event.target.value)} /></label><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId) || externalSessionsLoading} onChange={(event) => void selectHarnessSession(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => (item.harnessProfileId === harnessId || item.id === harnessSessionId) && (item.id === harnessSessionId || item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase()))).map((item) => <option value={item.id} key={item.id}>{item.displayName} · {item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}{item.serviceTier ? ` · ${item.serviceTier}` : ""} · {item.status} · {new Date(item.lastActivityAt).toLocaleString()}</option>)}{externalHarnessSessions.filter((item) => !item.internalSessionId && item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase())).map((item) => <option value={`external:${item.externalSessionId}`} key={`external:${item.externalSessionId}`}>{item.displayName}{item.model ? ` · ${item.model}` : ""}{item.updatedAt ? ` · ${new Date(item.updatedAt).toLocaleString()}` : ""}</option>)}</select></label>{externalSessionsLoading && <p className="provider-dialog-note" role="status">Loading resumable sessions…</p>}{externalSessionsError && <p className="provider-dialog-note error" role="alert">{externalSessionsError}</p>}</details>}
                 {sessionId && <p className="provider-dialog-note">{composerBusy ? "The running response keeps its model and effort. Changes apply to the next turn." : "Changes apply to your next message. Conversation history is kept."}</p>}
                 <div className="chat-settings-capabilities">
@@ -6612,6 +6676,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     requestAnimationFrame(scrollToTurn);
                   });
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
+                {planDirectives.filter(item => item.status === "pending").map(item => <div className="chat-task-plan" role="status" key={item.id}><strong>Butler requires a plan</strong><p>{item.reason}</p><small>Applies to the next enforceable action for this {item.target_kind}.</small></div>)}
+                {taskPlans.filter(item => item.phase === "blocked").slice(0, 1).map(item => <div className="chat-task-plan" role="alert" key={item.id}><strong>Plan before acting · blocked</strong><p>{item.reason ?? "This task needs a restricted planner before it can use tools."}</p></div>)}
                 {activeImagePreview ? <div className="chat-image-preview" data-testid="chat-image-preview" role="button" tabIndex={0} aria-label="Conversation image preview. Activate to read, copy, or edit the text." style={{width: activeImagePreview.width, minHeight: activeImagePreview.height}} onClick={revealImageText} onKeyDown={(event) => {if (event.key === "Enter" || event.key === " ") {event.preventDefault(); revealImageText();}}}>
                   {activeImagePreview.tiles.map((tile, index) => <img key={tile.url} src={tile.url} alt="" aria-hidden="true" width={activeImagePreview.width} height={tile.height} loading={index < 2 ? "eager" : "lazy"} decoding="async" />)}
                 </div> : loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {

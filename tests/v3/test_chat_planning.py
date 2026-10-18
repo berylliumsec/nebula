@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,8 @@ from nebula.v3.chat_planning import (
     PlanSubmission,
     PlanningBlocked,
 )
+from nebula.v3.chat import ChatCompletionRequest
+from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     ChatBackend,
     ChatPlanDirective,
@@ -28,7 +31,12 @@ from nebula.v3.domain import (
     ProviderProfile,
     RiskClass,
 )
-from nebula.v3.harnesses import HarnessPermissionRequest
+from nebula.v3.harnesses import (
+    AdapterOpenRequest,
+    ClaudeAgentSdkAdapter,
+    HarnessConfigurationError,
+    HarnessPermissionRequest,
+)
 from nebula.v3.providers import ToolCall
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_results import WorkspaceOutputService
@@ -64,6 +72,51 @@ def _enable(store: NebulaStore, prepared):
         {"request_snapshot": {"planning_enabled": True}},
         expected_revision=prepared.turn.revision,
     )
+
+
+def test_plan_only_mode_rejects_enforced_planning():
+    for mode in ("plan", "planning"):
+        with pytest.raises(ValueError, match="cannot be combined"):
+            ChatCompletionRequest(
+                backend=ChatBackend.HARNESS,
+                harness_profile_id="harness",
+                messages=[{"role": "user", "content": "Inspect the project."}],
+                harness_mode=mode,
+                planning_enabled=True,
+            )
+
+
+def test_claude_planner_fails_closed_without_preuse_hook(tmp_path, monkeypatch):
+    sdk = SimpleNamespace(__version__="0.2.118")
+    monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
+    profile = HarnessProfile(
+        name="Claude",
+        kind=HarnessKind.CLAUDE_AGENT_SDK,
+        default_model="m",
+    )
+    session = HarnessSession(
+        engagement_id="project",
+        harness_profile_id=profile.id,
+        model="m",
+        metadata={"planning_target_turn_id": "task"},
+    )
+
+    async def unexpected_permission(_request):
+        raise AssertionError("planning never reached a tool permission boundary")
+
+    with pytest.raises(HarnessConfigurationError, match="pre-use hook"):
+        asyncio.run(
+            ClaudeAgentSdkAdapter().open(
+                AdapterOpenRequest(
+                    profile=profile,
+                    session=session,
+                    workspace=tmp_path,
+                    mcp_profiles=(),
+                    credential_store=CredentialStore(),
+                    permission_handler=unexpected_permission,
+                )
+            )
+        )
 
 
 def test_provider_discovery_cannot_execute_and_saves_plan_before_tool(tmp_path):

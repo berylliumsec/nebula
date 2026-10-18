@@ -12,7 +12,7 @@
 
 Selected local commands and results:
 
-- `poetry run pytest -q tests/v3/test_chat_planning.py tests/v3/test_butler_authority.py tests/v3/test_product_knowledge.py` — 34 passed.
+- `poetry run pytest -q tests/v3/test_chat_planning.py tests/v3/test_butler_authority.py tests/v3/test_product_knowledge.py` — 36 passed.
 - `npm --prefix ui test -- src/api/chatPlanning.test.ts src/components/ButlerOversight.test.tsx src/api/butlerOverview.test.ts src/assistantDestinations.test.ts src/api/client.test.ts` — 118 passed.
 - `npm --prefix ui run build` — production bundle built.
 - `poetry run python scripts/build_product_knowledge.py --verify` — 218 passages, source digest `0bff34280cd7`.
