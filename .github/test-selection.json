@@ -1,5 +1,5 @@
 {
-  "change_digest": "e31d3f1afe5bac6cf0af583bbd937cfd161e3a109489c10abbd89d2a241fef73",
+  "change_digest": "a18ff7ba18e21dae70b5fcc5612a3be17580a9ef169fa44167c4a0f9d385bc4b",
   "reviewed_by": "Codex focused review of Nebula-wide Butler scheduling, authority, file management API, Markdown editor, and product-help paths",
   "reason": "Fifteen selected Python cases cover the user-owned instruction reader, global clock and capabilities, authenticated file create/update/conflict/repair, settings API discovery, and bundled Chroma source-digest sync. Thirty-six frontend cases cover Oversight, assistant action routing, and the shared Markdown editor entry, preview, save, conflict, and upload draft. The eight catalogued real-Core browser entries exercise the same scheduled and file-management journey at desktop and mobile widths with a production bundle and synthetic LAN Core.",
   "exclusions": "No native code changed, so native tests are excluded. Unrelated Python and frontend suites, unrelated Playwright areas, and full suites are excluded. Physical-device Safari is unavailable; mobile WebKit runs in browser emulation. The inert local model verifies scheduling and roster inspection; no real provider spending or external project data is involved.",
