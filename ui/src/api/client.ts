@@ -3745,6 +3745,9 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     completionEvidence: Array.isArray(value.completion_evidence) ? value.completion_evidence : [],
     parentGoalId: typeof value.parent_goal_id === "string" ? value.parent_goal_id : undefined,
     childSessionIds: Array.isArray(value.child_session_ids) ? value.child_session_ids.map(String) : [],
+    handoffSourceSessionId: typeof value.metadata?.handoff_source_session_id === "string" ? value.metadata.handoff_source_session_id : undefined,
+    handoffTargetSessionId: typeof value.metadata?.handoff_target_session_id === "string" ? value.metadata.handoff_target_session_id : undefined,
+    handoffReason: typeof value.metadata?.handoff_reason === "string" ? value.metadata.handoff_reason : undefined,
     skillSnapshots: Array.isArray(value.skill_snapshots) ? value.skill_snapshots.flatMap((item: unknown) => {
       if (!item || typeof item !== "object") return [];
       const snapshot = item as Record<string, unknown>;

@@ -18,7 +18,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "butler-instructions-settings",
-    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals"],
+    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals", "safe handoff", "provider continuation", "deepseek"],
   },
   {
     id: "settings.butler-voice",
@@ -95,11 +95,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.harnesses",
     label: "Assistant harnesses",
-    description: "Configure assistant harnesses; Plan before acting is a saved switch in each chat's Assistant settings",
+    description: "Configure assistant harnesses; Plan before acting is a saved switch in each chat's Assistant settings, and Butler can hand off a pre-admission planning failure to a provider goal",
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "planning", "plan only"],
+    keywords: ["harness", "codex", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "planning", "plan only", "safe handoff", "provider goal"],
   },
   {
     id: "settings.mcp",
