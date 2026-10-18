@@ -13,6 +13,10 @@ from nebula.v3.chat_planning import (
     PlanningBlocked,
 )
 from nebula.v3.chat import ChatCompletionRequest
+from nebula.v3.chat_assistant_config import (
+    ChatAssistantConfigPatch,
+    update_chat_assistant_config,
+)
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     ChatBackend,
@@ -581,6 +585,84 @@ def test_unenforceable_harness_adapters_block_before_connection(tmp_path, kind):
         asyncio.run(harness._ensure_harness_plan(harness_turn, session))
     assert ChatPlanService(store).for_turn(harness_turn.chat_turn_id).phase == "blocked"
     assert session.id not in harness._connections
+
+
+def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(tmp_path, monkeypatch):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    unsupported = store.create(
+        HarnessProfile(
+            name="Unsupported",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+            default_model="grok-model",
+            capabilities=HarnessCapabilities(models=["grok-model"]),
+            privacy={"local_only": True, "permits_sensitive_data": True},
+        )
+    )
+    managed = store.create(
+        HarnessProfile(
+            name="Managed",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            executable="/bin/true",
+            default_model="claude-model",
+            capabilities=HarnessCapabilities(models=["claude-model"]),
+            privacy={"local_only": True, "permits_sensitive_data": True},
+        )
+    )
+    harness = app.state.harness_runtime_service
+    chat, first_turn, failed = harness.prepare_chat(
+        engagement_id=project.id,
+        profile_id=unsupported.id,
+        model="grok-model",
+        prompt="Inspect a file",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        planning_enabled=True,
+    )
+    plans = ChatPlanService(store)
+    original_plan = plans.ensure(first_turn, chat)
+    plans.block(first_turn.id, "This adapter cannot enforce restricted discovery.")
+    store.update(
+        ChatTurn,
+        first_turn.id,
+        {"status": ChatTurnStatus.FAILED},
+        expected_revision=first_turn.revision,
+    )
+    store.update(
+        HarnessTurn,
+        failed.id,
+        {"status": HarnessTurnStatus.FAILED},
+        expected_revision=failed.revision,
+    )
+    chat = update_chat_assistant_config(
+        store,
+        store.get(ChatSession, chat.id),
+        ChatAssistantConfigPatch(
+            backend=ChatBackend.HARNESS,
+            profile_id=managed.id,
+            model="claude-model",
+            planning_enabled=True,
+        ),
+        expected_revision=store.get(ChatSession, chat.id).revision,
+    )
+    started: list[str] = []
+    monkeypatch.setattr(harness, "start_chat_turn", started.append)
+
+    replacement = asyncio.run(harness.retry_turn(failed.id))
+
+    assert started == [replacement.id]
+    assert replacement.metadata["retry_of_turn_id"] == failed.id
+    replacement_session = store.get(HarnessSession, replacement.harness_session_id)
+    assert replacement_session.harness_profile_id == managed.id
+    assert replacement_session.model == "claude-model"
+    replacement_chat_turn = store.get(ChatTurn, replacement.chat_turn_id)
+    assert replacement_chat_turn.request_snapshot["planning_enabled"] is True
+    assert replacement_chat_turn.id != first_turn.id
+    assert plans.for_turn(first_turn.id).id == original_plan.id
+    assert plans.for_turn(first_turn.id).phase == "blocked"
+    assert plans.for_turn(replacement_chat_turn.id) is None
 
 
 def test_unrestricted_claude_configuration_blocks_before_connection(tmp_path):

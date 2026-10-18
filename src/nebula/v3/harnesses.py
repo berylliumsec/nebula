@@ -11935,7 +11935,8 @@ class HarnessRuntimeService:
                 reason = (
                     "This harness configuration cannot enforce restricted discovery "
                     "and native pre-use checks. Choose a managed Claude Agent SDK "
-                    "profile or disable Plan before acting for a later task."
+                    "profile and retry this task as a linked turn, or disable "
+                    "Plan before acting for a later task."
                 )
                 self.plans.block(chat_turn.id, reason)
                 raise PlanningBlocked(reason)
@@ -13329,12 +13330,22 @@ class HarnessRuntimeService:
         session = self.store.get(HarnessSession, original.harness_session_id)
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         if original.origin == HarnessTurnOrigin.CHAT:
+            from .chat_assistant_config import chat_assistant_config
+
             chat = self.store.get(ChatSession, original.chat_session_id or "")
             original_chat_turn = self.store.get(ChatTurn, original.chat_turn_id or "")
+            blocked_plan = self.plans.for_turn(original_chat_turn.id)
+            retry_profile_id = profile.id
+            retry_model = session.model
+            if blocked_plan is not None and blocked_plan.phase == "blocked":
+                saved = chat_assistant_config(self.store, chat)
+                if saved["backend"] == ChatBackend.HARNESS.value:
+                    retry_profile_id = saved["profile_id"]
+                    retry_model = saved["model"]
             _, _, replacement = self.prepare_chat(
                 engagement_id=original.engagement_id,
-                profile_id=profile.id,
-                model=session.model,
+                profile_id=retry_profile_id,
+                model=retry_model,
                 prompt=str(original.metadata.get("user_prompt") or original.prompt),
                 content_blocks=[
                     ChatContentBlock.model_validate(block)
@@ -13373,6 +13384,7 @@ class HarnessRuntimeService:
                     original_chat_turn.request_snapshot.get("allow_agent_messaging")
                     is True
                 ),
+                planning_enabled=True if blocked_plan is not None else None,
             )
             replacement = self.store.update(
                 HarnessTurn,
