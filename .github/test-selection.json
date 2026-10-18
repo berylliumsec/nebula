@@ -1,33 +1,40 @@
 {
-  "change_digest": "df5ce8f53acbb0803522d863808b51fe2e9692314ce68dfbb4cf09d5c60ef6d4",
-  "reviewed_by": "Codex focused review of task planning, Butler authority, harness gating, and chat activity paths",
-  "reason": "Thirty-seven selected Python cases cover Core planning persistence, bounded discovery, Plan only exclusion, provider and harness execution gates, missing SDK hook rejection, linked retry, distinct child plans, Butler one-task authority and timing, and product-help source sync. One hundred eighteen frontend cases cover planning request and stream transport, configured harness selection, Butler authority controls, and settings discovery. Sixteen catalogued real-Core browser entries exercise the saved switch, successful file discovery and execution after linked retry, blocked unsupported harness state, refresh, accessibility, and responsive activity display against the production bundle over synthetic LAN.",
-  "exclusions": "No native code changed, so native tests are excluded. Unrelated Python and frontend suites, unrelated Playwright areas, and full suites are excluded. Physical-device Safari is unavailable; mobile WebKit runs in browser emulation. The synthetic harness fixture does not spend provider tokens or use external project data.",
-  "expected_tests": {
-    "python": 37,
-    "frontend": 118,
-    "native": 0,
-    "playwright": 16
-  },
-  "python_versions": [
-    "3.11"
-  ],
+  "change_digest": "34d9f377aca7f62f756f87106b934d29992b6c5572ea2b761faa73d08a3779a4",
+  "reviewed_by": "Codex agent focused selection review",
+  "reason": "The change adds a revisioned harness-to-provider goal handoff, Butler action and guidance, a visible source/target goal link, and correct verification of completed scheduled parent guidance. It classifies preexisting handled exceptions for the active diagnostic audit, reports partial filename discovery honestly, and fixes dormant type errors exposed by the selected CI job. Selected tests cover fail-closed admission, idempotency, Act authority, held-message and completed-guidance outcomes, bounded filename discovery, Butler's one-task force, harness planner and native gates, saved provider planning, product help, API mapping, and the production LAN browser journey.",
+  "exclusions": "No full Python or frontend suite, unrelated Playwright areas, native tests, live provider calls, physical Mac actions, or research-host tests. The browser fixture uses an inert harness and a verified local provider draft; existing focused planning tests cover execution gating.",
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
+  "expected_tests": {"python": 26, "frontend": 2, "playwright": 8, "native": 0},
   "python": [
-    "tests/v3/test_chat_planning.py",
-    "tests/v3/test_butler_authority.py",
-    "tests/v3/test_product_knowledge.py"
+    "tests/v3/test_goal_handoff.py",
+    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
+    "tests/v3/test_butler_recovery.py::test_active_parent_turn_hold_does_not_block_read_only_global_check",
+    "tests/v3/test_butler_recovery.py::test_global_parent_guidance_completion_does_not_require_a_subagent",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_goal_handoff",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_chat_planning.py::test_provider_discovery_cannot_execute_and_saves_plan_before_tool",
+    "tests/v3/test_chat_planning.py::test_filename_discovery_reports_unreadable_subtree_as_incomplete",
+    "tests/v3/test_chat_planning.py::test_butler_force_is_revisioned_one_task_and_read_back",
+    "tests/v3/test_chat_planning.py::test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan",
+    "tests/v3/test_chat_planning.py::test_harness_gateway_and_native_permission_replan_before_effect",
+    "tests/v3/test_chat_planning.py::test_linked_retry_of_blocked_plan_uses_saved_harness_choice"
   ],
   "frontend": [
-    "ui/src/api/chatPlanning.test.ts",
-    "ui/src/components/ButlerOversight.test.tsx",
-    "ui/src/api/butlerOverview.test.ts",
-    "ui/src/assistantDestinations.test.ts",
-    "ui/src/api/client.test.ts"
+    "ui/src/api/goalHandoff.test.ts",
+    "ui/src/components/ProviderGoalHandoff.test.tsx"
   ],
-  "native": [],
   "playwright": [
-    "area:chat-planning"
-  ]
+    "goal-handoff/assistant-real-desktop",
+    "goal-handoff/assistant-real-compact",
+    "goal-handoff/assistant-real-chromium-320",
+    "goal-handoff/assistant-real-chromium-390",
+    "goal-handoff/assistant-real-chromium-430",
+    "goal-handoff/assistant-real-webkit-320",
+    "goal-handoff/assistant-real-webkit-390",
+    "goal-handoff/assistant-real-webkit-430"
+  ],
+  "native": []
 }

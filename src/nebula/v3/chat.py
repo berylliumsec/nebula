@@ -8286,6 +8286,7 @@ class ChatService:
                         )
                         return None
                     except (ValueError, PlanningBlocked) as exc:
+                        # diagnostic-expected: invalid plans return a bounded error for revision.
                         output = {"error": str(exc)}
                         is_error = True
                 elif call.name in DISCOVERY_TOOL_NAMES and call.name in safe_names:
@@ -8296,6 +8297,14 @@ class ChatService:
                         )
                         plan = self.plans.record_discovery(plan, call.name, output)
                     except Exception as exc:
+                        record_caught_exception(
+                            "chat",
+                            "chat.planning.workspace_discovery_failed",
+                            "Workspace discovery failed during planning; the error was returned to the planner.",
+                            exc,
+                            stage="planning-discovery",
+                            metadata={"turn_id": turn.id, "tool_name": call.name},
+                        )
                         output = {"error": str(exc)}
                         is_error = True
                 elif (
@@ -8319,6 +8328,14 @@ class ChatService:
                         result = await broker.execute(invocation, components.scope)
                         output = result.model_result()
                     except Exception as exc:
+                        record_caught_exception(
+                            "chat",
+                            "chat.planning.catalog_discovery_failed",
+                            "Tool catalog discovery failed during planning; the error was returned to the planner.",
+                            exc,
+                            stage="planning-discovery",
+                            metadata={"turn_id": turn.id, "tool_name": call.name},
+                        )
                         output = {"error": str(exc)}
                         is_error = True
                 else:
@@ -8881,6 +8898,7 @@ class ChatService:
                             ):
                                 self.plans.guard(turn.id, pending.call.name)
                     except PlanningBlocked:
+                        # diagnostic-expected: the saved plan moved to replanning before dispatch.
                         batched_calls = []
                         continue
                 parallel_wave = self._parallel_safe_wave(

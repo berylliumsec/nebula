@@ -29,6 +29,7 @@ from .chat_goals import (
     ChatGoalService,
     GoalConversationCreate,
     GoalCreate,
+    GoalHandoffRequest,
     GoalUpdate,
     GoalWrite,
 )
@@ -374,6 +375,17 @@ START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
         "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "model": {"type": "string", "minLength": 1, "maxLength": 500},
         "tools_enabled": {"type": "boolean"},
+        "planning_enabled": {"type": "boolean"},
+        "mcp_server_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 64,
+        },
+        "reasoning_effort": {"type": "string"},
+        "allow_subagents": {"type": "boolean"},
+        "allow_agent_messaging": {"type": "boolean"},
+        "max_active_subagents": {"type": "integer", "minimum": 1, "maximum": 100},
+        "subagent_reasoning_effort": {"type": "string"},
     },
     "required": ["objective", "completion_criteria"],
 }
@@ -405,6 +417,19 @@ GOAL_ACTION_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["session_id", "expected_revision", "action"],
+}
+HANDOFF_GOAL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "checkpoint": {"type": "string", "maxLength": 4000},
+        "max_steps": {"type": "integer", "minimum": 1, "maximum": 100},
+        "max_time_seconds": {"type": "integer", "minimum": 1800, "maximum": 86400},
+    },
+    "required": ["session_id", "expected_revision", "reason"],
 }
 SUBAGENT_TARGET_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -791,6 +816,7 @@ class ControlAssistantWork:
         reason = _text(arguments.get("reason"), "reason", 2000)
         if len(reason) < 20:
             raise ValueError("record a concrete reason of at least 20 characters")
+        target: ChatSession | ChatGoal | ChatSubagent | ChatTurn
         if kind == "agent":
             target = session
             if target_id != session.id:
@@ -848,6 +874,7 @@ class ControlAssistantWork:
             try:
                 saved_internal = self.store.get(ChatPlanDirective, internal_id)
             except NotFoundError:
+                # diagnostic-expected: no prior directive allows one to be created.
                 saved_internal = None
             if saved_internal is not None:
                 if (
@@ -861,21 +888,29 @@ class ControlAssistantWork:
         if existing:
             directive = existing[-1]
         else:
-            directive = self.store.create(
-                ChatPlanDirective(
-                    **({"id": internal_id} if internal_id is not None else {}),
+            deferred_after_turn_id = (
+                active.id if active is not None and active_harness_in_flight else None
+            )
+            if internal_id is None:
+                pending_directive = ChatPlanDirective(
                     engagement_id=project_id,
                     session_id=session.id,
                     target_kind=kind,
                     target_id=target_id,
                     reason=reason,
-                    deferred_after_turn_id=(
-                        active.id
-                        if active is not None and active_harness_in_flight
-                        else None
-                    ),
+                    deferred_after_turn_id=deferred_after_turn_id,
                 )
-            )
+            else:
+                pending_directive = ChatPlanDirective(
+                    id=internal_id,
+                    engagement_id=project_id,
+                    session_id=session.id,
+                    target_kind=kind,
+                    target_id=target_id,
+                    reason=reason,
+                    deferred_after_turn_id=deferred_after_turn_id,
+                )
+            directive = self.store.create(pending_directive)
         timing = (
             "next_turn"
             if active is not None and active_harness_in_flight
@@ -1241,6 +1276,20 @@ class ControlAssistantWork:
             harness_profile_id=profile_id if backend == "harness" else None,
             model=model,
             tools_enabled=enabled,
+            **{
+                key: value
+                for key, value in arguments.items()
+                if key
+                in {
+                    "planning_enabled",
+                    "mcp_server_ids",
+                    "reasoning_effort",
+                    "allow_subagents",
+                    "allow_agent_messaging",
+                    "max_active_subagents",
+                    "subagent_reasoning_effort",
+                }
+            },
             **goal.model_dump(),
         )
         result = await self._request(
@@ -1290,6 +1339,26 @@ class ControlAssistantWork:
             body.model_dump(mode="json"),
         )
         return self.goal_detail(project_id, session.id)
+
+    async def handoff_goal(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        source = self._chat(project_id, arguments.get("session_id"))
+        body = GoalHandoffRequest.model_validate(
+            {key: value for key, value in arguments.items() if key != "session_id"}
+        )
+        result = await self._request(
+            "POST",
+            f"/api/v1/chat/sessions/{quote(source.id, safe='')}/goal/handoff",
+            body.model_dump(mode="json"),
+        )
+        target = self.goal_detail(project_id, result["session"]["id"])
+        return {
+            **target,
+            "source_goal_id": result["source_goal"]["id"],
+            "source_session_id": source.id,
+            "already_exists": result["already_exists"],
+        }
 
     async def create_goal_child(
         self, project_id: str, arguments: dict[str, Any]
@@ -2693,6 +2762,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.handoff_goal",
+        "Recover a paused harness goal after a pre-admission Plan before acting failure. Core checks zero tool effects, pending approvals, queue state, provider tools and privacy, then creates one linked provider draft. Read the source goal first and start the returned draft separately. Never use this to bypass a safety hold.",
+        HANDOFF_GOAL_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.create_goal_child",
         "Create an isolated draft child goal under one running, budgeted parent goal after explicit operator instruction. Read the parent goal first. Start the child separately with goal_action.",
         CREATE_GOAL_CHILD_SCHEMA,
@@ -2948,6 +3023,8 @@ async def dispatch_work_tool(
         return await work.update_goal(project_id, arguments)
     if name == "nebula.work.goal_action":
         return await work.goal_action(project_id, arguments)
+    if name == "nebula.work.handoff_goal":
+        return await work.handoff_goal(project_id, arguments)
     if name == "nebula.work.create_goal_child":
         return await work.create_goal_child(project_id, arguments)
     if name == "nebula.work.subagents":

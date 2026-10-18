@@ -8542,6 +8542,7 @@ class HarnessRuntimeService:
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
         self.butler_memory: Any = None
+        self.butler_instructions_root: Path | None = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
             raise ValueError("tool platform must use the harness runtime store")
@@ -12141,6 +12142,7 @@ class HarnessRuntimeService:
             try:
                 turn = await self._ensure_harness_plan(turn, session)
             except PlanningBlocked as exc:
+                # diagnostic-expected: the interrupted turn and blocked event are persisted.
                 self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, str(exc))
                 yield self._persist_activity(
                     turn,
@@ -14437,7 +14439,7 @@ class HarnessRuntimeService:
         current = self.store.get(HarnessSession, session.id)
         planning_target = current.metadata.get("planning_target_turn_id")
         if isinstance(planning_target, str):
-            tools = [
+            planning_tools = [
                 {
                     "name": name,
                     "description": "Bounded read of the linked project workspace for task planning.",
@@ -14446,14 +14448,14 @@ class HarnessRuntimeService:
                 }
                 for name in sorted(DISCOVERY_TOOL_NAMES)
             ]
-            tools.append(
+            planning_tools.append(
                 {
                     "name": "plan.submit",
                     "description": "Submit the structured task plan to Core before execution.",
                     "inputSchema": PlanSubmission.model_json_schema(),
                 }
             )
-            return {"tools": tools}
+            return {"tools": planning_tools}
         settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
         if turn is None:
@@ -16978,13 +16980,18 @@ class HarnessRuntimeService:
         adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None,
     ) -> PermissionTicket:
         turn = self.store.get(HarnessTurn, turn_id)
-        if turn.chat_turn_id is not None:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+        chat_turn_id = turn.chat_turn_id
+        if chat_turn_id is not None:
+            chat_turn = self.store.get(ChatTurn, chat_turn_id)
             chat = self.store.get(ChatSession, chat_turn.session_id)
             requires_plan = self.plans.required(chat_turn, chat)
         else:
             requires_plan = False
         if requires_plan:
+            if chat_turn_id is None:
+                raise PlanningBlocked(
+                    "a chat turn is required for the native plan gate"
+                )
             self.plans.ensure(chat_turn, chat)
             if request.category == "mcp" and request.server_name == "nebula":
                 pass  # The gateway checks the exact offered name before dispatch.
@@ -17000,14 +17007,14 @@ class HarnessRuntimeService:
                     raise PlanningBlocked(
                         "unmapped native capability is unavailable under Plan before acting"
                     )
-                plan = self.plans.for_turn(turn.chat_turn_id)
+                plan = self.plans.for_turn(chat_turn_id)
                 if (
                     category == "isolated_workspace_read"
                     and plan is not None
                     and "isolated_workspace_write" in plan.native_categories
                 ):
                     category = "isolated_workspace_write"
-                self.plans.guard_native(turn.chat_turn_id, category)
+                self.plans.guard_native(chat_turn_id, category)
         if request.category == "mcp" and request.server_name == "nebula":
             gateway_future: asyncio.Future[HarnessPermissionDecision] = (
                 asyncio.get_running_loop().create_future()

@@ -2059,6 +2059,9 @@ export interface ChatGoal {
   skillSnapshots: Array<HarnessSkillSummary & { sha256: string }>;
   parentGoalId?: Identifier;
   childSessionIds?: Identifier[];
+  handoffSourceSessionId?: Identifier;
+  handoffTargetSessionId?: Identifier;
+  handoffReason?: string;
   revision: number;
 }
 

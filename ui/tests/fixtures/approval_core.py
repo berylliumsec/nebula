@@ -27,6 +27,8 @@ from nebula.v3.domain import (
     HarnessModelOptions,
     HarnessRuntimeOption,
     ProviderProfile,
+    ProviderCapabilityVerification,
+    ProviderVerificationStatus,
     OperationEvent,
     ToolCall,
 )
@@ -523,6 +525,28 @@ if __name__ == "__main__":
         (args.root / "plan-target.txt").write_text("Synthetic planner evidence\n")
     store = NebulaStore(args.root / "nebula.db")
     scratch_id = bootstrap_scratch_project(store)
+    if args.scenario == "planning" and not any(
+        profile.id == "handoff-provider"
+        for profile in store.list_entities(ProviderProfile)
+    ):
+        store.create(
+            ProviderProfile(
+                id="handoff-provider",
+                name="Inert handoff provider",
+                provider_type="ollama",
+                is_local=True,
+                model_allowlist=["handoff-fixture"],
+                capability_verifications={
+                    "handoff-fixture": ProviderCapabilityVerification(
+                        model="handoff-fixture",
+                        status=ProviderVerificationStatus.VERIFIED,
+                    )
+                },
+                metadata={
+                    "options": {"context_window": 32_000, "max_output_tokens": 4_096}
+                },
+            )
+        )
     if args.scenario == "sidebar" and scratch_id:
         if not any(
             profile.id == "sidebar-provider"

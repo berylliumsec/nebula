@@ -189,6 +189,16 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             selected.id,
             other.id,
         }
+        handoff_matches = await global_butler.search(
+            {"query": "handoff a paused harness planning goal"}
+        )
+        assert "nebula.global.handoff_goal" in {
+            item["operation"] for item in handoff_matches["matches"]
+        }
+        handoff_description = await global_butler.describe(
+            {"operation": "nebula.global.handoff_goal"}
+        )
+        assert "expected_revision" in handoff_description["input_schema"]["required"]
         child_args = {
             "parent_project_id": selected.id,
             "expected_parent_revision": selected.revision,
@@ -226,6 +236,7 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             "backend": "provider",
             "profile_id": own_chat.provider_profile_id,
             "model": own_chat.model,
+            "planning_enabled": True,
             "objective": "Map the files",
             "completion_criteria": ["Report saved"],
         }
@@ -238,6 +249,10 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             change=True,
         )
         assert created["goal"]["status"] == "draft"
+        assert (
+            store.get(ChatSession, created["session_id"]).metadata["planning_enabled"]
+            is True
+        )
         assert duplicate["already_exists"] is True
         assert store.count_entities(ChatGoal, engagement_id=other.id) == 1
 

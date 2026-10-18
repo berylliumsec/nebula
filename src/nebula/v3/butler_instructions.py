@@ -43,6 +43,7 @@ def read_butler_instructions(data_root: Path) -> ButlerInstructions | None:
                 dir_fd=root_fd,
             )
         except FileNotFoundError:
+            # diagnostic-expected: no project instruction directory means no override.
             return None
         try:
             file_fd = os.open(
@@ -51,6 +52,7 @@ def read_butler_instructions(data_root: Path) -> ButlerInstructions | None:
                 dir_fd=folder_fd,
             )
         except FileNotFoundError:
+            # diagnostic-expected: no BUTLER.md means no project override.
             return None
         if not stat.S_ISREG(os.fstat(file_fd).st_mode):
             raise ButlerInstructionsError("BUTLER.md must be a regular file")

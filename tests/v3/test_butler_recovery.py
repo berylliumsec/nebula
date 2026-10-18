@@ -26,6 +26,7 @@ from nebula.v3.domain import (
     ChatSubagent,
     ChatSubagentStatus,
     ChatTurn,
+    ChatTurnStatus,
     Engagement,
     HarnessKind,
     HarnessNativeCapabilities,
@@ -461,6 +462,35 @@ def test_parent_follow_up_requires_same_child_task_completion_before_resolved(tm
     assert "Core confirmed" in settled.outcome
 
 
+def test_global_parent_guidance_completion_does_not_require_a_subagent(tmp_path):
+    store, project, parent, turn, policy, _ = _setup(tmp_path)
+    completed = store.update(
+        ChatTurn,
+        turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=turn.revision,
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="verifying",
+            summary="Guide active project",
+            delivered_turn_id=completed.id,
+            target_session_id=parent.id,
+            started_at=utc_now(),
+        )
+    )
+    settled = ButlerRecoveryService(store).verify_follow_up(case)
+    assert settled.status == "resolved"
+    assert "guidance turn completed" in settled.outcome
+    assert "Goal results remain independently tracked" in settled.outcome
+
+
 def test_crash_with_possible_side_effect_becomes_uncertain_without_replay(tmp_path):
     store, project, _, _, policy, _ = _setup(tmp_path)
     case = store.create(
@@ -724,6 +754,63 @@ def test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease(
     assert settled.status == expected_status
     renewed = store.get(ButlerProjectState, state.id)
     assert renewed.lease_expires_at > utc_now() + timedelta(seconds=45)
+
+
+@pytest.mark.parametrize(
+    ("signal", "changed_state", "expected_status"),
+    [
+        ("butler.global_periodic_check", False, "resolved"),
+        ("butler.global_periodic_check", True, "needs_attention"),
+        ("butler.periodic_check", False, "needs_attention"),
+    ],
+)
+def test_active_parent_turn_hold_does_not_block_read_only_global_check(
+    tmp_path, signal, changed_state, expected_status
+):
+    store, project, parent, _, policy, worker_id = _setup(tmp_path)
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal=signal,
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="observed",
+            summary="Check active parent work",
+        )
+    )
+
+    class Agent:
+        async def run(self, claimed):
+            current = store.get(ButlerRecoveryCase, claimed.id)
+            steps = [{"operation": "nebula.work.chat", "status": "applied"}]
+            if changed_state:
+                steps.append(
+                    {"operation": "nebula.work.set_chat_settings", "status": "applied"}
+                )
+            steps.append({"operation": "nebula.work.message_chat", "status": "failed"})
+            store.update(
+                ButlerRecoveryCase,
+                current.id,
+                {
+                    "steps": steps,
+                    "delivery_hold_reason": "active_turn_cannot_steer",
+                    "target_session_id": parent.id,
+                },
+                expected_revision=current.revision,
+            )
+            return "Read parent state", ChatBackend.PROVIDER, "provider", "model", None
+
+    asyncio.run(
+        ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id)
+    )
+    settled = store.get(ButlerRecoveryCase, case.id)
+    assert settled.status == expected_status
+    if expected_status == "resolved":
+        assert "not delivered" in settled.outcome
+    else:
+        assert "Review the parent chat" in settled.outcome
 
 
 def test_interrupted_read_only_investigation_can_replay(tmp_path):

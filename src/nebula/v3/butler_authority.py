@@ -696,6 +696,7 @@ class ButlerAuthorityService:
                     ChatPlanDirective, plan_directive_id(action.idempotency_key)
                 )
             except NotFoundError:
+                # diagnostic-expected: a missing dispatch receipt is persisted as uncertain.
                 self._finish(action, "uncertain", {"reason": "dispatch_interrupted"})
             else:
                 if directive.engagement_id == action.engagement_id:

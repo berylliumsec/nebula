@@ -91,6 +91,7 @@ class ChatPlanService:
         try:
             return self.store.get(ChatTaskPlan, plan_id(turn_id))
         except NotFoundError:
+            # diagnostic-expected: no saved plan means this turn still needs discovery.
             return None
 
     def pending_directive(

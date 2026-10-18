@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -383,6 +384,27 @@ def test_filename_discovery_is_bounded_and_paths_are_verified(tmp_path):
         workspace=tmp_path,
     )
     assert saved.files == ["a/match.txt"]
+
+
+def test_filename_discovery_reports_unreadable_subtree_as_incomplete(
+    tmp_path, monkeypatch
+):
+    unreadable = tmp_path / "a"
+    unreadable.mkdir()
+    (unreadable / "match.txt").write_text("hidden from this scan")
+    (tmp_path / "b-match.txt").write_text("visible")
+    original_iterdir = Path.iterdir
+
+    def iterdir(path):
+        if path == unreadable:
+            raise PermissionError("directory became unreadable")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    result = WorkspaceOutputService(tmp_path).find(query="match")
+    assert result["matches"] == ["b-match.txt"]
+    assert result["incomplete"] is True
+    assert result["after"] is None
 
 
 def test_butler_force_is_revisioned_one_task_and_read_back(tmp_path):

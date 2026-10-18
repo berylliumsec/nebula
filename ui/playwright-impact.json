@@ -9,6 +9,7 @@
   ],
   "rules": [
     {"name": "chat-planning", "patterns": ["src/nebula/v3/chat_planning.py", "src/nebula/v3/chat_assistant_config.py", "ui/src/pages/SessionsPage.tsx", "ui/tests/fixtures/approval_core.py"], "areas": ["chat-planning"]},
+    {"name": "goal-handoff", "patterns": ["src/nebula/v3/chat_goals.py", "src/nebula/v3/butler_global_capabilities.py", "ui/src/components/ProviderGoalPanel.tsx", "ui/tests/fixtures/approval_core.py"], "areas": ["goal-handoff"]},
     {"name": "storage-integrations", "patterns": ["src/nebula/v3/storage_integrations.py", "ui/src/components/Storage*", "ui/src/pages/StoragePage.tsx", "ui/src/storage.css", "docs/storage-integrations.md"], "areas": ["storage-integrations"]},
     {"name": "notebooks", "patterns": ["ui/src/components/NotebookPanel*", "ui/src/components/notebook.css", "src/nebula/v3/notebooks.py", "src/nebula/v3/notebook_mcp.py", "packaging/notebook/**"], "areas": ["notebooks"]},
     {"name": "notebook-file-index", "patterns": ["src/nebula/v3/notebook_file_index.py", "ui/src/components/NotebookFileIndexSettings*", "docs/notebook-file-index.md"], "areas": ["notebook-file-index"]},
@@ -74,6 +75,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "goal-handoff": [
+      {"area":"goal-handoff","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"goal-handoff","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"goal-handoff","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"goal-handoff","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"goal-handoff","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"goal-handoff","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"goal-handoff","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"goal-handoff","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant planning handoff links one provider draft and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "chat-planning": [
       {"area":"chat-planning","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant planning saved toggle blocks an unenforceable harness and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"chat-planning","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant planning saved toggle blocks an unenforceable harness and survives refresh on production LAN Core","runtime":"real-core","shard":"1/1"},

@@ -40,6 +40,7 @@ def _source(data_root: Path) -> bytes | None:
                 dir_fd=root_fd,
             )
         except FileNotFoundError:
+            # diagnostic-expected: a missing instruction directory is reported as absent.
             return None
         try:
             file_fd = os.open(
@@ -48,6 +49,7 @@ def _source(data_root: Path) -> bytes | None:
                 dir_fd=folder_fd,
             )
         except FileNotFoundError:
+            # diagnostic-expected: a missing BUTLER.md is reported as absent.
             return None
         if not stat.S_ISREG(os.fstat(file_fd).st_mode):
             raise ButlerInstructionsError("BUTLER.md must be a regular file")
@@ -80,6 +82,7 @@ def butler_instructions_snapshot(data_root: Path) -> dict[str, Any]:
     try:
         source = _source(data_root)
     except ButlerInstructionsError as exc:
+        # diagnostic-expected: validation failure is returned as an invalid status.
         return {**result, "status": "invalid", "detail": str(exc)}
     if source is None:
         return result
@@ -94,6 +97,7 @@ def butler_instructions_snapshot(data_root: Path) -> dict[str, Any]:
     try:
         content = source.decode("utf-8")
     except UnicodeDecodeError:
+        # diagnostic-expected: invalid text is returned as an invalid status.
         return {
             **result,
             "status": "invalid",
@@ -136,6 +140,7 @@ def write_butler_instructions(
             try:
                 os.mkdir(".butler", mode=0o700, dir_fd=root_fd)
             except FileExistsError:
+                # diagnostic-expected: another writer created the directory first.
                 pass
             folder_fd = os.open(
                 ".butler",

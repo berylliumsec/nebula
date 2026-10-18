@@ -42,6 +42,7 @@ Settings assistant and the complete destination catalog.
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 | Require a task plan | The chat's Assistant settings saves Plan before acting for future turns, or Butler records one exact one-task directive with the target revision and reason; the activity view shows the resulting plan and phase | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
+| Hand off a planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source, and Butler starts the draft under the selected Plan before acting setting | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
 
 The setting catalog lists every Settings section, Butler's Voice control, and
 the Nebula-wide Butler instruction editor. Dedicated actions handle
@@ -110,6 +111,17 @@ An active harness turn reports that the directive takes effect next turn. The
 saved plan and Butler reason remain visible in the chat activity after refresh.
 Butler's automatic one-task force requires the project's delegated action grant,
 current Core evidence, and a recorded reason.
+`nebula.work.handoff_goal` creates one provider draft only for a paused harness
+goal whose latest planning attempt stopped before admission with no tool calls.
+The source retains its queue and remains paused. Core checks pending approvals,
+selected provider model/tool verification, MCP selection, privacy scope, and
+remaining budgets before linking the goals atomically. A repeated request reads
+back the same continuation. Butler starts it through a separate goal action;
+the source and target link and reason appear in both goal panels after refresh.
+The handoff carries neither approval nor queue authority. For a scheduled check,
+`nebula.global.handoff_goal` performs the same checked create and can start the
+new draft under an Act grant. When handoff is unavailable, Butler reports the
+hold and can select another eligible project.
 `nebula.work.timeline` accepts a listed conversation ID or an Assistant title and
 a bounded number of hours. Ambiguous titles return selectable conversations. The
 read-only result pages saved messages, provider tool steps, selected harness
@@ -185,7 +197,8 @@ configured Butler chat in an Act project hosts the run. Butler reads the live
 Act-project roster and chooses where to work. Core still enforces each target
 project's Act revision and privacy boundary for reads and writes. The bounded
 global actions can resume a paused project or main goal, create and start a
-main goal, or create a managed child project under an Act parent. A child may
+main goal, hand off a planning-blocked harness goal to one linked provider goal,
+or create a managed child project under an Act parent. A child may
 receive an initial goal as part of its creation; it otherwise starts with the
 normal Watch authority. Goal and child-project creation check existing work
 before writing. The model cannot grant Act to another project, expand scope,
