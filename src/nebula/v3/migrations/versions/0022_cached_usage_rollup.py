@@ -155,7 +155,10 @@ def upgrade() -> None:
         source = _UsageRollup(goal_sources)
         if not source.matches(recorded):
             source = _UsageRollup(
-                [*goal_sources, *snapshots_by_session.get(payload.get("session_id"), [])]
+                [
+                    *goal_sources,
+                    *snapshots_by_session.get(payload.get("session_id"), []),
+                ]
             )
         _write_reconciled(bind, entities, row, source, now)
 

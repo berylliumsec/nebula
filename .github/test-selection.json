@@ -1,7 +1,7 @@
 {
-  "change_digest": "d9e6c84ad90d730920a318194897a06f839e287010fde772a68c3a6f3dc035c5",
+  "change_digest": "0005069bd759cc24264ef9fc3d5c7472b73b8c63643c3610864c359f1c7c9d16",
   "reviewed_by": "Codex agent focused selection review",
-  "reason": "The provider adapter and saved ChatTurn already preserve cache tokens and billed cost; goal and subagent rollups discard those details. Four selected Python tests verify direct goal charging, budget and terminal behavior, child accrual and settlement without double charging, and a historical migration that repairs only summaries reconciled to durable source turns. A separate synthetic LAN Core check will verify the saved API view and restart persistence. A follow-up names the goal source list separately to satisfy Python 3.12 mypy; the same selected tests cover unchanged runtime behavior.",
+  "reason": "The provider adapter and saved ChatTurn already preserve cache tokens and billed cost; goal and subagent rollups discard those details. Four selected Python tests verify direct goal charging, budget and terminal behavior, child accrual and settlement without double charging, and a historical migration that repairs only summaries reconciled to durable source turns. A separate synthetic LAN Core check will verify the saved API view and restart persistence. A follow-up names the goal source list separately for Python 3.12 mypy and applies Ruff formatting; the same selected tests cover unchanged runtime behavior.",
   "exclusions": "No frontend, native, or Playwright tests: this changes only Core usage accounting and a data migration, without adding or changing browser controls, layouts, or client mappings. No full suite, live provider call, production-data write, or live deployment. PostgreSQL migration coverage requires an unavailable test database; the selected migration check uses SQLite.",
   "python_versions": [
     "3.12"
