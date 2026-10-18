@@ -5829,6 +5829,24 @@ def test_global_butler_analysis_opens_gateway_using_its_harness_session(tmp_path
 
     async def scenario() -> None:
         store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        profile = store.update(
+            HarnessProfile,
+            profile.id,
+            {
+                "capabilities": HarnessCapabilities(
+                    models=["test-model"],
+                    model_options=[
+                        HarnessModelOptions(
+                            model="test-model",
+                            reasoning_efforts=[
+                                HarnessRuntimeOption(id="max", label="Max")
+                            ],
+                        )
+                    ],
+                )
+            },
+            expected_revision=profile.revision,
+        )
         case = store.create(
             ButlerRecoveryCase(
                 engagement_id=engagement.id,
@@ -5849,11 +5867,18 @@ def test_global_butler_analysis_opens_gateway_using_its_harness_session(tmp_path
             profile_id=profile.id,
             model=None,
             prompt="Inspect the global work roster.",
+            reasoning_effort="max",
             butler_recovery_case_id=case.id,
         )
 
         assert turn.status == HarnessTurnStatus.COMPLETE
         assert turn.chat_session_id is None
+        assert (
+            store.get(HarnessSession, turn.harness_session_id).metadata[
+                "runtime_options"
+            ]["reasoning_effort"]
+            == "max"
+        )
         assert adapter.opens
         assert "nebula.capabilities.search" in {
             item["name"] for item in adapter.opens[0].gateway_tools

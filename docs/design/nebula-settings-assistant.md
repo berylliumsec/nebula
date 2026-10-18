@@ -35,6 +35,7 @@ Settings assistant and the complete destination catalog.
 | Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
 | Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
 | Manage Nebula-wide Butler instructions | The catalog opens Automation → Butler instructions. The file row opens Nebula's Markdown editor with edit and rendered preview; upload opens a draft there. The API checks the loaded digest before saving and the UI reads Core back before confirming | Core data directory and durable Butler global clock | Tool unit, component and real Core browser |
+| Set Butler model and effort | The catalog opens Butler settings. Core saves the selected effort on Butler's chat; the next direct turn and each new scheduled harness check use that saved choice. An unset effort uses the model's advertised default | Core Assistant settings and harness session | Core unit, component and real Core |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets | Core sessions, turns, queues and runs | Tool unit and real Core |
@@ -196,7 +197,10 @@ When the file exists, Core records one Nebula-wide periodic check at least
 configured Butler chat in an Act project hosts the run. Butler reads the live
 Act-project roster and chooses where to work. Core still enforces each target
 project's Act revision and privacy boundary for reads and writes. The bounded
-global actions can resume a paused project or main goal, create and start a
+scheduled harness run uses the model and reasoning effort saved in that Butler
+chat's settings. Changing the effort applies to new runs and the next direct
+message; an already running turn keeps its selected effort. Global actions
+can resume a paused project or main goal, create and start a
 main goal, hand off a planning-blocked harness goal to one linked provider goal,
 or create a managed child project under an Act parent. A child may
 receive an initial goal as part of its creation; it otherwise starts with the
@@ -209,6 +213,7 @@ or treat a pending approval or uncertain write as permission to retry.
 | Discover | Butler Oversight shows the path, file state, and last scheduled check | Core data directory and global clock | Component, real Core and browser |
 | Schedule | Exactly one global check is recorded after 15 minutes even if all goals are idle | Core global state and event stream | Core unit and real Core |
 | Choose | Butler can inspect all eligible Act projects before selecting work | Core project and authority records | Tool unit and real Core |
+| Set effort | Saving an advertised effort in Butler settings is reflected in the next direct turn and scheduled harness session | Core chat settings and harness runtime options | Core unit, component and real Core |
 | Act | A stale Act revision, removed file, local-only boundary, or stale goal revision prevents a write | Core policy, instruction digest and goal records | Core unit and real Core |
 | Reconnect | The clock and action receipts survive Core restart without duplicating a project or goal | Core database and recovery cases | Core unit and real Core |
 

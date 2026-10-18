@@ -7268,6 +7268,65 @@ test.describe("Butler Voice settings", () => {
   });
 });
 
+test("assistant upgrade Butler max effort persists through settings on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler effort fixture", status: "active"}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string};
+    const harnessResponse = await api.post("harnesses", {data: {
+      name: "Butler effort fixture", kind: "codex_app_server", executable: "/bin/true",
+      default_model: "test-model", enabled: true,
+      privacy: {local_only: true, permits_sensitive_data: true},
+      capabilities: {models: ["test-model"], model_options: [{
+        model: "test-model", default_reasoning_effort: "low",
+        reasoning_efforts: [{id: "low", label: "Low"}, {id: "max", label: "Max"}],
+      }]},
+    }});
+    expect(harnessResponse.ok(), await harnessResponse.text()).toBe(true);
+    const harness = await harnessResponse.json() as {id: string};
+    const reserved = await api.post("chat/control-assistant/session", {data: {
+      engagement_id: project.id, backend: "harness", harness_profile_id: harness.id,
+      model: "test-model", harness_reasoning_effort: "low",
+    }});
+    expect(reserved.ok(), await reserved.text()).toBe(true);
+    const session = await reserved.json() as {id: string};
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Butler effort LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/settings#butler-settings`);
+    const settings = page.getByRole("region", {name: "Butler settings"});
+    const effort = settings.getByRole("combobox", {name: "Butler effort"});
+    await expect(effort).toHaveValue("low");
+    expect((await effort.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await effort.selectOption("max");
+    await settings.getByRole("button", {name: "Save"}).click();
+    await expect(settings).toContainText("Saved. Applies to Butler’s next message and scheduled check.");
+    const saved = await (await api.get(`chat-sessions/${session.id}/assistant-config`)).json() as {
+      settings: {harness_reasoning_effort: string};
+    };
+    expect(saved.settings.harness_reasoning_effort).toBe("max");
+    await page.reload();
+    await expect(page.getByRole("region", {name: "Butler settings"}).getByRole("combobox", {name: "Butler effort"})).toHaveValue("max");
+    expect((await new AxeBuilder({page}).include('[aria-label="Butler settings"]').analyze()).violations).toEqual([]);
+    await testInfo.attach("butler-max-effort-lan", {body: JSON.stringify({
+      origin: core.origin, buildCommit: build.commit, asset: entry, assetSha256: build.assets[entry!],
+      project: testInfo.project.name, viewport: page.viewportSize(), savedEffort: saved.settings.harness_reasoning_effort,
+    }), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const replaceButlerText = async (text: string) => {

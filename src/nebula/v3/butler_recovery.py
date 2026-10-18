@@ -411,6 +411,7 @@ class ButlerRecoveryAgent:
                     + "\n\n<core_case_json>\n"
                     + packet
                     + "\n</core_case_json>",
+                    reasoning_effort=config["harness_reasoning_effort"],
                     nebula_tools=True,
                     butler_recovery_case_id=case.id,
                 )

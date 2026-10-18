@@ -2011,3 +2011,95 @@ def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
         },
     )
     assert stale.status_code in {400, 409, 422}
+
+
+def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Codex fixture",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            default_model="test-model",
+            executable="/bin/true",
+            privacy={"local_only": True},
+            capabilities=HarnessCapabilities(
+                models=["test-model"],
+                model_options=[
+                    HarnessModelOptions(
+                        model="test-model",
+                        reasoning_efforts=[
+                            HarnessRuntimeOption(id="low", label="Low"),
+                            HarnessRuntimeOption(id="max", label="Max"),
+                        ],
+                    )
+                ],
+            ),
+        )
+    )
+    harness = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=profile.id,
+            model="test-model",
+            metadata={"runtime_options": {"reasoning_effort": "low"}},
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness.id,
+            model="test-model",
+            metadata={"control_assistant": True},
+        )
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    url = f"/api/v1/chat-sessions/{chat.id}/assistant-config"
+    with TestClient(app) as client:
+        before = client.get(url, headers=headers)
+        assert before.status_code == 200
+        assert before.json()["settings"]["harness_reasoning_effort"] == "low"
+        concurrent = client.patch(
+            url,
+            headers=headers,
+            json={
+                "expected_revision": before.json()["revision"],
+                "settings": {"harness_reasoning_effort": "low"},
+            },
+        )
+        assert concurrent.status_code == 200, concurrent.text
+        stale = client.patch(
+            url,
+            headers=headers,
+            json={
+                "expected_revision": before.json()["revision"],
+                "settings": {"harness_reasoning_effort": "max"},
+            },
+        )
+        assert stale.status_code in {400, 409, 422}
+        changed = client.patch(
+            url,
+            headers=headers,
+            json={
+                "expected_revision": client.get(url, headers=headers).json()[
+                    "revision"
+                ],
+                "settings": {"harness_reasoning_effort": "max"},
+            },
+        )
+        assert changed.status_code == 200, changed.text
+        assert (
+            client.get(url, headers=headers).json()["settings"][
+                "harness_reasoning_effort"
+            ]
+            == "max"
+        )
+    assert (
+        store.get(HarnessSession, harness.id).metadata["runtime_options"][
+            "reasoning_effort"
+        ]
+        == "low"
+    )

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,8 +28,16 @@ from nebula.v3.domain import (
     ButlerGlobalState,
     ButlerProjectState,
     ButlerRecoveryCase,
+    ChatBackend,
     ChatSession,
     Engagement,
+    HarnessCapabilities,
+    HarnessKind,
+    HarnessModelOptions,
+    HarnessProfile,
+    HarnessRuntimeOption,
+    HarnessSession,
+    HarnessTurnStatus,
     ProviderProfile,
     utc_now,
 )
@@ -129,6 +139,102 @@ def test_one_global_check_wakes_idle_projects_and_persists_across_restart(tmp_pa
         agent._global_instructions(case)
     assert restarted.fire_global_periodic_check(anchor, worker_id)
     assert len(store.replay_operation_events(project_stream_id(anchor))) == 2
+
+
+def test_global_check_uses_saved_butler_harness_effort(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Butler harness",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            default_model="test-model",
+            executable="/bin/true",
+            privacy={"local_only": True},
+            capabilities=HarnessCapabilities(
+                models=["test-model"],
+                model_options=[
+                    HarnessModelOptions(
+                        model="test-model",
+                        reasoning_efforts=[HarnessRuntimeOption(id="max", label="Max")],
+                    )
+                ],
+            ),
+        )
+    )
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=profile.id,
+            model="test-model",
+        )
+    )
+    store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness_session.id,
+            model="test-model",
+            metadata={
+                "control_assistant": True,
+                "assistant_config": {
+                    "backend": "harness",
+                    "profile_id": profile.id,
+                    "model": "test-model",
+                    "harness_reasoning_effort": "max",
+                },
+            },
+        )
+    )
+    store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(project.id), engagement_id=project.id, authority="act"
+        )
+    )
+    worker_id = "worker-1"
+    store.create(
+        ButlerProjectState(
+            id=project_state_id(project.id),
+            engagement_id=project.id,
+            lease_owner=worker_id,
+            lease_expires_at=utc_now() + timedelta(minutes=10),
+        )
+    )
+    _write(tmp_path)
+    recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
+    assert recovery.fire_global_periodic_check(project.id, worker_id)
+    assert recovery.capture_events(project.id, worker_id) == 1
+    case = store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)[0]
+
+    class Runtime:
+        async def analyze_structured(self, **request):
+            assert request["reasoning_effort"] == "max"
+            assert "Check idle work." in request["prompt"]
+            return SimpleNamespace(
+                status=HarnessTurnStatus.COMPLETE,
+                response="Checked Core state",
+                id="harness-turn",
+            )
+
+    agent = ButlerRecoveryAgent(
+        store,
+        provider_factory=lambda _: None,
+        harness_runtime=Runtime(),
+        artifact_store=None,
+        work=None,
+        memory=None,
+        instructions_root=tmp_path,
+    )
+    outcome, backend, profile_id, model, turn_id = asyncio.run(agent.run(case))
+    assert (outcome, backend.value, profile_id, model, turn_id) == (
+        "Checked Core state",
+        "harness",
+        profile.id,
+        "test-model",
+        "harness-turn",
+    )
 
 
 def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):

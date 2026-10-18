@@ -420,7 +420,7 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Start an assistant to ");
   });
 
-  it("saves Butler's advertised effort and Daybreak Blue, then uses Core readback on its next turn", async () => {
+  it("saves Butler's advertised max effort and Daybreak Blue, then uses Core readback on its next turn", async () => {
     const user = userEvent.setup();
     const saved = {
       id: "control", engagementId: "project", backend: "harness", harnessProfileId: "local", model: "model",
@@ -450,7 +450,8 @@ describe("NebulaControlAssistant", () => {
       engagement: {id: "project", name: "Project"}, providers: [],
       harnesses: [{id: "local", name: "Local", kind: "codex_app_server", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [{model: "model", reasoningEfforts: [
-          {id: "low", label: "Low", description: ""}, {id: "high", label: "High", description: ""}],
+          {id: "low", label: "Low", description: ""}, {id: "high", label: "High", description: ""},
+          {id: "max", label: "Max", description: ""}],
           serviceTiers: [], cyberAccessPrograms: ["standard", "daybreakBlue"]}], defaultModel: "model"}],
     } as unknown as ReturnType<typeof useWorkspace>);
     const onNavigate = vi.fn();
@@ -464,15 +465,15 @@ describe("NebulaControlAssistant", () => {
     }), expect.any(Function), expect.any(AbortSignal)));
     await user.click(screen.getByRole("button", {name: "Butler settings"}));
     expect(await screen.findByRole("combobox", {name: "Butler effort"})).toHaveValue("high");
-    await user.selectOptions(screen.getByRole("combobox", {name: "Butler effort"}), "low");
+    await user.selectOptions(screen.getByRole("combobox", {name: "Butler effort"}), "max");
     await user.selectOptions(screen.getByRole("combobox", {name: "Butler cyber access"}), "daybreakBlue");
     await user.click(screen.getByRole("button", {name: "Save"}));
-    expect(await screen.findByText("Saved. Applies to Butler’s next message.")).toBeInTheDocument();
+    expect(await screen.findByText("Saved. Applies to Butler’s next message and scheduled check.")).toBeInTheDocument();
     expect(updateChatAssistantConfig).toHaveBeenCalledWith("control", 3,
-      {harnessReasoningEffort: "low", harnessCyberAccessProgram: "daybreakBlue"});
+      {harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue"});
     await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Continue{enter}");
     await waitFor(() => expect(streamChat).toHaveBeenLastCalledWith(expect.objectContaining({
-      harnessReasoningEffort: "low", harnessCyberAccessProgram: "daybreakBlue",
+      harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue",
     }), expect.any(Function), expect.any(AbortSignal)));
     await user.click(screen.getByRole("button", {name: "Full Assistant settings"}));
     expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
@@ -508,7 +509,7 @@ describe("NebulaControlAssistant", () => {
     await user.selectOptions(screen.getByRole("combobox", {name: "Butler effort"}), "high");
     await user.selectOptions(screen.getByRole("combobox", {name: "Butler cyber access"}), "daybreakBlue");
     await user.click(screen.getByRole("button", {name: "Save"}));
-    expect(screen.getByText("Saved for Butler’s first message.")).toBeInTheDocument();
+    expect(screen.getByText("Saved for Butler’s first message and scheduled check.")).toBeInTheDocument();
     expect(updateChatAssistantConfig).toHaveBeenCalledWith("control", 1,
       { harnessReasoningEffort: "high", harnessCyberAccessProgram: "daybreakBlue" });
     await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Start work{enter}");

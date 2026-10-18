@@ -21,6 +21,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals", "safe handoff", "provider continuation", "deepseek"],
   },
   {
+    id: "settings.butler-effort",
+    label: "Butler model and effort",
+    description: "Choose Butler's model and reasoning effort for direct messages and scheduled checks",
+    category: "Models",
+    scope: "Workspace",
+    target: "butler-settings",
+    keywords: ["butler", "model", "effort", "reasoning", "max", "scheduled", "15 minutes", "background"],
+  },
+  {
     id: "settings.butler-voice",
     label: "Butler Voice timeout",
     description: "Pause paid Voice sessions after quiet time; open the compact control in Butler settings",
