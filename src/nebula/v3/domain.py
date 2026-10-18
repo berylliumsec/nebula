@@ -4065,6 +4065,14 @@ class ButlerProjectState(Entity):
     lease_expires_at: datetime | None = None
 
 
+class ButlerGlobalState(Entity):
+    """One durable clock for the Nebula-wide Butler mandate."""
+
+    entity_kind: ClassVar[str] = "butler_global_states"
+    last_periodic_at: datetime | None = None
+    last_project_id: str | None = Field(default=None, max_length=200)
+
+
 class ButlerIncident(Entity):
     """One project-scoped concern keyed by the underlying problem."""
 
@@ -4263,7 +4271,7 @@ class ButlerRecoveryCase(Entity):
     ] = "observed"
     summary: str = Field(min_length=1, max_length=500)
     outcome: str = Field(default="", max_length=1000)
-    steps: list[dict[str, Any]] = Field(default_factory=list, max_length=24)
+    steps: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
     model_backend: ChatBackend | None = None
     model_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
@@ -5553,6 +5561,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatGoal,
     ButlerGoalWatch,
     ButlerProjectState,
+    ButlerGlobalState,
     ButlerIncident,
     ButlerDecision,
     ButlerAuthorityPolicy,

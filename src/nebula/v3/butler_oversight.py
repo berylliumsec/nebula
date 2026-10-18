@@ -1618,6 +1618,11 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "project_id": engagement_id,
             "authority": authority["authority"],
             "authority_revision": authority["revision"],
+            "global_instructions": (
+                service.recovery_service.global_status()
+                if service.recovery_service is not None
+                else {"status": "unavailable", "path": None}
+            ),
             "delegate_actions": authority["delegate_actions"],
             "effective_actions": authority["effective_actions"],
             "watched_goals": watched_goals,

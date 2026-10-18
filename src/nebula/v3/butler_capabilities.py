@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -75,9 +76,14 @@ _BACKGROUND_CHANGES = frozenset(
         "nebula.work.decide_approval",
         "nebula.work.retry_chat_turn",
         "nebula.work.retry_mission",
+        "nebula.global.resume_project",
+        "nebula.global.create_goal",
+        "nebula.global.goal_action",
+        "nebula.global.create_child_project",
     }
 )
 _BACKGROUND_STEP_LIMIT = 12
+_GLOBAL_STEP_LIMIT = 40
 _CATEGORIES = (
     {
         "id": "work",
@@ -132,6 +138,8 @@ class ButlerCapabilities:
         operator_message: str = "",
         operator_turn_id: str | None = None,
         background_case_id: str | None = None,
+        instructions_root: Path | None = None,
+        background_runtime_local: bool = False,
     ) -> None:
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
@@ -169,6 +177,24 @@ class ButlerCapabilities:
                 and name != "nebula.work.catalog"
                 and self._read_only(plugin)
             }
+            case = store.get(ButlerRecoveryCase, background_case_id)
+            if case.signal == "butler.global_periodic_check":
+                if instructions_root is None or work is None:
+                    raise ValueError("Nebula-wide Butler tools are unavailable")
+                from .butler_global_capabilities import ButlerGlobalActions
+
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerGlobalActions(
+                            store,
+                            work,
+                            instructions_root,
+                            background_case_id,
+                            runtime_local=background_runtime_local,
+                        ).plugins()
+                    }
+                )
 
     def _background_case(self) -> ButlerRecoveryCase:
         if self._background_case_id is None:
@@ -266,7 +292,12 @@ class ButlerCapabilities:
                 current is None
                 or current.status != "investigating"
                 or current.revision != case.revision
-                or len(current.steps) >= _BACKGROUND_STEP_LIMIT
+                or len(current.steps)
+                >= (
+                    _GLOBAL_STEP_LIMIT
+                    if current.signal == "butler.global_periodic_check"
+                    else _BACKGROUND_STEP_LIMIT
+                )
                 or policy is None
                 or policy.authority != "act"
                 or policy.revision != current.authority_revision

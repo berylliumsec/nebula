@@ -12,6 +12,15 @@ export interface SettingCatalogEntry {
 
 export const settingCatalog: SettingCatalogEntry[] = [
   {
+    id: "settings.butler-instructions",
+    label: "Nebula-wide Butler instructions",
+    description: "Upload or edit the Nebula-wide BUTLER.md file and check its status",
+    category: "Automation",
+    scope: "Workspace",
+    target: "butler-instructions-settings",
+    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals"],
+  },
+  {
     id: "settings.butler-voice",
     label: "Butler Voice timeout",
     description: "Pause paid Voice sessions after quiet time; open the compact control in Butler settings",

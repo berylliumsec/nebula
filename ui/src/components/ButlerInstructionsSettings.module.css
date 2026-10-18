@@ -1,0 +1,41 @@
+.section { display: grid; gap: 12px; min-width: 0; }
+:global(.main-content:has(> .settings-page)) { scroll-behavior: auto; }
+.section p { margin: 0; }
+.fileRow { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface); }
+.fileButton { display: flex; min-width: 0; flex: 1; align-items: center; gap: 12px; min-height: 64px; padding: 9px 14px; border: 0; border-radius: var(--radius-control); color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.fileButton:hover, .fileButton:focus-visible { background: var(--surface-hover); }
+.fileButton > svg { flex: 0 0 auto; color: var(--blue); }
+.fileButton > span { display: grid; min-width: 0; gap: 3px; }
+.fileButton strong { font: var(--type-control) var(--font-mono); }
+.fileButton small { color: var(--muted); }
+.fileRow > span { flex: 0 0 auto; margin-right: 14px; }
+.path, .note { color: var(--muted); font-size: var(--type-meta); overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.actions label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.actions input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.actions label:has(+ input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.actions label:has(+ input:disabled) { opacity: .5; cursor: not-allowed; }
+.dialog { display: flex; height: min(760px, calc(100dvh - 32px)); flex-direction: column; padding: 0; }
+.dialogHeader { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-soft); }
+.dialogHeader > div { min-width: 0; }
+.dialogHeader small { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.dialogHeader h2 { display: flex; align-items: center; gap: 8px; margin: 3px 0 0; font-size: 17px; }
+.dialogHeader > button { flex: 0 0 44px; min-width: 44px; min-height: 44px; }
+.editorToolbar { display: flex; flex: 0 0 auto; min-height: 58px; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 14px; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
+.editorPath { min-width: 0; overflow: hidden; color: var(--muted); font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.dialogNotice { flex: 0 0 auto; margin: 8px 14px 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-muted); }
+.closePrompt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 14px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); }
+.closePrompt span { flex: 1; }
+.editorBody { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; overflow: hidden; background: var(--canvas); }
+.editorBody > :global(.code-mirror-host) { flex: 1 1 auto; min-width: 0; min-height: 0; }
+.dialogFooter { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border-soft); }
+.editorMeta { color: var(--muted); font: 11px var(--font-mono); }
+.footerActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+@media (max-width: 600px) {
+  .fileRow { flex-wrap: wrap; }
+  .fileRow > span { margin: 0 12px 12px 14px; }
+  .editorToolbar { padding-inline: 8px; }
+  .dialogFooter { align-items: stretch; flex-direction: column; }
+  .footerActions { justify-content: stretch; }
+  .footerActions > button { flex: 1 1 auto; }
+}

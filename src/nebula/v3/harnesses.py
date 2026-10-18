@@ -14183,6 +14183,15 @@ class HarnessRuntimeService:
                     else None
                 )
             ),
+            instructions_root=getattr(self, "butler_instructions_root", None),
+            background_runtime_local=(
+                self.store.get(
+                    HarnessProfile,
+                    self.store.get(HarnessSession, turn.session_id).harness_profile_id,
+                ).privacy.local_only
+                if turn is not None
+                else False
+            ),
             notebooks=(
                 self.mcp_service.notebook_tools.notebooks
                 if self.mcp_service is not None
