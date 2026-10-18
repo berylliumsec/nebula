@@ -94,6 +94,19 @@ def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
     )
 
 
+def test_product_search_finds_chat_planning_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where is Plan before acting and how does Butler require a task plan?"
+    )
+    assert any("Plan before acting" in str(item["text"]) for item in matches)
+    assert any(
+        "planning_enabled" in str(item["text"])
+        or "Assistant settings" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()
