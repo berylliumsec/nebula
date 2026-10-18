@@ -11966,15 +11966,18 @@ class HarnessRuntimeService:
                 f"Task:\n{turn.prompt[:30_000]}"
             )
             try:
-                await self.analyze_structured(
-                    engagement_id=turn.engagement_id,
-                    profile_id=session.harness_profile_id,
-                    model=session.model,
-                    prompt=prompt,
-                    nebula_tools=False,
-                    planning_target_turn_id=chat_turn.id,
-                    planning_tool_names=names,
-                    planning_native_categories=native_names,
+                await asyncio.wait_for(
+                    self.analyze_structured(
+                        engagement_id=turn.engagement_id,
+                        profile_id=session.harness_profile_id,
+                        model=session.model,
+                        prompt=prompt,
+                        nebula_tools=False,
+                        planning_target_turn_id=chat_turn.id,
+                        planning_tool_names=names,
+                        planning_native_categories=native_names,
+                    ),
+                    timeout=120,
                 )
             except Exception as exc:
                 reason = f"Restricted planner failed: {_safe_error(exc)}"

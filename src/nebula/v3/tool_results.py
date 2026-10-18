@@ -13,6 +13,7 @@ import os
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from heapq import heappop, heappush
 from pathlib import Path
 from time import monotonic
 from collections.abc import Sequence
@@ -666,24 +667,33 @@ class WorkspaceOutputService:
             relative = root.relative_to(self.workspace).as_posix()
             return {
                 "schema": "nebula.workspace.find/v1",
-                "matches": [relative] if query.casefold() in root.name.casefold() and (after is None or relative > after) else [],
+                "matches": [relative]
+                if query.casefold() in root.name.casefold()
+                and (after is None or relative > after)
+                else [],
                 "scanned_files": 1,
                 "incomplete": False,
                 "after": None,
             }
-        pending = [root]
+        # The cursor compares full relative paths. Emit candidates in that
+        # same order, including across a directory and its sibling files.
+        pending = [(root.relative_to(self.workspace).as_posix(), root)]
         while pending:
             if monotonic() >= deadline or scanned >= min(self.max_files, 10_000):
                 incomplete = True
                 break
-            candidate = pending.pop()
+            _, candidate = heappop(pending)
             if candidate.is_symlink():
                 continue
             if candidate.is_dir():
                 if candidate != root and candidate.name in WORKSPACE_SEARCH_EXCLUDES:
                     continue
                 try:
-                    pending.extend(sorted(candidate.iterdir(), reverse=True))
+                    for child in candidate.iterdir():
+                        heappush(
+                            pending,
+                            (child.relative_to(self.workspace).as_posix(), child),
+                        )
                 except OSError:
                     continue
                 continue
