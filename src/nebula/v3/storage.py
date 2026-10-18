@@ -173,6 +173,8 @@ _CHAT_SESSION_ID_ENTITY_KINDS = frozenset(
         "chat_goals",
         "chat_messages",
         "chat_queues",
+        "chat_task_plans",
+        "chat_plan_directives",
         "chat_read_cursors",
         "chat_schedules",
         "chat_snapshot_parts",

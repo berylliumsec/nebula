@@ -266,6 +266,25 @@ def command_specs(
             budget_class="artifact_query",
         ),
         ToolSpec(
+            name="workspace.find",
+            parallelism=ParallelismPolicy.SAFE_READ,
+            description="Find workspace-relative file names by substring in a bounded project subtree.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "path": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "after": {"type": ["string", "null"]},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            output_schema=common_output,
+            risk_class=RiskClass.LOCAL_READ,
+            budget_class="artifact_query",
+        ),
+        ToolSpec(
             name="workspace.search",
             parallelism=ParallelismPolicy.SAFE_READ,
             description="Search an authorized project file or directory. Budget exhaustion preserves partial results with incomplete status and narrowing guidance.",
@@ -708,6 +727,8 @@ class AutomationBroker:
                 **invocation.arguments,
             )
         workspace = WorkspaceOutputService(invocation.workspace)
+        if invocation.tool_name == "workspace.find":
+            return workspace.find(**invocation.arguments)
         if invocation.tool_name == "workspace.search":
             return workspace.search(**invocation.arguments)
         return workspace.read(**invocation.arguments)

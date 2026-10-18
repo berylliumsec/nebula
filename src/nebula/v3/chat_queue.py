@@ -660,6 +660,7 @@ class ChatQueueService:
                     allow_cloud_knowledge=request.allow_cloud_knowledge,
                     max_artifact_queries=request.max_artifact_queries,
                     harness_mode=request.harness_mode,
+                    planning_enabled=request.planning_enabled,
                     harness_skill=HarnessSkillInvocation.model_validate(
                         request.harness_skill
                     )

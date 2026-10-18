@@ -2036,6 +2036,10 @@ class SubagentService:
         parent_request: dict[str, Any] = {
             "idempotency_key": invocation.idempotency_key,
             "tools_enabled": tools_enabled,
+            "planning_enabled": bool(
+                parent_turn.request_snapshot.get("planning_enabled")
+                or self.chat.plans.for_turn(parent_turn.id)
+            ),
             "include_knowledge": include_knowledge,
             "allow_cloud_knowledge": allow_cloud_knowledge,
             "allow_subagents": allow_subagents,
@@ -2070,6 +2074,7 @@ class SubagentService:
                 "subagent_id": subagent_id,
                 "subagent_parent_session_id": parent_session.id,
                 "subagent_parent_turn_id": parent_turn.id,
+                "planning_enabled": parent_request["planning_enabled"],
             },
         )
         record = ChatSubagent(
@@ -2116,6 +2121,7 @@ class SubagentService:
                     ),
                     include_knowledge=include_knowledge,
                     allow_cloud_knowledge=allow_cloud_knowledge,
+                    planning_enabled=parent_request["planning_enabled"],
                 )
                 child_turn_id = child_turn.id
                 record = self.store.update(
@@ -2142,6 +2148,7 @@ class SubagentService:
                     allow_subagents=allow_subagents,
                     max_active_subagents=child_limit,
                     tools_enabled=tools_enabled,
+                    planning_enabled=parent_request["planning_enabled"],
                     mcp_server_ids=mcp_server_ids,
                     hook_ids=(selection or {}).get("hook_ids", []),
                     skill_selections=(selection or {}).get("skills", []),
@@ -2478,6 +2485,7 @@ class SubagentService:
                 mcp_server_ids=None,
                 include_knowledge=bool(flags.get("include_knowledge")),
                 allow_cloud_knowledge=bool(flags.get("allow_cloud_knowledge")),
+                planning_enabled=bool(flags.get("planning_enabled")),
             )
             prepared = None
         else:
@@ -2503,6 +2511,7 @@ class SubagentService:
                     allow_subagents=bool(flags.get("allow_subagents")),
                     max_active_subagents=flags.get("max_active_subagents"),
                     tools_enabled=bool(flags.get("tools_enabled")),
+                    planning_enabled=bool(flags.get("planning_enabled")),
                     mcp_server_ids=list(flags.get("mcp_server_ids") or []),
                     hook_ids=selection.get("hook_ids", []),
                     skill_selections=selection.get("skills", []),

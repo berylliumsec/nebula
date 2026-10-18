@@ -643,6 +643,69 @@ class WorkspaceOutputService:
         self.max_bytes = max_bytes
         self.max_files = max_files
 
+    def find(
+        self,
+        *,
+        query: str,
+        path: str = ".",
+        limit: int = 50,
+        after: str | None = None,
+    ) -> dict[str, Any]:
+        """Find file names under a bounded, symlink-free workspace subtree."""
+
+        if not query or len(query) > 200 or not 1 <= limit <= 100:
+            raise ToolOutputQueryError("invalid file-name query or limit")
+        root = self._safe_path(path, directory=None)
+        if after is not None:
+            self._safe_path(after, directory=False)
+        deadline = monotonic() + min(self.search_seconds, 3.0)
+        matches: list[str] = []
+        scanned = 0
+        incomplete = False
+        if root.is_file():
+            relative = root.relative_to(self.workspace).as_posix()
+            return {
+                "schema": "nebula.workspace.find/v1",
+                "matches": [relative] if query.casefold() in root.name.casefold() and (after is None or relative > after) else [],
+                "scanned_files": 1,
+                "incomplete": False,
+                "after": None,
+            }
+        pending = [root]
+        while pending:
+            if monotonic() >= deadline or scanned >= min(self.max_files, 10_000):
+                incomplete = True
+                break
+            candidate = pending.pop()
+            if candidate.is_symlink():
+                continue
+            if candidate.is_dir():
+                if candidate != root and candidate.name in WORKSPACE_SEARCH_EXCLUDES:
+                    continue
+                try:
+                    pending.extend(sorted(candidate.iterdir(), reverse=True))
+                except OSError:
+                    continue
+                continue
+            if not candidate.is_file():
+                continue
+            scanned += 1
+            relative = candidate.relative_to(self.workspace).as_posix()
+            if after is not None and relative <= after:
+                continue
+            if query.casefold() in candidate.name.casefold():
+                if len(matches) == limit:
+                    incomplete = True
+                    break
+                matches.append(relative)
+        return {
+            "schema": "nebula.workspace.find/v1",
+            "matches": matches,
+            "scanned_files": scanned,
+            "incomplete": incomplete,
+            "after": matches[-1] if incomplete and matches else None,
+        }
+
     def search(
         self,
         *,
@@ -1181,6 +1244,7 @@ _HISTORY_RESULT_SCHEMAS = {
     "nebula.tool-output.search/v1",
     "nebula.tool-output.read/v1",
     "nebula.workspace.search/v1",
+    "nebula.workspace.find/v1",
     "nebula.workspace.read/v1",
     "nebula.bounded-result/v1",
 }
