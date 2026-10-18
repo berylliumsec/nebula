@@ -78,6 +78,7 @@ _BACKGROUND_CHANGES = frozenset(
         "nebula.work.retry_mission",
         "nebula.global.resume_project",
         "nebula.global.create_goal",
+        "nebula.global.handoff_goal",
         "nebula.global.goal_action",
         "nebula.global.create_child_project",
     }

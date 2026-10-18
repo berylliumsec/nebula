@@ -256,6 +256,59 @@ class ButlerGlobalActions:
             },
         )
 
+    async def handoff_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Move one pre-admission planning failure to a linked provider draft."""
+
+        project_id = arguments["project_id"]
+        project = self._act(project_id, arguments["expected_authority_revision"])
+        if project.status != EngagementStatus.ACTIVE:
+            raise ValueError("Activate the project before handing off a goal")
+        if project.revision != arguments["expected_project_revision"]:
+            raise ValueError("Project changed; read its revision again")
+        current = self.work.goal_detail(project_id, arguments["session_id"])
+        source = current.get("goal")
+        if current.get("kind") != "main" or source is None:
+            raise ValueError("Handoff requires a listed main goal")
+        # A retry after a committed handoff returns the one linked target even
+        # when the source revision advanced. Core owns the deduplication.
+        if source["revision"] != arguments["expected_revision"] and not source.get(
+            "metadata", {}
+        ).get("handoff_target_session_id"):
+            raise ValueError("Source goal changed; read it again")
+        self._act(project_id, arguments["expected_authority_revision"])
+        handoff = await self.work.handoff_goal(
+            project_id,
+            {
+                key: value
+                for key, value in arguments.items()
+                if key
+                in {
+                    "session_id",
+                    "expected_revision",
+                    "reason",
+                    "checkpoint",
+                    "max_steps",
+                    "max_time_seconds",
+                }
+            },
+        )
+        if arguments.get("start", True) and handoff["goal"]["status"] == "draft":
+            self._act(project_id, arguments["expected_authority_revision"])
+            handoff = {
+                **await self.work.goal_action(
+                    project_id,
+                    {
+                        "session_id": handoff["session_id"],
+                        "expected_revision": handoff["goal"]["revision"],
+                        "action": "start",
+                    },
+                ),
+                "source_goal_id": source["id"],
+                "source_session_id": arguments["session_id"],
+                "already_exists": handoff["already_exists"],
+            }
+        return handoff
+
     async def create_child_project(self, arguments: dict[str, Any]) -> dict[str, Any]:
         from .setup import create_engagement_with_default_scope
 
@@ -435,6 +488,40 @@ class ButlerGlobalActions:
                 },
                 RiskClass.WORKSPACE_WRITE,
                 self.goal_action,
+            ),
+            (
+                "nebula.global.handoff_goal",
+                "Recover a paused harness main goal after a pre-admission Plan before acting failure. Core verifies no tool effects, approvals, queued work, model tools, privacy and current revisions; it creates one linked provider goal and optionally starts it. Read the source goal and settings first. Do not use this to bypass a safety hold.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "session_id": _ID,
+                        "expected_project_revision": _REV,
+                        "expected_authority_revision": _REV,
+                        "expected_revision": _REV,
+                        "reason": {"type": "string", "minLength": 1, "maxLength": 2000},
+                        "checkpoint": {"type": "string", "maxLength": 4000},
+                        "max_steps": {"type": "integer", "minimum": 1, "maximum": 100},
+                        "max_time_seconds": {
+                            "type": "integer",
+                            "minimum": 1800,
+                            "maximum": 86400,
+                        },
+                        "start": {"type": "boolean"},
+                    },
+                    "required": [
+                        "project_id",
+                        "session_id",
+                        "expected_project_revision",
+                        "expected_authority_revision",
+                        "expected_revision",
+                        "reason",
+                    ],
+                },
+                RiskClass.WORKSPACE_WRITE,
+                self.handoff_goal,
             ),
             (
                 "nebula.global.create_child_project",

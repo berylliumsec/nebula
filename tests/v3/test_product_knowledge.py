@@ -107,6 +107,14 @@ def test_product_search_finds_chat_planning_guidance(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_goal_handoff(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does Butler hand off a paused harness planning goal to DeepSeek?"
+    )
+    assert any("nebula.global.handoff_goal" in str(item["text"]) for item in matches)
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

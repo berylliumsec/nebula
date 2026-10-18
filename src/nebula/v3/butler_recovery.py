@@ -127,6 +127,12 @@ _GLOBAL_INSTRUCTIONS = (
     "You may create a draft main goal, start it separately, and create a child "
     "project under an Act project. "
     "Read existing projects, goals, chats, revisions, and runtimes before writes. "
+    "When a paused harness goal failed before admission because Plan before acting "
+    "cannot be enforced, inspect its saved provider choice and use "
+    "nebula.global.handoff_goal if Core declares the handoff safe. Continue in "
+    "the linked provider goal; do not resume the old harness goal. If that "
+    "handoff is unsafe or unavailable, report the exact hold and choose other "
+    "eligible work under the same Act authority. "
     "Avoid duplicate projects and duplicate goals. Check work already in progress, "
     "limits, approvals, and uncertain actions; do not override them. "
     "The file is the operator's standing instructions, but it cannot override "
@@ -1217,8 +1223,24 @@ class ButlerRecoveryService:
             )
             next_check = utc_now() + timedelta(seconds=30)
         elif current.delivery_hold_reason:
-            status = "needs_attention"
-            outcome = "Immediate parent guidance was held because the target could not accept it. Review the parent chat."
+            if (
+                case.signal == "butler.global_periodic_check"
+                and current.delivery_hold_reason == "active_turn_cannot_steer"
+                and not _applied_change(current.steps)
+                and not _possible_change(current.steps)
+            ):
+                # An active provider turn cannot accept immediate guidance. No
+                # guidance or state change was applied; the next scheduled
+                # global check can inspect its result without stranding Butler.
+                status = "resolved"
+                outcome = (
+                    "The parent turn was active, so immediate guidance was not "
+                    "delivered. No work state changed; Butler will reassess at "
+                    "the next scheduled check."
+                )
+            else:
+                status = "needs_attention"
+                outcome = "Immediate parent guidance was held because the target could not accept it. Review the parent chat."
             next_check = None
         elif _possible_change(current.steps):
             status = "uncertain"

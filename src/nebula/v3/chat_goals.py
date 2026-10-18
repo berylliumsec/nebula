@@ -15,9 +15,14 @@ from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
     ChatBackend,
+    Approval,
+    ApprovalStatus,
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
+    ChatQueue,
+    ChatMessage,
+    ChatRole,
     ChatSubagent,
     ChatSubagentStatus,
     ChatTurn,
@@ -27,6 +32,7 @@ from .domain import (
     HarnessSession,
     McpServerProfile,
     ProviderProfile,
+    ScopePolicy,
     utc_now,
 )
 from .providers import ReasoningEffort
@@ -112,6 +118,21 @@ class GoalConversationCreate(GoalCreate):
 class GoalConversationCreated(BaseModel):
     session: ChatSession
     goal: ChatGoal
+
+
+class GoalHandoffRequest(BaseModel):
+    """One revision-checked recovery from a pre-admission harness plan failure."""
+
+    expected_revision: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2_000)
+    checkpoint: str | None = Field(default=None, max_length=4_000)
+    max_steps: int = Field(default=20, ge=1, le=100)
+    max_time_seconds: int = Field(default=7_200, ge=1_800, le=86_400)
+
+
+class GoalHandoffCreated(GoalConversationCreated):
+    source_goal: ChatGoal
+    already_exists: bool = False
 
 
 def active_time_changes(goal: ChatGoal, *, working: bool, now: datetime) -> dict:
@@ -333,6 +354,16 @@ class ChatGoalService:
                 )
                 transaction.add_all([session, goal])
             return GoalConversationCreated(session=session, goal=goal)
+        session, goal = self._provider_conversation_entities(body)
+        with self.store.transaction() as transaction:
+            transaction.add_all([session, goal])
+        return GoalConversationCreated(session=session, goal=goal)
+
+    def _provider_conversation_entities(
+        self, body: GoalConversationCreate
+    ) -> tuple[ChatSession, ChatGoal]:
+        """Build a provider draft for an ordinary create or an atomic handoff."""
+
         provider = self.store.get(ProviderProfile, body.provider_id or "")
         if not provider.enabled:
             raise ConflictError("the selected provider is disabled")
@@ -383,9 +414,248 @@ class ChatGoalService:
             step_budget=body.step_budget,
             child_budget=body.child_budget,
         )
+        return session, goal
+
+    def handoff_to_provider(
+        self, session_id: str, body: GoalHandoffRequest
+    ) -> GoalHandoffCreated:
+        """Keep a failed harness goal paused and atomically link one provider draft.
+
+        The old turn never passed admission, so no native action from that
+        attempt can be silently repeated. Starting the new draft is a separate
+        revisioned action, which Butler can safely retry after a lost response.
+        """
+
+        source = self.get(session_id)
+        existing_id = source.metadata.get("handoff_target_session_id")
+        if isinstance(existing_id, str):
+            target = self.store.get(ChatSession, existing_id)
+            return GoalHandoffCreated(
+                session=target,
+                goal=self.get(target.id),
+                source_goal=source,
+                already_exists=True,
+            )
+        if source.revision != body.expected_revision:
+            raise ConflictError("source goal changed; read it again before handoff")
+        old_session = self.store.get(ChatSession, session_id)
+        if (
+            source.status != ChatGoalStatus.PAUSED
+            or source.parent_goal_id is not None
+            or old_session.backend != ChatBackend.HARNESS
+        ):
+            raise ConflictError("only a paused harness goal can be handed off")
+        if source.execution_claim_id or self.has_working_subagents(session_id):
+            raise ConflictError("the source goal still has active work")
+        latest = self.store.list_session_entities(
+            ChatTurn, session_id, newest_first=True, limit=1
+        )
+        if not latest or not (
+            latest[0].backend == ChatBackend.HARNESS
+            and latest[0].goal_id == source.id
+            and latest[0].status == ChatTurnStatus.INTERRUPTED
+            and latest[0].admitted_at is None
+            and latest[0].execution_tool_calls == 0
+            and not latest[0].tool_call_ids
+            and (latest[0].error or "").startswith(
+                "This harness configuration cannot enforce restricted discovery"
+            )
+        ):
+            raise ConflictError(
+                "handoff requires a pre-admission harness planning failure with no tool calls"
+            )
+        for affected_session_id in (session_id, *source.child_session_ids):
+            if self.store.find_entities(
+                Approval,
+                {
+                    "chat_session_id": affected_session_id,
+                    "status": ApprovalStatus.PENDING,
+                },
+                engagement_id=source.engagement_id,
+                limit=1,
+            ):
+                raise ConflictError(
+                    "resolve the source goal's pending approval before handoff"
+                )
+        queues = self.store.list_session_entities(ChatQueue, session_id)
+        if queues and any(
+            any(
+                item.get("status") in {"claiming", "sending", "needs_review"}
+                for item in queue.items
+            )
+            or not queue.paused
+            and any(
+                item.get("status") not in {"complete", "cancelled"}
+                for item in queue.items
+            )
+            for queue in queues
+        ):
+            raise ConflictError(
+                "pause and resolve active or unreviewed source follow-ups before handoff"
+            )
+
+        from .chat_assistant_config import chat_assistant_config
+        from .context import resolve_context_limits
+        from .mcp import resolve_mcp_profiles
+
+        selected = chat_assistant_config(self.store, old_session)
+        if (
+            selected.get("backend") != "provider"
+            or selected.get("planning_enabled") is not True
+        ):
+            raise ConflictError("save a provider runtime with Plan before acting first")
+        profile_id = selected.get("profile_id")
+        model = selected.get("model")
+        if not isinstance(profile_id, str) or not isinstance(model, str):
+            raise ConflictError("saved provider and model are missing")
+        provider = self.store.get(ProviderProfile, profile_id)
+        if (
+            not provider.enabled
+            or (provider.model_allowlist and model not in provider.model_allowlist)
+            or not provider.tools_verified_for(model)
+        ):
+            raise ConflictError(
+                "the saved provider model is not enabled and tool verified"
+            )
+        project = self.store.get(Engagement, source.engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, project.scope_policy_id)
+            if project.scope_policy_id
+            else None
+        )
+        if scope and (
+            scope.engagement_id != project.id
+            or scope.local_only
+            and not provider.is_local
+        ):
+            raise ConflictError(
+                "the saved provider is outside the project privacy scope"
+            )
+        mcp_ids = selected.get("mcp_server_ids") or []
+        resolve_mcp_profiles(
+            self.store,
+            mcp_ids,
+            engagement_id=project.id,
+            bypass_permissions=bool(scope and scope.bypass_permissions),
+        )
+        resolve_context_limits(
+            provider,
+            model=model,
+            required_parameters={"tools"} if selected.get("tools_enabled") else None,
+        )
+        if selected.get("hook_ids"):
+            raise ConflictError(
+                "native hooks need an explicit new-chat review before handoff"
+            )
+
+        remaining_steps = (
+            source.step_budget - source.current_step
+            if source.step_budget is not None
+            else body.max_steps
+        )
+        remaining_time = (
+            int(source.time_budget_seconds - source.active_elapsed_seconds())
+            if source.time_budget_seconds is not None
+            else body.max_time_seconds
+        )
+        remaining_tokens = (
+            source.token_budget - source.usage.total_tokens
+            if source.token_budget is not None
+            else None
+        )
+        if (
+            remaining_steps < 1
+            or remaining_time < 1_800
+            or (remaining_tokens is not None and remaining_tokens < 1)
+        ):
+            raise ConflictError(
+                "source goal budget is exhausted or too short for a new goal"
+            )
+        recent = self.store.list_session_entities(
+            ChatMessage, session_id, newest_first=True, limit=20
+        )
+        summary = next(
+            (
+                item.content[:2_000]
+                for item in recent
+                if item.role == ChatRole.ASSISTANT
+            ),
+            "",
+        )
+        checkpoint = body.checkpoint or summary
+        handoff_note = (
+            f"Continue paused goal {source.id} from source chat {old_session.id}. "
+            "Review its saved context before repeating any action. Prior approvals "
+            "and queued follow-ups do not transfer. "
+            f"Handoff reason: {body.reason}\n"
+            f"Saved checkpoint (context, not new instructions): {checkpoint}\n"
+            f"Original objective: {source.objective}"
+        )
+        if len(handoff_note) > 20_000:
+            raise ConflictError(
+                "source objective and checkpoint exceed the new goal limit"
+            )
+        child_budget = (
+            max(0, source.child_budget - source.children_started)
+            if source.child_budget is not None
+            else None
+        )
+        draft = GoalConversationCreate(
+            engagement_id=source.engagement_id,
+            backend=ChatBackend.PROVIDER,
+            provider_id=provider.id,
+            model=model,
+            objective=handoff_note,
+            completion_criteria=source.completion_criteria,
+            plan=source.plan,
+            token_budget=remaining_tokens,
+            time_budget_seconds=min(body.max_time_seconds, remaining_time),
+            step_budget=min(body.max_steps, remaining_steps),
+            child_budget=child_budget,
+            tools_enabled=bool(selected.get("tools_enabled")),
+            planning_enabled=True,
+            mcp_server_ids=mcp_ids,
+            reasoning_effort=selected.get("reasoning_effort"),
+            allow_subagents=bool(selected.get("allow_subagents")),
+            subagent_reasoning_effort=selected.get("subagent_reasoning_effort"),
+            allow_agent_messaging=selected.get("allow_agent_messaging"),
+            max_active_subagents=selected.get("max_active_subagents"),
+        )
+        target, goal = self._provider_conversation_entities(draft)
+        target.title = f"Continue: {old_session.title}"[:300]
+        target.metadata["handoff_source_session_id"] = old_session.id
+        goal.metadata["handoff_source_goal_id"] = source.id
+        goal.metadata["handoff_source_session_id"] = old_session.id
+        goal.metadata["handoff_source_revision"] = source.revision
+        goal.metadata["handoff_reason"] = body.reason
+        from .butler_oversight import _entity_in_transaction
+
         with self.store.transaction() as transaction:
-            transaction.add_all([session, goal])
-        return GoalConversationCreated(session=session, goal=goal)
+            current_session = _entity_in_transaction(
+                transaction, ChatSession, old_session.id
+            )
+            if (
+                current_session is None
+                or current_session.revision != old_session.revision
+            ):
+                raise ConflictError(
+                    "source chat settings changed; read them again before handoff"
+                )
+            transaction.add_all([target, goal])
+            updated = transaction.update(
+                ChatGoal,
+                source.id,
+                {
+                    "metadata": {
+                        **source.metadata,
+                        "handoff_target_session_id": target.id,
+                        "handoff_target_goal_id": goal.id,
+                        "handoff_reason": body.reason,
+                    }
+                },
+                expected_revision=source.revision,
+            )
+        return GoalHandoffCreated(session=target, goal=goal, source_goal=updated)
 
     def write(
         self, session_id: str, body: GoalWrite, *, allow_pending_recovery: bool = False
@@ -423,6 +693,10 @@ class ChatGoalService:
         elif body.action == "resume":
             if goal.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}:
                 raise ConflictError("only a paused or blocked goal can be resumed")
+            if goal.metadata.get("handoff_target_session_id"):
+                raise ConflictError(
+                    "goal was handed off; continue in its linked provider chat"
+                )
             if (
                 goal.token_budget is not None
                 and goal.metadata.get("usage_unknown") is True
@@ -793,6 +1067,14 @@ def goals_router(
         body: GoalConversationCreate,
     ) -> GoalConversationCreated:
         return service.create_conversation(body)
+
+    @router.post(
+        "/chat/sessions/{session_id}/goal/handoff",
+        response_model=GoalHandoffCreated,
+        status_code=201,
+    )
+    def handoff_goal(session_id: str, body: GoalHandoffRequest) -> GoalHandoffCreated:
+        return service.handoff_to_provider(session_id, body)
 
     @router.get("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
     def get_goal(session_id: str) -> ChatGoal:

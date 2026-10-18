@@ -726,6 +726,63 @@ def test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease(
     assert renewed.lease_expires_at > utc_now() + timedelta(seconds=45)
 
 
+@pytest.mark.parametrize(
+    ("signal", "changed_state", "expected_status"),
+    [
+        ("butler.global_periodic_check", False, "resolved"),
+        ("butler.global_periodic_check", True, "needs_attention"),
+        ("butler.periodic_check", False, "needs_attention"),
+    ],
+)
+def test_active_parent_turn_hold_does_not_block_read_only_global_check(
+    tmp_path, signal, changed_state, expected_status
+):
+    store, project, parent, _, policy, worker_id = _setup(tmp_path)
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal=signal,
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="observed",
+            summary="Check active parent work",
+        )
+    )
+
+    class Agent:
+        async def run(self, claimed):
+            current = store.get(ButlerRecoveryCase, claimed.id)
+            steps = [{"operation": "nebula.work.chat", "status": "applied"}]
+            if changed_state:
+                steps.append(
+                    {"operation": "nebula.work.set_chat_settings", "status": "applied"}
+                )
+            steps.append({"operation": "nebula.work.message_chat", "status": "failed"})
+            store.update(
+                ButlerRecoveryCase,
+                current.id,
+                {
+                    "steps": steps,
+                    "delivery_hold_reason": "active_turn_cannot_steer",
+                    "target_session_id": parent.id,
+                },
+                expected_revision=current.revision,
+            )
+            return "Read parent state", ChatBackend.PROVIDER, "provider", "model", None
+
+    asyncio.run(
+        ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id)
+    )
+    settled = store.get(ButlerRecoveryCase, case.id)
+    assert settled.status == expected_status
+    if expected_status == "resolved":
+        assert "not delivered" in settled.outcome
+    else:
+        assert "Review the parent chat" in settled.outcome
+
+
 def test_interrupted_read_only_investigation_can_replay(tmp_path):
     store, project, _, _, policy, _ = _setup(tmp_path)
     case = store.create(
