@@ -548,6 +548,7 @@ class ButlerRecoveryService:
         try:
             loaded = read_butler_instructions(root)
         except ButlerInstructionsError as exc:
+            # diagnostic-expected: invalid global instructions are visible in overview.
             return {**result, "status": "invalid", "detail": str(exc)}
         if loaded is None:
             return {**result, "status": "missing"}
@@ -683,6 +684,7 @@ class ButlerRecoveryService:
                 if read_butler_instructions(self.instructions_root) is not None:
                     return False
             except ButlerInstructionsError:
+                # diagnostic-expected: invalid global instructions do not stop project recovery.
                 # Existing goal recovery remains available while the operator
                 # repairs the Nebula-wide instruction file.
                 pass
@@ -1181,6 +1183,7 @@ class ButlerRecoveryService:
         try:
             self.fire_global_periodic_check(project_id, worker_id)
         except ButlerInstructionsError:
+            # diagnostic-expected: overview exposes invalid global instructions.
             # The operator can repair the file; the existing project recovery
             # path continues and the invalid state is visible in overview.
             pass

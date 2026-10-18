@@ -1,12 +1,12 @@
 {
-  "change_digest": "3cfd7eff2a2f2a12d4cad886221ab286747b51ae3d3c6944ebd96b7f87def6dd",
+  "change_digest": "34d9f377aca7f62f756f87106b934d29992b6c5572ea2b761faa73d08a3779a4",
   "reviewed_by": "Codex agent focused selection review",
-  "reason": "The change adds a revisioned harness-to-provider goal handoff, Butler action and guidance, a visible source/target goal link, and correct verification of completed scheduled parent guidance. Selected tests cover fail-closed admission, idempotency, Act authority, held-message and completed-guidance outcomes, saved provider planning, product help, API mapping, and the production LAN browser journey.",
+  "reason": "The change adds a revisioned harness-to-provider goal handoff, Butler action and guidance, a visible source/target goal link, and correct verification of completed scheduled parent guidance. It classifies preexisting handled exceptions for the active diagnostic audit, reports partial filename discovery honestly, and fixes dormant type errors exposed by the selected CI job. Selected tests cover fail-closed admission, idempotency, Act authority, held-message and completed-guidance outcomes, bounded filename discovery, Butler's one-task force, harness planner and native gates, saved provider planning, product help, API mapping, and the production LAN browser journey.",
   "exclusions": "No full Python or frontend suite, unrelated Playwright areas, native tests, live provider calls, physical Mac actions, or research-host tests. The browser fixture uses an inert harness and a verified local provider draft; existing focused planning tests cover execution gating.",
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "expected_tests": {"python": 22, "frontend": 2, "playwright": 8, "native": 0},
+  "expected_tests": {"python": 26, "frontend": 2, "playwright": 8, "native": 0},
   "python": [
     "tests/v3/test_goal_handoff.py",
     "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
@@ -16,6 +16,10 @@
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_goal_handoff",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
     "tests/v3/test_chat_planning.py::test_provider_discovery_cannot_execute_and_saves_plan_before_tool",
+    "tests/v3/test_chat_planning.py::test_filename_discovery_reports_unreadable_subtree_as_incomplete",
+    "tests/v3/test_chat_planning.py::test_butler_force_is_revisioned_one_task_and_read_back",
+    "tests/v3/test_chat_planning.py::test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan",
+    "tests/v3/test_chat_planning.py::test_harness_gateway_and_native_permission_replan_before_effect",
     "tests/v3/test_chat_planning.py::test_linked_retry_of_blocked_plan_uses_saved_harness_choice"
   ],
   "frontend": [

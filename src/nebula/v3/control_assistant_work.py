@@ -816,6 +816,7 @@ class ControlAssistantWork:
         reason = _text(arguments.get("reason"), "reason", 2000)
         if len(reason) < 20:
             raise ValueError("record a concrete reason of at least 20 characters")
+        target: ChatSession | ChatGoal | ChatSubagent | ChatTurn
         if kind == "agent":
             target = session
             if target_id != session.id:
@@ -873,6 +874,7 @@ class ControlAssistantWork:
             try:
                 saved_internal = self.store.get(ChatPlanDirective, internal_id)
             except NotFoundError:
+                # diagnostic-expected: no prior directive allows one to be created.
                 saved_internal = None
             if saved_internal is not None:
                 if (
@@ -886,21 +888,29 @@ class ControlAssistantWork:
         if existing:
             directive = existing[-1]
         else:
-            directive = self.store.create(
-                ChatPlanDirective(
-                    **({"id": internal_id} if internal_id is not None else {}),
+            deferred_after_turn_id = (
+                active.id if active is not None and active_harness_in_flight else None
+            )
+            if internal_id is None:
+                pending_directive = ChatPlanDirective(
                     engagement_id=project_id,
                     session_id=session.id,
                     target_kind=kind,
                     target_id=target_id,
                     reason=reason,
-                    deferred_after_turn_id=(
-                        active.id
-                        if active is not None and active_harness_in_flight
-                        else None
-                    ),
+                    deferred_after_turn_id=deferred_after_turn_id,
                 )
-            )
+            else:
+                pending_directive = ChatPlanDirective(
+                    id=internal_id,
+                    engagement_id=project_id,
+                    session_id=session.id,
+                    target_kind=kind,
+                    target_id=target_id,
+                    reason=reason,
+                    deferred_after_turn_id=deferred_after_turn_id,
+                )
+            directive = self.store.create(pending_directive)
         timing = (
             "next_turn"
             if active is not None and active_harness_in_flight

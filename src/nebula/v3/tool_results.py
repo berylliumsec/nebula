@@ -663,6 +663,7 @@ class WorkspaceOutputService:
         matches: list[str] = []
         scanned = 0
         incomplete = False
+        scan_error = False
         if root.is_file():
             relative = root.relative_to(self.workspace).as_posix()
             return {
@@ -695,6 +696,9 @@ class WorkspaceOutputService:
                             (child.relative_to(self.workspace).as_posix(), child),
                         )
                 except OSError:
+                    # diagnostic-expected: an unreadable subtree makes discovery incomplete.
+                    incomplete = True
+                    scan_error = True
                     continue
                 continue
             if not candidate.is_file():
@@ -713,7 +717,7 @@ class WorkspaceOutputService:
             "matches": matches,
             "scanned_files": scanned,
             "incomplete": incomplete,
-            "after": matches[-1] if incomplete and matches else None,
+            "after": matches[-1] if incomplete and matches and not scan_error else None,
         }
 
     def search(
