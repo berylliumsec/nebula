@@ -374,47 +374,53 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
   };
 
-  const openSettings = async () => {
+  const openSettings = () => {
     if (settingsOpen) { setSettingsOpen(false); return; }
     setSettingsOpen(true);
+    setSettingsBusy(true);
     setVoiceSettingsStatus("");
-    void loadVoiceSettings();
     setSettingsError("");
     setSettingsStatus("");
-    let config = sessionConfig;
-    if (api && engagement) {
-      setSettingsBusy(true);
+  };
+
+  useEffect(() => {
+    if (!settingsOpen) { setSettingsBusy(false); return; }
+    if (!api || !engagement?.id) return;
+    let current = true;
+    setSettingsBusy(true);
+    void (async () => {
       try {
-        // The panel can open before the background conversation restore finishes.
-        // Read Core directly so saved settings never appear as first-turn defaults.
-        let savedSessionId = sessionId;
-        if (!savedSessionId) {
-          const restored = await api.getControlAssistantSession(engagement.id);
-          if (restored?.engagementId === engagement.id) {
-            savedSessionId = restored.id;
-            setSessionId(restored.id);
-          }
-        }
-        if (savedSessionId) {
-          const saved = await api.getChatAssistantConfig(savedSessionId);
-          config = saved.settings;
-          setSessionConfig(config);
-          setSettingsRevision(saved.revision);
-        }
+        // A settings deep link may open before the selected project loads.
+        // Read Core when it becomes available, rather than capturing an empty draft.
+        const restored = await api.getControlAssistantSession(engagement.id);
+        if (!current) return;
+        if (restored && restored.engagementId !== engagement.id) throw new Error("Core returned a conversation outside this project's Butler. Retry after reconnecting.");
+        const saved = restored ? await api.getChatAssistantConfig(restored.id) : undefined;
+        if (!current) return;
+        const config = saved?.settings;
+        if (restored) setSessionId(restored.id);
+        setSessionConfig(config);
+        setSettingsRevision(saved?.revision);
+        setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
+        setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
       } catch (caught) {
+        if (!current) return;
         void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.settings_open_failed", message: "Butler settings could not be loaded.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
         setSettingsError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry by reopening settings.");
-      } finally { setSettingsBusy(false); }
-    }
-    setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
-    setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
-  };
+      } finally { if (current) setSettingsBusy(false); }
+    })();
+    return () => { current = false; };
+  }, [settingsOpen, api, engagement?.id]);
+
+  useEffect(() => {
+    if (settingsOpen) void loadVoiceSettings();
+  }, [settingsOpen, api]);
 
   useEffect(() => {
     const openVoiceSettings = () => {
       setOpen(true);
       setHidden(false);
-      if (!settingsOpen) void openSettings();
+      if (!settingsOpen) openSettings();
       else void loadVoiceSettings();
     };
     window.addEventListener("nebula:open-butler-settings", openVoiceSettings);
@@ -1149,12 +1155,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       {settingsOpen && <section id="butler-settings" className={styles.ownSettings} aria-label="Butler settings">
         <div className={styles.settingsHeading}><strong>Butler settings</strong><span>{selectedSettingsRuntime?.model ?? ""}</span></div>
         <form onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
-          {selectedSettingsRuntime?.kind === "provider" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option key={item} value={item}>{item === "none" ? "None" : item}</option>)}</select></label>}
-          {selectedSettingsRuntime?.kind === "harness" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || !selectedModelOptions?.reasoningEfforts.length} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Harness default</option>{effortDraft && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === effortDraft) && <option value={effortDraft}>{effortDraft} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option key={item.id} value={item.id} title={item.description || undefined}>{item.label}</option>)}</select></label>}
-          {cyberChoices.length > 0 && <label>Cyber access<select aria-label="Butler cyber access" value={cyberDraft} disabled={settingsBusy} onChange={(event) => setCyberDraft(event.target.value as ChatAssistantConfig["harnessCyberAccessProgram"])}><option value="automatic">Codex automatic</option>{cyberChoices.map((choice) => <option key={choice} value={choice}>{choice === "standard" ? "Standard" : choice === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label>}
+          {selectedSettingsRuntime?.kind === "provider" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option key={item} value={item}>{item === "none" ? "None" : item}</option>)}</select></label>}
+          {selectedSettingsRuntime?.kind === "harness" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError) || !selectedModelOptions?.reasoningEfforts.length} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Harness default</option>{effortDraft && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === effortDraft) && <option value={effortDraft}>{effortDraft} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option key={item.id} value={item.id} title={item.description || undefined}>{item.label}</option>)}</select></label>}
+          {cyberChoices.length > 0 && <label>Cyber access<select aria-label="Butler cyber access" value={cyberDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setCyberDraft(event.target.value as ChatAssistantConfig["harnessCyberAccessProgram"])}><option value="automatic">Codex automatic</option>{cyberChoices.map((choice) => <option key={choice} value={choice}>{choice === "standard" ? "Standard" : choice === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label>}
           {selectedSettingsRuntime?.kind === "harness" && !selectedModelOptions?.reasoningEfforts.length && <small>This harness does not advertise effort choices.</small>}
-          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || busy}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}>Full Assistant settings</button>}</div>
-          {settingsBusy && <p role="status">Loading Butler settings…</p>}
+          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || Boolean(settingsError) || busy}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}>Full Assistant settings</button>}</div>
+          {settingsBusy && <p role="status">{!api ? "Connect to Core to load Butler settings." : !engagement ? "Choose a project to load Butler settings." : "Loading Butler settings…"}</p>}
           {settingsStatus && <p role="status">{settingsStatus}</p>}
           {settingsError && <p role="alert">{settingsError}</p>}
         </form>
