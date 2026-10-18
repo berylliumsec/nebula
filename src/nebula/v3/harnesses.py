@@ -82,6 +82,12 @@ from .chat import (
     HarnessKnowledgeSearchResult,
     resolve_chat_model_content,
 )
+from .chat_planning import (
+    ChatPlanService,
+    DISCOVERY_TOOL_NAMES,
+    PlanSubmission,
+    PlanningBlocked,
+)
 from .chat_turn_headers import session_turn_headers
 from .chat_subagents import (
     HARNESS_WAIT_DEFAULT_SECONDS,
@@ -374,6 +380,17 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["artifact_id"],
+        "additionalProperties": False,
+    },
+    "workspace.find": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "minLength": 1, "maxLength": 200},
+            "path": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "after": {"type": ["string", "null"]},
+        },
+        "required": ["query"],
         "additionalProperties": False,
     },
     "workspace.search": {
@@ -886,6 +903,25 @@ def _native_tool_risk(tool_name: str) -> RiskClass:
     if any(token in lowered for token in ("command", "bash", "file", "write", "edit")):
         return RiskClass.WORKSPACE_WRITE
     return RiskClass.ACTIVE_SCAN
+
+
+def _native_plan_category(tool_name: str) -> str | None:
+    name = tool_name.casefold()
+    if name in {"read", "glob", "grep"}:
+        return "isolated_workspace_read"
+    if name in {"write", "edit", "multiedit", "notebookedit"}:
+        return "isolated_workspace_write"
+    if name in {"bash", "command", "run_command"}:
+        return "shell"
+    if "websearch" in name or "web_search" in name:
+        return "web_search"
+    if "webfetch" in name or "web_fetch" in name:
+        return "web_fetch"
+    if name == "skill":
+        return "skills"
+    if name in {"agent", "task", "collabagenttoolcall"}:
+        return "subagents"
+    return None
 
 
 def _portable_gateway_tool_name(name: str) -> str:
@@ -8194,11 +8230,9 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 decision = "ask"
                 reason = "Nebula approval is required for this configured MCP tool"
             elif _claude_native_tool_enabled(native_capabilities, tool_name):
-                decision = "allow" if tool_name == "Skill" else "ask"
+                decision = "ask"
                 reason = (
-                    "Installed skills are explicitly enabled on this harness profile"
-                    if tool_name == "Skill"
-                    else "Nebula approval is required for this vendor-native capability"
+                    "Nebula validates the saved task plan and native capability policy"
                 )
             else:
                 decision = "deny"
@@ -8212,6 +8246,14 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             }
 
         hook_matcher = getattr(sdk, "HookMatcher", None)
+        if (
+            request.session.metadata.get("planning_enforced") is True
+            or isinstance(request.session.metadata.get("planning_target_turn_id"), str)
+        ) and hook_matcher is None:
+            raise HarnessConfigurationError(
+                "This Claude SDK cannot enforce the planning pre-use hook. "
+                "Update the managed SDK before resuming this task."
+            )
         hooks = (
             {"PreToolUse": [hook_matcher(matcher=None, hooks=[enforce_native_tool])]}
             if hook_matcher is not None
@@ -8481,6 +8523,7 @@ class HarnessRuntimeService:
         shutdown_timeout_seconds: float = 5.0,
     ) -> None:
         self.store = store
+        self.plans = ChatPlanService(store)
         self.work = WorkService(store)
         self.credential_store = credential_store
         self.workspace_resolver = workspace_resolver
@@ -9768,6 +9811,9 @@ class HarnessRuntimeService:
         files: dict[str, str] | None = None,
         nebula_tools: bool = True,
         butler_recovery_case_id: str | None = None,
+        planning_target_turn_id: str | None = None,
+        planning_tool_names: list[str] | None = None,
+        planning_native_categories: list[str] | None = None,
     ) -> HarnessTurn:
         """Run a tool-disabled, durable harness turn for bounded analysis.
 
@@ -9790,7 +9836,7 @@ class HarnessRuntimeService:
             profile_id=profile.id,
             model=selected_model,
             mcp_server_ids=[],
-            tools_enabled=nebula_tools,
+            tools_enabled=nebula_tools and planning_target_turn_id is None,
             control_assistant=butler_recovery_case_id is not None,
         )
         native = (
@@ -9806,6 +9852,16 @@ class HarnessRuntimeService:
                     **session.metadata,
                     "context_management": "isolated_analysis",
                     "analysis_only": True,
+                    **(
+                        {
+                            "planning_target_turn_id": planning_target_turn_id,
+                            "planning_tool_names": planning_tool_names or [],
+                            "planning_native_categories": planning_native_categories
+                            or [],
+                        }
+                        if planning_target_turn_id
+                        else {}
+                    ),
                     "analysis_files": files or {},
                     **(
                         {"butler_recovery_case_id": butler_recovery_case_id}
@@ -9821,7 +9877,13 @@ class HarnessRuntimeService:
                         else {}
                     ),
                     "native_capabilities": native.model_dump(mode="json"),
-                    **({} if nebula_tools else {"nebula_gateway": False}),
+                    **(
+                        {"nebula_gateway": True}
+                        if planning_target_turn_id
+                        else {}
+                        if nebula_tools
+                        else {"nebula_gateway": False}
+                    ),
                 }
             },
             expected_revision=session.revision,
@@ -10471,6 +10533,7 @@ class HarnessRuntimeService:
         allow_cloud_knowledge: bool = False,
         max_artifact_queries: int | None = None,
         harness_mode: str | None = None,
+        planning_enabled: bool | None = None,
         harness_skill: HarnessSkillInvocation | None = None,
         harness_reasoning_effort: str | None = None,
         harness_service_tier: str | None = None,
@@ -10490,6 +10553,15 @@ class HarnessRuntimeService:
         saved_chat = (
             self.store.get(ChatSession, chat_session_id) if chat_session_id else None
         )
+        planning_enabled = bool(
+            planning_enabled
+            if planning_enabled is not None
+            else saved_chat and saved_chat.metadata.get("planning_enabled", False)
+        )
+        if planning_enabled and harness_mode in {"plan", "planning"}:
+            raise HarnessConfigurationError(
+                "Plan before acting cannot be combined with harness Plan only mode"
+            )
         messaging_choice = resolve_agent_messaging_choice(
             self.store,
             engagement_id,
@@ -10817,6 +10889,7 @@ class HarnessRuntimeService:
                         else "pending",
                         **({"control_assistant": True} if control_assistant else {}),
                         "allow_agent_messaging": messaging_choice,
+                        "planning_enabled": planning_enabled,
                         "harness_runtime_options": session.metadata.get(
                             "runtime_options", {}
                         ),
@@ -10836,6 +10909,13 @@ class HarnessRuntimeService:
                 and isinstance(saved_subagent, dict)
             ):
                 pending_provider_subagent = saved_subagent
+        if chat.metadata.get("planning_enabled", False) != planning_enabled:
+            chat = self.store.update(
+                ChatSession,
+                chat.id,
+                {"metadata": {**chat.metadata, "planning_enabled": planning_enabled}},
+                expected_revision=chat.revision,
+            )
         # Core checks the subagent model itself: the composer may still be
         # loading the verification a saved or newly chosen model already has.
         if subagent_setting is None and pending_provider_subagent is not None:
@@ -11125,6 +11205,7 @@ class HarnessRuntimeService:
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
                 "provider_subagent": subagent_setting,
                 "allow_agent_messaging": allow_agent_messaging,
+                "planning_enabled": planning_enabled,
             },
         )
         harness_turn = HarnessTurn(
@@ -11830,6 +11911,121 @@ class HarnessRuntimeService:
                 # diagnostic-expected: an idle wait re-reads the durable status.
                 continue
 
+    async def _ensure_harness_plan(
+        self, turn: HarnessTurn, session: HarnessSession
+    ) -> HarnessTurn:
+        if turn.chat_turn_id is None or turn.chat_session_id is None:
+            return turn
+        chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+        chat = self.store.get(ChatSession, turn.chat_session_id)
+        if not chat_turn.tools_enabled or not self.plans.required(chat_turn, chat):
+            return turn
+        plan = self.plans.ensure(chat_turn, chat)
+        if plan is None:
+            return turn
+        if plan.phase == "blocked":
+            raise PlanningBlocked(plan.reason or "task planning is blocked")
+        if plan.phase != "execution":
+            profile = self.store.get(HarnessProfile, session.harness_profile_id)
+            if (
+                profile.kind != HarnessKind.CLAUDE_AGENT_SDK
+                or profile.permission_mode != "managed"
+                or session.metadata.get("harness_permission_mode") == "unrestricted"
+            ):
+                reason = (
+                    "This harness configuration cannot enforce restricted discovery "
+                    "and native pre-use checks. Choose a managed Claude Agent SDK "
+                    "profile and retry this task as a linked turn, or disable "
+                    "Plan before acting for a later task."
+                )
+                self.plans.block(chat_turn.id, reason)
+                raise PlanningBlocked(reason)
+            names: list[str] = []
+            cursor: str | None = None
+            for _ in range(64):
+                catalog = self._gateway_catalog(
+                    session, {"cursor": cursor} if cursor else None, turn=turn
+                )
+                names.extend(str(item["name"]) for item in catalog["tools"])
+                cursor = catalog.get("nextCursor")
+                if not cursor:
+                    break
+            native = HarnessNativeCapabilities.model_validate(
+                chat_turn.request_snapshot.get("native_capabilities") or {}
+            )
+            native_names = _native_capability_names(native)
+            prompt = (
+                "Plan this exact task before execution. You are in a restricted "
+                "session with only Core workspace.find, workspace.search, "
+                "workspace.read, and plan.submit. Discover file paths as needed. "
+                "Call plan.submit with steps, expected outcomes, exact available "
+                "tool names, native capability categories, workspace-relative "
+                "files (or no_file_work), and unresolved dependencies. "
+                "No task action may be taken in this session.\n\n"
+                f"Available execution tools: {json.dumps(sorted(set(names)))}\n"
+                f"Available native categories: {json.dumps(native_names)}\n"
+                f"Task:\n{turn.prompt[:30_000]}"
+            )
+            try:
+                await asyncio.wait_for(
+                    self.analyze_structured(
+                        engagement_id=turn.engagement_id,
+                        profile_id=session.harness_profile_id,
+                        model=session.model,
+                        prompt=prompt,
+                        nebula_tools=False,
+                        planning_target_turn_id=chat_turn.id,
+                        planning_tool_names=names,
+                        planning_native_categories=native_names,
+                    ),
+                    timeout=120,
+                )
+            except Exception as exc:
+                reason = f"Restricted planner failed: {_safe_error(exc)}"
+                self.plans.block(chat_turn.id, reason)
+                raise PlanningBlocked(reason) from exc
+            plan = self.plans.for_turn(chat_turn.id)
+            if plan is None or plan.phase != "execution":
+                reason = "Restricted planner ended without a validated plan."
+                self.plans.block(chat_turn.id, reason)
+                raise PlanningBlocked(reason)
+        plan_block = json.dumps(
+            {
+                "version": plan.plan_version,
+                "steps": plan.steps,
+                "tool_names": plan.tool_names,
+                "native_categories": plan.native_categories,
+                "files": plan.files,
+                "no_file_work": plan.no_file_work,
+                "unresolved_dependencies": plan.unresolved_dependencies,
+            },
+            ensure_ascii=False,
+        )
+        marker = "\n\nCore-validated task plan (follow it; replan if a capability is missing):\n"
+        if marker not in turn.prompt:
+            if len(turn.prompt) + len(marker) + len(plan_block) > 250_000:
+                raise PlanningBlocked("validated plan does not fit the harness prompt")
+            turn = self.store.update(
+                HarnessTurn,
+                turn.id,
+                {"prompt": turn.prompt + marker + plan_block},
+                expected_revision=turn.revision,
+            )
+        current_session = self.store.get(HarnessSession, session.id)
+        if current_session.metadata.get("planning_enforced") is not True:
+            self.store.update(
+                HarnessSession,
+                current_session.id,
+                {"metadata": {**current_session.metadata, "planning_enforced": True}},
+                expected_revision=current_session.revision,
+            )
+        existing_connection = self._connections.get(session.id)
+        if existing_connection is not None:
+            await self._discard_connection(
+                session.id, existing_connection, reason="planning_requirement_changed"
+            )
+        return turn
+
     async def stream_turn(self, turn_id: str) -> AsyncIterator[HarnessEvent]:
         turn = self.store.get(HarnessTurn, turn_id)
         if turn.status != HarnessTurnStatus.QUEUED:
@@ -11942,6 +12138,24 @@ class HarnessRuntimeService:
             )
         async with AsyncExitStack() as held_locks:
             await held_locks.enter_async_context(lock)
+            try:
+                turn = await self._ensure_harness_plan(turn, session)
+            except PlanningBlocked as exc:
+                self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, str(exc))
+                yield self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="status",
+                        origin=turn.origin,
+                        harness_profile_id=session.harness_profile_id,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        model=session.model,
+                        payload={"phase": "blocked", "detail": str(exc)},
+                    ),
+                )
+                return
             yield self._persist_activity(
                 turn,
                 session,
@@ -13116,12 +13330,22 @@ class HarnessRuntimeService:
         session = self.store.get(HarnessSession, original.harness_session_id)
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         if original.origin == HarnessTurnOrigin.CHAT:
+            from .chat_assistant_config import chat_assistant_config
+
             chat = self.store.get(ChatSession, original.chat_session_id or "")
             original_chat_turn = self.store.get(ChatTurn, original.chat_turn_id or "")
+            blocked_plan = self.plans.for_turn(original_chat_turn.id)
+            retry_profile_id = profile.id
+            retry_model = session.model
+            if blocked_plan is not None and blocked_plan.phase == "blocked":
+                saved = chat_assistant_config(self.store, chat)
+                if saved["backend"] == ChatBackend.HARNESS.value:
+                    retry_profile_id = saved["profile_id"]
+                    retry_model = saved["model"]
             _, _, replacement = self.prepare_chat(
                 engagement_id=original.engagement_id,
-                profile_id=profile.id,
-                model=session.model,
+                profile_id=retry_profile_id,
+                model=retry_model,
                 prompt=str(original.metadata.get("user_prompt") or original.prompt),
                 content_blocks=[
                     ChatContentBlock.model_validate(block)
@@ -13160,6 +13384,7 @@ class HarnessRuntimeService:
                     original_chat_turn.request_snapshot.get("allow_agent_messaging")
                     is True
                 ),
+                planning_enabled=True if blocked_plan is not None else None,
             )
             replacement = self.store.update(
                 HarnessTurn,
@@ -14210,6 +14435,25 @@ class HarnessRuntimeService:
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
         current = self.store.get(HarnessSession, session.id)
+        planning_target = current.metadata.get("planning_target_turn_id")
+        if isinstance(planning_target, str):
+            tools = [
+                {
+                    "name": name,
+                    "description": "Bounded read of the linked project workspace for task planning.",
+                    "inputSchema": _GATEWAY_RETRIEVAL_SCHEMAS[name],
+                    "annotations": {"readOnlyHint": True},
+                }
+                for name in sorted(DISCOVERY_TOOL_NAMES)
+            ]
+            tools.append(
+                {
+                    "name": "plan.submit",
+                    "description": "Submit the structured task plan to Core before execution.",
+                    "inputSchema": PlanSubmission.model_json_schema(),
+                }
+            )
+            return {"tools": tools}
         settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
         if turn is None:
@@ -14700,6 +14944,55 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
+        planner_target = self.store.get(HarnessSession, session.id).metadata.get(
+            "planning_target_turn_id"
+        )
+        if isinstance(planner_target, str):
+            plan = self.plans.for_turn(planner_target)
+            if plan is None:
+                raise PlanningBlocked("planning target is unavailable")
+            if name == "plan.submit":
+                selected = self.store.get(HarnessSession, session.id).metadata
+                saved = self.plans.submit(
+                    plan,
+                    PlanSubmission.model_validate(arguments),
+                    available_tools=set(selected.get("planning_tool_names") or []),
+                    native_categories=set(
+                        selected.get("planning_native_categories") or []
+                    ),
+                    workspace=self.workspace_resolver(plan.engagement_id),
+                )
+                value = {
+                    "plan_id": saved.id,
+                    "version": saved.plan_version,
+                    "phase": saved.phase,
+                }
+            elif name in DISCOVERY_TOOL_NAMES:
+                workspace = WorkspaceOutputService(
+                    self.workspace_resolver(plan.engagement_id)
+                )
+                value = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        getattr(workspace, name.split(".")[1]), **arguments
+                    ),
+                    timeout=5,
+                )
+                self.plans.record_discovery(plan, name, value)
+            else:
+                raise PlanningBlocked(
+                    "only Core workspace reads and plan.submit are available during discovery"
+                )
+            return {
+                "content": [{"type": "text", "text": json.dumps(value)}],
+                "structuredContent": value,
+                "isError": False,
+            }
+        if turn.chat_turn_id is not None:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat = self.store.get(ChatSession, chat_turn.session_id)
+            if self.plans.required(chat_turn, chat):
+                self.plans.ensure(chat_turn, chat)
+                self.plans.guard(chat_turn.id, name)
         settings_only = (
             self.store.get(HarnessSession, session.id).metadata.get("control_assistant")
             is True
@@ -15924,6 +16217,11 @@ class HarnessRuntimeService:
                     owner_id=owner_id,
                     **arguments,
                 )
+            elif name == "workspace.find":
+                workspace_service = WorkspaceOutputService(
+                    self.workspace_resolver(turn.engagement_id)
+                )
+                result = await asyncio.to_thread(workspace_service.find, **arguments)
             elif name == "workspace.search":
                 workspace_service = WorkspaceOutputService(
                     self.workspace_resolver(turn.engagement_id)
@@ -16502,12 +16800,22 @@ class HarnessRuntimeService:
                 future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
                 )
+                planner = isinstance(
+                    session.metadata.get("planning_target_turn_id"), str
+                )
                 future.set_result(
                     HarnessPermissionDecision(
-                        allowed=True,
+                        allowed=(
+                            not planner
+                            or (
+                                request.category == "mcp"
+                                and request.server_name == "nebula"
+                            )
+                        ),
                         reason=(
-                            "Approved within the isolated post-tool analysis session; "
-                            "no execution capabilities are attached"
+                            "Core's restricted planner allows only its discovery gateway"
+                            if planner
+                            else "Approved within the isolated post-tool analysis session; no execution capabilities are attached"
                         ),
                     )
                 )
@@ -16669,6 +16977,37 @@ class HarnessRuntimeService:
         *,
         adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None,
     ) -> PermissionTicket:
+        turn = self.store.get(HarnessTurn, turn_id)
+        if turn.chat_turn_id is not None:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat = self.store.get(ChatSession, chat_turn.session_id)
+            requires_plan = self.plans.required(chat_turn, chat)
+        else:
+            requires_plan = False
+        if requires_plan:
+            self.plans.ensure(chat_turn, chat)
+            if request.category == "mcp" and request.server_name == "nebula":
+                pass  # The gateway checks the exact offered name before dispatch.
+            elif request.category == "mcp":
+                raise PlanningBlocked(
+                    "direct harness MCP calls are unavailable under Plan before acting"
+                )
+            else:
+                category = _native_plan_category(
+                    request.tool_name or request.vendor_name
+                )
+                if category is None:
+                    raise PlanningBlocked(
+                        "unmapped native capability is unavailable under Plan before acting"
+                    )
+                plan = self.plans.for_turn(turn.chat_turn_id)
+                if (
+                    category == "isolated_workspace_read"
+                    and plan is not None
+                    and "isolated_workspace_write" in plan.native_categories
+                ):
+                    category = "isolated_workspace_write"
+                self.plans.guard_native(turn.chat_turn_id, category)
         if request.category == "mcp" and request.server_name == "nebula":
             gateway_future: asyncio.Future[HarnessPermissionDecision] = (
                 asyncio.get_running_loop().create_future()

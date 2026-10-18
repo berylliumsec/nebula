@@ -41,6 +41,7 @@ Settings assistant and the complete destination catalog.
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
+| Require a task plan | The chat's Assistant settings saves Plan before acting for future turns, or Butler records one exact one-task directive with the target revision and reason; the activity view shows the resulting plan and phase | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
 
 The setting catalog lists every Settings section, Butler's Voice control, and
 the Nebula-wide Butler instruction editor. Dedicated actions handle
@@ -99,6 +100,16 @@ The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
 `nebula.work.stop_mission`. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
+`nebula.work.chat_settings` and `nebula.work.set_chat_settings` expose the saved
+`planning_enabled` switch with revision checks and read-back. The switch lives
+in each conversation's Assistant settings. The existing harness Plan only mode
+still ends after planning; it cannot run together with Plan before acting.
+`nebula.work.require_plan` records a one-task requirement against an exact
+agent, goal, child, or turn, using a fresh target revision and concrete reason.
+An active harness turn reports that the directive takes effect next turn. The
+saved plan and Butler reason remain visible in the chat activity after refresh.
+Butler's automatic one-task force requires the project's delegated action grant,
+current Core evidence, and a recorded reason.
 `nebula.work.timeline` accepts a listed conversation ID or an Assistant title and
 a bounded number of hours. Ambiguous titles return selectable conversations. The
 read-only result pages saved messages, provider tool steps, selected harness

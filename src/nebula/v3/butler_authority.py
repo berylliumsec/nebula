@@ -27,6 +27,7 @@ from .domain import (
     ButlerDecision,
     ButlerProjectState,
     ChatGoal,
+    ChatPlanDirective,
     ChatGoalStatus,
     ChatSession,
     ChatTurn,
@@ -49,11 +50,12 @@ if TYPE_CHECKING:
 
 
 Authority = Literal["watch", "steer", "delegate", "act"]
-DelegateAction = Literal["pause_urgent_machine_blocker"]
+DelegateAction = Literal["pause_urgent_machine_blocker", "force_one_task_plan"]
 SUPPORTED_ACTIONS = (
     "request_parent_status",
     "request_parent_plan_reassessment",
     "pause_urgent_machine_blocker",
+    "force_one_task_plan",
     "investigate_and_repair",
 )
 
@@ -68,9 +70,13 @@ def action_id(decision_id: str, kind: str) -> str:
     )
 
 
+def plan_directive_id(action_key: str) -> str:
+    return "butler-plan-directive:" + action_key.removeprefix("butler-action:")
+
+
 class AuthorityWrite(NebulaModel):
     authority: Authority
-    delegate_actions: list[DelegateAction] = Field(default_factory=list, max_length=1)
+    delegate_actions: list[DelegateAction] = Field(default_factory=list, max_length=2)
     expected_revision: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -308,6 +314,7 @@ class ButlerAuthorityService:
                 "request_parent_status",
                 "request_parent_plan_reassessment",
                 "pause_urgent_machine_blocker",
+                "force_one_task_plan",
             ]
             | None
         ) = None
@@ -332,7 +339,13 @@ class ButlerAuthorityService:
                 for ref in decision.evidence_refs
             )
         ):
-            kind = "request_parent_plan_reassessment"
+            kind = (
+                "force_one_task_plan"
+                if policy is not None
+                and policy.authority in {"delegate", "act"}
+                and "force_one_task_plan" in policy.delegate_actions
+                else "request_parent_plan_reassessment"
+            )
         elif (
             event.event_type == "goal.read_only_tool_failures_repeated"
             and decision.choice == "steer"
@@ -399,6 +412,8 @@ class ButlerAuthorityService:
                     if event.event_type == "goal.read_only_tool_failures_repeated"
                     else "Ask the parent main agent to reassess the changed goal plan."
                     if kind == "request_parent_plan_reassessment"
+                    else "Require one Core-validated plan for the changed goal."
+                    if kind == "force_one_task_plan"
                     else "Pause the main goal after an urgent agent-reported machine blocker."
                 )
             ),
@@ -675,6 +690,23 @@ class ButlerAuthorityService:
             )
 
     def _reconcile(self, action: ButlerAction) -> None:
+        if action.action_type == "force_one_task_plan":
+            try:
+                directive = self.store.get(
+                    ChatPlanDirective, plan_directive_id(action.idempotency_key)
+                )
+            except NotFoundError:
+                self._finish(action, "uncertain", {"reason": "dispatch_interrupted"})
+            else:
+                if directive.engagement_id == action.engagement_id:
+                    self._finish(
+                        action,
+                        "applied",
+                        {"directive_id": directive.id, "status": directive.status},
+                    )
+                else:
+                    self._finish(action, "uncertain", {"reason": "directive_mismatch"})
+            return
         if action.action_type in {
             "request_parent_status",
             "request_parent_plan_reassessment",
@@ -753,6 +785,8 @@ class ButlerAuthorityService:
             if target_detail.get("kind") != "main":
                 self._hold(action, "main_agent_unavailable")
                 return
+        elif action.action_type == "force_one_task_plan":
+            target = goal.session_id
         else:
             if detail.get("kind") != "main" or goal.parent_goal_id:
                 self._cancel(action, "main_goal_required")
@@ -790,7 +824,27 @@ class ButlerAuthorityService:
                 expected_revision=current.revision,
             )
         try:
-            if action.action_type in {
+            if action.action_type == "force_one_task_plan":
+                receipt = self.work.require_plan(
+                    action.engagement_id,
+                    {
+                        "session_id": goal.session_id,
+                        "target_kind": "goal",
+                        "target_id": goal.id,
+                        "expected_revision": goal.revision,
+                        "reason": decision.why_now,
+                        "_directive_id": plan_directive_id(action.idempotency_key),
+                    },
+                )
+                directive = self.store.get(
+                    ChatPlanDirective, receipt["directive"]["id"]
+                )
+                self._finish(
+                    action,
+                    "applied",
+                    {"directive_id": directive.id, "status": directive.status},
+                )
+            elif action.action_type in {
                 "request_parent_status",
                 "request_parent_plan_reassessment",
             }:

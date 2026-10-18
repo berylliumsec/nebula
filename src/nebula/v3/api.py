@@ -328,6 +328,8 @@ from .domain import (
     ChatMessage,
     ChatRole,
     ChatSession,
+    ChatTaskPlan,
+    ChatPlanDirective,
     ChatTurn,
     ChatTurnStatus,
     ChatTokenUsage,
@@ -10495,6 +10497,7 @@ def create_app(
                 allow_cloud_knowledge=request.allow_cloud_knowledge,
                 max_artifact_queries=request.max_artifact_queries,
                 harness_mode=request.harness_mode,
+                planning_enabled=request.planning_enabled,
                 harness_reasoning_effort=request.harness_reasoning_effort,
                 harness_service_tier=request.harness_service_tier,
                 harness_cyber_access_program=request.harness_cyber_access_program,
@@ -12128,6 +12131,29 @@ def create_app(
             "session_id": session.id,
             "revision": session.revision,
             "settings": chat_assistant_config(store, session),
+        }
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/task-plans",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_chat_task_plans(session_id: str) -> dict[str, Any]:
+        session = store.get(ChatSession, session_id)
+        return {
+            "session_id": session.id,
+            "plans": [
+                item.model_dump(mode="json")
+                for item in store.list_session_entities(
+                    ChatTaskPlan, session.id, newest_first=True, limit=50
+                )
+            ],
+            "directives": [
+                item.model_dump(mode="json")
+                for item in store.list_session_entities(
+                    ChatPlanDirective, session.id, newest_first=True, limit=50
+                )
+            ],
         }
 
     @app.patch(

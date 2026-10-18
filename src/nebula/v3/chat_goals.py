@@ -75,6 +75,7 @@ class GoalConversationCreate(GoalCreate):
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     model: str = Field(min_length=1, max_length=500)
     tools_enabled: bool = False
+    planning_enabled: bool = False
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
     hook_ids: list[str] = Field(default_factory=list, max_length=32)
     # The rest of the composer's choices, saved as a send or the assistant
@@ -316,6 +317,7 @@ class ChatGoalService:
                             else None
                         ),
                         "allow_agent_messaging": body.allow_agent_messaging,
+                        "planning_enabled": body.planning_enabled,
                     },
                 )
                 goal = ChatGoal(
@@ -354,6 +356,7 @@ class ChatGoalService:
             model=body.model,
             metadata={
                 "tools_enabled": body.tools_enabled,
+                "planning_enabled": body.planning_enabled,
                 "mcp_server_ids": body.mcp_server_ids,
                 "hook_ids": body.hook_ids,
                 "reasoning_effort": body.reasoning_effort,

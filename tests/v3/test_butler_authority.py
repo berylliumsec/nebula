@@ -25,6 +25,7 @@ from nebula.v3.domain import (
     ButlerProjectState,
     ChatGoal,
     ChatGoalStatus,
+    ChatPlanDirective,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -346,6 +347,51 @@ def test_plan_change_steer_needs_explicit_reviewed_reason_before_parent_message(
     assert app.state.control_assistant_work.queue.get(child.session_id).items == []
     asyncio.run(authority.process_project(project.id, worker.worker_id))
     assert len(delivered) == 1
+
+
+def test_delegate_plan_force_requires_grant_and_current_reviewed_goal_evidence(
+    tmp_path,
+):
+    store, app, project, main, goal, _, worker = _setup(tmp_path)
+    authority = app.state.butler_authority
+    authority.write(
+        project.id,
+        AuthorityWrite(
+            authority="delegate",
+            delegate_actions=["force_one_task_plan"],
+            expected_revision=0,
+        ),
+    )
+    changed = ChatGoalService(store).update(
+        main.id,
+        GoalUpdate(
+            expected_revision=goal.revision,
+            objective=goal.objective,
+            completion_criteria=goal.completion_criteria,
+            plan=["Inspect current state", "Recheck the changed condition"],
+        ),
+    )
+    decision = _review(
+        store,
+        project,
+        worker,
+        "steer",
+        why_now="The changed goal plan needs a fresh tool and file inventory.",
+    )
+    assert any(
+        ref.get("kind") == "goal" and ref.get("id") == changed.id
+        for ref in decision.evidence_refs
+    )
+    asyncio.run(authority.process_project(project.id, worker.worker_id))
+    actions = store.find_entities(ButlerAction, {}, engagement_id=project.id)
+    assert len(actions) == 1
+    assert actions[0].action_type == "force_one_task_plan"
+    assert actions[0].status == "applied", actions[0].outcome
+    directives = store.list_session_entities(ChatPlanDirective, main.id)
+    assert len(directives) == 1
+    assert directives[0].target_kind == "goal"
+    assert directives[0].target_id == changed.id
+    assert directives[0].reason == decision.why_now
 
 
 def test_plan_reassessment_re_reviews_when_precedent_changes(tmp_path):

@@ -187,6 +187,7 @@ RETRIEVAL_TOOL_NAMES = frozenset(
         "research_result_search",
         "research_result_read",
         "workspace.search",
+        "workspace.find",
         "workspace.read",
         "conversation.search",
         "knowledge.search",
@@ -1468,7 +1469,7 @@ def register_artifact_retrieval_tools(
     *,
     output_service: ToolOutputService,
 ) -> None:
-    """Install the four trusted, bounded retrieval capabilities."""
+    """Install trusted, bounded retrieval capabilities."""
 
     common_output = {"type": "object", "additionalProperties": True}
 
@@ -1492,6 +1493,10 @@ def register_artifact_retrieval_tools(
         service = WorkspaceOutputService(invocation.workspace)
         return await asyncio.to_thread(service.search, **invocation.arguments)
 
+    async def workspace_find(invocation: ToolInvocation) -> dict[str, Any]:
+        service = WorkspaceOutputService(invocation.workspace)
+        return await asyncio.to_thread(service.find, **invocation.arguments)
+
     async def workspace_read(invocation: ToolInvocation) -> dict[str, Any]:
         service = WorkspaceOutputService(invocation.workspace)
         return await asyncio.to_thread(service.read, **invocation.arguments)
@@ -1504,6 +1509,22 @@ def register_artifact_retrieval_tools(
             Callable[[ToolInvocation], Awaitable[dict[str, Any]]],
         ]
     ] = [
+        (
+            "workspace.find",
+            "Find file names by substring in a bounded project subtree.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "path": {"type": "string", "default": "."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "after": {"type": ["string", "null"]},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            workspace_find,
+        ),
         (
             "tool_output.search",
             "Search output artifacts from a prior tool call. context_lines must be 0-5; match_limit must be 1-100.",

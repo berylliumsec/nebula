@@ -95,11 +95,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.harnesses",
     label: "Assistant harnesses",
-    description: "Configure Codex and other assistant harness capabilities",
+    description: "Configure assistant harnesses; Plan before acting is a saved switch in each chat's Assistant settings",
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "assistant", "steer", "interrupt", "capabilities"],
+    keywords: ["harness", "codex", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "planning", "plan only"],
   },
   {
     id: "settings.mcp",
