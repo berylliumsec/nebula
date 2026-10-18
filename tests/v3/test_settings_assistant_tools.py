@@ -54,7 +54,7 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 21
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 22
     assert (
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"
@@ -86,6 +86,12 @@ def test_catalog_covers_settings_destinations_without_secrets():
         "assistant_ui_actions"
     ] == ["device_theme"]
     assert (
+        next(item for item in result["settings"] if item["id"] == "butler-effort")[
+            "url"
+        ]
+        == "/settings#butler-settings"
+    )
+    assert (
         next(item for item in result["settings"] if item["id"] == "butler-voice")["url"]
         == "/settings#butler-settings"
     )
@@ -113,6 +119,10 @@ def test_catalog_covers_settings_destinations_without_secrets():
 
 
 def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them():
+    assert open_setting({"setting_id": "butler-effort"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "open_setting", "setting_id": "butler-effort"},
+    }
     assert open_setting({"setting_id": "butler-voice"}) == {
         "state": "pending_browser_apply",
         "client_action": {"kind": "open_setting", "setting_id": "butler-voice"},

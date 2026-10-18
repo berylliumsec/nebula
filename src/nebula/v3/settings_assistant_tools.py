@@ -27,6 +27,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
         "Nebula-wide Butler instructions",
         "butler-instructions-settings",
     ),
+    ("butler-effort", "Butler model and effort", "butler-settings"),
     ("butler-voice", "Butler Voice timeout", "butler-settings"),
     ("usage", "Usage and credits", "usage-settings"),
     ("appearance", "Appearance and theme", "appearance-settings"),

@@ -47,6 +47,17 @@ describe("CompactSettingsList", () => {
     expect(screen.queryByRole("region", { name: "Models" })).not.toBeInTheDocument();
   });
 
+  it("finds Butler's scheduled effort setting and opens its control", () => {
+    const openSetting = vi.fn();
+    render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "max" } });
+    fireEvent.click(screen.getByRole("button", { name: /Butler model and effort/ }));
+    expect(openSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings.butler-effort", target: "butler-settings" }),
+      expect.any(HTMLElement),
+    );
+  });
+
   it("offers the native connection sheet only inside the iPhone shell", () => {
     const userAgent = vi.spyOn(navigator, "userAgent", "get");
     userAgent.mockReturnValue("Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0");

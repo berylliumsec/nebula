@@ -440,7 +440,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setSettingsRevision(saved.revision);
       setEffortDraft(saved.settings.backend === "provider" ? saved.settings.reasoningEffort ?? "" : saved.settings.harnessReasoningEffort ?? "");
       setCyberDraft(saved.settings.harnessCyberAccessProgram ?? "automatic");
-      setSettingsStatus(sessionId ? "Saved. Applies to Butler’s next message." : "Saved for Butler’s first message.");
+      setSettingsStatus(selectedSettingsRuntime.kind === "harness"
+        ? sessionId
+          ? "Saved. Applies to Butler’s next message and scheduled check."
+          : "Saved for Butler’s first message and scheduled check."
+        : sessionId
+          ? "Saved. Applies to Butler’s next message."
+          : "Saved for Butler’s first message.");
     } catch (caught) {
       void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_save_failed", message: "Butler settings could not be saved.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
       setSettingsError(caught instanceof Error ? caught.message : "Could not save Butler settings. Reload and retry.");

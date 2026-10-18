@@ -128,6 +128,14 @@ def test_product_search_finds_butler_goal_handoff(monkeypatch):
     assert any("nebula.global.handoff_goal" in str(item["text"]) for item in matches)
 
 
+def test_product_search_finds_butler_effort_setting(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where do I set Butler to max reasoning effort for scheduled checks?"
+    )
+    assert any(item["heading"] == "Butler model and effort" for item in matches)
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

@@ -1,35 +1,38 @@
 {
-  "change_digest": "544a0d8d1cba7a67314273df105f1b4b0cc1dcba23ad03ed405140dbd18b7890",
-  "reviewed_by": "Codex focused review for compact MCP capability directory",
-  "reason": "Fifteen collected Python cases cover complete compact directory content, a 109-tool payload bound, stable schema-free catalog tools, selected and pinned compatibility, real routing through search/load/call, unknown-name rejection, paused-turn resume, context reserve, and bundled product guidance with Chroma digest synchronization. A separate synthetic LAN Core probe validates the provider-facing workflow.",
-  "exclusions": "No frontend component, browser-origin behavior, or native code changed. Frontend, Playwright, native, and unrelated Python suites are excluded. Physical-device testing is not applicable to this provider request construction change.",
+  "change_digest": "49cad4a4c91c22ee6205c7c344e6fbd70d5126a2ae74403183c532c3af66f930",
+  "reviewed_by": "Codex focused review for Butler max effort parity",
+  "reason": "Ten collected Python cases cover durable Assistant settings, stale revision retry, direct next-turn settings, scheduled Butler selection and isolated harness effort, settings discovery, and product-help Chroma digest. Fifty-five component cases cover Butler controls and settings actions. Eight catalogued production-bundle LAN Core journeys cover save and refresh at desktop, compact, and Chromium/WebKit mobile widths.",
+  "exclusions": "Native code is unchanged. Unrelated Python, frontend, and browser journeys are excluded. Physical-device Safari is not available; WebKit mobile emulation is selected.",
   "expected_tests": {
-    "python": 15,
-    "frontend": 0,
+    "python": 10,
+    "frontend": 55,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_tool_catalog.py::test_always_loaded_tools_stay_out_of_the_deferred_catalog",
-    "tests/v3/test_tool_catalog.py::test_selected_sources_stay_out_of_the_deferred_catalog",
-    "tests/v3/test_tool_catalog.py::test_catalog_instructions_carry_preloaded_schemas_as_data",
-    "tests/v3/test_tool_catalog.py::test_catalog_instructions_name_each_picks_server_and_describe_it",
-    "tests/v3/test_tool_catalog.py::test_catalog_directory_uses_source_purpose_and_keeps_missing_purpose_empty",
-    "tests/v3/test_tool_catalog.py::test_large_directory_keeps_every_name_without_repeating_full_schemas",
-    "tests/v3/test_tool_catalog.py::test_catalog_digest_is_stable_for_resume",
-    "tests/v3/test_tool_catalog.py::test_tools_array_is_identical_across_search_load_and_call",
-    "tests/v3/test_tool_catalog.py::test_call_to_an_unknown_tool_is_an_error_the_model_can_correct",
-    "tests/v3/test_tool_catalog.py::test_resume_rebuilds_the_on_demand_catalog_from_the_turn",
-    "tests/v3/test_tool_catalog.py::test_prepare_keeps_an_always_loaded_tool_in_the_function_list",
-    "tests/v3/test_chat_context_assembly.py::test_the_reserve_covers_the_largest_catalog_picks_routing_can_send",
+    "tests/v3/test_butler_instructions.py::test_global_check_uses_saved_butler_harness_effort",
+    "tests/v3/test_harnesses.py::test_global_butler_analysis_opens_gateway_using_its_harness_session",
+    "tests/v3/test_control_assistant_work.py::test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message",
+    "tests/v3/test_control_assistant_work.py::test_chat_settings_api_reads_back_durable_next_turn_choice",
+    "tests/v3/test_control_assistant_work.py::test_butler_settings_api_saves_advertised_max_effort",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_mcp_directory_and_full_schema_cost",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_effort_setting",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_settings_assistant_tools.py::test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:butler-effort"
+  ]
 }
