@@ -1,8 +1,8 @@
 {
-  "change_digest": "ced17add4f35b4b6fe474ce661f9b82bb9cdde0905d10cf136a01ca3aa515271",
-  "reviewed_by": "Codex focused review of scheduled Butler draft project activation",
-  "reason": "One existing global Butler capability case now verifies that draft project activation is discoverable and can use current revisions before goal work. It also retains coverage for paused project activation, goal and child project deduplication, and mandate changes.",
-  "exclusions": "No frontend, browser, native, or UI source changed. This is the scheduled Butler prompt and capability discovery contract; the focused Python case exercises its Core-owned activation path. A synthetic LAN Core and the next live scheduled check provide runtime evidence separately.",
+  "change_digest": "3d2eea708760f0501f8eb8ad7c33ef36f4038eb81f72e3510d6e8ea07d1dba6a",
+  "reviewed_by": "Codex focused review of scheduled Butler parent guidance delivery",
+  "reason": "The existing global Butler capability case verifies that background discovery requires immediate delivery, rejects the two modes that failed live before a write, and records an accepted parent guidance receipt. It retains coverage for project activation and deduplicated work creation.",
+  "exclusions": "No frontend, browser, native, or UI source changed. This is a scheduled Butler prompt and Core capability contract. The focused Python case covers discovery, validation, and the delivery handoff; an isolated synthetic LAN Core exercises the scheduled gateway path. No browser controls changed.",
   "expected_tests": {
     "python": 1,
     "frontend": 0,

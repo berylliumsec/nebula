@@ -132,7 +132,9 @@ _GLOBAL_INSTRUCTIONS = (
     "The file is the operator's standing instructions, but it cannot override "
     "Core policy or scope. If no work is due, report that plainly. "
     "Use nebula.capabilities.search and describe before invoking tools. "
-    "Do not message child agents. Report exact Core results, not predicted outcomes."
+    "Deliver parent guidance with delivery=immediate and verify the Core result "
+    "before retrying or claiming the message was received. Do not message child "
+    "agents. Report exact Core results, not predicted outcomes."
 )
 GLOBAL_STATE_ID = "butler-global-periodic-state"
 
