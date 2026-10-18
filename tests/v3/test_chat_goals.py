@@ -1139,6 +1139,54 @@ def test_charging_a_terminal_goal_records_usage_without_resurrecting_it(tmp_path
     assert paused.usage.total_tokens == 36
 
 
+def test_goal_usage_keeps_provider_cache_and_billed_cost(tmp_path):
+    store, goals = setup_goal(tmp_path)
+    chat = ChatService(store, provider_factory=lambda _: FakeProvider("provider"))
+    draft = goals.create(
+        "session", GoalCreate(objective="Inspect", completion_criteria=["Evidence"])
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+
+    chat._charge_goal(
+        running.id,
+        ChatTokenUsage(
+            input_tokens=100,
+            output_tokens=10,
+            total_tokens=110,
+            cached_input_tokens=80,
+            cache_creation_input_tokens=5,
+            cost_usd=0.02,
+        ),
+    )
+    charged = chat._charge_goal(
+        running.id,
+        ChatTokenUsage(
+            input_tokens=20,
+            output_tokens=2,
+            total_tokens=22,
+            cached_input_tokens=15,
+            cost_usd=0.01,
+        ),
+    )
+
+    assert charged.usage == ChatTokenUsage(
+        input_tokens=120,
+        output_tokens=12,
+        total_tokens=132,
+        cached_input_tokens=95,
+        cache_creation_input_tokens=5,
+        cost_usd=0.03,
+    )
+    assert goals.read("session").usage == charged.usage
+    unknown = chat._charge_goal(
+        running.id, ChatTokenUsage(input_tokens=1, total_tokens=1)
+    )
+    assert unknown.usage.cached_input_tokens == 95
+    assert unknown.usage.cost_usd is None
+
+
 def test_parent_pause_skips_draft_children_and_commits_with_the_parent(tmp_path):
     store, service = setup_goal(tmp_path)
     parent = service.create(

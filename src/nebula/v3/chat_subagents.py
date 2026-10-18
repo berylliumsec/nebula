@@ -90,6 +90,7 @@ from .domain import (
     utc_now,
 )
 from .providers import REASONING_EFFORTS, ReasoningEffort
+from .model_pricing import combined_billed_cost
 from .runtime_platform import RuntimeToolComponents
 from .native_hooks import discover_native_hooks
 from .mcp import catalog_mcp_profiles, mcp_tool_runtime_name, usable_mcp_tools
@@ -872,16 +873,40 @@ def _add_usage(first: ChatTokenUsage, second: ChatTokenUsage) -> ChatTokenUsage:
         input_tokens=first.input_tokens + second.input_tokens,
         output_tokens=first.output_tokens + second.output_tokens,
         total_tokens=first.total_tokens + second.total_tokens,
+        cached_input_tokens=first.cached_input_tokens + second.cached_input_tokens,
+        cache_creation_input_tokens=first.cache_creation_input_tokens
+        + second.cache_creation_input_tokens,
+        cost_usd=combined_billed_cost(first, second),
     )
 
 
 def _subtract_usage(first: ChatTokenUsage, second: ChatTokenUsage) -> ChatTokenUsage:
     """Remove one prematurely settled turn debit without going below zero."""
 
+    if first == second:
+        return ChatTokenUsage()
     return ChatTokenUsage(
         input_tokens=max(0, first.input_tokens - second.input_tokens),
         output_tokens=max(0, first.output_tokens - second.output_tokens),
         total_tokens=max(0, first.total_tokens - second.total_tokens),
+        cached_input_tokens=max(
+            0, first.cached_input_tokens - second.cached_input_tokens
+        ),
+        cache_creation_input_tokens=max(
+            0,
+            first.cache_creation_input_tokens - second.cache_creation_input_tokens,
+        ),
+        cost_usd=(
+            round(max(0.0, first.cost_usd - (second.cost_usd or 0.0)), 12)
+            if first.cost_usd is not None
+            and (
+                second.cost_usd is not None
+                or not (
+                    second.input_tokens or second.output_tokens or second.total_tokens
+                )
+            )
+            else None
+        ),
     )
 
 
