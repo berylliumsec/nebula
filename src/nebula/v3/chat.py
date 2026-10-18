@@ -1545,6 +1545,7 @@ def _added_usage(left: ChatTokenUsage, right: ChatTokenUsage) -> ChatTokenUsage:
         cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
         cache_creation_input_tokens=left.cache_creation_input_tokens
         + right.cache_creation_input_tokens,
+        cost_usd=combined_billed_cost(left, right),
     )
 
 
@@ -11537,11 +11538,7 @@ class ChatService:
 
         write = transaction.update if transaction is not None else self.store.update
         goal = self.store.get(ChatGoal, goal_id)
-        combined = ChatTokenUsage(
-            input_tokens=goal.usage.input_tokens + usage.input_tokens,
-            output_tokens=goal.usage.output_tokens + usage.output_tokens,
-            total_tokens=goal.usage.total_tokens + usage.total_tokens,
-        )
+        combined = _added_usage(goal.usage, usage)
         # Usage is always recorded, but only a running goal pauses on the
         # budget: a goal the operator cancelled, completed, paused or blocked
         # while the response was in flight keeps that state and its timestamps.

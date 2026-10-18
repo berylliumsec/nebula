@@ -1,40 +1,19 @@
 {
-  "change_digest": "34d9f377aca7f62f756f87106b934d29992b6c5572ea2b761faa73d08a3779a4",
+  "change_digest": "48340f314ad24caef2a8d0d9402ddf30f36b95fbd55884fe72153adc50944996",
   "reviewed_by": "Codex agent focused selection review",
-  "reason": "The change adds a revisioned harness-to-provider goal handoff, Butler action and guidance, a visible source/target goal link, and correct verification of completed scheduled parent guidance. It classifies preexisting handled exceptions for the active diagnostic audit, reports partial filename discovery honestly, and fixes dormant type errors exposed by the selected CI job. Selected tests cover fail-closed admission, idempotency, Act authority, held-message and completed-guidance outcomes, bounded filename discovery, Butler's one-task force, harness planner and native gates, saved provider planning, product help, API mapping, and the production LAN browser journey.",
-  "exclusions": "No full Python or frontend suite, unrelated Playwright areas, native tests, live provider calls, physical Mac actions, or research-host tests. The browser fixture uses an inert harness and a verified local provider draft; existing focused planning tests cover execution gating.",
+  "reason": "The provider adapter and saved ChatTurn already preserve cache tokens and billed cost; goal and subagent rollups discard those details. Four selected Python tests verify direct goal charging, budget and terminal behavior, child accrual and settlement without double charging, and a historical migration that repairs only summaries reconciled to durable source turns. A separate synthetic LAN Core check will verify the saved API view and restart persistence.",
+  "exclusions": "No frontend, native, or Playwright tests: this changes only Core usage accounting and a data migration, without adding or changing browser controls, layouts, or client mappings. No full suite, live provider call, production-data write, or live deployment. PostgreSQL migration coverage requires an unavailable test database; the selected migration check uses SQLite.",
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "expected_tests": {"python": 26, "frontend": 2, "playwright": 8, "native": 0},
+  "expected_tests": {"python": 4, "frontend": 0, "playwright": 0, "native": 0},
   "python": [
-    "tests/v3/test_goal_handoff.py",
-    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
-    "tests/v3/test_butler_recovery.py::test_active_parent_turn_hold_does_not_block_read_only_global_check",
-    "tests/v3/test_butler_recovery.py::test_global_parent_guidance_completion_does_not_require_a_subagent",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_goal_handoff",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_chat_planning.py::test_provider_discovery_cannot_execute_and_saves_plan_before_tool",
-    "tests/v3/test_chat_planning.py::test_filename_discovery_reports_unreadable_subtree_as_incomplete",
-    "tests/v3/test_chat_planning.py::test_butler_force_is_revisioned_one_task_and_read_back",
-    "tests/v3/test_chat_planning.py::test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan",
-    "tests/v3/test_chat_planning.py::test_harness_gateway_and_native_permission_replan_before_effect",
-    "tests/v3/test_chat_planning.py::test_linked_retry_of_blocked_plan_uses_saved_harness_choice"
+    "tests/v3/test_chat_goals.py::test_charging_a_terminal_goal_records_usage_without_resurrecting_it",
+    "tests/v3/test_chat_goals.py::test_goal_usage_keeps_provider_cache_and_billed_cost",
+    "tests/v3/test_chat_subagent_lifecycle.py::test_settle_charges_only_what_accrual_left_uncharged",
+    "tests/v3/test_cache_usage_migration.py::test_cached_usage_migration_reconciles_goals_and_settled_child_rounds"
   ],
-  "frontend": [
-    "ui/src/api/goalHandoff.test.ts",
-    "ui/src/components/ProviderGoalHandoff.test.tsx"
-  ],
-  "playwright": [
-    "goal-handoff/assistant-real-desktop",
-    "goal-handoff/assistant-real-compact",
-    "goal-handoff/assistant-real-chromium-320",
-    "goal-handoff/assistant-real-chromium-390",
-    "goal-handoff/assistant-real-chromium-430",
-    "goal-handoff/assistant-real-webkit-320",
-    "goal-handoff/assistant-real-webkit-390",
-    "goal-handoff/assistant-real-webkit-430"
-  ],
+  "frontend": [],
+  "playwright": [],
   "native": []
 }
