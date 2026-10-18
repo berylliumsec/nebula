@@ -233,7 +233,7 @@ class ButlerGlobalActions:
         project_id = arguments["project_id"]
         project = self._act(project_id, arguments["expected_authority_revision"])
         if project.status != EngagementStatus.ACTIVE:
-            raise ValueError("Activate the project before starting a goal")
+            raise ValueError("Activate the project before starting or resuming a goal")
         if arguments["action"] not in {"start", "resume"}:
             raise ValueError("Scheduled Butler may only start or resume a main goal")
         current = self.work.goal_detail(project_id, arguments["session_id"])
@@ -246,7 +246,7 @@ class ButlerGlobalActions:
             raise ValueError("Main goal changed; read it again")
         project = self._act(project_id, arguments["expected_authority_revision"])
         if project.status != EngagementStatus.ACTIVE:
-            raise ValueError("Activate the project before starting a goal")
+            raise ValueError("Activate the project before starting or resuming a goal")
         return await self.work.goal_action(
             project_id,
             {
@@ -370,7 +370,7 @@ class ButlerGlobalActions:
             ),
             (
                 "nebula.global.resume_project",
-                "Resume one paused Act project's status using current revisions.",
+                "Activate one draft or paused Act project using current revisions before creating, starting, or resuming a goal.",
                 {
                     "type": "object",
                     "additionalProperties": False,
@@ -414,7 +414,7 @@ class ButlerGlobalActions:
             ),
             (
                 "nebula.global.goal_action",
-                "Start or resume one main goal in an Act project after reading its revision.",
+                "Start or resume one main goal in an active Act project after reading its revision. Activate a draft or paused project first.",
                 {
                     "type": "object",
                     "additionalProperties": False,

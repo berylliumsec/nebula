@@ -1,10 +1,10 @@
 {
-  "change_digest": "af644e901ab57511870d6ce6b06e7c88e0da1d7efeffe586b612d0b78a1aff09",
-  "reviewed_by": "Codex focused review of Butler harness gateway activation",
-  "reason": "Three Python cases cover the previously failing project Butler catalog, scoped Butler gateway access, and a scheduled global analysis opening its gateway with a durable harness turn. The analysis case also checks local runtime scope from the owning harness session.",
-  "exclusions": "No UI, API contract, frontend, browser, or native source changed. The selected cases exercise both affected Butler harness entry points; unrelated suites and Playwright areas are excluded. A synthetic LAN Core and the promoted simulation Core provide runtime acceptance evidence separately.",
+  "change_digest": "ced17add4f35b4b6fe474ce661f9b82bb9cdde0905d10cf136a01ca3aa515271",
+  "reviewed_by": "Codex focused review of scheduled Butler draft project activation",
+  "reason": "One existing global Butler capability case now verifies that draft project activation is discoverable and can use current revisions before goal work. It also retains coverage for paused project activation, goal and child project deduplication, and mandate changes.",
+  "exclusions": "No frontend, browser, native, or UI source changed. This is the scheduled Butler prompt and capability discovery contract; the focused Python case exercises its Core-owned activation path. A synthetic LAN Core and the next live scheduled check provide runtime evidence separately.",
   "expected_tests": {
-    "python": 3,
+    "python": 1,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -13,9 +13,7 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_control_assistant_work.py::test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_not",
-    "tests/v3/test_harnesses.py::test_butler_harness_has_scoped_capability_gateway_and_isolated_session",
-    "tests/v3/test_harnesses.py::test_global_butler_analysis_opens_gateway_using_its_harness_session"
+    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work"
   ],
   "frontend": [],
   "native": [],
