@@ -17102,10 +17102,10 @@ class HarnessRuntimeService:
                 offered_names = {
                     f"nebula__{item['name']}" for item in gateway_catalog({})["tools"]
                 }
-                future: asyncio.Future[HarnessPermissionDecision] = (
+                grok_future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
                 )
-                future.set_result(
+                grok_future.set_result(
                     HarnessPermissionDecision(
                         allowed=_planned_grok_gateway_permission(
                             request, offered_names
@@ -17113,7 +17113,7 @@ class HarnessRuntimeService:
                         reason="Core permits only this turn's guarded Nebula gateway",
                     )
                 )
-                return PermissionTicket(None, None, future)
+                return PermissionTicket(None, None, grok_future)
             if analysis_only or core_planned_gateway:
                 future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
