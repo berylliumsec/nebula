@@ -520,6 +520,128 @@ def test_grok_process_removes_host_command_and_workspace_tools(monkeypatch, tmp_
     assert isinstance(rpc, _AcpRpc)
 
 
+def test_core_planned_grok_uses_private_home_and_no_native_tools(monkeypatch, tmp_path):
+    observed: dict[str, Any] = {}
+
+    class Process:
+        stdin = SimpleNamespace()
+        stdout = SimpleNamespace()
+        stderr = SimpleNamespace()
+
+    async def create_process(*argv: str, **kwargs: Any) -> Process:
+        observed["argv"] = argv
+        observed["kwargs"] = kwargs
+        return Process()
+
+    async def verify(_executable, workspace, environment):
+        observed["inspected"] = (workspace, environment["GROK_HOME"])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(_AcpRpc, "start", lambda self: asyncio.sleep(0))
+    monkeypatch.setattr(GrokAcpAdapter, "_verify_plan_isolation", staticmethod(verify))
+    executable = tmp_path / "grok"
+    executable.write_text("", encoding="utf-8")
+    account = tmp_path / "account"
+    account.mkdir()
+    (account / "auth.json").write_text("fixture", encoding="utf-8")
+    workspace = tmp_path / "private" / "vendor-workspace"
+    workspace.mkdir(parents=True)
+    profile = HarnessProfile(
+        name="Grok",
+        kind=HarnessKind.GROK_ACP,
+        executable=str(executable),
+        home_directory=str(account),
+        permission_mode="unrestricted",
+    )
+    session = HarnessSession(
+        engagement_id="eng-a",
+        harness_profile_id=profile.id,
+        model="grok-test",
+        metadata={
+            "core_plan_isolated": True,
+            "execution_mode": "host",
+            "harness_permission_mode": "unrestricted",
+            "scope_snapshot": {"bypass_permissions": True},
+            "native_capabilities": HarnessNativeCapabilities(
+                workspace_access=HarnessWorkspaceAccess.WRITE, shell=True
+            ).model_dump(mode="json"),
+        },
+    )
+
+    asyncio.run(GrokAcpAdapter()._connect(profile, workspace, session))
+
+    argv = observed["argv"]
+    assert "--always-approve" not in argv
+    assert "--sandbox" not in argv
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    assert argv[argv.index("--allow") + 1] == "MCPTool(nebula__*)"
+    assert argv[argv.index("--tools") + 1] == "__nebula_no_builtin_tools__"
+    assert {
+        "--disable-web-search",
+        "--no-subagents",
+        "--no-plan",
+        "--no-memory",
+        "--no-leader",
+    } <= set(argv)
+    assert "run_terminal_command" in argv[argv.index("--disallowed-tools") + 1]
+    assert observed["kwargs"]["cwd"] == str(workspace)
+    private_home = Path(observed["kwargs"]["env"]["GROK_HOME"])
+    assert private_home != account
+    assert observed["kwargs"]["env"]["HOME"] == str(private_home)
+    assert (private_home / "auth.json").resolve() == (account / "auth.json")
+    assert "mcps = false" in (private_home / "config.toml").read_text()
+    assert observed["inspected"] == (workspace, str(private_home))
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"mcpServers": [{"name": "ambient"}]},
+        {"plugins": [{"name": "ambient"}]},
+        {"hooks": [{"name": "ambient"}]},
+        {"skills": [{"name": "ambient"}]},
+        {"projectInstructions": [{"path": "AGENTS.md"}]},
+        {
+            "permissions": {
+                "sources": ["ambient"],
+                "loaded": 1,
+                "managedSettingsActive": True,
+            }
+        },
+        {"projectRoot": "/other-project"},
+        {"externalCompat": {"cells": [{"enabled": True}]}},
+    ],
+)
+def test_core_planned_grok_rejects_ambient_tool_sources(tmp_path, changed):
+    base = {
+        "projectRoot": None,
+        "mcpServers": [],
+        "plugins": [],
+        "hooks": [],
+        "skills": [],
+        "marketplaces": [],
+        "lspServers": [],
+        "projectInstructions": [],
+        "agents": [{"source": {"type": "builtin"}}],
+        "permissions": {"sources": [], "loaded": 0, "managedSettingsActive": False},
+        "externalCompat": {"cells": [{"enabled": False}]},
+        "configSources": {"layers": [{"path": str(tmp_path / "config.toml")}]},
+    }
+    base.update(changed)
+    executable = tmp_path / "inspect-grok"
+    executable.write_text(
+        "#!/usr/bin/python3\nimport json\nprint(json.dumps(" + repr(base) + "))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    with pytest.raises(HarnessConfigurationError, match="ambient tools"):
+        asyncio.run(
+            GrokAcpAdapter._verify_plan_isolation(
+                executable, tmp_path, {"GROK_HOME": str(tmp_path)}
+            )
+        )
+
+
 @pytest.mark.parametrize("unrestricted", [False, True])
 def test_grok_host_session_preserves_native_tools_and_user_bus(
     monkeypatch, tmp_path, unrestricted

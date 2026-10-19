@@ -8277,7 +8277,7 @@ reliabilityTest("assistant planning saved toggle blocks an unenforceable harness
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
-for (const plannedHarness of [{name: "managed Claude", id: "inert-fixture"}, {name: "unrestricted Codex", id: "inert-codex"}]) reliabilityTest(`assistant planning discovers a file and executes a saved ${plannedHarness.name} plan on production LAN Core`, async ({page}, testInfo) => {
+for (const plannedHarness of [{name: "managed Claude", id: "inert-fixture"}, {name: "unrestricted Codex", id: "inert-codex"}, {name: "unrestricted Grok", id: "inert-grok"}]) reliabilityTest(`assistant planning discovers a file and executes a saved ${plannedHarness.name} plan on production LAN Core`, async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "planning_managed");
   await withOwnedCleanup(async () => {

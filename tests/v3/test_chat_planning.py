@@ -42,6 +42,8 @@ from nebula.v3.harnesses import (
     ClaudeAgentSdkAdapter,
     HarnessConfigurationError,
     HarnessPermissionRequest,
+    _planned_grok_gateway_permission,
+    _portable_gateway_tool_name,
     _session_native_capabilities,
 )
 from nebula.v3.providers import ToolCall
@@ -588,7 +590,7 @@ def test_unenforceable_harness_adapter_blocks_before_connection(tmp_path):
             kind=HarnessKind.GROK_ACP,
             executable="/bin/true",
             default_model="m",
-            capabilities=HarnessCapabilities(models=["m"], mcp=True),
+            capabilities=HarnessCapabilities(models=["m"], mcp=False),
             native_capabilities=HarnessNativeCapabilities(shell=True),
             privacy={"local_only": True, "permits_sensitive_data": True},
         )
@@ -609,6 +611,120 @@ def test_unenforceable_harness_adapter_blocks_before_connection(tmp_path):
         asyncio.run(harness._ensure_harness_plan(harness_turn, session))
     assert ChatPlanService(store).for_turn(harness_turn.chat_turn_id).phase == "blocked"
     assert session.id not in harness._connections
+
+
+def test_existing_grok_chat_rebinds_to_contained_plan_session(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Grok",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+            default_model="grok-test",
+            capabilities=HarnessCapabilities(models=["grok-test"], mcp=True),
+            native_capabilities=HarnessNativeCapabilities(shell=True),
+            privacy={"local_only": True, "permits_sensitive_data": True},
+        )
+    )
+    old_session = app.state.harness_runtime_service.create_session(
+        engagement_id=project.id, profile_id=profile.id, model="grok-test"
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=old_session.id,
+            model="grok-test",
+            metadata={"planning_enabled": True},
+        )
+    )
+    saved, _, turn = app.state.harness_runtime_service.prepare_chat(
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model="grok-test",
+        prompt="Read AGENTS.md and plan the task",
+        chat_session_id=chat.id,
+        harness_session_id=old_session.id,
+        mcp_server_ids=[],
+        planning_enabled=True,
+    )
+    contained = store.get(HarnessSession, turn.harness_session_id)
+    assert saved.id == chat.id
+    assert contained.id != old_session.id
+    assert contained.metadata["core_plan_isolated"] is True
+    assert (
+        _session_native_capabilities(contained, profile) == HarnessNativeCapabilities()
+    )
+
+
+def test_contained_grok_submits_formal_plan_and_guards_gateway(tmp_path, monkeypatch):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Grok planning fixture",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+            permission_mode="unrestricted",
+            default_model="grok-test",
+            capabilities=HarnessCapabilities(models=["grok-test"], mcp=True),
+            native_capabilities=HarnessNativeCapabilities(shell=True),
+            privacy={"local_only": True, "permits_sensitive_data": True},
+        )
+    )
+    harness = app.state.harness_runtime_service
+    _, chat_turn, harness_turn = harness.prepare_chat(
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model="grok-test",
+        prompt="Inspect files before acting",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        planning_enabled=True,
+    )
+    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    assert session.metadata["core_plan_isolated"] is True
+
+    async def planner(**kwargs):
+        assert kwargs["planning_native_categories"] == []
+        plan = harness.plans.for_turn(kwargs["planning_target_turn_id"])
+        harness.plans.submit(
+            plan,
+            _submission("workspace.read"),
+            available_tools=set(kwargs["planning_tool_names"]),
+            native_categories=set(kwargs["planning_native_categories"]),
+            workspace=tmp_path,
+        )
+
+    monkeypatch.setattr(harness, "analyze_structured", planner)
+    planned = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+    assert "Core-validated task plan" in planned.prompt
+    assert harness.plans.for_turn(chat_turn.id).phase == "execution"
+    session = store.get(HarnessSession, session.id)
+    assert _session_native_capabilities(session, profile) == HarnessNativeCapabilities()
+
+    offered = {"nebula__" + _portable_gateway_tool_name("workspace.read")}
+    request = HarnessPermissionRequest(
+        vendor_request_id="allow",
+        category="permission",
+        vendor_name="session/request_permission",
+        tool_name="workspace.read",
+        arguments={"rawInput": {"tool_name": next(iter(offered))}},
+    )
+    assert _planned_grok_gateway_permission(request, offered) is True
+    assert (
+        _planned_grok_gateway_permission(
+            request.model_copy(
+                update={"arguments": {"rawInput": {"tool_name": "other__write"}}}
+            ),
+            offered,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize("permission_mode", ["managed", "unrestricted"])

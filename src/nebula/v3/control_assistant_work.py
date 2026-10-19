@@ -2513,17 +2513,18 @@ class ControlAssistantWork:
                 prompt=text,
                 chat_session_id=session.id,
                 harness_session_id=session.harness_session_id,
-                mcp_server_ids=[],
-                include_knowledge=next_settings["include_knowledge"],
-                allow_cloud_knowledge=next_settings["allow_cloud_knowledge"],
-                allow_remote_mcp=False,
-                allow_agent_messaging=next_settings["allow_agent_messaging"],
-                harness_mode=next_settings["harness_mode"],
-                harness_reasoning_effort=next_settings["harness_reasoning_effort"],
-                harness_service_tier=next_settings["harness_service_tier"],
-                harness_cyber_access_program=next_settings[
-                    "harness_cyber_access_program"
-                ],
+                mcp_server_ids=request.mcp_server_ids,
+                include_knowledge=request.include_knowledge,
+                allow_cloud_knowledge=request.allow_cloud_knowledge,
+                allow_remote_mcp=request.allow_cloud_tool_results,
+                allow_agent_messaging=request.allow_agent_messaging,
+                harness_mode=request.harness_mode,
+                planning_enabled=request.planning_enabled,
+                harness_reasoning_effort=request.harness_reasoning_effort,
+                harness_service_tier=request.harness_service_tier,
+                harness_cyber_access_program=request.harness_cyber_access_program,
+                provider_subagent=request.harness_provider_subagent(),
+                pending_provider_subagent=request.harness_pending_provider_subagent(),
             )
             self.harness.start_chat_turn(harness_turn.id)
             return {"session_id": session.id, "delivery": "started", "turn_id": turn.id}
@@ -2903,7 +2904,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.set_chat_settings",
-        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To give an agent a missing MCP capability, add the listed server ID to mcp_server_ids while preserving existing IDs, read back the setting, then send a new message. Running and queued turns keep their submitted settings.",
+        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To switch the main harness, save its profile, model, Plan before acting, MCP servers, and subagent together, then send a new message in the same chat. The saved choice is not the bound runtime until that message starts; read back the chat and turn result before resuming a goal. Running and queued turns keep their submitted settings.",
         SET_CHAT_SETTINGS_SCHEMA,
         False,
     ),
@@ -2927,7 +2928,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.message_chat",
-        "Send a durable next message to a main assistant chat, or steer its active harness turn. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
+        "Send a durable next message to a main assistant chat, or steer its active harness turn. A new idle turn applies saved next-turn settings and may rebind the same chat to another harness. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
         MESSAGE_CHAT_SCHEMA,
         False,
     ),

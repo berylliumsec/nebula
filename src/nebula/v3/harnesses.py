@@ -847,9 +847,9 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
-    if _codex_core_planned_session(session, profile.kind):
-        # Codex has no fail-closed callback for every native tool. Planned
-        # turns use the Core gateway instead, where every call is guarded.
+    if _gateway_only_core_planned_session(session, profile.kind):
+        # Codex and Grok have no fail-closed callback for every native tool.
+        # Planned turns use the Core gateway instead, where every call is guarded.
         return HarnessNativeCapabilities()
     raw = session.metadata.get("native_capabilities")
     capabilities = (
@@ -869,6 +869,19 @@ def _session_native_capabilities(
 def _codex_core_planned_session(session: HarnessSession, kind: HarnessKind) -> bool:
     return kind == HarnessKind.CODEX_APP_SERVER and (
         isinstance(session.metadata.get("planning_target_turn_id"), str)
+        or session.metadata.get("planning_enforced") is True
+    )
+
+
+def _gateway_only_core_planned_session(
+    session: HarnessSession, kind: HarnessKind
+) -> bool:
+    return kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP} and (
+        (
+            kind == HarnessKind.GROK_ACP
+            and session.metadata.get("core_plan_isolated") is True
+        )
+        or isinstance(session.metadata.get("planning_target_turn_id"), str)
         or session.metadata.get("planning_enforced") is True
     )
 
@@ -942,6 +955,21 @@ def _portable_gateway_tool_name(name: str) -> str:
         return name
     readable = re.sub(r"[^A-Za-z0-9_-]", "_", name)[: max_length - 17]
     return readable + "_" + hashlib.sha256(name.encode()).hexdigest()[:16]
+
+
+def _planned_grok_gateway_permission(
+    request: HarnessPermissionRequest, offered_names: set[str]
+) -> bool:
+    """Allow only the exact Core MCP tools advertised to this Grok turn."""
+
+    if (
+        request.category != "permission"
+        or request.vendor_name != "session/request_permission"
+    ):
+        return False
+    raw_input = request.arguments.get("rawInput")
+    target = raw_input.get("tool_name") if isinstance(raw_input, dict) else None
+    return isinstance(target, str) and target in offered_names
 
 
 def _harness_developer_instructions(
@@ -7616,6 +7644,16 @@ async def _grok_model_catalog(
 class GrokAcpAdapter(HarnessAdapter):
     kind = HarnessKind.GROK_ACP
 
+    _CORE_PLAN_CONFIG = (
+        "[compat.claude]\n"
+        "skills = false\nrules = false\nagents = false\n"
+        "mcps = false\nhooks = false\nsessions = false\n"
+        "[compat.cursor]\n"
+        "skills = false\nrules = false\nagents = false\n"
+        "mcps = false\nhooks = false\nsessions = false\n"
+        "[compat.codex]\nsessions = false\n"
+    )
+
     async def read_account_usage(
         self, profile: HarnessProfile, credential_store: CredentialStore
     ) -> dict[str, Any]:
@@ -7650,17 +7688,36 @@ class GrokAcpAdapter(HarnessAdapter):
     )
 
     @staticmethod
-    def _settings_home(profile: HarnessProfile, workspace: Path) -> Path:
-        """Keep ambient Grok MCP servers and plugins out of settings sessions."""
+    def _settings_home(
+        profile: HarnessProfile, workspace: Path, *, core_planned: bool = False
+    ) -> Path:
+        """Keep ambient integrations out of settings and Core-planned sessions."""
 
         source = _harness_home(profile) / "auth.json"
         if not source.is_file():
             raise HarnessConfigurationError(
-                "The Grok account is not signed in for the settings assistant. Check the harness account and retry."
+                "The Grok account is not signed in on this Core host. Check the harness account and retry."
             )
         home = workspace.parent / f"{workspace.name}.settings-home"
+        if home.is_symlink():
+            raise HarnessConfigurationError(
+                "The isolated Grok account folder is a link"
+            )
         home.mkdir(mode=0o700, parents=True, exist_ok=True)
         home.chmod(0o700)
+        if core_planned:
+            config = home / "config.toml"
+            if config.is_symlink() or (
+                config.exists()
+                and config.read_text(encoding="utf-8")
+                != GrokAcpAdapter._CORE_PLAN_CONFIG
+            ):
+                raise HarnessConfigurationError(
+                    "The isolated Grok plan configuration changed. Retry in a new session."
+                )
+            if not config.exists():
+                config.write_text(GrokAcpAdapter._CORE_PLAN_CONFIG, encoding="utf-8")
+                config.chmod(0o600)
         account = home / "auth.json"
         if account.is_symlink():
             if account.resolve() != source.resolve():
@@ -7674,6 +7731,82 @@ class GrokAcpAdapter(HarnessAdapter):
         else:
             account.symlink_to(source.resolve())
         return home
+
+    @staticmethod
+    async def _verify_plan_isolation(
+        executable: Path, workspace: Path, environment: dict[str, str]
+    ) -> None:
+        """Fail closed if Grok discovers a tool source outside Core's ACP MCP."""
+
+        process = await asyncio.create_subprocess_exec(
+            str(executable),
+            "inspect",
+            "--json",
+            cwd=str(workspace),
+            env=environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+        except TimeoutError as exc:
+            process.kill()
+            await process.communicate()
+            raise HarnessConfigurationError(
+                "Grok plan isolation check timed out"
+            ) from exc
+        try:
+            observed = json.loads(output) if process.returncode == 0 else None
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HarnessConfigurationError(
+                "Grok could not verify its isolated plan configuration"
+            ) from exc
+        if not isinstance(observed, dict):
+            raise HarnessConfigurationError(
+                "Grok could not verify its isolated plan configuration"
+            )
+        compat = observed.get("externalCompat")
+        cells = compat.get("cells") if isinstance(compat, dict) else None
+        sources = observed.get("configSources")
+        layers = sources.get("layers") if isinstance(sources, dict) else None
+        permissions = observed.get("permissions")
+        expected_config = str(Path(environment["GROK_HOME"]) / "config.toml")
+        if (
+            observed.get("projectRoot") is not None
+            or any(
+                observed.get(key) != []
+                for key in (
+                    "hooks",
+                    "plugins",
+                    "mcpServers",
+                    "marketplaces",
+                    "lspServers",
+                    "projectInstructions",
+                    "skills",
+                )
+            )
+            or not isinstance(observed.get("agents"), list)
+            or any(
+                not isinstance(agent, dict)
+                or not isinstance(agent.get("source"), dict)
+                or agent["source"].get("type") != "builtin"
+                for agent in observed["agents"]
+            )
+            or not isinstance(cells, list)
+            or not cells
+            or any(not isinstance(cell, dict) or cell.get("enabled") for cell in cells)
+            or not isinstance(layers, list)
+            or len(layers) != 1
+            or not isinstance(layers[0], dict)
+            or layers[0].get("path") != expected_config
+            or not isinstance(permissions, dict)
+            or permissions.get("sources") != []
+            or permissions.get("loaded") != 0
+            or permissions.get("managedSettingsActive") is not False
+        ):
+            raise HarnessConfigurationError(
+                "Grok plan isolation found ambient tools or project configuration"
+            )
 
     async def _connect(
         self,
@@ -7693,13 +7826,41 @@ class GrokAcpAdapter(HarnessAdapter):
             if session is not None
             else _container_only_native_capabilities(profile.native_capabilities)
         )
+        core_planned = bool(
+            session is not None
+            and _gateway_only_core_planned_session(session, profile.kind)
+        )
         command = [str(executable)]
-        if session is not None and _unrestricted_harness_session(session):
+        if (
+            session is not None
+            and _unrestricted_harness_session(session)
+            and not core_planned
+        ):
             command.extend(["--always-approve", "--sandbox", "off"])
         settings_only = bool(
             session and session.metadata.get("control_assistant") is True
         )
-        if (
+        if core_planned:
+            # Grok can still offer a built-in Write with the tool allowlist set.
+            # dontAsk denies any tool without an explicit allow rule; only the
+            # session-scoped, Core-guarded MCP gateway is allowed here.
+            command.extend(
+                [
+                    "--permission-mode",
+                    "dontAsk",
+                    "--allow",
+                    "MCPTool(nebula__*)",
+                    "--tools",
+                    "__nebula_no_builtin_tools__",
+                    "--disallowed-tools",
+                    ",".join(self._DISALLOWED_HOST_TOOLS),
+                    "--disable-web-search",
+                    "--no-subagents",
+                    "--no-plan",
+                    "--no-memory",
+                ]
+            )
+        elif (
             native_capabilities.workspace_access == HarnessWorkspaceAccess.NONE
             and not native_capabilities.shell
         ):
@@ -7707,6 +7868,8 @@ class GrokAcpAdapter(HarnessAdapter):
                 ["--disallowed-tools", ",".join(self._DISALLOWED_HOST_TOOLS)]
             )
         command.append("agent")
+        if core_planned:
+            command.append("--no-leader")
         if session is not None:
             command.extend(["--model", session.model])
             raw_options = session.metadata.get("runtime_options")
@@ -7718,8 +7881,16 @@ class GrokAcpAdapter(HarnessAdapter):
         environment = _harness_environment(
             profile, host_session=bool(native_capabilities.shell)
         )
-        if settings_only:
-            environment["GROK_HOME"] = str(self._settings_home(profile, workspace))
+        if settings_only or core_planned:
+            isolated_home = self._settings_home(
+                profile, workspace, core_planned=core_planned
+            )
+            environment["GROK_HOME"] = str(isolated_home)
+            if core_planned:
+                # Grok also discovers user skills through HOME/.claude.
+                environment["HOME"] = str(isolated_home)
+        if core_planned:
+            await self._verify_plan_isolation(executable, workspace, environment)
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
@@ -9698,6 +9869,7 @@ class HarnessRuntimeService:
         cyber_access_program: str | None = None,
         tools_enabled: bool = True,
         control_assistant: bool = False,
+        core_plan_isolated: bool = False,
         transaction: StoreTransaction | None = None,
     ) -> HarnessSession:
         if self._closed:
@@ -9705,6 +9877,10 @@ class HarnessRuntimeService:
         profile = self.store.get(HarnessProfile, profile_id)
         if not profile.enabled:
             raise HarnessConfigurationError(f"harness {profile.id!r} is disabled")
+        if core_plan_isolated and profile.kind != HarnessKind.GROK_ACP:
+            raise HarnessConfigurationError(
+                "Core plan isolation is available only for Grok chat sessions"
+            )
         self.store.get_by_kind("engagements", engagement_id)
         selected_model = (model or profile.default_model or "").strip()
         if not selected_model:
@@ -9810,6 +9986,7 @@ class HarnessRuntimeService:
         )
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
+            **({"core_plan_isolated": True} if core_plan_isolated else {}),
             "execution_mode": execution_mode,
             "harness_permission_mode": profile.permission_mode,
             "approval_policy": self._project_approval_policy(engagement_id),
@@ -10803,6 +10980,11 @@ class HarnessRuntimeService:
                 )
                 or session.harness_profile_id != profile_id
                 or session.model != selected_model
+                or (
+                    profile.kind == HarnessKind.GROK_ACP
+                    and (session.metadata.get("core_plan_isolated") is True)
+                    != planning_enabled
+                )
                 or set(session.mcp_server_ids) != set(selected_mcp)
                 or effort != frozen_options.get("reasoning_effort")
                 or tier != frozen_options.get("service_tier")
@@ -10830,6 +11012,9 @@ class HarnessRuntimeService:
                     cyber_access_program=cyber_program,
                     tools_enabled=True,
                     control_assistant=control_assistant,
+                    core_plan_isolated=(
+                        profile.kind == HarnessKind.GROK_ACP and planning_enabled
+                    ),
                 )
                 chat = self._rebind_chat_session(
                     chat,
@@ -10869,6 +11054,10 @@ class HarnessRuntimeService:
                 session = self._compatible_session(
                     harness_session_id, engagement_id, profile_id, model
                 )
+                if profile.kind == HarnessKind.GROK_ACP and planning_enabled:
+                    raise HarnessConfigurationError(
+                        "Start a new Grok session for Plan before acting; an existing vendor session cannot be contained retroactively"
+                    )
                 if bool(session.metadata.get("control_assistant")) != control_assistant:
                     raise HarnessStateError(
                         "A settings assistant cannot attach an ordinary harness session."
@@ -10932,6 +11121,9 @@ class HarnessRuntimeService:
                     ),
                     tools_enabled=True,
                     control_assistant=control_assistant,
+                    core_plan_isolated=(
+                        profile.kind == HarnessKind.GROK_ACP and planning_enabled
+                    ),
                 )
             chat = self.store.create(
                 ChatSession(
@@ -12027,12 +12219,17 @@ class HarnessRuntimeService:
                 profile.kind == HarnessKind.CODEX_APP_SERVER
                 and profile.capabilities.mcp
             )
-            if not (managed_claude or contained_codex):
+            contained_grok = (
+                profile.kind == HarnessKind.GROK_ACP
+                and profile.capabilities.mcp
+                and session.metadata.get("core_plan_isolated") is True
+            )
+            if not (managed_claude or contained_codex or contained_grok):
                 reason = (
                     "This harness configuration cannot enforce restricted discovery "
-                    "and native pre-use checks. Choose a managed Claude Agent SDK "
-                    "or MCP-capable Codex App Server profile and retry this task "
-                    "as a linked turn."
+                    "and native pre-use checks. Choose a managed Claude Agent SDK, "
+                    "MCP-capable Codex App Server, or contained Grok ACP profile "
+                    "and retry this task as a linked turn."
                 )
                 self.plans.block(chat_turn.id, reason)
                 raise PlanningBlocked(reason)
@@ -12051,7 +12248,7 @@ class HarnessRuntimeService:
             )
             native_names = (
                 []
-                if profile.kind == HarnessKind.CODEX_APP_SERVER
+                if profile.kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
                 else _native_capability_names(native)
             )
             prompt = (
@@ -16892,13 +17089,32 @@ class HarnessRuntimeService:
                     )
                 }
             )
-        core_planned_codex = _codex_core_planned_session(session, profile.kind)
+        core_planned_gateway = _gateway_only_core_planned_session(session, profile.kind)
+        core_planned_grok = (
+            core_planned_gateway and profile.kind == HarnessKind.GROK_ACP
+        )
         self._ensure_oci_components(session)
 
         async def permission_handler(
             request: HarnessPermissionRequest,
         ) -> PermissionTicket:
-            if analysis_only or core_planned_codex:
+            if core_planned_grok and request.category == "permission":
+                offered_names = {
+                    f"nebula__{item['name']}" for item in gateway_catalog({})["tools"]
+                }
+                grok_future: asyncio.Future[HarnessPermissionDecision] = (
+                    asyncio.get_running_loop().create_future()
+                )
+                grok_future.set_result(
+                    HarnessPermissionDecision(
+                        allowed=_planned_grok_gateway_permission(
+                            request, offered_names
+                        ),
+                        reason="Core permits only this turn's guarded Nebula gateway",
+                    )
+                )
+                return PermissionTicket(None, None, grok_future)
+            if analysis_only or core_planned_gateway:
                 future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
                 )
@@ -16910,14 +17126,14 @@ class HarnessRuntimeService:
                         allowed=(
                             request.category == "mcp"
                             and request.server_name == "nebula"
-                            if planner or core_planned_codex
+                            if planner or core_planned_gateway
                             else True
                         ),
                         reason=(
                             "Core's restricted planner allows only its discovery gateway"
                             if planner
-                            else "Core-planned Codex turns use only the guarded Nebula gateway"
-                            if core_planned_codex
+                            else "Core-planned turns use only the guarded Nebula gateway"
+                            if core_planned_gateway
                             else "Approved within the isolated post-tool analysis session; no execution capabilities are attached"
                         ),
                     )
@@ -16979,13 +17195,15 @@ class HarnessRuntimeService:
         execution_mode = _session_execution_mode(session)
         isolated_workspace = (
             self.workspace_resolver(session.engagement_id)
-            if execution_mode == "host" and not analysis_only and not core_planned_codex
+            if execution_mode == "host"
+            and not analysis_only
+            and not core_planned_gateway
             else gateway.root / "vendor-workspace"
         )
         if portable_names and not analysis_only:
             # Grok indexes native sessions by cwd. Keep this private directory
             # stable across Core restarts, separately from the ephemeral socket.
-            if execution_mode != "host":
+            if execution_mode != "host" or core_planned_grok:
                 isolated_workspace = (
                     self.artifact_store.root
                     / "harness-workspaces"

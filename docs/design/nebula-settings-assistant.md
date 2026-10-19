@@ -106,13 +106,18 @@ accept arbitrary API paths, workspace commands or cross-project target IDs.
 `planning_enabled` switch with revision checks and read-back. The switch lives
 in each conversation's Assistant settings. The existing harness Plan only mode
 still ends after planning; it cannot run together with Plan before acting.
-Codex App Server profiles with Core MCP access can submit a formal `plan.submit`
-receipt after bounded workspace discovery, even when the profile normally uses
-unrestricted host access. Each planned turn uses a private read-only vendor
-workspace, disables vendor-native execution tools, and routes actions through
-Core's guarded gateway. Ordinary later turns retain their saved profile mode. The
-main agent's validated steps, selected tools, files, and unresolved dependencies
+Codex App Server and Grok ACP profiles with Core MCP access can submit a formal
+`plan.submit` receipt after bounded workspace discovery, even when the profile
+normally uses unrestricted host access. Each planned turn uses a private vendor
+workspace, denies vendor-native execution, and routes actions through
+Core's guarded gateway. Planned Grok turns also isolate account configuration,
+skills, and compatibility integrations. Ordinary later turns retain their saved
+profile mode. The main agent's validated steps, selected tools, files, and unresolved dependencies
 are included in a delegated subagent's task context.
+Butler can save a different main harness and provider subagent on the same chat.
+The saved choice becomes the bound runtime when a new message starts; Butler
+checks the resulting turn before reporting a goal resumed. Immediate messages
+carry the same saved MCP servers and Plan choice as queued next messages.
 `nebula.work.require_plan` records a one-task requirement against an exact
 agent, goal, child, or turn, using a fresh target revision and concrete reason.
 An active harness turn reports that the directive takes effect next turn. The

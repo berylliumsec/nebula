@@ -1,13 +1,13 @@
 {
-  "change_digest": "ba3b3484a22c3bb79ccb741908775a02d2e1d46e5e4959d56b1d42254c8eca6f",
+  "change_digest": "aa3655be3ffac3d579077e1f7da69ea52e63401be709429f06c60b1039d509f5",
   "reviewed_by": "Codex focused review on 2026-10-19",
-  "reason": "Allow formal Core plans on the existing unrestricted MCP-capable Codex profiles by containing each planned turn, while preserving ordinary unrestricted turns. Python covers admission, guarded gateway and app-server start/resume sandbox policy, ordinary host policy, goal-resume compatibility, subagent plan context, and product help. Frontend covers planning API and assistant destinations. Browser covers blocked linked retry, unrestricted Codex execution, refresh, and responsive settings on a disposable LAN Core.",
-  "exclusions": "No Rust or native code changed. Full backend and UI suites, unrelated journeys, external provider inference, and physical-device checks are excluded; browser cases use an inert harness. A separate real app-server handshake will validate the Codex thread policy without running a model turn.",
+  "reason": "Add Core-enforced formal planning for MCP-capable Grok main chats, preserve Codex planning, and carry saved MCP, Plan and provider-subagent choices through Butler immediate guidance. Python covers admission, same-chat rebind, formal plan and gateway guard, Grok process isolation, ordinary host behavior, Butler handoff, subagent context, and product-help sync. Frontend covers planning transport and assistant navigation. Browser covers blocked recovery and planned Claude, Codex and Grok execution with refresh across the permanent desktop and mobile LAN projects.",
+  "exclusions": "No Rust or native code changed. Full suites, unrelated operator journeys, physical-device checks, and live research goals are excluded. Browser cases use a synthetic inert harness on a disposable real Core; local Grok ACP handshake, native-tool denial, and synthetic task validation are separate manual checks. The live Core host has Grok 1.0.62 installed, and its account login was verified with a Core-user prompt; the research holds remain independent blockers.",
   "expected_tests": {
-    "python": 15,
+    "python": 22,
     "frontend": 4,
     "native": 0,
-    "playwright": 24
+    "playwright": 32
   },
   "python_versions": [
     "3.12"
@@ -16,16 +16,18 @@
   "python_node": false,
   "python": [
     "tests/v3/test_chat_planning.py::test_unenforceable_harness_adapter_blocks_before_connection",
+    "tests/v3/test_chat_planning.py::test_existing_grok_chat_rebinds_to_contained_plan_session",
+    "tests/v3/test_chat_planning.py::test_contained_grok_submits_formal_plan_and_guards_gateway",
     "tests/v3/test_chat_planning.py::test_managed_codex_submits_formal_plan_through_restricted_core_gateway",
     "tests/v3/test_chat_planning.py::test_harness_gateway_and_native_permission_replan_before_effect",
-    "tests/v3/test_harness_adapters.py::test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox",
-    "tests/v3/test_harness_adapters.py::test_codex_process_enables_goals_for_the_goal_command",
-    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
+    "tests/v3/test_harness_adapters.py::test_core_planned_grok_uses_private_home_and_no_native_tools",
+    "tests/v3/test_harness_adapters.py::test_core_planned_grok_rejects_ambient_tool_sources",
+    "tests/v3/test_harness_adapters.py::test_grok_host_session_preserves_native_tools_and_user_bus",
+    "tests/v3/test_control_assistant_work.py::test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_harness_chat_goals.py::test_saved_harness_effort_applies_to_goal_resume_and_continuation",
-    "tests/v3/test_harness_adapters.py::test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox"
+    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate"
   ],
   "frontend": [
     "ui/src/api/chatPlanning.test.ts",

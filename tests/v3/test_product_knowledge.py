@@ -122,9 +122,19 @@ def test_product_search_finds_chat_planning_guidance(monkeypatch):
         "Can unrestricted Codex submit a formal Core plan and give it to subagents?"
     )
     assert any(
-        "Codex App Server profiles with Core MCP access" in str(item["text"])
-        or "MCP-capable Codex can submit a formal Core plan" in str(item["text"])
+        "Codex App Server and Grok ACP profiles with Core MCP access"
+        in str(item["text"])
+        or "MCP-capable Codex and Grok can submit a formal Core plan"
+        in str(item["text"])
         for item in codex_matches
+    )
+    grok_matches = search_product_knowledge(
+        "Can Butler switch the main agent to Grok while keeping Plan before acting and a provider subagent?"
+    )
+    assert any(
+        "Butler can save a different main harness and provider subagent"
+        in str(item["text"])
+        for item in grok_matches
     )
 
 
