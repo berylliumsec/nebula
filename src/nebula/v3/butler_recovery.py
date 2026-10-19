@@ -398,12 +398,16 @@ class ButlerRecoveryAgent:
                         {
                             "case_id": prior.id,
                             "recovery_goal_id": goal.id,
-                            "source_goal_id": goal.metadata.get("butler_recovery_source_goal_id"),
+                            "source_goal_id": goal.metadata.get(
+                                "butler_recovery_source_goal_id"
+                            ),
                             "project_id": goal.engagement_id,
                             "session_id": goal.session_id,
                             "status": goal.status.value,
                             "current_step": goal.current_step,
-                            "report": (goal.completion_summary or goal.blocked_reason or "")[:700],
+                            "report": (
+                                goal.completion_summary or goal.blocked_reason or ""
+                            )[:700],
                         }
                     )
             packet["recent_recovery_goals"] = reports[:8]

@@ -97,32 +97,59 @@ def _events(store: NebulaStore, project_id="project"):
 
 def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path):
     _, store, _ = _setup(tmp_path)
-    session = store.create(ChatSession(
-        id="session-recovery", engagement_id="project", title="Recovery",
-        provider_profile_id="provider-project", model="model",
-    ))
-    goal = store.create(ChatGoal(
-        engagement_id="project", session_id=session.id, objective="Recover the paused work",
-        completion_criteria=["Report evidence"], plan=["Inspect the blocker"],
-        metadata={"butler_recovery_source_goal_id": "source-goal"},
-    ))
-    store.create(ChatMessage(
-        engagement_id="project", session_id=session.id, sequence=1,
-        role=ChatRole.ASSISTANT, content="The source goal can resume after checking its revision.",
-    ))
-    case = store.create(ButlerRecoveryCase(
-        engagement_id="project", trigger="periodic", signal="butler.global_periodic_check",
-        source_event_id="scheduled-event", source_event_sequence=1, authority_revision=1,
-        status="resolved", summary="Scheduled work check", model_backend=ChatBackend.HARNESS,
-        model_turn_id="saved-harness-turn", recovery_goal_ids=[goal.id],
-    ))
+    session = store.create(
+        ChatSession(
+            id="session-recovery",
+            engagement_id="project",
+            title="Recovery",
+            provider_profile_id="provider-project",
+            model="model",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            engagement_id="project",
+            session_id=session.id,
+            objective="Recover the paused work",
+            completion_criteria=["Report evidence"],
+            plan=["Inspect the blocker"],
+            metadata={"butler_recovery_source_goal_id": "source-goal"},
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id="project",
+            session_id=session.id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="The source goal can resume after checking its revision.",
+        )
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id="project",
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id="scheduled-event",
+            source_event_sequence=1,
+            authority_revision=1,
+            status="resolved",
+            summary="Scheduled work check",
+            model_backend=ChatBackend.HARNESS,
+            model_turn_id="saved-harness-turn",
+            recovery_goal_ids=[goal.id],
+        )
+    )
     app = FastAPI()
     app.include_router(butler_router(ButlerOversightService(store)), prefix="/api/v1")
     body = TestClient(app).get("/api/v1/engagements/project/butler/overview").json()
     saved = next(item for item in body["recovery_cases"] if item["id"] == case.id)
     assert saved["model_turn_id"] == "saved-harness-turn"
     assert saved["recovery_goals"][0]["source_goal_id"] == "source-goal"
-    assert saved["recovery_goals"][0]["report"] == "The source goal can resume after checking its revision."
+    assert (
+        saved["recovery_goals"][0]["report"]
+        == "The source goal can resume after checking its revision."
+    )
 
 
 def _turn(store: NebulaStore, goal: ChatGoal, turn_id: str) -> ChatTurn:

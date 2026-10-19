@@ -72,7 +72,9 @@ def test_completed_turn_has_precedent_query_before_semantic_review():
         def search(self, project_id, query, *, limit):
             assert project_id == "project" and limit == 3
             assert "completed investigation" in query
-            return SimpleNamespace(items=[], index_status=SimpleNamespace(state="lexical_fallback"))
+            return SimpleNamespace(
+                items=[], index_status=SimpleNamespace(state="lexical_fallback")
+            )
 
     snapshot = read_precedents(Memory(), "project", "agent.turn_completed")
     assert snapshot.index_state == "lexical_fallback" and snapshot.items == []

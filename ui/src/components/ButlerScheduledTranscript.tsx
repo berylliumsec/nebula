@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ApiClient } from "../api/client";
 import type { ButlerRecoveryCase, ButlerRecoveryGoal } from "../api/butlerOverview";
 import type { HarnessActivityEvent, HarnessTurnDetail } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { activityLedgerFromHarness } from "./activityLedgerModel";
 import { ActivityLedger } from "./ActivityLedger";
 import { isTimelineActivity, reduceHarnessActivity, type HarnessActivityItem } from "../pages/harnessActivity";
@@ -54,7 +55,10 @@ export function ButlerScheduledTranscript({ item, api, coreState, onNavigate }: 
       setHasMore(page.events.length === PAGE_SIZE);
       setTurn(detail);
     }).catch((caught: unknown) => {
-      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "The saved activity could not be loaded.");
+      if (!controller.signal.aborted) {
+        void logCaughtDiagnostic("interface.butler_oversight.transcript_load_failed", "Butler check transcript could not be loaded.", caught, "butler_oversight");
+        setError(caught instanceof Error ? caught.message : "The saved activity could not be loaded.");
+      }
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [api, coreState, item.modelBackend, item.modelTurnId, open, reload]);
@@ -77,6 +81,7 @@ export function ButlerScheduledTranscript({ item, api, coreState, onNavigate }: 
       setNextSequence(page.nextSequence);
       setHasMore(page.events.length === PAGE_SIZE && page.nextSequence > nextSequence);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_oversight.transcript_more_failed", "More Butler check activity could not be loaded.", caught, "butler_oversight");
       setError(caught instanceof Error ? caught.message : "More activity could not be loaded.");
     } finally {
       setLoading(false);

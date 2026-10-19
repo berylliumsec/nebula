@@ -400,17 +400,24 @@ def test_manual_codex_quota_refresh_persists_project_resource(tmp_path, monkeypa
         assert body["resources"][0]["remaining_percent"] == 20
 
 
-def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(tmp_path, monkeypatch):
+def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "quota.db")
     _profile(store, "grok", HarnessKind.GROK_ACP)
     _watched_project(store, "project", "grok")
 
     async def account_read(self, profile, credentials):
-        return {"config": {
-            "creditUsagePercent": 81,
-            "isUnifiedBillingUser": True,
-            "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "end": "2026-10-26T12:00:00Z"},
-        }}
+        return {
+            "config": {
+                "creditUsagePercent": 81,
+                "isUnifiedBillingUser": True,
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "end": "2026-10-26T12:00:00Z",
+                },
+            }
+        }
 
     monkeypatch.setattr(GrokAcpAdapter, "read_account_usage", account_read)
     app = create_app(store=store, auth_token="test-token")
@@ -428,11 +435,13 @@ def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(tmp_path
         assert overview["resources"][0]["source"] == "grok._x.ai/billing"
         assert overview["resources"][0]["remaining_percent"] == 19
         assert overview["summary"]["open_incidents"] == 1
-        queried = asyncio.run(dispatch_work_tool(
-            app.state.control_assistant_work,
-            "project",
-            "nebula.work.harness_quota",
-            {"profile_id": "grok", "refresh": True},
-        ))
+        queried = asyncio.run(
+            dispatch_work_tool(
+                app.state.control_assistant_work,
+                "project",
+                "nebula.work.harness_quota",
+                {"profile_id": "grok", "refresh": True},
+            )
+        )
         assert queried["snapshots"][0]["remaining_percent"] == 19
         assert queried["snapshots"][0]["source"] == "grok._x.ai/billing"

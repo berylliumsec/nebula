@@ -137,8 +137,13 @@ def update_chat_assistant_config(
     current = chat_assistant_config(store, session)
     changes = patch.model_dump(exclude_unset=True, mode="json")
     selected = {**current, **changes}
-    if isinstance(session.metadata.get("subagent_id"), str) and selected["planning_enabled"]:
-        raise ValueError("planning belongs to the main agent; subagents receive its plan")
+    if (
+        isinstance(session.metadata.get("subagent_id"), str)
+        and selected["planning_enabled"]
+    ):
+        raise ValueError(
+            "planning belongs to the main agent; subagents receive its plan"
+        )
     backend = selected["backend"]
     if backend not in {"provider", "harness"}:
         raise ValueError("choose Provider or Agent harness")

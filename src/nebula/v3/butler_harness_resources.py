@@ -542,7 +542,10 @@ class HarnessQuotaObserver:
             # diagnostic-expected: the profile may be removed after scheduling;
             # there is no configured harness left to check.
             return
-        if not profile.enabled or profile.kind not in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}:
+        if not profile.enabled or profile.kind not in {
+            HarnessKind.CODEX_APP_SERVER,
+            HarnessKind.GROK_ACP,
+        }:
             return
         loop = self._loop
         if loop is not None and loop.is_running():
