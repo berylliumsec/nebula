@@ -40,7 +40,10 @@ from .domain import (
     ChatTurn,
     Engagement,
     EngagementStatus,
+    HarnessKind,
     HarnessProfile,
+    HarnessTurn,
+    HarnessTurnOrigin,
     HarnessTurnStatus,
     OperationEvent,
     ProviderProfile,
@@ -48,6 +51,7 @@ from .domain import (
     utc_now,
 )
 from .butler_capabilities import ButlerCapabilities, _BACKGROUND_CHANGES
+from .butler_global_capabilities import measured_harness_capacity
 from .butler_instructions import ButlerInstructionsError, read_butler_instructions
 from .butler_precedent import read_precedents
 from .chat_assistant_config import chat_assistant_config
@@ -55,6 +59,7 @@ from .privacy import validate_engagement_provider_privacy
 from .providers import ModelMessage, ModelRequest, ModelToolResult, ToolDefinition
 from .storage import NebulaStore, NotFoundError
 from .tools import BudgetExhausted, CapacityReached, InvalidToolArguments, PolicyDenied
+from .harnesses import HarnessConfigurationError
 
 if TYPE_CHECKING:
     from .butler_memory import ButlerMemoryService
@@ -90,6 +95,10 @@ MODEL_STEP_LIMIT = 8
 GLOBAL_MODEL_STEP_LIMIT = 20
 TOOL_CALL_LIMIT = 12
 GLOBAL_TOOL_CALL_LIMIT = 40
+
+
+class ButlerRouteUnavailableError(ValueError):
+    """No authorized scheduled Butler route has measured capacity."""
 
 _INSTRUCTIONS = (
     "You are Butler, acting under this selected project's standing Act authority. "
@@ -135,7 +144,8 @@ _GLOBAL_INSTRUCTIONS = (
     "the original goal must still be resumed separately when safe. "
     "Read existing projects, goals, chats, revisions, and runtimes before writes. "
     "Query nebula.global.harness_quota before choosing a Codex or Grok runtime "
-    "when capacity matters; treat unavailable numeric quota as unknown. "
+    "when capacity matters; inspect separate credits even if included quota is "
+    "exhausted, and treat unavailable values as unknown. "
     "When a paused harness goal failed before admission because Plan before acting "
     "cannot be enforced, inspect its saved provider choice and use "
     "nebula.global.handoff_goal if Core declares the handoff safe. Continue in "
@@ -167,6 +177,40 @@ def _applied_change(steps: list[dict[str, Any]]) -> bool:
         step.get("operation") in _BACKGROUND_CHANGES and step.get("status") == "applied"
         for step in steps
     )
+
+
+def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
+    """Match the vendor's exact load code on this case's failed analysis turn."""
+
+    if (
+        case.signal != "butler.global_periodic_check"
+        or not case.model_turn_id
+        or case.queued_item_id
+        or case.delivered_turn_id
+        or case.recovery_goal_ids
+        or any(step.get("operation") in _BACKGROUND_CHANGES for step in case.steps)
+    ):
+        return False
+    try:
+        turn = store.get(HarnessTurn, case.model_turn_id)
+    except NotFoundError:
+        return False
+    if (
+        turn.engagement_id != case.engagement_id
+        or turn.origin != HarnessTurnOrigin.ANALYSIS
+        or turn.metadata.get("butler_recovery_case_id") != case.id
+        or turn.status not in {HarnessTurnStatus.FAILED, HarnessTurnStatus.INTERRUPTED}
+    ):
+        return False
+    events = store.replay_operation_events(turn.id, limit=10_000)
+    for event in reversed(events):
+        payload = event.payload
+        nested = payload.get("payload")
+        details = nested if isinstance(nested, dict) else payload
+        error = details.get("error")
+        if isinstance(error, dict) and error.get("codexErrorInfo") == "serverOverloaded":
+            return True
+    return False
 
 
 def recovery_case_id(project_id: str, source_event_id: str) -> str:
@@ -319,6 +363,71 @@ class ButlerRecoveryAgent:
             raise ValueError("Butler has no configured chat in this project")
         return session
 
+    async def _scheduled_harness_profile(
+        self,
+        project_id: str,
+        preferred: HarnessProfile,
+        model: str,
+        reasoning_effort: str | None,
+        cyber_access_program: str | None,
+    ) -> HarnessProfile:
+        """Use a same-model Codex account with current measured capacity."""
+
+        if preferred.kind != HarnessKind.CODEX_APP_SERVER:
+            return preferred
+        available: list[tuple[tuple[int, float], bool, HarnessProfile]] = []
+        for profile in self.store.iter_readable_entities(HarnessProfile):
+            if (
+                not profile.enabled
+                or profile.kind != preferred.kind
+                or model not in profile.capabilities.models
+            ):
+                continue
+            option = next(
+                (item for item in profile.capabilities.model_options if item.model == model),
+                None,
+            )
+            if reasoning_effort and (
+                option is None
+                or reasoning_effort not in {item.id for item in option.reasoning_efforts}
+            ):
+                continue
+            if cyber_access_program not in {None, "automatic"} and (
+                option is None
+                or cyber_access_program not in (option.cyber_access_programs or [])
+            ):
+                continue
+            if not profile.privacy.local_only and not (
+                profile.privacy.permits_sensitive_data
+                and profile.privacy.auto_share_tool_results
+            ):
+                continue
+            try:
+                self.harness_runtime._validate_harness_privacy(
+                    project_id,
+                    profile,
+                    [],
+                    allow_remote_mcp=profile.privacy.auto_share_tool_results,
+                    uses_gateway_tools=True,
+                )
+            except HarnessConfigurationError:
+                # diagnostic-expected: this account cannot read project tools.
+                continue
+            capacity = await measured_harness_capacity(
+                self.work, project_id, profile.id
+            )
+            if capacity is not None:
+                available.append((capacity, profile.id == preferred.id, profile))
+        if available:
+            return min(
+                available,
+                key=lambda item: (-item[0][0], -item[0][1], not item[1], item[2].id),
+            )[2]
+        raise ButlerRouteUnavailableError(
+            "No authorized Codex account has confirmed included usage or credits for "
+            f"Butler's scheduled {model} check."
+        )
+
     def _record_model_turn(
         self,
         case_id: str,
@@ -330,6 +439,11 @@ class ButlerRecoveryAgent:
         """Keep the scheduled check's transcript link as soon as its turn exists."""
 
         current = self.store.get(ButlerRecoveryCase, case_id)
+        turn_ids = list(current.model_turn_ids)
+        if current.model_turn_id and current.model_turn_id not in turn_ids:
+            turn_ids.append(current.model_turn_id)
+        if turn_id not in turn_ids:
+            turn_ids.append(turn_id)
         self.store.update(
             ButlerRecoveryCase,
             case_id,
@@ -338,6 +452,7 @@ class ButlerRecoveryAgent:
                 "model_profile_id": profile_id,
                 "model": model,
                 "model_turn_id": turn_id,
+                "model_turn_ids": turn_ids,
             },
             expected_revision=current.revision,
         )
@@ -466,6 +581,15 @@ class ButlerRecoveryAgent:
                     raise ValueError(
                         "Butler's harness is not authorized for unattended project tool results"
                     )
+                if global_check:
+                    harness_profile = await self._scheduled_harness_profile(
+                        case.engagement_id,
+                        harness_profile,
+                        model,
+                        config["harness_reasoning_effort"],
+                        config["harness_cyber_access_program"],
+                    )
+                    profile_id = harness_profile.id
                 turn = await self.harness_runtime.analyze_structured(
                     engagement_id=case.engagement_id,
                     profile_id=profile_id,
@@ -951,7 +1075,11 @@ class ButlerRecoveryService:
         if not candidates:
             return None
         case = next(
-            (item for item in candidates if item.authority_revision == policy.revision),
+            (
+                item for item in candidates
+                if item.authority_revision == policy.revision
+                and (item.next_check_at is None or item.next_check_at <= utc_now())
+            ),
             None,
         )
         for stale in candidates:
@@ -977,6 +1105,7 @@ class ButlerRecoveryService:
                 or current.status != "observed"
                 or current.revision != case.revision
                 or current.authority_revision != policy.revision
+                or (current.next_check_at is not None and current.next_check_at > utc_now())
                 or current_policy is None
                 or current_policy.authority != "act"
                 or current_policy.revision != policy.revision
@@ -1098,6 +1227,70 @@ class ButlerRecoveryService:
                     )
             recovered += 1
         return recovered
+
+    def retry_overloaded_cases(self, project_id: str, worker_id: str) -> int:
+        """Reopen recent legacy load failures once, preserving their case and turn."""
+
+        policy = self._current_act(project_id, worker_id)
+        if policy is None or self.agent is None:
+            return 0
+        reopened = 0
+        for case in self.store.find_entities(
+            ButlerRecoveryCase,
+            {"status": "needs_attention"},
+            engagement_id=project_id,
+            limit=20,
+            newest_first=True,
+        ):
+            if (
+                case.capacity_retry_count
+                or case.authority_revision != policy.revision
+                or case.finished_at is None
+                or utc_now() - case.finished_at > timedelta(hours=4)
+                or not _server_overloaded(self.store, case)
+            ):
+                continue
+            try:
+                self.agent._global_instructions(case)
+            except (ButlerInstructionsError, NotFoundError):
+                # diagnostic-expected: a changed or missing mandate belongs to a new check.
+                continue
+            with self.store.transaction(immediate=True) as transaction:
+                current = _entity_in_transaction(transaction, ButlerRecoveryCase, case.id)
+                current_policy = _entity_in_transaction(
+                    transaction, ButlerAuthorityPolicy, policy.id
+                )
+                state = _entity_in_transaction(
+                    transaction, ButlerProjectState, project_state_id(project_id)
+                )
+                if (
+                    current is None
+                    or current.revision != case.revision
+                    or current.status != "needs_attention"
+                    or current.capacity_retry_count
+                    or current_policy is None
+                    or current_policy.authority != "act"
+                    or current_policy.revision != policy.revision
+                    or state is None
+                    or state.lease_owner != worker_id
+                    or state.lease_expires_at is None
+                    or state.lease_expires_at <= utc_now()
+                ):
+                    continue
+                transaction.update(
+                    ButlerRecoveryCase,
+                    case.id,
+                    {
+                        "status": "observed",
+                        "outcome": "Codex reported server load; Butler is retrying this check once.",
+                        "capacity_retry_count": 1,
+                        "next_check_at": utc_now(),
+                        "finished_at": None,
+                    },
+                    expected_revision=case.revision,
+                )
+                reopened += 1
+        return reopened
 
     def verify_follow_up(self, case: ButlerRecoveryCase) -> ButlerRecoveryCase:
         """Verify scheduled guidance or the child result of an immediate retry."""
@@ -1247,6 +1440,7 @@ class ButlerRecoveryService:
 
     async def process_project(self, project_id: str, worker_id: str) -> None:
         self.recover_interrupted_cases(project_id)
+        self.retry_overloaded_cases(project_id, worker_id)
         try:
             self.fire_global_periodic_check(project_id, worker_id)
         except ButlerInstructionsError:
@@ -1282,18 +1476,28 @@ class ButlerRecoveryService:
         except Exception as exc:
             # diagnostic-expected: the case records the investigation failure for operator review.
             current = self.store.get(ButlerRecoveryCase, case.id)
+            overloaded = (
+                current.capacity_retry_count == 0
+                and _server_overloaded(self.store, current)
+            )
             uncertain = _possible_change(current.steps)
+            if overloaded:
+                outcome = "Codex reported server load; Butler will retry this check once."
+            elif uncertain:
+                outcome = "An action may have taken effect; inspect Core before retry."
+            elif isinstance(exc, (ButlerInstructionsError, ButlerRouteUnavailableError)):
+                outcome = str(exc)[:300]
+            else:
+                outcome = (
+                    f"Butler could not finish the investigation ({type(exc).__name__})."
+                )
             self._update_case(
                 current,
-                status="uncertain" if uncertain else "needs_attention",
-                outcome=(
-                    "An action may have taken effect; inspect Core before retry."
-                    if uncertain
-                    else str(exc)[:300]
-                    if isinstance(exc, ButlerInstructionsError)
-                    else f"Butler could not finish the investigation ({type(exc).__name__})."
-                ),
-                finished_at=utc_now(),
+                status=("observed" if overloaded else "uncertain" if uncertain else "needs_attention"),
+                outcome=outcome,
+                capacity_retry_count=1 if overloaded else current.capacity_retry_count,
+                next_check_at=utc_now() + timedelta(seconds=30) if overloaded else None,
+                finished_at=None if overloaded else utc_now(),
             )
             return
         current = self.store.get(ButlerRecoveryCase, case.id)

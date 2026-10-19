@@ -378,7 +378,10 @@ def test_manual_codex_quota_refresh_persists_project_resource(tmp_path, monkeypa
     _watched_project(store, "project", "codex")
 
     async def account_read(self, profile, credentials):
-        return {"rateLimits": {"primary": {"usedPercent": 80}}}
+        return {"ordinaryUsageAllowed": False, "rateLimits": {
+            "primary": {"usedPercent": 100},
+            "credits": {"balance": "6.50", "hasCredits": True},
+        }}
 
     monkeypatch.setattr(CodexAppServerAdapter, "read_account_usage", account_read)
     app = create_app(store=store, auth_token="test-token")
@@ -387,7 +390,8 @@ def test_manual_codex_quota_refresh_persists_project_resource(tmp_path, monkeypa
         assert client.post(path).status_code == 401
         response = client.post(path, headers={"Authorization": "Bearer test-token"})
         assert response.status_code == 200, response.text
-        assert response.json()["snapshots"][0]["remaining_percent"] == 20
+        assert response.json()["snapshots"][0]["remaining_percent"] == 0
+        assert response.json()["balances"][0]["remaining"] == 6.5
         overview = client.get(
             "/api/v1/engagements/project/butler/overview",
             headers={"Authorization": "Bearer test-token"},
@@ -397,7 +401,13 @@ def test_manual_codex_quota_refresh_persists_project_resource(tmp_path, monkeypa
         assert body["summary"]["harness_quota_resources"] == 1
         assert body["summary"]["open_incidents"] == 1
         assert body["resources"][0]["kind"] == "harness_quota"
-        assert body["resources"][0]["remaining_percent"] == 20
+        assert body["resources"][0]["remaining_percent"] == 0
+        queried = asyncio.run(dispatch_work_tool(
+            app.state.control_assistant_work, "project", "nebula.work.harness_quota",
+            {"profile_id": "codex", "refresh": True},
+        ))
+        assert queried["ordinary_usage_allowed"] is False
+        assert queried["balances"][0]["remaining"] == 6.5
 
 
 def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(
@@ -410,7 +420,8 @@ def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(
     async def account_read(self, profile, credentials):
         return {
             "config": {
-                "creditUsagePercent": 81,
+                "creditUsagePercent": 100,
+                "prepaidBalance": {"val": "3.75"},
                 "isUnifiedBillingUser": True,
                 "currentPeriod": {
                     "type": "USAGE_PERIOD_TYPE_WEEKLY",
@@ -427,13 +438,14 @@ def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(
             headers={"Authorization": "Bearer test-token"},
         )
         assert response.status_code == 200, response.text
-        assert response.json()["snapshots"][0]["remaining_percent"] == 19
+        assert response.json()["snapshots"][0]["remaining_percent"] == 0
+        assert response.json()["balances"][0]["remaining"] == 3.75
         overview = client.get(
             "/api/v1/engagements/project/butler/overview",
             headers={"Authorization": "Bearer test-token"},
         ).json()
         assert overview["resources"][0]["source"] == "grok._x.ai/billing"
-        assert overview["resources"][0]["remaining_percent"] == 19
+        assert overview["resources"][0]["remaining_percent"] == 0
         assert overview["summary"]["open_incidents"] == 1
         queried = asyncio.run(
             dispatch_work_tool(
@@ -443,5 +455,6 @@ def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(
                 {"profile_id": "grok", "refresh": True},
             )
         )
-        assert queried["snapshots"][0]["remaining_percent"] == 19
+        assert queried["snapshots"][0]["remaining_percent"] == 0
         assert queried["snapshots"][0]["source"] == "grok._x.ai/billing"
+        assert queried["balances"][0]["remaining"] == 3.75

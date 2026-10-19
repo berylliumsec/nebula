@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,53 @@ _PROJECT = {
     "properties": {"project_id": _ID},
     "required": ["project_id"],
 }
+
+
+async def measured_harness_capacity(
+    work: Any, project_id: str, profile_id: str
+) -> tuple[int, float] | None:
+    """Rank confirmed included usage ahead of paid credits; unknown stays unknown."""
+
+    try:
+        quota = await work.harness_quota(
+            project_id, {"profile_id": profile_id, "refresh": True}
+        )
+    except Exception:
+        # diagnostic-expected: a failed account read excludes only its profile.
+        return None
+    if not isinstance(quota, dict) or quota.get("state") != "available":
+        return None
+    snapshots = quota.get("snapshots")
+    remaining: list[float] = []
+    if isinstance(snapshots, list):
+        for item in snapshots:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("remaining_percent")
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+            ):
+                remaining.append(float(value))
+    if remaining and min(remaining) > 0 and quota.get("ordinary_usage_allowed") is not False:
+        return (2, min(remaining))
+    balances = quota.get("balances")
+    if isinstance(balances, list):
+        for item in balances:
+            if not isinstance(item, dict):
+                continue
+            if item.get("display_value") == "Unlimited":
+                return (1, float("inf"))
+            amount = item.get("remaining")
+            if (
+                isinstance(amount, (int, float))
+                and not isinstance(amount, bool)
+                and math.isfinite(amount)
+                and amount > 0
+            ):
+                return (1, float(amount))
+    return None
 
 
 class ButlerGlobalActions:
@@ -238,8 +286,8 @@ class ButlerGlobalActions:
             return {**started, "created": True, "started": True}
         return {**created, "created": True}
 
-    def _recovery_harness(self, project_id: str) -> HarnessProfile:
-        """Select an advertised Codex route, preferring this check's Butler chat."""
+    async def _recovery_harness(self, project_id: str) -> HarnessProfile:
+        """Select an authorized Codex route with measured usage or credits."""
 
         butler_sessions = [
             session
@@ -261,6 +309,7 @@ class ButlerGlobalActions:
             self.store.iter_readable_entities(HarnessProfile),
             key=lambda profile: (profile.id != preferred_id, profile.id),
         )
+        available: list[tuple[tuple[int, float], bool, HarnessProfile]] = []
         for profile in profiles:
             if not profile.enabled or profile.kind != HarnessKind.CODEX_APP_SERVER:
                 continue
@@ -290,10 +339,19 @@ class ButlerGlobalActions:
             except HarnessConfigurationError:
                 # diagnostic-expected: this profile cannot use gateway tools in this project; inspect the next profile.
                 continue
-            return profile
+            capacity = await measured_harness_capacity(
+                self.work, project_id, profile.id
+            )
+            if capacity is not None:
+                available.append((capacity, profile.id == preferred_id, profile))
+        if available:
+            return min(
+                available,
+                key=lambda item: (-item[0][0], -item[0][1], not item[1], item[2].id),
+            )[2]
         raise ValueError(
-            "No authorized Codex harness advertises gpt-6-sol with max effort "
-            "and Daybreak Blue for this project"
+            "No authorized Codex harness has confirmed included usage or credits for "
+            "gpt-6-sol with max effort and Daybreak Blue in this project"
         )
 
     async def create_recovery_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -375,7 +433,7 @@ class ButlerGlobalActions:
                     "source_goal_id": source.id,
                 }
             return result
-        profile = self._recovery_harness(project_id)
+        profile = await self._recovery_harness(project_id)
         if not isinstance(arguments.get("plan"), list) or not arguments["plan"]:
             raise ValueError(
                 "Record the main recovery agent's plan before starting its goal"
@@ -619,7 +677,7 @@ class ButlerGlobalActions:
             ),
             (
                 "nebula.global.harness_quota",
-                "Read a configured Codex or Grok harness's vendor-reported remaining quota window for an Act project; refresh requests a new read. Missing numeric values remain unknown.",
+                "Read a configured Codex or Grok harness's vendor-reported included quota window and separate credit balance for an Act project; refresh requests a new read. Missing values remain unknown.",
                 {
                     "type": "object",
                     "additionalProperties": False,

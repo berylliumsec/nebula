@@ -162,6 +162,16 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
             ),
         )
     )
+    alternate = store.create(
+        HarnessProfile(
+            name="Butler alternate account",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            default_model="test-model",
+            executable="/bin/true",
+            privacy={"local_only": True},
+            capabilities=profile.capabilities,
+        )
+    )
     harness_session = store.create(
         HarnessSession(
             engagement_id=project.id,
@@ -209,21 +219,49 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
     case = store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)[0]
 
     class Runtime:
+        def _validate_harness_privacy(self, *_args, **_kwargs):
+            pass
+
         async def analyze_structured(self, **request):
+            assert request["profile_id"] == alternate.id
             assert request["reasoning_effort"] == "max"
             assert "Check idle work." in request["prompt"]
+            request["on_turn_created"](SimpleNamespace(id="harness-turn"))
             return SimpleNamespace(
                 status=HarnessTurnStatus.COMPLETE,
                 response="Checked Core state",
                 id="harness-turn",
             )
 
+    class Work:
+        available = True
+
+        async def harness_quota(self, project_id, arguments):
+            assert project_id == project.id
+            assert arguments["refresh"] is True
+            if not self.available:
+                return {"state": "unavailable", "snapshots": []}
+            return {
+                "state": "available",
+                "snapshots": [
+                    {
+                        "remaining_percent": (
+                            0.0
+                            if arguments["profile_id"] == profile.id
+                            else 100.0
+                        )
+                    }
+                ],
+            }
+
+    work = Work()
+
     agent = ButlerRecoveryAgent(
         store,
         provider_factory=lambda _: None,
         harness_runtime=Runtime(),
         artifact_store=None,
-        work=None,
+        work=work,
         memory=None,
         instructions_root=tmp_path,
     )
@@ -231,10 +269,35 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
     assert (outcome, backend.value, profile_id, model, turn_id) == (
         "Checked Core state",
         "harness",
-        profile.id,
+        alternate.id,
         "test-model",
         "harness-turn",
     )
+    saved_case = store.get(ButlerRecoveryCase, case.id)
+    assert saved_case.model_turn_id == "harness-turn"
+    assert saved_case.model_turn_ids == ["harness-turn"]
+    assert saved_case.model_profile_id == alternate.id
+    assert agent._butler_session(project.id).harness_profile_id == profile.id
+    work.available = False
+    with pytest.raises(ValueError, match="confirmed included usage or credits"):
+        asyncio.run(
+            agent._scheduled_harness_profile(
+                project.id, profile, "test-model", "max", "automatic"
+            )
+        )
+
+    async def credit_only(_project_id, arguments):
+        return {
+            "state": "available",
+            "ordinary_usage_allowed": False,
+            "snapshots": [{"remaining_percent": 0.0}],
+            "balances": [{"remaining": 2.0 if arguments["profile_id"] == profile.id else 0.0}],
+        }
+
+    work.harness_quota = credit_only
+    assert asyncio.run(
+        agent._scheduled_harness_profile(project.id, profile, "test-model", "max", "automatic")
+    ).id == profile.id
 
 
 def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):

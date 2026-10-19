@@ -91,6 +91,7 @@ export interface ButlerRecoveryCase {
   targetSessionId?: string;
   modelBackend?: "provider" | "harness";
   modelTurnId?: string;
+  modelTurnIds?: string[];
   recoveryGoals: ButlerRecoveryGoal[];
   createdAt?: string;
   finishedAt?: string;
@@ -263,6 +264,7 @@ interface WireButlerOverview {
     target_session_id?: string | null;
     model_backend?: "provider" | "harness" | null;
     model_turn_id?: string | null;
+    model_turn_ids?: string[];
     recovery_goals?: Array<{
       id: string;
       project_id: string;
@@ -422,6 +424,7 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       targetSessionId: item.target_session_id ?? undefined,
       modelBackend: item.model_backend ?? undefined,
       modelTurnId: item.model_turn_id ?? undefined,
+      modelTurnIds: item.model_turn_ids?.length ? item.model_turn_ids : item.model_turn_id ? [item.model_turn_id] : [],
       recoveryGoals: (item.recovery_goals ?? []).map((goal) => ({
         id: goal.id,
         projectId: goal.project_id,

@@ -50,7 +50,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.usage",
     label: "Usage and credits",
-    description: "See provider and harness balances, rate limits, and Nebula activity",
+    description: "See Codex and Grok credits separately from included usage, plus other balances and Nebula activity",
     category: "Models",
     scope: "Workspace",
     target: "usage-settings",

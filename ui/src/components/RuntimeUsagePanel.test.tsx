@@ -47,3 +47,21 @@ it("shows measured activity and honest vendor scope, then recovers a failed refr
   await waitFor(() => expect(router).toHaveTextContent("$60.00"));
   expect(getRuntimeUsage).toHaveBeenNthCalledWith(2, true, expect.any(AbortSignal));
 });
+
+it("shows Codex and Grok credits when included windows have no remaining usage", async () => {
+  const base = snapshot.items[1];
+  const items: RuntimeUsageResponse["items"] = [
+    { ...base, profileId: "codex", name: "Codex", providerType: "codex_app_server", enabled: true,
+      vendor: { state: "available", source: "Codex account", detail: "Credits are separate from included usage.",
+        balances: [{ label: "Codex credits", remaining: 7.25, note: "Vendor credit units" }],
+        windows: [{ label: "Included usage", usedPercent: 100 }] } },
+    { ...base, vendor: { state: "available", source: "Grok account", detail: "Prepaid credits are separate from included usage.",
+      balances: [{ label: "Grok prepaid credits", remaining: 3.75, note: "Vendor credit units" }],
+      windows: [{ label: "Shared Grok credits · Weekly", usedPercent: 100 }] } },
+  ];
+  const api = { getRuntimeUsage: vi.fn().mockResolvedValue({ ...snapshot, items }) } as unknown as ApiClient;
+  render(<RuntimeUsagePanel api={api} active />);
+  expect(await screen.findByRole("article", { name: "Codex usage" })).toHaveTextContent("7.25");
+  expect(screen.getByRole("article", { name: "Grok Build usage" })).toHaveTextContent("3.75");
+  expect(screen.getAllByText("0% left")).toHaveLength(2);
+});

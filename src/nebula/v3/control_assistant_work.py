@@ -2765,7 +2765,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.harness_quota",
-        "Read one enabled harness's vendor-reported account quota windows by profile ID from the runtime catalog. Grok and Codex can report included-credit percentages; unavailable is unknown, not zero. Set refresh true for a new vendor read.",
+        "Read one enabled harness's vendor-reported included quota windows and separate credit balances by profile ID from the runtime catalog. Grok and Codex credits may remain usable after included usage is exhausted; unavailable is unknown, not zero. Set refresh true for a new vendor read.",
         HARNESS_QUOTA_SCHEMA,
         True,
     ),

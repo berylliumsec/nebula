@@ -23,7 +23,7 @@ describe("getButlerOverview", () => {
       recovery_cases: [{ id: "case-1", trigger: "immediate", signal: "agent.subagent_start_failed",
         status: "verifying", summary: "Subagent start failed", outcome: "Parent retry queued",
         source_session_id: "session one", target_session_id: "session one",
-        model_backend: "harness", model_turn_id: "saved-turn",
+        model_backend: "harness", model_turn_id: "saved-turn", model_turn_ids: ["failed-turn", "saved-turn"],
         recovery_goals: [{ id: "recovery-goal", project_id: "a/b", session_id: "recovery-chat",
           source_goal_id: "source-goal", objective: "Recover work", status: "running", current_step: 2,
           updated_at: "2026-10-19T12:00:00Z", report: "Investigating" }],
@@ -57,7 +57,7 @@ describe("getButlerOverview", () => {
     expect(result.nextActionOffset).toBe(50);
     expect(result.capabilities.actions).toBe(true);
     expect(result.capabilities.recovery).toBe(true);
-    expect(result.recoveryCases[0]).toMatchObject({ status: "verifying", targetSessionId: "session one", modelTurnId: "saved-turn", modelBackend: "harness", steps: [{ status: "applied" }],
+    expect(result.recoveryCases[0]).toMatchObject({ status: "verifying", targetSessionId: "session one", modelTurnId: "saved-turn", modelTurnIds: ["failed-turn", "saved-turn"], modelBackend: "harness", steps: [{ status: "applied" }],
       recoveryGoals: [{ projectId: "a/b", sessionId: "recovery-chat", sourceGoalId: "source-goal", currentStep: 2 }] });
     expect(result.summary.watchedGoals).toBe(1);
     expect(result.capabilities.incidents).toBe(false);
