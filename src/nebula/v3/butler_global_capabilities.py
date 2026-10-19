@@ -288,6 +288,7 @@ class ButlerGlobalActions:
                     uses_gateway_tools=True,
                 )
             except HarnessConfigurationError:
+                # diagnostic-expected: this profile cannot use gateway tools in this project; inspect the next profile.
                 continue
             return profile
         raise ValueError(
