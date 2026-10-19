@@ -1,5 +1,5 @@
 {
-  "change_digest": "ea9e714a552b4386b672a59069808d384538a87f0dbe88286bdb8663ea7f7f6e",
+  "change_digest": "fa422a86ef28d00d455f31048d98668f04596648b2cd81f349ba2ee2730be11f",
   "reviewed_by": "Codex focused review on 2026-10-19",
   "reason": "Add Core-enforced formal planning for MCP-capable Grok main chats, preserve Codex planning, and carry saved MCP, Plan and provider-subagent choices through Butler immediate guidance. Python covers admission, same-chat rebind, formal plan and gateway guard, Grok process isolation, ordinary host behavior, Butler handoff, subagent context, and product-help sync. Frontend covers planning transport and assistant navigation. Browser covers blocked recovery and planned Claude, Codex and Grok execution with refresh across the permanent desktop and mobile LAN projects.",
   "exclusions": "No Rust or native code changed. Full suites, unrelated operator journeys, physical-device checks, and live research goals are excluded. Browser cases use a synthetic inert harness on a disposable real Core; local Grok ACP handshake, native-tool denial, and synthetic task validation are separate manual checks. The live Core host has Grok 1.0.62 installed, and its account login was verified with a Core-user prompt; the research holds remain independent blockers.",

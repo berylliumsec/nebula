@@ -7757,8 +7757,10 @@ class GrokAcpAdapter(HarnessAdapter):
             ) from exc
         try:
             observed = json.loads(output) if process.returncode == 0 else None
-        except (ValueError, UnicodeDecodeError):
-            observed = None
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HarnessConfigurationError(
+                "Grok could not verify its isolated plan configuration"
+            ) from exc
         if not isinstance(observed, dict):
             raise HarnessConfigurationError(
                 "Grok could not verify its isolated plan configuration"
