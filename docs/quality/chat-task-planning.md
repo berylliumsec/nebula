@@ -32,3 +32,34 @@ The final browser run against the rebased candidate started disposable Core inst
 | Mobile WebKit 430 | `http://192.168.1.155:35759` | `http://192.168.1.155:45629` |
 
 The journeys verify the bundle asset hash, the saved switch, blocked unsupported harness behavior without execution receipts, a same-chat linked retry after changing the saved harness, managed file discovery, a distinct plan submission, declared read, Core read-back, refresh, accessibility, and responsive settings geometry. The fixture stopped Core and removed its temporary data. Mobile Chromium and WebKit are emulated browser profiles; a physical device was not run. No external provider or real project was used.
+
+## Managed Codex formal-plan acceptance, 2026-10-19
+
+The prior gate rejected Codex before opening its restricted planning session, so
+Codex could not call `plan.submit`. Managed MCP-capable Codex now uses the same
+Core plan submission and saved receipt as managed Claude. Planned Codex turns
+expose the guarded Core gateway in a private scratch workspace with read-only
+vendor sandboxing and native execution features disabled. A later ordinary turn
+restores the session's native feature selection. Delegated children receive the
+main plan's steps, expected outcomes, tools, files, and unresolved dependencies.
+
+- Focused Python selection: 10 cases passed after correcting a synthetic test
+  record; the Codex start and resume requests also validate against the pinned
+  app-server schemas. Ruff check and format, mypy, and bundled product-help
+  digest verification passed. The Chroma source-digest synchronization check
+  passed with the selected Python cases.
+- Frontend unit selection: 4 cases passed in two files. The candidate production
+  bundle built successfully.
+- Real Core browser selection: 24 cases passed on desktop Chromium at 1440 and
+  1024 px, emulated mobile Chromium at 320, 390, and 430 px, and emulated mobile
+  WebKit at 320, 390, and 430 px. Each case used normal pairing against a
+  disposable Core on a non-loopback LAN origin with synthetic project data and
+  an inert harness. Blocked, linked retry, saved execution, refresh, responsive
+  geometry, and accessibility checks were exercised.
+- A repeated desktop Codex case captured `http://192.168.1.155:42953` with the
+  production bundle, 1440×900 viewport, and saved plan phase `execution`.
+  The fixture stopped and removed its temporary data afterward.
+
+These synthetic checks verify Core and UI behavior. They do not establish that
+an external Codex model will choose to submit a suitable plan for every task.
+No physical device was used.
