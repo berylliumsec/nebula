@@ -107,6 +107,7 @@ class GoalConversationCreate(GoalCreate):
     butler_recovery_source_goal_id: str | None = Field(
         default=None, min_length=1, max_length=200
     )
+    butler_initiated: bool = False
 
     @model_validator(mode="after")
     def selections_are_unique(self) -> "GoalConversationCreate":
@@ -143,6 +144,7 @@ class GoalHandoffRequest(BaseModel):
     checkpoint: str | None = Field(default=None, max_length=4_000)
     max_steps: int = Field(default=20, ge=1, le=100)
     max_time_seconds: int = Field(default=7_200, ge=1_800, le=86_400)
+    butler_initiated: bool = False
 
 
 class GoalHandoffCreated(GoalConversationCreated):
@@ -394,6 +396,11 @@ class ChatGoalService:
                         ),
                         "allow_agent_messaging": body.allow_agent_messaging,
                         "planning_enabled": body.planning_enabled,
+                        **(
+                            {"butler_initiated": True}
+                            if body.butler_initiated or body.butler_recovery_case_id
+                            else {}
+                        ),
                     },
                 )
                 goal = ChatGoal(
@@ -473,6 +480,7 @@ class ChatGoalService:
                 "message_count": 0,
                 "last_sequence": 0,
                 "initial_title_state": "goal",
+                **({"butler_initiated": True} if body.butler_initiated else {}),
             },
         )
         goal = ChatGoal(
@@ -697,6 +705,8 @@ class ChatGoalService:
         target, goal = self._provider_conversation_entities(draft)
         target.title = f"Continue: {old_session.title}"[:300]
         target.metadata["handoff_source_session_id"] = old_session.id
+        if body.butler_initiated:
+            target.metadata["butler_initiated"] = True
         goal.metadata["handoff_source_goal_id"] = source.id
         goal.metadata["handoff_source_session_id"] = old_session.id
         goal.metadata["handoff_source_revision"] = source.revision

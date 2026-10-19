@@ -1321,6 +1321,7 @@ class ControlAssistantWork:
             harness_profile_id=profile_id if backend == "harness" else None,
             model=model,
             tools_enabled=enabled,
+            butler_initiated=True,
             **{
                 key: value
                 for key, value in arguments.items()
@@ -1395,7 +1396,14 @@ class ControlAssistantWork:
     ) -> dict[str, Any]:
         source = self._chat(project_id, arguments.get("session_id"))
         body = GoalHandoffRequest.model_validate(
-            {key: value for key, value in arguments.items() if key != "session_id"}
+            {
+                **{
+                    key: value
+                    for key, value in arguments.items()
+                    if key != "session_id"
+                },
+                "butler_initiated": True,
+            }
         )
         result = await self._request(
             "POST",
@@ -2090,6 +2098,7 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(source.id, safe='')}/fork",
             {
                 "through_message_id": message_id,
+                "butler_initiated": True,
                 **({"title": _text(title, "title", 300)} if title is not None else {}),
             },
         )
@@ -2306,6 +2315,7 @@ class ControlAssistantWork:
         if backend == "provider":
             request = ChatCompletionRequest(
                 backend=ChatBackend.PROVIDER,
+                butler_initiated=True,
                 engagement_id=project_id,
                 provider_id=profile_id,
                 model=model,
@@ -2334,6 +2344,7 @@ class ControlAssistantWork:
         else:
             session, turn, harness_turn = self.harness.prepare_chat(
                 engagement_id=project_id,
+                butler_initiated=True,
                 profile_id=profile_id,
                 model=model,
                 prompt=prompt,
