@@ -847,6 +847,10 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
+    if _codex_core_planned_session(session, profile.kind):
+        # Codex has no fail-closed callback for every native tool. Planned
+        # turns use the Core gateway instead, where every call is guarded.
+        return HarnessNativeCapabilities()
     raw = session.metadata.get("native_capabilities")
     capabilities = (
         HarnessNativeCapabilities.model_validate(raw)
@@ -860,6 +864,13 @@ def _session_native_capabilities(
     # inconsistent metadata.  Clamp (never grant) so vendor tool config and
     # native permission decisions match the workspace the session actually got.
     return _container_only_native_capabilities(capabilities)
+
+
+def _codex_core_planned_session(session: HarnessSession, kind: HarnessKind) -> bool:
+    return kind == HarnessKind.CODEX_APP_SERVER and (
+        isinstance(session.metadata.get("planning_target_turn_id"), str)
+        or session.metadata.get("planning_enforced") is True
+    )
 
 
 def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[str]:
@@ -4462,6 +4473,9 @@ class CodexAppServerAdapter(HarnessAdapter):
 
     async def _open(self, request: AdapterOpenRequest) -> HarnessConnection:
         managed_gateway = bool(request.gateway_config)
+        core_planned = _codex_core_planned_session(
+            request.session, request.profile.kind
+        )
         native_capabilities = _session_native_capabilities(
             request.session, request.profile
         )
@@ -4489,6 +4503,7 @@ class CodexAppServerAdapter(HarnessAdapter):
             request.workspace,
             mcp_config=effective_mcp,
             native_capabilities=native_capabilities,
+            core_planned=core_planned,
         )
         try:
             verified_activity_protocol = bool(
@@ -4550,6 +4565,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                                 effective_mcp,
                                 native_capabilities=native_capabilities,
                                 trusted_butler_gateway=trusted_butler_gateway,
+                                core_planned=core_planned,
                             ),
                             "developerInstructions": developer_instructions,
                             # Nebula never reads thread.turns, and a long history
@@ -4584,6 +4600,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                             effective_mcp,
                             native_capabilities=native_capabilities,
                             trusted_butler_gateway=trusted_butler_gateway,
+                            core_planned=core_planned,
                         ),
                         "developerInstructions": developer_instructions,
                         **(
@@ -4659,6 +4676,7 @@ class CodexAppServerAdapter(HarnessAdapter):
         *,
         mcp_config: dict[str, dict[str, Any]] | None = None,
         native_capabilities: HarnessNativeCapabilities | None = None,
+        core_planned: bool = False,
     ) -> _CodexRpc:
         if profile.connection_mode == HarnessConnectionMode.SPAWN:
             if not profile.executable:
@@ -4677,7 +4695,9 @@ class CodexAppServerAdapter(HarnessAdapter):
                 native_capabilities or HarnessNativeCapabilities()
             )
             argv = [str(executable), "app-server", "-c", "mcp_servers={}"]
-            for override in _codex_process_overrides(effective_native_capabilities):
+            for override in _codex_process_overrides(
+                effective_native_capabilities, core_planned=core_planned
+            ):
                 argv.extend(["-c", override])
             child_env: dict[str, str] = {}
             if profile.auth_mode == HarnessAuthMode.SECRET_REF and profile.secret_ref:
@@ -4806,6 +4826,8 @@ def _codex_mcp_overrides(
 
 def _codex_feature_policy(
     capabilities: HarnessNativeCapabilities,
+    *,
+    core_planned: bool = False,
 ) -> dict[str, bool]:
     shell = capabilities.shell or (
         capabilities.workspace_access != HarnessWorkspaceAccess.NONE
@@ -4813,8 +4835,8 @@ def _codex_feature_policy(
     enabled = {
         # The stable host dispatches MCP calls even when code mode is disabled.
         "code_mode_host": True,
-        # /goal is always offered; Codex rejects thread/goal/* without it.
-        "goals": True,
+        # Vendor goals can start later turns outside Core's task-plan gate.
+        "goals": not core_planned,
         "shell_tool": shell,
         "unified_exec": shell,
         "browser_use": capabilities.browser,
@@ -4845,8 +4867,10 @@ def _codex_shell_environment(
 
 def _codex_process_overrides(
     capabilities: HarnessNativeCapabilities,
+    *,
+    core_planned: bool = False,
 ) -> tuple[str, ...]:
-    features = _codex_feature_policy(capabilities)
+    features = _codex_feature_policy(capabilities, core_planned=core_planned)
     shell_environment = _codex_shell_environment(capabilities)
     return (
         *(
@@ -4864,6 +4888,7 @@ def _codex_thread_config(
     *,
     native_capabilities: HarnessNativeCapabilities | None = None,
     trusted_butler_gateway: bool = False,
+    core_planned: bool = False,
 ) -> dict[str, Any]:
     """Convert the gateway config to the app-server per-thread config shape."""
 
@@ -4897,7 +4922,7 @@ def _codex_thread_config(
     capabilities = native_capabilities or HarnessNativeCapabilities()
     result: dict[str, Any] = {
         "mcp_servers": servers,
-        "features": _codex_feature_policy(capabilities),
+        "features": _codex_feature_policy(capabilities, core_planned=core_planned),
         "web_search": "live" if capabilities.web_search else "disabled",
         "shell_environment_policy": _codex_shell_environment(capabilities),
     }
@@ -11958,6 +11983,26 @@ class HarnessRuntimeService:
         chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
         chat = self.store.get(ChatSession, turn.chat_session_id)
         if not chat_turn.tools_enabled or not self.plans.required(chat_turn, chat):
+            current_session = self.store.get(HarnessSession, session.id)
+            if current_session.metadata.get("planning_enforced") is True:
+                self.store.update(
+                    HarnessSession,
+                    current_session.id,
+                    {
+                        "metadata": {
+                            **current_session.metadata,
+                            "planning_enforced": False,
+                        }
+                    },
+                    expected_revision=current_session.revision,
+                )
+                existing_connection = self._connections.get(session.id)
+                if existing_connection is not None:
+                    await self._discard_connection(
+                        session.id,
+                        existing_connection,
+                        reason="planning_requirement_changed",
+                    )
             return turn
         plan = self.plans.ensure(chat_turn, chat)
         if plan is None:
@@ -11967,15 +12012,20 @@ class HarnessRuntimeService:
         if plan.phase != "execution":
             profile = self.store.get(HarnessProfile, session.harness_profile_id)
             if (
-                profile.kind != HarnessKind.CLAUDE_AGENT_SDK
+                profile.kind
+                not in {HarnessKind.CLAUDE_AGENT_SDK, HarnessKind.CODEX_APP_SERVER}
                 or profile.permission_mode != "managed"
                 or session.metadata.get("harness_permission_mode") == "unrestricted"
+                or (
+                    profile.kind == HarnessKind.CODEX_APP_SERVER
+                    and not profile.capabilities.mcp
+                )
             ):
                 reason = (
                     "This harness configuration cannot enforce restricted discovery "
                     "and native pre-use checks. Choose a managed Claude Agent SDK "
-                    "profile and retry this task as a linked turn, or disable "
-                    "Plan before acting for a later task."
+                    "or MCP-capable Codex App Server profile and retry this task "
+                    "as a linked turn."
                 )
                 self.plans.block(chat_turn.id, reason)
                 raise PlanningBlocked(reason)
@@ -11992,7 +12042,11 @@ class HarnessRuntimeService:
             native = HarnessNativeCapabilities.model_validate(
                 chat_turn.request_snapshot.get("native_capabilities") or {}
             )
-            native_names = _native_capability_names(native)
+            native_names = (
+                []
+                if profile.kind == HarnessKind.CODEX_APP_SERVER
+                else _native_capability_names(native)
+            )
             prompt = (
                 "Plan this exact task before execution. You are in a restricted "
                 "session with only Core workspace.find, workspace.search, "
@@ -16831,12 +16885,13 @@ class HarnessRuntimeService:
                     )
                 }
             )
+        core_planned_codex = _codex_core_planned_session(session, profile.kind)
         self._ensure_oci_components(session)
 
         async def permission_handler(
             request: HarnessPermissionRequest,
         ) -> PermissionTicket:
-            if analysis_only:
+            if analysis_only or core_planned_codex:
                 future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
                 )
@@ -16846,15 +16901,16 @@ class HarnessRuntimeService:
                 future.set_result(
                     HarnessPermissionDecision(
                         allowed=(
-                            not planner
-                            or (
-                                request.category == "mcp"
-                                and request.server_name == "nebula"
-                            )
+                            request.category == "mcp"
+                            and request.server_name == "nebula"
+                            if planner or core_planned_codex
+                            else True
                         ),
                         reason=(
                             "Core's restricted planner allows only its discovery gateway"
                             if planner
+                            else "Core-planned Codex turns use only the guarded Nebula gateway"
+                            if core_planned_codex
                             else "Approved within the isolated post-tool analysis session; no execution capabilities are attached"
                         ),
                     )
@@ -16916,7 +16972,7 @@ class HarnessRuntimeService:
         execution_mode = _session_execution_mode(session)
         isolated_workspace = (
             self.workspace_resolver(session.engagement_id)
-            if execution_mode == "host" and not analysis_only
+            if execution_mode == "host" and not analysis_only and not core_planned_codex
             else gateway.root / "vendor-workspace"
         )
         if portable_names and not analysis_only:

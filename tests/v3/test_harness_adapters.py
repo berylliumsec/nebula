@@ -1997,6 +1997,93 @@ def test_codex_process_enables_goals_for_the_goal_command():
     assert "features.goals=false" not in overrides
 
 
+@pytest.mark.parametrize("resumed", [False, True])
+def test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox(
+    tmp_path, resumed
+):
+    async def scenario() -> None:
+        rpc = FixtureCodexRpc()
+        profile = HarnessProfile(
+            name="Managed Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            permission_mode="managed",
+        )
+        session = HarnessSession(
+            engagement_id="synthetic-project",
+            harness_profile_id=profile.id,
+            model="gpt-test",
+            external_session_id="thread-fixture" if resumed else None,
+            metadata={
+                "planning_enforced": True,
+                "execution_mode": "host",
+                "native_capabilities": HarnessNativeCapabilities(
+                    workspace_access=HarnessWorkspaceAccess.WRITE,
+                    shell=True,
+                    web_search=True,
+                    browser=True,
+                    computer_use=True,
+                    image_generation=True,
+                    subagents=True,
+                ).model_dump(mode="json"),
+            },
+        )
+
+        async def no_permission(_request):
+            raise AssertionError("No tool call is made during the handshake")
+
+        connection = await FixtureCodexAdapter(rpc).open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session,
+                workspace=tmp_path,
+                mcp_profiles=(),
+                credential_store=CredentialStore(),
+                permission_handler=no_permission,
+                gateway_config={
+                    "nebula": {
+                        "url": "http://127.0.0.1/fixture",
+                        "transport": "streamable_http",
+                        "required": True,
+                        "startup_timeout_seconds": 10.0,
+                        "tool_timeout_seconds": 900.0,
+                    }
+                },
+            )
+        )
+        params = next(
+            payload
+            for method, payload in rpc.calls
+            if method == ("thread/resume" if resumed else "thread/start")
+        )
+        _validate(
+            "v2/ThreadResumeParams.json" if resumed else "v2/ThreadStartParams.json",
+            params,
+        )
+        assert params["sandbox"] == "read-only"
+        assert params["approvalPolicy"] == "untrusted"
+        assert set(params["config"]["mcp_servers"]) == {"nebula"}
+        assert params["config"]["features"]["code_mode_host"] is True
+        assert all(
+            not enabled
+            for name, enabled in params["config"]["features"].items()
+            if name != "code_mode_host"
+        )
+        assert params["config"]["web_search"] == "disabled"
+        assert params["config"]["shell_environment_policy"] == {
+            "inherit": "none",
+            "set": {"PATH": "/nonexistent"},
+        }
+        await connection.close()
+
+    asyncio.run(scenario())
+
+    process = _codex_process_overrides(HarnessNativeCapabilities(), core_planned=True)
+    assert "features.goals=false" in process
+    assert "features.shell_tool=false" in process
+    assert "features.unified_exec=false" in process
+
+
 def _goal_turn(method: str, turn_id: str, status: str, thread: str = "thread-goal"):
     return {
         "method": method,

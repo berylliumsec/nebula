@@ -335,10 +335,12 @@ def test_main_agent_plan_is_handed_to_child_without_child_planning_gate(
                     }
                 ],
                 tool_names=["start_subagent", "finish_response"],
+                native_categories=["isolated_workspace_read"],
                 no_file_work=True,
+                unresolved_dependencies=["Confirm the route owner"],
             ),
             available_tools={"start_subagent", "finish_response"},
-            native_categories=set(),
+            native_categories={"isolated_workspace_read"},
             workspace=tmp_path,
         )
         await _drain(chat, chat.start_provider_turn(prepared))
@@ -347,10 +349,13 @@ def test_main_agent_plan_is_handed_to_child_without_child_planning_gate(
         child_session = store.get(ChatSession, record.child_session_id)
         assert record.parent_request["planning_enabled"] is False
         assert child_session.metadata["planning_enabled"] is False
-        assert (
-            "Inspect auth routes (expected: List reachable auth paths)"
-            in provider.child_requests[0].messages[-1].content
-        )
+        child_prompt = provider.child_requests[0].messages[-1].content
+        assert "Main agent's Core-validated task plan:" in child_prompt
+        assert '"action": "Inspect auth routes"' in child_prompt
+        assert '"expected_outcome": "List reachable auth paths"' in child_prompt
+        assert '"tool_names": ["start_subagent", "finish_response"]' in child_prompt
+        assert '"native_categories": ["isolated_workspace_read"]' in child_prompt
+        assert '"unresolved_dependencies": ["Confirm the route owner"]' in child_prompt
         child_turn = store.get(ChatTurn, record.child_turn_id)
         assert child_turn.request_snapshot["planning_enabled"] is False
         assert chat.plans.required(child_turn, child_session) is False
