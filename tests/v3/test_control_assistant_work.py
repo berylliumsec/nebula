@@ -1348,6 +1348,104 @@ def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_que
     assert [item["id"] for item in work.queue.get(session.id).items] == ["old"]
 
 
+def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    old_profile = store.create(
+        HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="old-model",
+            capabilities=HarnessCapabilities(models=["old-model"], mcp=True),
+        )
+    )
+    grok = store.create(
+        HarnessProfile(
+            name="Grok",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+            default_model="grok-model",
+            capabilities=HarnessCapabilities(models=["grok-model"], mcp=True),
+        )
+    )
+    child = store.create(
+        ProviderProfile(
+            name="DeepSeek",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["child-model"],
+        )
+    )
+    old_session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=old_profile.id,
+            model="old-model",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=old_profile.id,
+            harness_session_id=old_session.id,
+            model="old-model",
+        )
+    )
+    work = app.state.control_assistant_work
+    mcp = app.state.agent_security_tools.register_profile()
+    before = work.chat_settings(project.id, chat.id)
+    saved = work.set_chat_settings(
+        project.id,
+        {
+            "session_id": chat.id,
+            "expected_revision": before["revision"],
+            "settings": {
+                "backend": "harness",
+                "profile_id": grok.id,
+                "model": "grok-model",
+                "planning_enabled": True,
+                "mcp_server_ids": [mcp.id],
+                "allow_subagents": True,
+                "subagent_provider_id": child.id,
+                "subagent_model": "child-model",
+            },
+        },
+    )
+    assert saved["settings"]["profile_id"] == grok.id
+    prepared = []
+
+    def prepare_chat(**kwargs):
+        prepared.append(kwargs)
+        return None, SimpleNamespace(id="chat-turn"), SimpleNamespace(id="harness-turn")
+
+    monkeypatch.setattr(work.harness, "prepare_chat", prepare_chat)
+    monkeypatch.setattr(work.harness, "start_chat_turn", lambda _: None)
+    result = asyncio.run(
+        work.message_chat(
+            project.id,
+            {
+                "session_id": chat.id,
+                "text": "Reload AGENTS.md before resuming",
+                "delivery": "immediate",
+            },
+        )
+    )
+    assert result["delivery"] == "started"
+    assert len(prepared) == 1
+    assert prepared[0]["profile_id"] == grok.id
+    assert prepared[0]["planning_enabled"] is True
+    assert prepared[0]["mcp_server_ids"] == [mcp.id]
+    assert prepared[0]["provider_subagent"] == {
+        "provider_profile_id": child.id,
+        "model": "child-model",
+    }
+
+
 def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
     tmp_path, monkeypatch
 ):
