@@ -9,9 +9,21 @@ from types import SimpleNamespace
 from claude_agent_sdk.types import RateLimitEvent, RateLimitInfo, ResultMessage
 
 from nebula.v3.domain import HarnessKind, HarnessProfile
-from nebula.v3.harness_quota import claude_quota_snapshot, codex_quota_snapshots
-from nebula.v3.harnesses import ClaudeAgentSdkConnection, CodexAppServerAdapter
-from nebula.v3.runtime_usage import RuntimeUsageService, parse_codex_usage
+from nebula.v3.harness_quota import (
+    claude_quota_snapshot,
+    codex_quota_snapshots,
+    grok_quota_snapshots,
+)
+from nebula.v3.harnesses import (
+    ClaudeAgentSdkConnection,
+    CodexAppServerAdapter,
+    GrokAcpAdapter,
+)
+from nebula.v3.runtime_usage import (
+    RuntimeUsageService,
+    parse_codex_usage,
+    parse_grok_usage,
+)
 from nebula.v3.storage import NebulaStore
 
 
@@ -84,7 +96,37 @@ def test_claude_rejected_status_without_numeric_utilization_is_not_zero_percent(
     assert claude_quota_snapshot({"overage_status": "rejected"}) is None
 
 
-def test_profile_read_returns_numeric_codex_and_explicit_unknown_grok(
+def test_grok_billing_percentage_and_period_are_vendor_scoped():
+    payload = {
+        "config": {
+            "creditUsagePercent": 1.25,
+            "isUnifiedBillingUser": True,
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                "end": "2026-10-26T12:00:00Z",
+            },
+            "used": {"val": 999999},
+        }
+    }
+    snapshots = grok_quota_snapshots(payload, observed_at=OBSERVED)
+    assert len(snapshots) == 1
+    assert snapshots[0].remaining_percent == 98.75
+    assert snapshots[0].window_id == "included_credits:weekly"
+    assert snapshots[0].source == "grok._x.ai/billing"
+    assert snapshots[0].resets_at == datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
+    assert "Shared" in snapshots[0].window_label
+    assert parse_grok_usage(payload).quota_snapshots[0].remaining_percent == 98.75
+    for invalid in (None, True, -1, 101, float("nan"), "1.25"):
+        assert (
+            grok_quota_snapshots(
+                {"config": {**payload["config"], "creditUsagePercent": invalid}}
+            )
+            == []
+        )
+    assert grok_quota_snapshots({"usage": {"inputTokens": 1000}}) == []
+
+
+def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "quota.db")
@@ -106,30 +148,45 @@ def test_profile_read_returns_numeric_codex_and_explicit_unknown_grok(
     )
     calls = []
     response = {"rateLimits": {"primary": {"usedPercent": 80}}}
+    grok_response = {
+        "config": {
+            "creditUsagePercent": 45,
+            "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"},
+        }
+    }
 
     async def account_read(self, profile, credentials):
         calls.append(profile.id)
         return response
 
     monkeypatch.setattr(CodexAppServerAdapter, "read_account_usage", account_read)
+
+    async def grok_read(self, profile, credentials):
+        calls.append(profile.id)
+        return grok_response
+
+    monkeypatch.setattr(GrokAcpAdapter, "read_account_usage", grok_read)
     service = RuntimeUsageService(store, object())
 
     async def scenario():
         codex = await service.read_harness_quota("codex", refresh=True)
-        unknown = await service.read_harness_quota("grok", refresh=True)
-        return codex, unknown
+        grok = await service.read_harness_quota("grok", refresh=True)
+        return codex, grok
 
-    codex, unknown = asyncio.run(scenario())
-    assert calls == ["codex"]
+    codex, grok = asyncio.run(scenario())
+    assert calls == ["codex", "grok"]
     assert codex.state == "available"
     assert codex.snapshots[0].remaining_percent == 20
-    assert unknown.state == "unavailable"
-    assert unknown.snapshots == []
+    assert grok.state == "available"
+    assert grok.snapshots[0].remaining_percent == 55
+    grok_response["config"].pop("creditUsagePercent")
+    unknown = asyncio.run(service.read_harness_quota("grok", refresh=True))
+    assert unknown.state == "unavailable" and unknown.snapshots == []
     response["rateLimits"]["primary"].pop("usedPercent")
     without_numeric = asyncio.run(service.read_harness_quota("codex", refresh=True))
     assert without_numeric.state == "unavailable"
     assert without_numeric.snapshots == []
-    assert calls == ["codex", "codex"]
+    assert calls == ["codex", "grok", "grok", "codex"]
 
 
 def test_claude_adapter_attaches_only_numeric_quota_to_rate_limit_notice(tmp_path):

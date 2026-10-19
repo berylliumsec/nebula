@@ -259,7 +259,7 @@ def test_parallel_batch_is_fully_checked_before_any_tool_runs(tmp_path):
     assert ChatPlanService(store).for_turn("turn").plan_version == 2
 
 
-def test_restart_reloads_gate_and_parent_child_plans_are_distinct(tmp_path):
+def test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot(tmp_path):
     database = tmp_path / "plans.db"
     store = NebulaStore(database)
     project = store.create(Engagement(name="Planning"))
@@ -308,8 +308,10 @@ def test_restart_reloads_gate_and_parent_child_plans_are_distinct(tmp_path):
     )
     plans = ChatPlanService(store)
     first = plans.ensure(parent_turn, parent)
+    assert first is not None
     second = plans.ensure(child_turn, child)
-    assert first.id != second.id and second.subagent_id == "child-1"
+    assert second is None
+    assert plans.required(child_turn, child) is False
 
     reopened = ChatPlanService(NebulaStore(database))
     with pytest.raises(PlanningBlocked, match="pending a validated plan"):
@@ -322,8 +324,7 @@ def test_restart_reloads_gate_and_parent_child_plans_are_distinct(tmp_path):
         workspace=tmp_path,
     )
     reopened.guard(parent_turn.id, "workspace.read")
-    with pytest.raises(PlanningBlocked, match="pending a validated plan"):
-        reopened.guard(child_turn.id, "workspace.read")
+    assert reopened.required(child_turn, child) is False
 
 
 def test_filename_discovery_is_bounded_and_paths_are_verified(tmp_path):
@@ -607,6 +608,49 @@ def test_unenforceable_harness_adapters_block_before_connection(tmp_path, kind):
         asyncio.run(harness._ensure_harness_plan(harness_turn, session))
     assert ChatPlanService(store).for_turn(harness_turn.chat_turn_id).phase == "blocked"
     assert session.id not in harness._connections
+
+
+def test_legacy_harness_subagent_cannot_start_a_second_planning_gate(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Harness",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+            default_model="m",
+            capabilities=HarnessCapabilities(models=["m"], mcp=True),
+            privacy={"local_only": True, "permits_sensitive_data": True},
+        )
+    )
+    harness = app.state.harness_runtime_service
+    vendor_session = harness.create_session(
+        engagement_id=project.id, profile_id=profile.id, model="m", mcp_server_ids=[]
+    )
+    child = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Delegated child",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=vendor_session.id,
+            model="m",
+            metadata={"subagent_id": "child-1", "planning_enabled": True},
+        )
+    )
+    _, chat_turn, _ = harness.prepare_chat(
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model="m",
+        prompt="Continue the delegated plan",
+        chat_session_id=child.id,
+        harness_session_id=vendor_session.id,
+        mcp_server_ids=None,
+        planning_enabled=True,
+    )
+    saved_child = store.get(ChatSession, child.id)
+    assert saved_child.metadata["planning_enabled"] is False
+    assert ChatPlanService(store).required(chat_turn, saved_child) is False
 
 
 def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(tmp_path, monkeypatch):

@@ -1,5 +1,6 @@
 """Authoritative harness windows produce bounded project quota incidents."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from nebula.v3.butler_harness_resources import (
 )
 from nebula.v3.butler_oversight import acknowledge_incident, project_stream_id
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+from nebula.v3.control_assistant_work import dispatch_work_tool
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     ButlerHarnessQuota,
@@ -28,6 +30,7 @@ from nebula.v3.domain import (
 from nebula.v3.harness_quota import HarnessQuotaSnapshot
 from nebula.v3.harnesses import (
     CodexAppServerAdapter,
+    GrokAcpAdapter,
     HarnessEvent,
     HarnessRuntimeService,
 )
@@ -395,3 +398,41 @@ def test_manual_codex_quota_refresh_persists_project_resource(tmp_path, monkeypa
         assert body["summary"]["open_incidents"] == 1
         assert body["resources"][0]["kind"] == "harness_quota"
         assert body["resources"][0]["remaining_percent"] == 20
+
+
+def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "quota.db")
+    _profile(store, "grok", HarnessKind.GROK_ACP)
+    _watched_project(store, "project", "grok")
+
+    async def account_read(self, profile, credentials):
+        return {"config": {
+            "creditUsagePercent": 81,
+            "isUnifiedBillingUser": True,
+            "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "end": "2026-10-26T12:00:00Z"},
+        }}
+
+    monkeypatch.setattr(GrokAcpAdapter, "read_account_usage", account_read)
+    app = create_app(store=store, auth_token="test-token")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/harnesses/grok/quota/refresh",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["snapshots"][0]["remaining_percent"] == 19
+        overview = client.get(
+            "/api/v1/engagements/project/butler/overview",
+            headers={"Authorization": "Bearer test-token"},
+        ).json()
+        assert overview["resources"][0]["source"] == "grok._x.ai/billing"
+        assert overview["resources"][0]["remaining_percent"] == 19
+        assert overview["summary"]["open_incidents"] == 1
+        queried = asyncio.run(dispatch_work_tool(
+            app.state.control_assistant_work,
+            "project",
+            "nebula.work.harness_quota",
+            {"profile_id": "grok", "refresh": True},
+        ))
+        assert queried["snapshots"][0]["remaining_percent"] == 19
+        assert queried["snapshots"][0]["source"] == "grok._x.ai/billing"
