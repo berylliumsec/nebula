@@ -11463,9 +11463,11 @@ test("provider and harness usage separates vendor balances from recorded turns",
         { kind: "harness", profile_id: "codex", name: "Codex Studio", provider_type: "codex_app_server", enabled: true,
           recorded: recorded(385000, 21100, 69), vendor: vendor("Codex account", "Account rate-limit windows and credits reported by Codex. Resets do not guarantee access.", [
             { label: "Codex credits", remaining: 7.25, note: "Vendor credit units" },
-          ], [{ label: "Included usage · Short window", used_percent: 62, duration_minutes: 300, resets_at: "2026-10-12T17:00:00Z" }]) },
+          ], [{ label: "Included usage · Short window", used_percent: 100, duration_minutes: 300, resets_at: "2026-10-12T17:00:00Z" }]) },
         { kind: "harness", profile_id: "grok", name: "Grok Build", provider_type: "grok_acp", enabled: true,
-          recorded: recorded(14800, 2300, 8), vendor: { state: "unavailable", source: "Vendor account", detail: "This harness does not expose an account balance to Nebula.", checked_at: null, balances: [], windows: [], ordinary_usage_allowed: null } },
+          recorded: recorded(14800, 2300, 8), vendor: vendor("Grok account", "Prepaid credits are separate from included usage.", [
+            { label: "Grok prepaid credits", remaining: 3.75, note: "Vendor credit units" },
+          ], [{ label: "Shared Grok credits · Weekly", used_percent: 100 }]) },
       ],
     } });
   });
@@ -11475,8 +11477,10 @@ test("provider and harness usage separates vendor balances from recorded turns",
   const router = usage.getByRole("article", { name: "OpenRouter Research usage" });
   await expect(router).toContainText("$74.50");
   await expect(router).toContainText("not the account's total credits");
-  await expect(usage.getByRole("article", { name: "Grok Build usage" })).toContainText("Unavailable");
-  await expect(usage.getByRole("article", { name: "Codex Studio usage" })).toContainText("38% left");
+  await expect(usage.getByRole("article", { name: "Grok Build usage" })).toContainText("3.75");
+  await expect(usage.getByRole("article", { name: "Grok Build usage" })).toContainText("0% left");
+  await expect(usage.getByRole("article", { name: "Codex Studio usage" })).toContainText("7.25");
+  await expect(usage.getByRole("article", { name: "Codex Studio usage" })).toContainText("0% left");
   const refresh = usage.getByRole("button", { name: "Refresh provider and harness usage" });
   const box = await refresh.boundingBox();
   expectTouchTarget(box?.width, "Usage refresh width");
