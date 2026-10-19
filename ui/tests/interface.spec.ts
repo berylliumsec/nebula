@@ -181,6 +181,8 @@ async function installTruthfulCore(page: Page) {
     let responseStatus = 200;
     if (path.includes("/chat/sessions/") && path.endsWith("/queue")) {
       body = {revision: 0, paused: false, items: []};
+    } else if (path.includes("/chat/sessions/") && path.endsWith("/task-plans")) {
+      body = {plans: [], directives: []};
     } else if (path.includes("/chat/sessions/") && path.endsWith("/goal")) {
       responseStatus = 404;
       body = { detail: "Goal not found" };
@@ -4042,6 +4044,77 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   await expect(sidebar.locator('[data-session-id="sidebar-child-a"]')).toBeVisible();
   await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "Collapse 2 subagents for Main investigation" })).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include(".session-list").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane", async ({ page }) => {
+  const butler = { ...entity, id: "group-butler", engagement_id: "scratch-project", title: "Butler", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { control_assistant: true } };
+  const recovery = { ...entity, id: "group-recovery", engagement_id: "scratch-project", title: "Recover paused Apple Music goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
+  const other = { ...entity, id: "group-other", engagement_id: "scratch-project", title: "Recover blocked Siri AI goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
+  const subagent = { ...entity, id: "group-subagent", engagement_id: "scratch-project", title: "Subagent · Inspect stream path", backend: "provider", provider_profile_id: "provider-a", parent_session_id: recovery.id, model: "model-a", metadata: { subagent_id: "group-sub" } };
+  const ordinary = { ...entity, id: "group-ordinary", engagement_id: "scratch-project", title: "Operator research", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  // Butler falls beyond the bounded first page. Its dedicated GET supplies
+  // the parent without changing the list's pagination offset.
+  const filler = Array.from({ length: 96 }, (_, index) => ({ ...ordinary, id: `group-filler-${index}`, title: `Saved ${index}` }));
+  const firstPage = [recovery, other, subagent, ordinary, ...filler];
+  const items = [butler, ...firstPage];
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") {
+      const params = new URL(route.request().url()).searchParams;
+      const offset = Number(params.get("offset") ?? 0);
+      const limit = Number(params.get("limit") ?? 100);
+      return route.fulfill({ json: limit >= 1000 ? items : offset >= 100 ? [butler] : firstPage });
+    }
+    if (path.endsWith("/chat/control-assistant/session") && route.request().method() === "GET") return route.fulfill({ json: butler });
+    const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
+    if (/\/chat\/sessions\/group-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/chat\/sessions\/group-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=group-ordinary", "Workbench");
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+  if (await show.isVisible()) await show.click();
+  await expect(sidebar.locator('[data-session-id="group-butler"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toHaveCount(0);
+  await expect(sidebar.locator('[data-session-id="group-ordinary"]')).toBeVisible();
+  const butlerToggle = sidebar.getByRole("button", { name: "Expand 2 chats for Butler" });
+  if (mobile) {
+    const bounds = await butlerToggle.boundingBox();
+    expectTouchTarget(bounds?.width, "Butler disclosure width");
+    expectTouchTarget(bounds?.height, "Butler disclosure height");
+  }
+  await butlerToggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="group-other"]')).toBeVisible();
+  await sidebar.getByRole("button", { name: "Expand 1 subagent for Recover paused Apple Music goal" }).click();
+  await expect(sidebar.locator('[data-session-id="group-subagent"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="group-subagent"]').locator("..")).toHaveClass(/nested-subagent-deep/);
+  await sidebar.getByRole("button", { name: "More actions for Recover paused Apple Music goal" }).click();
+  await expect(page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Copy link" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await sidebar.locator('[data-session-id="group-recovery"]').click();
+  await expect(page).toHaveURL(/session=group-recovery/);
+  await page.reload();
+  const reopened = page.getByRole("complementary", { name: "Conversations" });
+  const reopen = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+  if (mobile) {
+    await expect(reopen).toBeVisible();
+    await reopen.click();
+  } else if (await reopen.isVisible()) await reopen.click();
+  await expect(reopened).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await reopened.getByRole("searchbox", { name: "Search conversations" }).fill("Inspect stream path");
+  await expect(reopened.locator('[data-session-id="group-butler"]')).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-subagent"]')).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-other"]')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const accessibility = await new AxeBuilder({ page }).include(".session-list").analyze();
   expect(accessibility.violations).toEqual([]);
