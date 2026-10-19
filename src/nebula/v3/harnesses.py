@@ -11767,6 +11767,7 @@ class HarnessRuntimeService:
         self, session_id: str, instruction: str
     ) -> str | None:
         """Start one harness turn for an idle Core-owned goal."""
+        from .chat_assistant_config import chat_assistant_config
         from .chat_goals import ChatGoalService
 
         goals = ChatGoalService(self.store)
@@ -11820,6 +11821,14 @@ class HarnessRuntimeService:
                     "Review their saved replies, then resume when concrete work can continue.",
                 )
                 return None
+            next_settings = chat_assistant_config(self.store, chat)
+            saved_effort = (
+                next_settings["harness_reasoning_effort"]
+                if next_settings["backend"] == ChatBackend.HARNESS.value
+                and next_settings["profile_id"] == chat.harness_profile_id
+                and next_settings["model"] == chat.model
+                else None
+            )
             _, turn, harness_turn = self.prepare_chat(
                 engagement_id=chat.engagement_id,
                 profile_id=chat.harness_profile_id or "",
@@ -11830,6 +11839,7 @@ class HarnessRuntimeService:
                 harness_session_id=None,
                 mcp_server_ids=None,
                 include_knowledge=False,
+                harness_reasoning_effort=saved_effort,
             )
             try:
                 self.start_chat_turn(harness_turn.id)

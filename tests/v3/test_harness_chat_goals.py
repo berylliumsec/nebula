@@ -8,6 +8,10 @@ from datetime import timedelta
 
 import pytest
 
+from nebula.v3.chat_assistant_config import (
+    ChatAssistantConfigPatch,
+    update_chat_assistant_config,
+)
 from nebula.v3.chat_goals import (
     ChatGoalService,
     GoalConversationCreate,
@@ -29,7 +33,9 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     HarnessKind,
+    HarnessModelOptions,
     HarnessProfile,
+    HarnessRuntimeOption,
     HarnessSession,
     HarnessTurn,
     HarnessTurnStatus,
@@ -338,6 +344,100 @@ def test_native_tool_activity_resets_harness_goal_continuation_guard(tmp_path):
         await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
         assert goals.get(created.session.id).current_step == 6
         assert len(adapter.connections[0].prompts) == 6
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_saved_harness_effort_applies_to_goal_resume_and_continuation(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+        store.update(
+            HarnessProfile,
+            profile.id,
+            {
+                "capabilities": profile.capabilities.model_copy(
+                    update={
+                        "models": ["test-model"],
+                        "model_options": [
+                            HarnessModelOptions(
+                                model="test-model",
+                                reasoning_efforts=[
+                                    HarnessRuntimeOption(id="medium", label="Medium"),
+                                    HarnessRuntimeOption(id="max", label="Max"),
+                                ],
+                                default_reasoning_effort="medium",
+                            )
+                        ],
+                    }
+                )
+            },
+            expected_revision=profile.revision,
+        )
+        goals = ChatGoalService(store, runtime)
+        created = goals.create_conversation(
+            GoalConversationCreate(
+                engagement_id=engagement.id,
+                backend=ChatBackend.HARNESS,
+                harness_profile_id=profile.id,
+                model="test-model",
+                harness_reasoning_effort="medium",
+                objective="Review the bounded research result",
+                completion_criteria=["The result has evidence"],
+                step_budget=2,
+            )
+        )
+        session_id = created.session.id
+        old_harness_id = created.session.harness_session_id
+        started = goals.write(
+            session_id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        blocked = goals.write(
+            session_id,
+            GoalWrite(
+                expected_revision=started.revision,
+                action="block",
+                reason="Waiting for a settings change",
+            ),
+        )
+        chat = store.get(ChatSession, session_id)
+        update_chat_assistant_config(
+            store,
+            chat,
+            ChatAssistantConfigPatch(harness_reasoning_effort="max"),
+            expected_revision=chat.revision,
+        )
+        assert goals.get(session_id).status == ChatGoalStatus.BLOCKED
+        assert store.get(ChatSession, session_id).harness_session_id == old_harness_id
+        assert (
+            store.get(HarnessSession, old_harness_id).metadata["runtime_options"][
+                "reasoning_effort"
+            ]
+            == "medium"
+        )
+
+        goals.write(
+            session_id,
+            GoalWrite(expected_revision=blocked.revision, action="resume"),
+        )
+        assert await runtime.dispatch_running_goal(session_id, "Resume this goal")
+        await _wait_for_goal(goals, session_id, ChatGoalStatus.PAUSED)
+        chat = store.get(ChatSession, session_id)
+        assert chat.harness_session_id != old_harness_id
+        assert (
+            store.get(HarnessSession, chat.harness_session_id).metadata[
+                "runtime_options"
+            ]["reasoning_effort"]
+            == "max"
+        )
+        turns = store.list_session_entities(ChatTurn, session_id)
+        assert len(turns) == 2
+        assert all(turn.goal_id == created.goal.id for turn in turns)
+        assert [
+            turn.request_snapshot["harness_runtime_options"]["reasoning_effort"]
+            for turn in turns
+        ] == ["max", "max"]
         await runtime.shutdown()
 
     asyncio.run(scenario())
