@@ -32,6 +32,7 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessSession,
     HarnessTurn,
+    HarnessTurnOrigin,
     HarnessTurnStatus,
     ProviderProfile,
     RiskClass,
@@ -41,6 +42,7 @@ from nebula.v3.harnesses import (
     ClaudeAgentSdkAdapter,
     HarnessConfigurationError,
     HarnessPermissionRequest,
+    _session_native_capabilities,
 )
 from nebula.v3.providers import ToolCall
 from nebula.v3.storage import NebulaStore
@@ -577,14 +579,13 @@ def test_queued_harness_force_applies_before_that_turn_starts(tmp_path):
     assert ChatPlanService(store).ensure(queued, session).directive_id == directive.id
 
 
-@pytest.mark.parametrize("kind", [HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP])
-def test_unenforceable_harness_adapters_block_before_connection(tmp_path, kind):
+def test_unenforceable_harness_adapter_blocks_before_connection(tmp_path):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
     profile = store.create(
         HarnessProfile(
             name="Harness",
-            kind=kind,
+            kind=HarnessKind.GROK_ACP,
             executable="/bin/true",
             default_model="m",
             capabilities=HarnessCapabilities(models=["m"], mcp=True),
@@ -608,6 +609,100 @@ def test_unenforceable_harness_adapters_block_before_connection(tmp_path, kind):
         asyncio.run(harness._ensure_harness_plan(harness_turn, session))
     assert ChatPlanService(store).for_turn(harness_turn.chat_turn_id).phase == "blocked"
     assert session.id not in harness._connections
+
+
+def test_managed_codex_submits_formal_plan_through_restricted_core_gateway(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Managed Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="codex-test",
+            capabilities=HarnessCapabilities(models=["codex-test"], mcp=True),
+            native_capabilities=HarnessNativeCapabilities(shell=True, web_search=True),
+            privacy={"local_only": True, "permits_sensitive_data": True},
+        )
+    )
+    harness = app.state.harness_runtime_service
+    _, chat_turn, harness_turn = harness.prepare_chat(
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model="codex-test",
+        prompt="inspect files",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        planning_enabled=True,
+    )
+    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    observed = {}
+
+    async def planner(**kwargs):
+        observed.update(kwargs)
+        planner_session = store.create(
+            HarnessSession(
+                engagement_id=project.id,
+                harness_profile_id=profile.id,
+                model="codex-test",
+                metadata={
+                    "analysis_only": True,
+                    "planning_target_turn_id": chat_turn.id,
+                    "planning_tool_names": kwargs["planning_tool_names"],
+                    "planning_native_categories": kwargs["planning_native_categories"],
+                },
+            )
+        )
+        assert {
+            item["name"] for item in harness._gateway_catalog(planner_session)["tools"]
+        } == {"workspace.find", "workspace.search", "workspace.read", "plan.submit"}
+        monkeypatch.setattr(harness, "_active_gateway_turn", lambda _: harness_turn)
+        await harness._gateway_call_unwrapped(
+            planner_session,
+            "plan.submit",
+            _submission("workspace.read").model_dump(),
+        )
+
+    monkeypatch.setattr(harness, "analyze_structured", planner)
+    planned_turn = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+
+    plan = ChatPlanService(store).for_turn(chat_turn.id)
+    assert plan is not None and plan.phase == "execution"
+    assert plan.tool_names == ["workspace.read"]
+    assert plan.native_categories == []
+    assert observed["planning_native_categories"] == []
+    assert "Core-validated task plan" in planned_turn.prompt
+    session = store.get(HarnessSession, session.id)
+    assert session.metadata["planning_enforced"] is True
+    assert _session_native_capabilities(session, profile) == HarnessNativeCapabilities()
+
+    ordinary_chat_turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat_turn.session_id,
+            backend=ChatBackend.HARNESS,
+            model="codex-test",
+            tools_enabled=True,
+            request_snapshot={"planning_enabled": False},
+        )
+    )
+    ordinary_harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=project.id,
+            harness_session_id=session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=chat_turn.session_id,
+            chat_turn_id=ordinary_chat_turn.id,
+            prompt="ordinary follow-up",
+        )
+    )
+    asyncio.run(harness._ensure_harness_plan(ordinary_harness_turn, session))
+    session = store.get(HarnessSession, session.id)
+    assert session.metadata["planning_enforced"] is False
+    assert _session_native_capabilities(session, profile).web_search is True
 
 
 def test_legacy_harness_subagent_cannot_start_a_second_planning_gate(tmp_path):

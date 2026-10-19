@@ -1,13 +1,13 @@
 {
-  "change_digest": "1429745c0871942e76c0482414752e23d98d9b7c34d9f4aaf5db6a0bd5cf3c47",
-  "reviewed_by": "Codex focused review of saved harness effort on Core-owned goal dispatch",
-  "reason": "The harness goal tests exercise blocked-goal resume, frozen-session rollover, and automatic continuation. The selected production LAN browser journey saves effort through Assistant settings, reloads the blocked goal, resumes it through the visible control, and checks the bound harness session in Core across desktop and mobile profiles.",
-  "exclusions": "No frontend component or Rust behavior changes. The selected browser journey covers the existing interface without running unrelated chat, provider, mission, or release scenarios.",
+  "change_digest": "7d50a5e4b551f4a7404070b81c15050ab83fa12e057fd7daa4a58a2ec589c31e",
+  "reviewed_by": "Codex focused review on 2026-10-19",
+  "reason": "Formal managed Codex plan admission, Core-only planned tool scope, full parent-plan handoff, product guidance, and saved UI journey. Python covers the gateway and vendor config boundaries; browser covers blocked retry and Claude/Codex execution on a disposable LAN Core.",
+  "exclusions": "No Rust or native code changed. Full backend and UI suites, unrelated interface journeys, external provider credentials, and physical-device checks are excluded; the browser cases use an inert harness fixture and cannot prove a real Codex model response.",
   "expected_tests": {
-    "python": 21,
-    "frontend": 0,
+    "python": 10,
+    "frontend": 4,
     "native": 0,
-    "playwright": 8
+    "playwright": 24
   },
   "python_versions": [
     "3.12"
@@ -15,18 +15,29 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_harness_chat_goals.py"
+    "tests/v3/test_chat_planning.py::test_unenforceable_harness_adapter_blocks_before_connection",
+    "tests/v3/test_chat_planning.py::test_managed_codex_submits_formal_plan_through_restricted_core_gateway",
+    "tests/v3/test_chat_planning.py::test_harness_gateway_and_native_permission_replan_before_effect",
+    "tests/v3/test_harness_adapters.py::test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox",
+    "tests/v3/test_harness_adapters.py::test_codex_process_enables_goals_for_the_goal_command",
+    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/chatPlanning.test.ts",
+    "ui/src/assistantDestinations.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "entry:harness-goal/assistant-real-desktop",
-    "entry:harness-goal/assistant-real-compact",
-    "entry:harness-goal/assistant-real-chromium-320",
-    "entry:harness-goal/assistant-real-chromium-390",
-    "entry:harness-goal/assistant-real-chromium-430",
-    "entry:harness-goal/assistant-real-webkit-320",
-    "entry:harness-goal/assistant-real-webkit-390",
-    "entry:harness-goal/assistant-real-webkit-430"
+    "entry:chat-planning/assistant-real-desktop",
+    "entry:chat-planning/assistant-real-compact",
+    "entry:chat-planning/assistant-real-chromium-320",
+    "entry:chat-planning/assistant-real-chromium-390",
+    "entry:chat-planning/assistant-real-chromium-430",
+    "entry:chat-planning/assistant-real-webkit-320",
+    "entry:chat-planning/assistant-real-webkit-390",
+    "entry:chat-planning/assistant-real-webkit-430"
   ]
 }

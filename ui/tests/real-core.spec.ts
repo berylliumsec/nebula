@@ -8277,11 +8277,11 @@ reliabilityTest("assistant planning saved toggle blocks an unenforceable harness
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
-reliabilityTest("assistant planning discovers a file and executes a saved managed harness plan on production LAN Core", async ({page}, testInfo) => {
+for (const plannedHarness of [{name: "Claude", id: "inert-fixture"}, {name: "Codex", id: "inert-codex"}]) reliabilityTest(`assistant planning discovers a file and executes a saved managed ${plannedHarness.name} plan on production LAN Core`, async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "planning_managed");
   await withOwnedCleanup(async () => {
-    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    expect((await core.api.post(`harnesses/${plannedHarness.id}/health`)).ok()).toBe(true);
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -8306,11 +8306,11 @@ reliabilityTest("assistant planning discovers a file and executes a saved manage
     await expect(page.getByRole("alert").filter({hasText: "Plan before acting · blocked"})).toBeVisible({timeout: 20_000});
     expect(await core.receipts()).toEqual([]);
     await clickAssistantSettings(page);
-    await settings.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption("inert-fixture");
+    await settings.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption(plannedHarness.id);
     await expect.poll(async () => {
       const saved = await (await core.api.get(`chat-sessions/${sessionId}/assistant-config`)).json() as {settings: {profile_id: string; planning_enabled: boolean}};
       return [saved.settings.profile_id, saved.settings.planning_enabled];
-    }).toEqual(["inert-fixture", true]);
+    }).toEqual([plannedHarness.id, true]);
     await settings.getByRole("button", {name: "Close assistant settings"}).click();
     await page.getByRole("button", {name: "Retry as linked turn"}).click();
     await page.getByRole("dialog", {name: "Retry harness turn?"}).getByRole("button", {name: "Start retry"}).click();
@@ -8329,7 +8329,7 @@ reliabilityTest("assistant planning discovers a file and executes a saved manage
     await clickAssistantSettings(page);
     await expect(settings.getByRole("checkbox", {name: /Plan before acting/})).toBeChecked();
     expect((await new AxeBuilder({page}).include(".chat-settings-popover").analyze()).violations).toEqual([]);
-    await testInfo.attach("chat-planning-success-lan", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, phase: plans.plans[0].phase}), contentType: "application/json"});
+    await testInfo.attach("chat-planning-success-lan", {body: JSON.stringify({origin: core.origin, build: "production", harness: plannedHarness.name, viewport: page.viewportSize(), sessionId, phase: plans.plans[0].phase}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 

@@ -118,6 +118,14 @@ def test_product_search_finds_chat_planning_guidance(monkeypatch):
         or "Assistant settings" in str(item["text"])
         for item in matches
     )
+    codex_matches = search_product_knowledge(
+        "Can managed Codex submit a formal Core plan and give it to subagents?"
+    )
+    assert any(
+        "Managed Codex App Server" in str(item["text"])
+        or "managed Codex can submit a formal Core plan" in str(item["text"])
+        for item in codex_matches
+    )
 
 
 def test_product_search_finds_butler_goal_handoff(monkeypatch):

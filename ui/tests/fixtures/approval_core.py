@@ -134,6 +134,11 @@ class InertConnection(HarnessConnection):
             yield HarnessEvent(type="completed", message="OK")
             return
         if self.runtime.scenario == "planning_managed":
+            if (
+                self.request.profile.kind == HarnessKind.CODEX_APP_SERVER
+                and self.request.workspace == self.runtime.fixture_root
+            ):
+                raise RuntimeError("Planned Codex was given the linked host workspace")
             if self.request.session.metadata.get("planning_target_turn_id"):
                 found = await self.runtime._gateway_call(
                     self.request.session, "workspace.find", {"query": "plan-target"}
@@ -387,10 +392,11 @@ class InertAdapter(HarnessAdapter):
         return HarnessHealth(
             profile_id=profile.id,
             healthy=True,
-            kind=self.kind,
+            kind=profile.kind,
             authentication_state="verified",
             capabilities=HarnessCapabilities(
                 detailed_usage=self.runtime.scenario == "goal",
+                mcp=profile.kind == HarnessKind.CODEX_APP_SERVER,
                 models=["fixture", "fixture-next"]
                 if self.runtime.scenario in {"settings", "daybreak", "goal"}
                 else ["fixture"],
@@ -668,6 +674,18 @@ if __name__ == "__main__":
                 executable="/bin/true",
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},
+                native_capabilities=HarnessNativeCapabilities(shell=True),
+            )
+        )
+        store.create(
+            HarnessProfile(
+                id="inert-codex",
+                name="Managed Codex planning fixture",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="fixture",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
                 native_capabilities=HarnessNativeCapabilities(shell=True),
             )
         )
