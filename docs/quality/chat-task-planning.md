@@ -43,11 +43,12 @@ vendor sandboxing and native execution features disabled. A later ordinary turn
 restores the session's native feature selection. Delegated children receive the
 main plan's steps, expected outcomes, tools, files, and unresolved dependencies.
 
-- Focused Python selection: 10 cases passed after correcting a synthetic test
+- Focused Python selection: 11 cases passed after correcting a synthetic test
   record; the Codex start and resume requests also validate against the pinned
-  app-server schemas. Ruff check and format, mypy, and bundled product-help
-  digest verification passed. The Chroma source-digest synchronization check
-  passed with the selected Python cases.
+  app-server schemas. The selection includes the saved-effort goal-resume case
+  after main added that behavior. Ruff check and format, mypy, and bundled
+  product-help digest verification passed. The Chroma source-digest
+  synchronization check passed with the selected Python cases.
 - Frontend unit selection: 4 cases passed in two files. The candidate production
   bundle built successfully.
 - Real Core browser selection: 24 cases passed on desktop Chromium at 1440 and

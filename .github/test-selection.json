@@ -1,10 +1,10 @@
 {
-  "change_digest": "7d50a5e4b551f4a7404070b81c15050ab83fa12e057fd7daa4a58a2ec589c31e",
+  "change_digest": "eb482fcfe8e42b2b0ca8913c06824b7b1e2b3fda0462c179cda467df5858721e",
   "reviewed_by": "Codex focused review on 2026-10-19",
-  "reason": "Formal managed Codex plan admission, Core-only planned tool scope, full parent-plan handoff, product guidance, and saved UI journey. Python covers the gateway and vendor config boundaries; browser covers blocked retry and Claude/Codex execution on a disposable LAN Core.",
+  "reason": "Formal managed Codex plan admission, Core-only planned tool scope, full parent-plan handoff, product guidance, and saved UI journey. Python covers the gateway, vendor config, and integration with the newly merged Core-owned goal-resume path; browser covers blocked retry and Claude/Codex execution on a disposable LAN Core.",
   "exclusions": "No Rust or native code changed. Full backend and UI suites, unrelated interface journeys, external provider credentials, and physical-device checks are excluded; the browser cases use an inert harness fixture and cannot prove a real Codex model response.",
   "expected_tests": {
-    "python": 10,
+    "python": 11,
     "frontend": 4,
     "native": 0,
     "playwright": 24
@@ -23,7 +23,8 @@
     "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_harness_chat_goals.py::test_saved_harness_effort_applies_to_goal_resume_and_continuation"
   ],
   "frontend": [
     "ui/src/api/chatPlanning.test.ts",
