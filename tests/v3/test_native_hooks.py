@@ -253,6 +253,43 @@ def test_native_hook_runner_persists_versioned_bounded_outcome(tmp_path):
     assert store.get(type(execution), execution.id) == execution
 
 
+def test_native_hook_uses_user_home_for_url_scoped_git_helper(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        '[credential "https://github.com"]\n'
+        "    helper = /tmp/fixture-git-credential\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("NEBULA_HOOK_SECRET", "must-not-leak")
+    workspace = tmp_path / "workspace"
+    _hook(
+        workspace,
+        script=(
+            "#!/bin/sh\n"
+            'test -z "$NEBULA_HOOK_SECRET" || exit 3\n'
+            "git config --get-urlmatch credential.helper "
+            "https://github.com/example/repository.git\n"
+        ),
+    )
+    snapshot = snapshot_native_hook("audit", discover_native_hooks(workspace))
+
+    execution = asyncio.run(
+        NativeHookRunner(NebulaStore(tmp_path / "git-hook.db")).run(
+            snapshot,
+            engagement_id="eng",
+            chat_session_id="session",
+            chat_turn_id="turn",
+            event_name="chat.turn.started",
+            payload={},
+        )
+    )
+
+    assert execution.status == "complete"
+    assert execution.stdout.strip() == "/tmp/fixture-git-credential"
+
+
 def test_native_hook_envelope_exposes_generic_actor_and_workspace_provenance(tmp_path):
     workspace = tmp_path / "workspace"
     _hook(

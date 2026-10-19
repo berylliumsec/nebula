@@ -373,6 +373,7 @@ class NativeHookRunner:
         ).encode()
         environment = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(Path.home()),
             "LANG": "C.UTF-8",
             "NEBULA_HOOK_EVENT": event_name,
             "NEBULA_HOOK_EVENT_VERSION": "1",
