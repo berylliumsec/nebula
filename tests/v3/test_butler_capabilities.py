@@ -176,6 +176,7 @@ def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path
     assert store.get(ButlerRecoveryCase, case.id).recovery_goal_ids == [goal.id]
     session = store.get(ChatSession, goal.session_id)
     assert session.harness_profile_id == profile.id and session.model == "gpt-6-sol"
+    assert session.metadata["butler_initiated"] is True
     harness_session = store.get(HarnessSession, session.harness_session_id)
     assert harness_session.metadata["runtime_options"]["reasoning_effort"] == "max"
     assert (

@@ -17,6 +17,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     Approval,
+    ChatGoal,
     ChatSession,
     ChatTokenUsage,
     HarnessCapabilities,
@@ -594,6 +595,15 @@ if __name__ == "__main__":
                     {"subagent_id": "fixture-subagent"},
                 ),
                 ("sidebar-branch", "Ordinary branch", "sidebar-parent", {}),
+                ("sidebar-butler", "Butler", None, {"control_assistant": True}),
+                ("sidebar-recovery", "Recover paused goal", None, {}),
+                (
+                    "sidebar-butler-chat",
+                    "Review blocked goal",
+                    None,
+                    {"butler_initiated": True},
+                ),
+                ("sidebar-ordinary-recovery", "Recover ordinary goal", None, {}),
             ):
                 store.create(
                     ChatSession(
@@ -606,6 +616,15 @@ if __name__ == "__main__":
                         metadata=metadata,
                     )
                 )
+            store.create(
+                ChatGoal(
+                    engagement_id=scratch_id,
+                    session_id="sidebar-recovery",
+                    objective="Recover paused goal",
+                    completion_criteria=["Report result"],
+                    metadata={"butler_recovery_case_id": "fixture-case"},
+                )
+            )
     if args.scenario == "navigation" and scratch_id:
         store.create(
             ProviderProfile(

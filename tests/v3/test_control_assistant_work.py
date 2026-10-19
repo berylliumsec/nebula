@@ -320,6 +320,7 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             title="Research",
             provider_profile_id=profile.id,
             model="model-a",
+            metadata={"butler_initiated": True},
         )
     )
     message = store.create(
@@ -379,6 +380,12 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             },
         )
         assert fork["parent_session_id"] == source.id
+        assert (
+            store.get(ChatSession, fork["session_id"]).metadata["butler_initiated"]
+            is True
+        )
+        ordinary_fork = work.chat.fork_session(source.id, through_message_id=message.id)
+        assert ordinary_fork.metadata.get("butler_initiated") is not True
         assert work.chat_detail(selected.id, fork["session_id"])["kind"] == "main"
         assert (
             work.chat_detail(selected.id, source.id)["recent_messages"][0]["id"]
@@ -640,6 +647,10 @@ def test_new_goal_conversation_is_draft_until_explicit_start(tmp_path):
         assert created["goal"]["status"] == "draft"
         assert work.overview(project.id)["chats"][0]["id"] == created["session_id"]
         assert work.goals_overview(project.id)["goals"][0]["status"] == "draft"
+        assert (
+            store.get(ChatSession, created["session_id"]).metadata["butler_initiated"]
+            is True
+        )
 
     asyncio.run(scenario())
 
@@ -1579,6 +1590,7 @@ def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypa
         saved = store.get(ChatSession, result["session_id"])
         assert saved.engagement_id == project.id
         assert saved.metadata.get("control_assistant") is not True
+        assert saved.metadata["butler_initiated"] is True
         assert (
             work.chat_detail(project.id, saved.id)["pending_turn"]["id"]
             == result["turn_id"]
@@ -1620,6 +1632,7 @@ def test_start_remote_harness_chat_keeps_peer_messaging_off(tmp_path, monkeypatc
         session = store.get(ChatSession, result["session_id"])
         assert session.metadata.get("allow_agent_messaging") is False
         assert session.metadata.get("control_assistant") is not True
+        assert session.metadata["butler_initiated"] is True
 
     asyncio.run(scenario())
 

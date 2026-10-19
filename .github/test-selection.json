@@ -1,47 +1,47 @@
 {
-  "change_digest": "aa3655be3ffac3d579077e1f7da69ea52e63401be709429f06c60b1039d509f5",
-  "reviewed_by": "Codex focused review on 2026-10-19",
-  "reason": "Add Core-enforced formal planning for MCP-capable Grok main chats, preserve Codex planning, and carry saved MCP, Plan and provider-subagent choices through Butler immediate guidance. Python covers admission, same-chat rebind, formal plan and gateway guard, Grok process isolation, ordinary host behavior, Butler handoff, subagent context, and product-help sync. Frontend covers planning transport and assistant navigation. Browser covers blocked recovery and planned Claude, Codex and Grok execution with refresh across the permanent desktop and mobile LAN projects.",
-  "exclusions": "No Rust or native code changed. Full suites, unrelated operator journeys, physical-device checks, and live research goals are excluded. Browser cases use a synthetic inert harness on a disposable real Core; local Grok ACP handshake, native-tool denial, and synthetic task validation are separate manual checks. The live Core host has Grok 1.0.62 installed, and its account login was verified with a Core-user prompt; the research holds remain independent blockers.",
+  "change_digest": "5965bdd3d3a320ffa98012f183e1ad38a63ad1e53ae5bb51fbac7f5e959ee618",
+  "reviewed_by": "Codex focused review for Butler conversation grouping",
+  "reason": "Butler-created session provenance, legacy recovery goal read-back, sidebar hierarchy and search, assistant destination discovery, and product guidance are covered at their changed boundaries. Browser selection exercises the visible journey across the required desktop and mobile engines plus synthetic real Core on a LAN origin; existing subagent hierarchy checks protect the shared sidebar behavior.",
+  "exclusions": "No Rust or native code changed. Unrelated provider, mission, storage, and editor journeys are excluded. The real-Core fixture uses inert synthetic sessions and credentials; no operator data or live Core is exercised.",
   "expected_tests": {
-    "python": 22,
-    "frontend": 4,
+    "python": 12,
+    "frontend": 12,
     "native": 0,
-    "playwright": 32
+    "playwright": 12
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_planning.py::test_unenforceable_harness_adapter_blocks_before_connection",
-    "tests/v3/test_chat_planning.py::test_existing_grok_chat_rebinds_to_contained_plan_session",
-    "tests/v3/test_chat_planning.py::test_contained_grok_submits_formal_plan_and_guards_gateway",
-    "tests/v3/test_chat_planning.py::test_managed_codex_submits_formal_plan_through_restricted_core_gateway",
-    "tests/v3/test_chat_planning.py::test_harness_gateway_and_native_permission_replan_before_effect",
-    "tests/v3/test_harness_adapters.py::test_core_planned_grok_uses_private_home_and_no_native_tools",
-    "tests/v3/test_harness_adapters.py::test_core_planned_grok_rejects_ambient_tool_sources",
-    "tests/v3/test_harness_adapters.py::test_grok_host_session_preserves_native_tools_and_user_bus",
-    "tests/v3/test_control_assistant_work.py::test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent",
+    "tests/v3/test_butler_capabilities.py::test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue",
+    "tests/v3/test_chat_session_recent_page.py::test_recent_conversation_page_is_scoped_ordered_and_indexed",
+    "tests/v3/test_chat_session_recent_page.py::test_older_butler_recovery_chat_has_read_only_sidebar_provenance",
+    "tests/v3/test_goal_handoff.py::test_handoff_is_atomic_bounded_idempotent_and_survives_restart",
+    "tests/v3/test_control_assistant_work.py::test_chat_fork_and_delete_are_project_bound_and_revision_guarded",
+    "tests/v3/test_control_assistant_work.py::test_new_goal_conversation_is_draft_until_explicit_start",
+    "tests/v3/test_control_assistant_work.py::test_start_chat_saves_a_separate_turn_for_core_owned_work",
+    "tests/v3/test_control_assistant_work.py::test_start_remote_harness_chat_keeps_peer_messaging_off",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate"
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_butler_conversation_grouping",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [
-    "ui/src/api/chatPlanning.test.ts",
+    "ui/src/pages/conversationSidebar.test.ts",
     "ui/src/assistantDestinations.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:chat-planning/assistant-real-desktop",
-    "entry:chat-planning/assistant-real-compact",
-    "entry:chat-planning/assistant-real-chromium-320",
-    "entry:chat-planning/assistant-real-chromium-390",
-    "entry:chat-planning/assistant-real-chromium-430",
-    "entry:chat-planning/assistant-real-webkit-320",
-    "entry:chat-planning/assistant-real-webkit-390",
-    "entry:chat-planning/assistant-real-webkit-430"
+    "butler-sidebar/desktop",
+    "butler-sidebar/compact",
+    "butler-sidebar/mobile-chromium-small",
+    "butler-sidebar/mobile-chromium-ledger-390",
+    "butler-sidebar/mobile-chromium-wide",
+    "butler-sidebar/mobile-webkit-small",
+    "butler-sidebar/mobile-webkit",
+    "butler-sidebar/mobile-webkit-wide",
+    "butler-sidebar/assistant-real-desktop",
+    "subagent-sidebar/desktop",
+    "subagent-sidebar/assistant-real-desktop"
   ]
 }

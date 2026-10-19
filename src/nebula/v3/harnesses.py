@@ -10777,6 +10777,7 @@ class HarnessRuntimeService:
         pending_provider_subagent: dict[str, Any] | None = None,
         allow_agent_messaging: bool | None = None,
         control_assistant: bool = False,
+        butler_initiated: bool = False,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
@@ -11141,6 +11142,7 @@ class HarnessRuntimeService:
                         if control_assistant
                         else "pending",
                         **({"control_assistant": True} if control_assistant else {}),
+                        **({"butler_initiated": True} if butler_initiated else {}),
                         "allow_agent_messaging": messaging_choice,
                         "planning_enabled": planning_enabled,
                         "harness_runtime_options": session.metadata.get(

@@ -1075,6 +1075,7 @@ class ChatSessionForkRequest(NebulaModel):
     through_latest: bool = False
     title: str | None = Field(default=None, min_length=1, max_length=300)
     side_chat: bool = False
+    butler_initiated: bool = False
 
 
 class ChatSessionRewindRequest(NebulaModel):
@@ -12438,6 +12439,7 @@ def create_app(
                 through_latest=request.through_latest,
                 title=request.title,
                 side_chat=request.side_chat,
+                butler_initiated=request.butler_initiated,
                 harness_session_id=harness_session_id,
             )
         except Exception:  # diagnostic-expected: the failure is re-raised once the vendor branch is discarded
@@ -15266,6 +15268,21 @@ def _register_crud_routes(
                 limit=limit,
                 recent_first=recent_first and model is ChatSession,
             )
+            if model is ChatSession:
+                legacy_ids = store.butler_recovery_session_ids(
+                    item.id
+                    for item in entities
+                    if isinstance(item, ChatSession)
+                    and item.metadata.get("butler_initiated") is not True
+                )
+                entities = [
+                    item.model_copy(
+                        update={"metadata": {**item.metadata, "butler_initiated": True}}
+                    )
+                    if isinstance(item, ChatSession) and item.id in legacy_ids
+                    else item
+                    for item in entities
+                ]
             if model is HarnessSession and entities:
 
                 def all_entities(related_model: type[Entity]) -> list[Entity]:
@@ -15351,6 +15368,14 @@ def _register_crud_routes(
     def make_get() -> Callable[..., Any]:
         async def get_entity(entity_id: str) -> Entity:
             entity = store.get(model, entity_id)
+            if (
+                isinstance(entity, ChatSession)
+                and entity.metadata.get("butler_initiated") is not True
+                and entity.id in store.butler_recovery_session_ids([entity.id])
+            ):
+                entity = entity.model_copy(
+                    update={"metadata": {**entity.metadata, "butler_initiated": True}}
+                )
             entity = (
                 knowledge_summary(entity)
                 if isinstance(entity, KnowledgeSource)

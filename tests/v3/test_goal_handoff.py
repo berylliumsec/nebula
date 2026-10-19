@@ -132,13 +132,14 @@ def _request(goal):
 def test_handoff_is_atomic_bounded_idempotent_and_survives_restart(tmp_path):
     store, db_path, _project, profile, source, old_goal, _turn = _source(tmp_path)
     service = ChatGoalService(store)
-    request = _request(old_goal)
+    request = _request(old_goal).model_copy(update={"butler_initiated": True})
 
     created = service.handoff_to_provider(source.id, request)
     assert created.already_exists is False
     assert created.session.backend == ChatBackend.PROVIDER
     assert created.session.provider_profile_id == profile.id
     assert created.session.metadata["planning_enabled"] is True
+    assert created.session.metadata["butler_initiated"] is True
     assert created.goal.status == ChatGoalStatus.DRAFT
     assert created.goal.step_budget == 3
     assert created.goal.time_budget_seconds == 3_600

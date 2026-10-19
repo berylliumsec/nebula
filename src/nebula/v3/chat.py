@@ -604,6 +604,7 @@ class ChatCompletionRequest(NebulaModel):
     _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
     backend: ChatBackend = ChatBackend.PROVIDER
     control_assistant: bool = False
+    butler_initiated: bool = False
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -1050,6 +1051,8 @@ _FORK_PRIVATE_METADATA_KEYS = frozenset(
         "subagent_parent_turn_id",
         "temporary_assistant",
         "side_chat",
+        "butler_initiated",
+        "control_assistant",
     }
 )
 
@@ -5648,9 +5651,18 @@ class ChatService:
                     else self._title(request.messages),
                     provider_profile_id=profile.id,
                     model=selected_model,
-                    metadata={"control_assistant": True}
-                    if request.control_assistant
-                    else {},
+                    metadata={
+                        **(
+                            {"control_assistant": True}
+                            if request.control_assistant
+                            else {}
+                        ),
+                        **(
+                            {"butler_initiated": True}
+                            if request.butler_initiated
+                            else {}
+                        ),
+                    },
                 )
 
         citations: list[ChatCitation] = []
@@ -14052,6 +14064,7 @@ class ChatService:
         through_latest: bool = False,
         title: str | None = None,
         side_chat: bool = False,
+        butler_initiated: bool = False,
         harness_session_id: str | None = None,
     ) -> ChatSession:
         """Create an independent transcript branch with explicit provenance."""
@@ -14115,6 +14128,7 @@ class ChatService:
                 "forked_from_message_id": boundary.id,
                 "workspace_is_shared": not side_chat,
                 "side_chat": side_chat,
+                **({"butler_initiated": True} if butler_initiated else {}),
                 **(
                     {"inherited_message_count": len(copied_messages)}
                     if side_chat

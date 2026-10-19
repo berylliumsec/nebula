@@ -6,6 +6,7 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("show me my projects")?.id).toBe("projects");
     expect(destinationToOpen("open all projects")?.id).toBe("projects");
     expect(destinationToOpen("open Workbench")?.id).toBe("chat");
+    expect(destinationToOpen("show Butler conversations")?.id).toBe("chat");
     expect(destinationToOpen("open Knowledge")?.id).toBe("sources");
     expect(destinationToOpen("show storage devices")?.id).toBe("storage");
     expect(destinationToOpen("How do projects work?")).toBeUndefined();
