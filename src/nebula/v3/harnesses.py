@@ -1857,6 +1857,7 @@ def _minimal_environment(extra: Mapping[str, str] | None = None) -> dict[str, st
             "PATH",
             "SSL_CERT_FILE",
             "SSL_CERT_DIR",
+            "GIT_SSL_CAINFO",
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "NO_PROXY",
