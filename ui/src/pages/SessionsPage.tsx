@@ -848,7 +848,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {taskPlan && <details className="chat-task-plan" open={taskPlan.phase !== "execution"}>
         <summary><ListTodo size={15} aria-hidden="true" /> Task plan <span>{taskPlan.phase === "execution" ? "shared" : taskPlan.phase === "discovery" ? "requested" : taskPlan.phase.replaceAll("_", " ")} · version {taskPlan.plan_version}</span></summary>
         {taskPlan.reason && <p role="status">{taskPlan.reason}</p>}
-        {taskPlan.directive_id && <p>Butler required a plan for this task{planDirective ? `: ${planDirective.reason}` : "."}</p>}
+        {taskPlan.directive_id && <p>Butler requested a plan for this task{planDirective ? `: ${planDirective.reason}` : "."}</p>}
         {taskPlan.steps.length > 0 && <ol>{taskPlan.steps.map((step, index) => <li key={index}><strong>{step.action}</strong><small>Expected: {step.expected_outcome}</small></li>)}</ol>}
         {taskPlan.tool_names.length > 0 && <p><strong>Tools:</strong> {taskPlan.tool_names.join(", ")}</p>}
         {taskPlan.native_categories.length > 0 && <p><strong>Native capabilities:</strong> {taskPlan.native_categories.join(", ")}</p>}
