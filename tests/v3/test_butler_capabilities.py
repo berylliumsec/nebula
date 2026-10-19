@@ -273,7 +273,9 @@ def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path
             "state": "available",
             "ordinary_usage_allowed": False,
             "snapshots": [{"remaining_percent": 0.0}],
-            "balances": [{"remaining": 4.0 if arguments["profile_id"] == preferred.id else 0.0}],
+            "balances": [
+                {"remaining": 4.0 if arguments["profile_id"] == preferred.id else 0.0}
+            ],
         }
 
     ordinary._work.harness_quota = credits_after_included_limit

@@ -53,8 +53,14 @@ def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
             outcome="Butler could not finish the investigation (HarnessUnavailableError).",
             finished_at=utc_now(),
             steps=(
-                [{"operation": "nebula.global.create_recovery_goal", "status": "failed"}]
-                if changed else []
+                [
+                    {
+                        "operation": "nebula.global.create_recovery_goal",
+                        "status": "failed",
+                    }
+                ]
+                if changed
+                else []
             ),
         )
     )
@@ -111,7 +117,13 @@ def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path):
             recorder._record_model_turn(
                 active_case.id, ChatBackend.HARNESS, "codex", "gpt-6-sol", "retry-turn"
             )
-            return "Core state inspected", ChatBackend.HARNESS, "codex", "gpt-6-sol", "retry-turn"
+            return (
+                "Core state inspected",
+                ChatBackend.HARNESS,
+                "codex",
+                "gpt-6-sol",
+                "retry-turn",
+            )
 
     service = ButlerRecoveryService(store, Agent())
     asyncio.run(service.process_project(project.id, worker_id))
@@ -127,9 +139,7 @@ def test_quota_error_or_attempted_change_never_reopens(tmp_path):
     for code, changed in (("usageLimitExceeded", False), ("serverOverloaded", True)):
         branch = tmp_path / ("changed" if changed else "quota")
         branch.mkdir()
-        store, project, case, _, worker_id = _failed_case(
-            branch, code, changed=changed
-        )
+        store, project, case, _, worker_id = _failed_case(branch, code, changed=changed)
         agent = type("Agent", (), {"_global_instructions": lambda self, _: "mandate"})()
         service = ButlerRecoveryService(store, agent)
         assert service.retry_overloaded_cases(project.id, worker_id) == 0

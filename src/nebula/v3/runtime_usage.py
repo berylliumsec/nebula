@@ -284,12 +284,15 @@ def parse_grok_usage(payload: Any) -> VendorUsage:
     prepaid = config.get("prepaidBalance")
     amount = _number(prepaid.get("val")) if isinstance(prepaid, dict) else None
     balances = (
-        [UsageBalance(
-            label="Grok prepaid credits",
-            remaining=amount,
-            note="Vendor credit units; separate from included usage. Spending limits may still apply.",
-        )]
-        if amount is not None else []
+        [
+            UsageBalance(
+                label="Grok prepaid credits",
+                remaining=amount,
+                note="Vendor credit units; separate from included usage. Spending limits may still apply.",
+            )
+        ]
+        if amount is not None
+        else []
     )
     if not snapshots and not balances:
         return VendorUsage(

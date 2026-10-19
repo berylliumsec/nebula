@@ -62,7 +62,11 @@ async def measured_harness_capacity(
                 and math.isfinite(value)
             ):
                 remaining.append(float(value))
-    if remaining and min(remaining) > 0 and quota.get("ordinary_usage_allowed") is not False:
+    if (
+        remaining
+        and min(remaining) > 0
+        and quota.get("ordinary_usage_allowed") is not False
+    ):
         return (2, min(remaining))
     balances = quota.get("balances")
     if isinstance(balances, list):

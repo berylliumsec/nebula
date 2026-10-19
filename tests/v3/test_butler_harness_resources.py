@@ -378,10 +378,13 @@ def test_manual_codex_quota_refresh_persists_project_resource(tmp_path, monkeypa
     _watched_project(store, "project", "codex")
 
     async def account_read(self, profile, credentials):
-        return {"ordinaryUsageAllowed": False, "rateLimits": {
-            "primary": {"usedPercent": 100},
-            "credits": {"balance": "6.50", "hasCredits": True},
-        }}
+        return {
+            "ordinaryUsageAllowed": False,
+            "rateLimits": {
+                "primary": {"usedPercent": 100},
+                "credits": {"balance": "6.50", "hasCredits": True},
+            },
+        }
 
     monkeypatch.setattr(CodexAppServerAdapter, "read_account_usage", account_read)
     app = create_app(store=store, auth_token="test-token")
@@ -402,10 +405,14 @@ def test_manual_codex_quota_refresh_persists_project_resource(tmp_path, monkeypa
         assert body["summary"]["open_incidents"] == 1
         assert body["resources"][0]["kind"] == "harness_quota"
         assert body["resources"][0]["remaining_percent"] == 0
-        queried = asyncio.run(dispatch_work_tool(
-            app.state.control_assistant_work, "project", "nebula.work.harness_quota",
-            {"profile_id": "codex", "refresh": True},
-        ))
+        queried = asyncio.run(
+            dispatch_work_tool(
+                app.state.control_assistant_work,
+                "project",
+                "nebula.work.harness_quota",
+                {"profile_id": "codex", "refresh": True},
+            )
+        )
         assert queried["ordinary_usage_allowed"] is False
         assert queried["balances"][0]["remaining"] == 6.5
 

@@ -246,9 +246,7 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
                 "snapshots": [
                     {
                         "remaining_percent": (
-                            0.0
-                            if arguments["profile_id"] == profile.id
-                            else 100.0
+                            0.0 if arguments["profile_id"] == profile.id else 100.0
                         )
                     }
                 ],
@@ -291,13 +289,20 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
             "state": "available",
             "ordinary_usage_allowed": False,
             "snapshots": [{"remaining_percent": 0.0}],
-            "balances": [{"remaining": 2.0 if arguments["profile_id"] == profile.id else 0.0}],
+            "balances": [
+                {"remaining": 2.0 if arguments["profile_id"] == profile.id else 0.0}
+            ],
         }
 
     work.harness_quota = credit_only
-    assert asyncio.run(
-        agent._scheduled_harness_profile(project.id, profile, "test-model", "max", "automatic")
-    ).id == profile.id
+    assert (
+        asyncio.run(
+            agent._scheduled_harness_profile(
+                project.id, profile, "test-model", "max", "automatic"
+            )
+        ).id
+        == profile.id
+    )
 
 
 def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):

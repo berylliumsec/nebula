@@ -1,5 +1,5 @@
 {
-  "change_digest": "d37878552fff44c846ee3f79c89cdfd9046245411d90d2614477c92b0919404d",
+  "change_digest": "fa2a89b87e773c02fb520d70772d2fcb0dd2005a23155b062e37d79eee0c6ef2",
   "reviewed_by": "Codex focused review for Butler capacity retry and Codex/Grok credits",
   "reason": "Thirteen exact Python cases cover a one-time safe serverOverloaded retry, no retry on quota or attempted writes, recovery routing with included quota or credits, Codex and Grok agent-facing balance reads at zero included usage, saved case projection, settings discovery, and bundled product guidance. Five UI files cover multi-attempt transcript loading/reload, Codex and Grok credits at exhausted included windows, overview mapping, and settings navigation. Selected production LAN and mocked browser journeys cover Butler checks, durable two-attempt history, and Usage on desktop Chromium and mobile Chromium/WebKit.",
   "exclusions": "No native code changed. Unrelated planning, goal-link limit, precedent, and broad suites already passed in PR #856 and are unchanged here. A disposable Core and inert synthetic data exercise the operator workflow; no live vendor credentials are copied into fixtures.",

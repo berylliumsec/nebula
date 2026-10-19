@@ -147,7 +147,12 @@ def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
         )
     )
     calls = []
-    response = {"rateLimits": {"primary": {"usedPercent": 80}, "credits": {"balance": "5.25", "hasCredits": True}}}
+    response = {
+        "rateLimits": {
+            "primary": {"usedPercent": 80},
+            "credits": {"balance": "5.25", "hasCredits": True},
+        }
+    }
     grok_response = {
         "config": {
             "creditUsagePercent": 45,

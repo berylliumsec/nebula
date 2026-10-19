@@ -100,6 +100,7 @@ GLOBAL_TOOL_CALL_LIMIT = 40
 class ButlerRouteUnavailableError(ValueError):
     """No authorized scheduled Butler route has measured capacity."""
 
+
 _INSTRUCTIONS = (
     "You are Butler, acting under this selected project's standing Act authority. "
     "Investigate the exact Core signal and repair an operational blocker with the "
@@ -208,7 +209,10 @@ def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
         nested = payload.get("payload")
         details = nested if isinstance(nested, dict) else payload
         error = details.get("error")
-        if isinstance(error, dict) and error.get("codexErrorInfo") == "serverOverloaded":
+        if (
+            isinstance(error, dict)
+            and error.get("codexErrorInfo") == "serverOverloaded"
+        ):
             return True
     return False
 
@@ -384,12 +388,17 @@ class ButlerRecoveryAgent:
             ):
                 continue
             option = next(
-                (item for item in profile.capabilities.model_options if item.model == model),
+                (
+                    item
+                    for item in profile.capabilities.model_options
+                    if item.model == model
+                ),
                 None,
             )
             if reasoning_effort and (
                 option is None
-                or reasoning_effort not in {item.id for item in option.reasoning_efforts}
+                or reasoning_effort
+                not in {item.id for item in option.reasoning_efforts}
             ):
                 continue
             if cyber_access_program not in {None, "automatic"} and (
@@ -1076,7 +1085,8 @@ class ButlerRecoveryService:
             return None
         case = next(
             (
-                item for item in candidates
+                item
+                for item in candidates
                 if item.authority_revision == policy.revision
                 and (item.next_check_at is None or item.next_check_at <= utc_now())
             ),
@@ -1105,7 +1115,10 @@ class ButlerRecoveryService:
                 or current.status != "observed"
                 or current.revision != case.revision
                 or current.authority_revision != policy.revision
-                or (current.next_check_at is not None and current.next_check_at > utc_now())
+                or (
+                    current.next_check_at is not None
+                    and current.next_check_at > utc_now()
+                )
                 or current_policy is None
                 or current_policy.authority != "act"
                 or current_policy.revision != policy.revision
@@ -1256,7 +1269,9 @@ class ButlerRecoveryService:
                 # diagnostic-expected: a changed or missing mandate belongs to a new check.
                 continue
             with self.store.transaction(immediate=True) as transaction:
-                current = _entity_in_transaction(transaction, ButlerRecoveryCase, case.id)
+                current = _entity_in_transaction(
+                    transaction, ButlerRecoveryCase, case.id
+                )
                 current_policy = _entity_in_transaction(
                     transaction, ButlerAuthorityPolicy, policy.id
                 )
@@ -1476,16 +1491,19 @@ class ButlerRecoveryService:
         except Exception as exc:
             # diagnostic-expected: the case records the investigation failure for operator review.
             current = self.store.get(ButlerRecoveryCase, case.id)
-            overloaded = (
-                current.capacity_retry_count == 0
-                and _server_overloaded(self.store, current)
+            overloaded = current.capacity_retry_count == 0 and _server_overloaded(
+                self.store, current
             )
             uncertain = _possible_change(current.steps)
             if overloaded:
-                outcome = "Codex reported server load; Butler will retry this check once."
+                outcome = (
+                    "Codex reported server load; Butler will retry this check once."
+                )
             elif uncertain:
                 outcome = "An action may have taken effect; inspect Core before retry."
-            elif isinstance(exc, (ButlerInstructionsError, ButlerRouteUnavailableError)):
+            elif isinstance(
+                exc, (ButlerInstructionsError, ButlerRouteUnavailableError)
+            ):
                 outcome = str(exc)[:300]
             else:
                 outcome = (
@@ -1493,7 +1511,13 @@ class ButlerRecoveryService:
                 )
             self._update_case(
                 current,
-                status=("observed" if overloaded else "uncertain" if uncertain else "needs_attention"),
+                status=(
+                    "observed"
+                    if overloaded
+                    else "uncertain"
+                    if uncertain
+                    else "needs_attention"
+                ),
                 outcome=outcome,
                 capacity_retry_count=1 if overloaded else current.capacity_retry_count,
                 next_check_at=utc_now() + timedelta(seconds=30) if overloaded else None,
