@@ -7,12 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from .butler_instructions import read_butler_instructions
+from .harnesses import HarnessConfigurationError
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
     ChatGoal,
+    ChatGoalStatus,
+    ChatSession,
     Engagement,
     EngagementStatus,
+    HarnessKind,
+    HarnessProfile,
     RiskClass,
     ScopePolicy,
 )
@@ -156,6 +161,10 @@ class ButlerGlobalActions:
         self._project(arguments["project_id"])
         return self.work.goal_detail(arguments["project_id"], arguments["session_id"])
 
+    async def harness_quota(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._project(arguments["project_id"])
+        return await self.work.harness_quota(arguments["project_id"], arguments)
+
     async def resume_project(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         project = self._act(project_id, arguments["expected_authority_revision"])
@@ -228,6 +237,192 @@ class ButlerGlobalActions:
             )
             return {**started, "created": True, "started": True}
         return {**created, "created": True}
+
+    def _recovery_harness(self, project_id: str) -> HarnessProfile:
+        """Select an advertised Codex route, preferring this check's Butler chat."""
+
+        butler_sessions = [
+            session
+            for session in self.store.iter_readable_entities(
+                ChatSession, engagement_id=self._case().engagement_id
+            )
+            if session.metadata.get("control_assistant") is True
+            and not session.metadata.get("archived_at")
+            and not session.parent_session_id
+        ]
+        preferred_id = (
+            max(
+                butler_sessions, key=lambda session: session.created_at
+            ).harness_profile_id
+            if butler_sessions
+            else None
+        )
+        profiles = sorted(
+            self.store.iter_readable_entities(HarnessProfile),
+            key=lambda profile: (profile.id != preferred_id, profile.id),
+        )
+        for profile in profiles:
+            if not profile.enabled or profile.kind != HarnessKind.CODEX_APP_SERVER:
+                continue
+            option = next(
+                (
+                    item
+                    for item in profile.capabilities.model_options
+                    if item.model == "gpt-6-sol"
+                ),
+                None,
+            )
+            if (
+                option is None
+                or "gpt-6-sol" not in profile.capabilities.models
+                or "max" not in {item.id for item in option.reasoning_efforts}
+                or "daybreakBlue" not in (option.cyber_access_programs or [])
+            ):
+                continue
+            try:
+                self.work.harness._validate_harness_privacy(
+                    project_id,
+                    profile,
+                    [],
+                    allow_remote_mcp=profile.privacy.auto_share_tool_results,
+                    uses_gateway_tools=True,
+                )
+            except HarnessConfigurationError:
+                continue
+            return profile
+        raise ValueError(
+            "No authorized Codex harness advertises gpt-6-sol with max effort "
+            "and Daybreak Blue for this project"
+        )
+
+    async def create_recovery_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Create one typed recovery goal and report its result through this case."""
+
+        case = self._mandate()
+        project_id = arguments["project_id"]
+        project = self._act(project_id, arguments["expected_authority_revision"])
+        if project.revision != arguments["expected_project_revision"]:
+            raise ValueError("Project revision changed; read it again")
+        if project.status != EngagementStatus.ACTIVE:
+            raise ValueError("Activate the project before creating a recovery goal")
+        source = self.store.get(ChatGoal, arguments["source_goal_id"])
+        if (
+            source.engagement_id != project_id
+            or source.parent_goal_id is not None
+            or source.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}
+        ):
+            raise ValueError("Read a paused or blocked main goal in this project first")
+        existing = next(
+            (
+                goal
+                for goal in self.store.iter_readable_entities(
+                    ChatGoal, engagement_id=project_id
+                )
+                if goal.metadata.get("butler_recovery_source_goal_id") == source.id
+                and goal.status
+                not in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}
+            ),
+            None,
+        )
+        if existing is not None:
+            if existing.id not in case.recovery_goal_ids:
+                from .butler_oversight import _entity_in_transaction
+
+                with self.store.transaction() as transaction:
+                    current = _entity_in_transaction(
+                        transaction, ButlerRecoveryCase, case.id
+                    )
+                    if current is None or current.status != "investigating":
+                        raise ValueError(
+                            "Scheduled Butler check changed; read it again"
+                        )
+                    if existing.id not in current.recovery_goal_ids:
+                        if len(current.recovery_goal_ids) >= 20:
+                            raise ValueError(
+                                "This check already has 20 linked recovery goals"
+                            )
+                        transaction.update(
+                            ButlerRecoveryCase,
+                            current.id,
+                            {
+                                "recovery_goal_ids": [
+                                    *current.recovery_goal_ids,
+                                    existing.id,
+                                ]
+                            },
+                            expected_revision=current.revision,
+                        )
+            result = {
+                **self.work.goal_detail(project_id, existing.session_id),
+                "already_exists": True,
+                "source_goal_id": source.id,
+            }
+            if arguments.get("start", True) and existing.status == ChatGoalStatus.DRAFT:
+                self._act(project_id, arguments["expected_authority_revision"])
+                started = await self.work.goal_action(
+                    project_id,
+                    {
+                        "session_id": existing.session_id,
+                        "expected_revision": existing.revision,
+                        "action": "start",
+                    },
+                )
+                return {
+                    **started,
+                    "already_exists": True,
+                    "started": True,
+                    "source_goal_id": source.id,
+                }
+            return result
+        profile = self._recovery_harness(project_id)
+        if not isinstance(arguments.get("plan"), list) or not arguments["plan"]:
+            raise ValueError(
+                "Record the main recovery agent's plan before starting its goal"
+            )
+        goal_args = {
+            key: value
+            for key, value in arguments.items()
+            if key
+            in {
+                "objective",
+                "completion_criteria",
+                "plan",
+                "step_budget",
+                "time_budget_seconds",
+            }
+        }
+        goal_args.update(
+            {
+                "backend": "harness",
+                "profile_id": profile.id,
+                "model": "gpt-6-sol",
+                "harness_reasoning_effort": "max",
+                "harness_cyber_access_program": "daybreakBlue",
+                "tools_enabled": True,
+                "planning_enabled": False,
+                "butler_recovery_case_id": case.id,
+                "butler_recovery_source_goal_id": source.id,
+            }
+        )
+        self._act(project_id, arguments["expected_authority_revision"])
+        created = await self.work.create_goal_conversation(project_id, goal_args)
+        if arguments.get("start", True):
+            self._act(project_id, arguments["expected_authority_revision"])
+            started = await self.work.goal_action(
+                project_id,
+                {
+                    "session_id": created["session_id"],
+                    "expected_revision": created["goal"]["revision"],
+                    "action": "start",
+                },
+            )
+            return {
+                **started,
+                "created": True,
+                "started": True,
+                "source_goal_id": source.id,
+            }
+        return {**created, "created": True, "source_goal_id": source.id}
 
     async def goal_action(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
@@ -422,6 +617,22 @@ class ButlerGlobalActions:
                 self.goal,
             ),
             (
+                "nebula.global.harness_quota",
+                "Read a configured Codex or Grok harness's vendor-reported remaining quota window for an Act project; refresh requests a new read. Missing numeric values remain unknown.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "profile_id": _ID,
+                        "refresh": {"type": "boolean"},
+                    },
+                    "required": ["project_id", "profile_id"],
+                },
+                RiskClass.LOCAL_READ,
+                self.harness_quota,
+            ),
+            (
                 "nebula.global.resume_project",
                 "Activate one draft or paused Act project using current revisions before creating, starting, or resuming a goal.",
                 {
@@ -464,6 +675,37 @@ class ButlerGlobalActions:
                 },
                 RiskClass.WORKSPACE_WRITE,
                 self.create_goal,
+            ),
+            (
+                "nebula.global.create_recovery_goal",
+                "Create or find one recovery goal for a paused or blocked main goal. Core links its report to this scheduled check and requires an authorized Codex gpt-6-sol route with max effort and Daybreak Blue. Use this instead of create_goal for recovery work.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "source_goal_id": _ID,
+                        "expected_project_revision": _REV,
+                        "expected_authority_revision": _REV,
+                        "objective": goal_fields["objective"],
+                        "completion_criteria": goal_fields["completion_criteria"],
+                        "plan": goal_fields["plan"],
+                        "step_budget": goal_fields["step_budget"],
+                        "time_budget_seconds": goal_fields["time_budget_seconds"],
+                        "start": {"type": "boolean"},
+                    },
+                    "required": [
+                        "project_id",
+                        "source_goal_id",
+                        "expected_project_revision",
+                        "expected_authority_revision",
+                        "objective",
+                        "completion_criteria",
+                        "plan",
+                    ],
+                },
+                RiskClass.WORKSPACE_WRITE,
+                self.create_recovery_goal,
             ),
             (
                 "nebula.global.goal_action",
