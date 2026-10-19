@@ -7489,6 +7489,68 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
   ]);
 });
 
+test("assistant upgrade Butler scheduled retry shows both saved attempts after reload on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const created = await api.post("engagements", {data: {name: "Butler retry history fixture", status: "active"}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const project = await created.json() as {id: string};
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seeded = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ButlerAuthorityPolicy, ButlerRecoveryCase, ChatSession, HarnessSession, HarnessTurn, HarnessTurnOrigin, HarnessTurnStatus",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "project_id = sys.argv[2]",
+      "store.create(ButlerAuthorityPolicy(id='butler-authority-' + project_id, engagement_id=project_id, authority='act'))",
+      "store.create(ChatSession(id='butler-retry-chat', engagement_id=project_id, title='Butler', model='fixture-model', provider_profile_id='fixture-provider', metadata={'control_assistant': True}))",
+      "store.create(HarnessSession(id='butler-retry-harness', engagement_id=project_id, harness_profile_id='fixture-harness', model='gpt-6-sol'))",
+      "store.create(HarnessTurn(id='butler-overloaded-turn', engagement_id=project_id, harness_session_id='butler-retry-harness', origin=HarnessTurnOrigin.ANALYSIS, prompt='Check Core', status=HarnessTurnStatus.INTERRUPTED, error='Selected model is at capacity'))",
+      "store.create(HarnessTurn(id='butler-retry-turn', engagement_id=project_id, harness_session_id='butler-retry-harness', origin=HarnessTurnOrigin.ANALYSIS, prompt='Retry check', status=HarnessTurnStatus.COMPLETE, response='Core state inspected on retry.'))",
+      "store.create(ButlerRecoveryCase(id='butler-retry-case', engagement_id=project_id, trigger='periodic', signal='butler.global_periodic_check', source_event_id='fixture-event', source_event_sequence=1, authority_revision=1, status='resolved', summary='Scheduled work check', outcome='Core state inspected on retry.', model_backend='harness', model_turn_id='butler-retry-turn', model_turn_ids=['butler-overloaded-turn', 'butler-retry-turn'], capacity_retry_count=1))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), project.id], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
+    });
+    expect(seeded.status, seeded.error?.message ?? seeded.stderr).toBe(0);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    const overview = await api.get(`engagements/${project.id}/butler/overview`);
+    expect(overview.ok(), await overview.text()).toBe(true);
+    expect((await overview.json() as {recovery_cases: Array<{model_turn_ids: string[]}>}).recovery_cases[0].model_turn_ids)
+      .toEqual(["butler-overloaded-turn", "butler-retry-turn"]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Butler retry LAN browser", {requireReady: false});
+    const show = async () => {
+      await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+      await openNebulaAssistantFromShell(page);
+      const oversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
+      await oversight.getByRole("button", {name: /Oversight/}).click();
+      const scheduled = oversight.getByRole("region", {name: "Butler scheduled activity"});
+      await scheduled.getByText("Check transcript").click();
+      await expect(scheduled.getByText("Attempt 1")).toBeVisible();
+      await expect(scheduled.getByText("Attempt 2")).toBeVisible();
+      await expect(scheduled.getByText("Selected model is at capacity")).toBeVisible();
+      await expect(scheduled.getByRole("region", {name: "Attempt 2"}).getByText("Core state inspected on retry.")).toBeVisible();
+      expect(await scheduled.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    };
+    await show();
+    await page.reload();
+    await show();
+    await testInfo.attach("butler-retry-lan", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, project: testInfo.project.name, viewport: page.viewportSize(), attempts: 2}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler watches a goal and surfaces an agent-reported machine incident on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});

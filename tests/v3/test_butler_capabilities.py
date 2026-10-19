@@ -149,6 +149,12 @@ def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path
     actions = ButlerGlobalActions(
         store, ordinary._work, tmp_path, case.id, runtime_local=True
     )
+
+    async def measured_quota(_project_id, arguments):
+        assert arguments == {"profile_id": profile.id, "refresh": True}
+        return {"state": "available", "snapshots": [{"remaining_percent": 75.0}]}
+
+    ordinary._work.harness_quota = measured_quota
     arguments = {
         "project_id": selected.id,
         "source_goal_id": source.id,
@@ -179,6 +185,108 @@ def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path
     again = asyncio.run(actions.create_recovery_goal(arguments))
     assert again["already_exists"] is True
     assert store.get(ButlerRecoveryCase, case.id).recovery_goal_ids == [goal.id]
+
+
+def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path):
+    store, selected, _, _, ordinary = _capabilities(tmp_path)
+    options = HarnessCapabilities(
+        models=["gpt-6-sol"],
+        model_options=[
+            HarnessModelOptions(
+                model="gpt-6-sol",
+                reasoning_efforts=[HarnessRuntimeOption(id="max", label="Max")],
+                cyber_access_programs=["daybreakBlue"],
+            )
+        ],
+    )
+    preferred = store.create(
+        HarnessProfile(
+            name="Butler Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="gpt-6-sol",
+            privacy={"local_only": True},
+            capabilities=options,
+        )
+    )
+    alternate = store.create(
+        HarnessProfile(
+            name="Available Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="gpt-6-sol",
+            privacy={"local_only": True},
+            capabilities=options,
+        )
+    )
+    butler_harness_session = store.create(
+        HarnessSession(
+            engagement_id=selected.id,
+            harness_profile_id=preferred.id,
+            model="gpt-6-sol",
+        )
+    )
+    store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Butler",
+            backend="harness",
+            harness_profile_id=preferred.id,
+            harness_session_id=butler_harness_session.id,
+            model="gpt-6-sol",
+            metadata={"control_assistant": True},
+        )
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=selected.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id="synthetic-event",
+            source_event_sequence=1,
+            authority_revision=1,
+            status="investigating",
+            summary="Global work check",
+        )
+    )
+    actions = ButlerGlobalActions(
+        store, ordinary._work, tmp_path, case.id, runtime_local=True
+    )
+
+    async def measured_quota(_project_id, arguments):
+        return {
+            "state": "available",
+            "snapshots": [
+                {
+                    "remaining_percent": (
+                        0.0 if arguments["profile_id"] == preferred.id else 100.0
+                    )
+                }
+            ],
+        }
+
+    ordinary._work.harness_quota = measured_quota
+    assert asyncio.run(actions._recovery_harness(selected.id)).id == alternate.id
+
+    async def credits_after_included_limit(_project_id, arguments):
+        return {
+            "state": "available",
+            "ordinary_usage_allowed": False,
+            "snapshots": [{"remaining_percent": 0.0}],
+            "balances": [
+                {"remaining": 4.0 if arguments["profile_id"] == preferred.id else 0.0}
+            ],
+        }
+
+    ordinary._work.harness_quota = credits_after_included_limit
+    assert asyncio.run(actions._recovery_harness(selected.id)).id == preferred.id
+
+    async def unavailable_quota(_project_id, _arguments):
+        return {"state": "unavailable", "snapshots": []}
+
+    ordinary._work.harness_quota = unavailable_quota
+    with pytest.raises(ValueError, match="confirmed included usage or credits"):
+        asyncio.run(actions._recovery_harness(selected.id))
 
 
 def test_global_butler_chooses_act_projects_and_deduplicates_new_work(

@@ -5,6 +5,10 @@
 Open Settings → Advanced → Usage to inspect every configured model provider and
 agent harness. Read Nebula-recorded token use separately from a vendor-reported
 balance or rate limit. Refresh the vendor snapshot without starting a model turn.
+Codex and Grok credit balances remain visible when their included-usage window
+is exhausted. Grok's prepaid balance and its shared included window are separate
+vendor fields; an absent field stays unknown. The agent-facing profile quota read
+returns these balances alongside any numeric windows.
 
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |

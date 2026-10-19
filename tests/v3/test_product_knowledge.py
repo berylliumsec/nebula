@@ -142,8 +142,12 @@ def test_product_search_finds_scheduled_history_and_grok_quota(monkeypatch):
         "Where can I read Butler scheduled check transcript and linked recovery goal reports?"
     )
     quota = search_product_knowledge("Where do I see Grok remaining quota?")
+    credits = search_product_knowledge(
+        "Can I read Grok prepaid credits or Codex credits after included quota runs out?"
+    )
     assert any(item["heading"] == "Butler scheduled activity" for item in history)
     assert any(item["heading"] == "Usage and credits" for item in quota)
+    assert any(item["heading"] == "Usage and credits" for item in credits)
 
 
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):

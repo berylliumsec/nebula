@@ -147,10 +147,16 @@ def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
         )
     )
     calls = []
-    response = {"rateLimits": {"primary": {"usedPercent": 80}}}
+    response = {
+        "rateLimits": {
+            "primary": {"usedPercent": 80},
+            "credits": {"balance": "5.25", "hasCredits": True},
+        }
+    }
     grok_response = {
         "config": {
             "creditUsagePercent": 45,
+            "prepaidBalance": {"val": "3.75"},
             "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"},
         }
     }
@@ -177,16 +183,23 @@ def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
     assert calls == ["codex", "grok"]
     assert codex.state == "available"
     assert codex.snapshots[0].remaining_percent == 20
+    assert codex.balances[0].remaining == 5.25
     assert grok.state == "available"
     assert grok.snapshots[0].remaining_percent == 55
+    assert grok.balances[0].remaining == 3.75
     grok_response["config"].pop("creditUsagePercent")
     unknown = asyncio.run(service.read_harness_quota("grok", refresh=True))
-    assert unknown.state == "unavailable" and unknown.snapshots == []
+    assert unknown.state == "available" and unknown.snapshots == []
+    assert unknown.balances[0].remaining == 3.75
     response["rateLimits"]["primary"].pop("usedPercent")
     without_numeric = asyncio.run(service.read_harness_quota("codex", refresh=True))
-    assert without_numeric.state == "unavailable"
+    assert without_numeric.state == "available"
     assert without_numeric.snapshots == []
-    assert calls == ["codex", "grok", "grok", "codex"]
+    assert without_numeric.balances[0].remaining == 5.25
+    grok_response["config"].pop("prepaidBalance")
+    truly_unknown = asyncio.run(service.read_harness_quota("grok", refresh=True))
+    assert truly_unknown.state == "unavailable"
+    assert calls == ["codex", "grok", "grok", "codex", "grok"]
 
 
 def test_claude_adapter_attaches_only_numeric_quota_to_rate_limit_notice(tmp_path):

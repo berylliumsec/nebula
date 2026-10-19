@@ -61,6 +61,7 @@
     {"name": "butler-live-feedback", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/components/butlerTurnFeedback.ts"], "areas": ["butler-live-feedback"]},
     {"name": "butler-oversight", "patterns": ["src/nebula/v3/butler_oversight.py", "src/nebula/v3/butler_review.py", "src/nebula/v3/butler_authority.py", "src/nebula/v3/butler_recovery.py", "src/nebula/v3/butler_improvements.py", "ui/src/components/ButlerOversight.tsx", "ui/src/components/ButlerIssues.tsx", "ui/src/components/ButlerOversight.module.css"], "areas": ["butler-oversight"]},
     {"name": "butler-global", "patterns": ["src/nebula/v3/butler_instructions.py", "src/nebula/v3/butler_instructions_management.py", "src/nebula/v3/butler_global_capabilities.py", "src/nebula/v3/butler_recovery.py", "ui/src/components/ButlerOversight.tsx", "ui/src/components/ButlerInstructionsSettings.tsx", "ui/src/components/ButlerInstructionsSettings.module.css", "ui/src/api/butlerOverview.ts", "ui/src/api/butlerInstructions.ts", "ui/src/settingsCatalog.ts"], "areas": ["butler-global"]},
+    {"name": "butler-capacity-history", "patterns": ["src/nebula/v3/butler_recovery.py", "src/nebula/v3/domain.py", "ui/src/components/ButlerScheduledTranscript.tsx", "ui/src/api/butlerOverview.ts"], "areas": ["butler-capacity-history"]},
     {"name": "butler-effort", "patterns": ["src/nebula/v3/butler_recovery.py", "src/nebula/v3/harnesses.py", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/AppShell.tsx", "ui/src/settingsCatalog.ts"], "areas": ["butler-effort"]},
     {"name": "nebula-voice", "patterns": ["src/nebula/v3/live_voice.py", "ui/src/components/NebulaVoice.tsx", "ui/src/components/NebulaVoice.module.css", "ui/src/components/voiceTranscript.ts", "docs/design/nebula-voice.md"], "areas": ["nebula-voice"]},
     {"name": "quiet-lens", "patterns": ["ui/src/quiet-lens.css"], "areas": ["quiet-lens"]},
@@ -255,6 +256,11 @@
       {"area":"butler-global","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-global","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-global","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-capacity-history": [
+      {"area":"butler-capacity-history","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler scheduled retry shows both saved attempts after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-capacity-history","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler scheduled retry shows both saved attempts after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-capacity-history","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler scheduled retry shows both saved attempts after reload on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "nebula-voice": [
       {"area":"nebula-voice","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization Butler Voice pauses and resumes without losing project work","runtime":"mock","shard":"1/1"},

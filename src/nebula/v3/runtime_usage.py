@@ -74,13 +74,15 @@ class VendorUsage(BaseModel):
 
 
 class HarnessQuotaRead(BaseModel):
-    """A profile-scoped numeric read; unavailable never means zero remaining."""
+    """Profile-scoped vendor usage; an unreadable balance is never zero."""
 
     profile_id: str
     state: Literal["available", "unavailable", "error"]
     detail: str
     checked_at: datetime | None = None
     snapshots: list[HarnessQuotaSnapshot] = Field(default_factory=list)
+    balances: list[UsageBalance] = Field(default_factory=list)
+    ordinary_usage_allowed: bool | None = None
 
 
 class RuntimeUsageItem(BaseModel):
@@ -273,29 +275,45 @@ def parse_codex_usage(payload: Any) -> VendorUsage:
 
 
 def parse_grok_usage(payload: Any) -> VendorUsage:
-    """Expose Grok's reported included-credit window with its shared scope."""
+    """Expose Grok's prepaid balance even when no included window is reported."""
 
     checked_at = datetime.now(timezone.utc)
     snapshots = grok_quota_snapshots(payload, observed_at=checked_at)
-    if not snapshots:
+    config = payload.get("config") if isinstance(payload, dict) else None
+    config = config if isinstance(config, dict) else {}
+    prepaid = config.get("prepaidBalance")
+    amount = _number(prepaid.get("val")) if isinstance(prepaid, dict) else None
+    balances = (
+        [
+            UsageBalance(
+                label="Grok prepaid credits",
+                remaining=amount,
+                note="Vendor credit units; separate from included usage. Spending limits may still apply.",
+            )
+        ]
+        if amount is not None
+        else []
+    )
+    if not snapshots and not balances:
         return VendorUsage(
             state="unavailable",
             source="Grok account",
-            detail="Grok did not report a numeric included-credit window for this account.",
+            detail="Grok did not report a readable prepaid balance or numeric included-credit window for this account.",
             checked_at=checked_at,
         )
-    snapshot = snapshots[0]
     return VendorUsage(
         state="available",
         source="Grok account",
-        detail="Grok reported included-credit use for this period. A shared pool may include other Grok products.",
+        detail="Grok prepaid credits and included usage are separate. The included pool may be shared with other Grok products.",
         checked_at=checked_at,
+        balances=balances,
         windows=[
             UsageWindow(
                 label=snapshot.window_label,
                 used_percent=round(snapshot.used_percent),
                 resets_at=snapshot.resets_at,
             )
+            for snapshot in snapshots[:1]
         ],
         quota_snapshots=snapshots,
     )
@@ -486,11 +504,13 @@ class RuntimeUsageService:
         vendor = await self._vendor(profile, refresh=refresh)
         state = (
             "unavailable"
-            if vendor.state == "available" and not vendor.quota_snapshots
+            if vendor.state == "available"
+            and not vendor.quota_snapshots
+            and not vendor.balances
             else vendor.state
         )
         detail = (
-            "The harness did not report a numeric quota window."
+            "The harness did not report a numeric quota window or readable credit balance."
             if state == "unavailable" and vendor.state == "available"
             else vendor.detail
         )
@@ -500,6 +520,8 @@ class RuntimeUsageService:
             detail=detail,
             checked_at=vendor.checked_at,
             snapshots=vendor.quota_snapshots,
+            balances=vendor.balances,
+            ordinary_usage_allowed=vendor.ordinary_usage_allowed,
         )
 
     async def read(self, *, refresh: bool = False) -> RuntimeUsageResponse:

@@ -122,6 +122,36 @@ describe("ButlerOversight", () => {
     expect(events).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps the overloaded turn beside its retry in the same saved check", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn().mockResolvedValue({ ...overview, authority: "act",
+      capabilities: { ...overview.capabilities, recovery: true },
+      recovery_cases: [{ id: "scheduled", trigger: "periodic", signal: "butler.global_periodic_check",
+        status: "resolved", summary: "Scheduled work check", outcome: "Core state inspected",
+        model_backend: "harness", model_turn_id: "turn-retry",
+        model_turn_ids: ["turn-overloaded", "turn-retry"], steps: [] }],
+    });
+    const events = vi.fn().mockResolvedValue({ events: [], nextSequence: 0 });
+    const turn = vi.fn().mockImplementation(async (id: string) => ({
+      id, origin: "analysis", harnessSessionId: "analysis-session",
+      status: id === "turn-overloaded" ? "interrupted" : "complete",
+      error: id === "turn-overloaded" ? "Selected model is at capacity" : undefined,
+      response: id === "turn-retry" ? "Core state inspected" : undefined,
+    }));
+    const api = { ...client(request), getHarnessTurnEvents: events, getHarnessTurn: turn } as unknown as ApiClient;
+    const mounted = render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText("Attempt 1")).toBeVisible();
+    expect(await screen.findByText("Attempt 2")).toBeVisible();
+    expect(await screen.findByText("Selected model is at capacity")).toBeVisible();
+    expect(await within(screen.getByRole("region", { name: "Attempt 2" })).findByText("Core state inspected")).toBeVisible();
+    mounted.unmount();
+    render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText("Attempt 1")).toBeVisible();
+    expect(await screen.findByText("Attempt 2")).toBeVisible();
+  });
+
   it("keeps Watch compact beside the chat while surfacing open incidents", async () => {
     const user = userEvent.setup();
     const request = vi.fn().mockResolvedValue({
