@@ -795,6 +795,22 @@ class NebulaStore:
                 model.model_validate(row.payload) for row in session.scalars(statement)
             ]
 
+    def butler_recovery_session_ids(self, session_ids: Iterable[str]) -> set[str]:
+        """Find older Butler recovery chats without scanning every project goal."""
+
+        ids = set(session_ids)
+        if not ids:
+            return set()
+        statement = select(EntityRow.chat_session_id).where(
+            EntityRow.kind == ChatGoal.entity_kind,
+            EntityRow.chat_session_id.in_(ids),
+            EntityRow.payload["metadata"]["butler_recovery_case_id"]
+            .as_string()
+            .is_not(None),
+        )
+        with self.database.session() as session:
+            return {value for value in session.scalars(statement) if value}
+
     def list_tool_call_artifacts(
         self, engagement_id: str, tool_call_id: str
     ) -> list[Artifact]:
