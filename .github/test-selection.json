@@ -1,8 +1,8 @@
 {
-  "change_digest": "d6af5d690235e2d4433ed92901128bc9477d76d499aba216c3d9955a5b504f2b",
+  "change_digest": "27238b389a76660ba111f8bb8c82a4696de8531c4a6f61a86f97997387964409",
   "reviewed_by": "Codex focused review for native hook Git configuration",
   "reason": "Fifteen native hook tests cover runner execution, environment-dependent Git helper lookup, hook discovery, source integrity, envelope contents, and timeout handling. The new regression proves that a URL-scoped helper in the service user's home is visible to a hook while unrelated environment variables stay absent.",
-  "exclusions": "No UI, frontend, browser, or native-code path changed. The hook environment is exercised through the actual NativeHookRunner in the selected backend file; unrelated backend tests are excluded.",
+  "exclusions": "No UI, frontend, browser, or Rust code changed. The hook environment is exercised through the actual NativeHookRunner in the selected backend file; unrelated backend tests are excluded.",
   "expected_tests": {
     "python": 15,
     "frontend": 0,

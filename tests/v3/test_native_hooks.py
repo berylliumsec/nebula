@@ -257,8 +257,7 @@ def test_native_hook_uses_user_home_for_url_scoped_git_helper(tmp_path, monkeypa
     home = tmp_path / "home"
     home.mkdir()
     (home / ".gitconfig").write_text(
-        '[credential "https://github.com"]\n'
-        "    helper = /tmp/fixture-git-credential\n",
+        '[credential "https://github.com"]\n    helper = /tmp/fixture-git-credential\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("HOME", str(home))
