@@ -106,10 +106,11 @@ accept arbitrary API paths, workspace commands or cross-project target IDs.
 `planning_enabled` switch with revision checks and read-back. The switch lives
 in each conversation's Assistant settings. The existing harness Plan only mode
 still ends after planning; it cannot run together with Plan before acting.
-Managed Codex App Server profiles with Core MCP access can submit a formal
-`plan.submit` receipt after bounded workspace discovery. On planned Codex turns,
-Core disables vendor-native execution tools and routes available actions through
-its guarded gateway, so the saved plan controls every offered tool call. The
+Codex App Server profiles with Core MCP access can submit a formal `plan.submit`
+receipt after bounded workspace discovery, even when the profile normally uses
+unrestricted host access. Each planned turn uses a private read-only vendor
+workspace, disables vendor-native execution tools, and routes actions through
+Core's guarded gateway. Ordinary later turns retain their saved profile mode. The
 main agent's validated steps, selected tools, files, and unresolved dependencies
 are included in a delegated subagent's task context.
 `nebula.work.require_plan` records a one-task requirement against an exact
