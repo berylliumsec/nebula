@@ -2072,9 +2072,17 @@ class SubagentService:
         parent_plan = self.chat.plans.for_turn(parent_turn.id)
         plan_context = parent_session.metadata.get("delegated_plan_context")
         if parent_plan is not None and parent_plan.phase == "execution":
-            plan_context = "Main agent's saved plan:\n" + "\n".join(
-                f"{index}. {step['action']} (expected: {step['expected_outcome']})"
-                for index, step in enumerate(parent_plan.steps, 1)
+            plan_context = "Main agent's Core-validated task plan:\n" + json.dumps(
+                {
+                    "plan_version": parent_plan.plan_version,
+                    "steps": parent_plan.steps,
+                    "tool_names": parent_plan.tool_names,
+                    "native_categories": parent_plan.native_categories,
+                    "files": parent_plan.files,
+                    "no_file_work": parent_plan.no_file_work,
+                    "unresolved_dependencies": parent_plan.unresolved_dependencies,
+                },
+                ensure_ascii=False,
             )
         elif not plan_context and parent_turn.goal_id:
             goal = self.store.get(ChatGoal, parent_turn.goal_id)
@@ -2084,7 +2092,7 @@ class SubagentService:
                 )
         if not isinstance(plan_context, str):
             plan_context = ""
-        plan_context = _bounded(plan_context, 24_000)
+        plan_context = _bounded(plan_context, 30_000)
         subagent_id = str(uuid4())
         harness_session = (
             self.harness_runtime.create_session(
