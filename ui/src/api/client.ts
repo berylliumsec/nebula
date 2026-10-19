@@ -3667,6 +3667,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     isSideChat: value.metadata?.side_chat === true,
     isControlAssistant: value.metadata?.control_assistant === true,
+    isButlerInitiated: value.metadata?.butler_initiated === true,
     assistantConfig,
     planningEnabled: assistantConfig?.planningEnabled ?? value.metadata?.planning_enabled === true,
     inheritedMessageCount: typeof value.metadata?.inherited_message_count === "number"

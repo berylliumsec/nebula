@@ -2444,6 +2444,8 @@ export interface ChatSessionSummary {
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
   isControlAssistant?: boolean;
+  /** Core records chats created by Butler separately from ordinary conversations. */
+  isButlerInitiated?: boolean;
   assistantConfig?: ChatAssistantConfig;
   planningEnabled?: boolean;
   inheritedMessageCount?: number;
