@@ -1,10 +1,10 @@
 {
-  "change_digest": "eb482fcfe8e42b2b0ca8913c06824b7b1e2b3fda0462c179cda467df5858721e",
+  "change_digest": "ba3b3484a22c3bb79ccb741908775a02d2e1d46e5e4959d56b1d42254c8eca6f",
   "reviewed_by": "Codex focused review on 2026-10-19",
-  "reason": "Formal managed Codex plan admission, Core-only planned tool scope, full parent-plan handoff, product guidance, and saved UI journey. Python covers the gateway, vendor config, and integration with the newly merged Core-owned goal-resume path; browser covers blocked retry and Claude/Codex execution on a disposable LAN Core.",
-  "exclusions": "No Rust or native code changed. Full backend and UI suites, unrelated interface journeys, external provider credentials, and physical-device checks are excluded; the browser cases use an inert harness fixture and cannot prove a real Codex model response.",
+  "reason": "Allow formal Core plans on the existing unrestricted MCP-capable Codex profiles by containing each planned turn, while preserving ordinary unrestricted turns. Python covers admission, guarded gateway and app-server start/resume sandbox policy, ordinary host policy, goal-resume compatibility, subagent plan context, and product help. Frontend covers planning API and assistant destinations. Browser covers blocked linked retry, unrestricted Codex execution, refresh, and responsive settings on a disposable LAN Core.",
+  "exclusions": "No Rust or native code changed. Full backend and UI suites, unrelated journeys, external provider inference, and physical-device checks are excluded; browser cases use an inert harness. A separate real app-server handshake will validate the Codex thread policy without running a model turn.",
   "expected_tests": {
-    "python": 11,
+    "python": 15,
     "frontend": 4,
     "native": 0,
     "playwright": 24
@@ -24,7 +24,8 @@
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_harness_chat_goals.py::test_saved_harness_effort_applies_to_goal_resume_and_continuation"
+    "tests/v3/test_harness_chat_goals.py::test_saved_harness_effort_applies_to_goal_resume_and_continuation",
+    "tests/v3/test_harness_adapters.py::test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox"
   ],
   "frontend": [
     "ui/src/api/chatPlanning.test.ts",

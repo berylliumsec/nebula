@@ -680,10 +680,11 @@ if __name__ == "__main__":
         store.create(
             HarnessProfile(
                 id="inert-codex",
-                name="Managed Codex planning fixture",
+                name="Unrestricted Codex planning fixture",
                 kind=HarnessKind.CODEX_APP_SERVER,
                 executable="/bin/true",
                 default_model="fixture",
+                permission_mode="unrestricted",
                 privacy={"local_only": True, "permits_sensitive_data": True},
                 capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
                 native_capabilities=HarnessNativeCapabilities(shell=True),

@@ -113,7 +113,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.harnesses",
     label: "Assistant harnesses",
-    description: "Configure assistant harnesses; managed Codex can submit a formal Core plan before using Core tools, pass its detailed scope to subagents, and Butler can hand off a pre-admission planning failure",
+    description: "Configure assistant harnesses; MCP-capable Codex can submit a formal Core plan under either profile permission mode, pass its detailed scope to subagents, and Butler can hand off a pre-admission planning failure",
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",

@@ -611,16 +611,19 @@ def test_unenforceable_harness_adapter_blocks_before_connection(tmp_path):
     assert session.id not in harness._connections
 
 
+@pytest.mark.parametrize("permission_mode", ["managed", "unrestricted"])
+# Keep this test ID available to the cumulative selection from PR #861.
 def test_managed_codex_submits_formal_plan_through_restricted_core_gateway(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, permission_mode
 ):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
     profile = store.create(
         HarnessProfile(
-            name="Managed Codex",
+            name="Codex planning fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
             executable="/bin/true",
+            permission_mode=permission_mode,
             default_model="codex-test",
             capabilities=HarnessCapabilities(models=["codex-test"], mcp=True),
             native_capabilities=HarnessNativeCapabilities(shell=True, web_search=True),
@@ -639,6 +642,21 @@ def test_managed_codex_submits_formal_plan_through_restricted_core_gateway(
         planning_enabled=True,
     )
     session = store.get(HarnessSession, harness_turn.harness_session_id)
+    if permission_mode == "unrestricted":
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **session.metadata,
+                    "execution_mode": "host",
+                    "harness_permission_mode": "unrestricted",
+                    "scope_snapshot": {"bypass_permissions": True},
+                    "approval_policy": "never",
+                }
+            },
+            expected_revision=session.revision,
+        )
     observed = {}
 
     async def planner(**kwargs):
