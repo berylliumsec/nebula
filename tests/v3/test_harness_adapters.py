@@ -1998,16 +1998,17 @@ def test_codex_process_enables_goals_for_the_goal_command():
 
 
 @pytest.mark.parametrize("resumed", [False, True])
+@pytest.mark.parametrize("unrestricted", [False, True])
 def test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox(
-    tmp_path, resumed
+    tmp_path, resumed, unrestricted
 ):
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
         profile = HarnessProfile(
-            name="Managed Codex",
+            name="Codex planning fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
             executable="/bin/true",
-            permission_mode="managed",
+            permission_mode="unrestricted" if unrestricted else "managed",
         )
         session = HarnessSession(
             engagement_id="synthetic-project",
@@ -2017,6 +2018,11 @@ def test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox(
             metadata={
                 "planning_enforced": True,
                 "execution_mode": "host",
+                "harness_permission_mode": (
+                    "unrestricted" if unrestricted else "managed"
+                ),
+                "scope_snapshot": {"bypass_permissions": unrestricted},
+                "approval_policy": "never" if unrestricted else "untrusted",
                 "native_capabilities": HarnessNativeCapabilities(
                     workspace_access=HarnessWorkspaceAccess.WRITE,
                     shell=True,
@@ -2075,6 +2081,20 @@ def test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox(
             "set": {"PATH": "/nonexistent"},
         }
         await connection.close()
+        with pytest.raises(
+            HarnessConfigurationError,
+            match="require the guarded Nebula gateway",
+        ):
+            await FixtureCodexAdapter(FixtureCodexRpc()).open(
+                AdapterOpenRequest(
+                    profile=profile,
+                    session=session,
+                    workspace=tmp_path,
+                    mcp_profiles=(),
+                    credential_store=CredentialStore(),
+                    permission_handler=no_permission,
+                )
+            )
 
     asyncio.run(scenario())
 

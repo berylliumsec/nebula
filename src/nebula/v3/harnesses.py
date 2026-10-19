@@ -4476,19 +4476,25 @@ class CodexAppServerAdapter(HarnessAdapter):
         core_planned = _codex_core_planned_session(
             request.session, request.profile.kind
         )
+        if core_planned and not managed_gateway:
+            raise HarnessConfigurationError(
+                "Core-planned Codex turns require the guarded Nebula gateway"
+            )
         native_capabilities = _session_native_capabilities(
             request.session, request.profile
         )
-        approval_policy: Literal["untrusted", "never"] = (
-            "never"
-            if _unrestricted_harness_session(request.session)
+        approval_policy: Literal["untrusted", "never"]
+        if core_planned:
+            approval_policy = "untrusted"
+        elif (
+            _unrestricted_harness_session(request.session)
             or request.session.metadata.get("approval_policy") == "never"
-            else (
-                "untrusted"
-                if managed_gateway or _native_capability_names(native_capabilities)
-                else "never"
-            )
-        )
+        ):
+            approval_policy = "never"
+        elif managed_gateway or _native_capability_names(native_capabilities):
+            approval_policy = "untrusted"
+        else:
+            approval_policy = "never"
         effective_mcp, _ = _mcp_runtime_config(
             request.mcp_profiles,
             request.credential_store,
@@ -4524,13 +4530,14 @@ class CodexAppServerAdapter(HarnessAdapter):
                 managed_gateway
                 and request.session.metadata.get("control_assistant") is True
             )
-            sandbox = (
-                "danger-full-access"
-                if _unrestricted_harness_session(request.session)
-                else "workspace-write"
-                if native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE
-                else "read-only"
-            )
+            if core_planned:
+                sandbox = "read-only"
+            elif _unrestricted_harness_session(request.session):
+                sandbox = "danger-full-access"
+            elif native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE:
+                sandbox = "workspace-write"
+            else:
+                sandbox = "read-only"
             raw_runtime_options = request.session.metadata.get("runtime_options")
             runtime_options = (
                 raw_runtime_options if isinstance(raw_runtime_options, dict) else {}
@@ -12011,16 +12018,16 @@ class HarnessRuntimeService:
             raise PlanningBlocked(plan.reason or "task planning is blocked")
         if plan.phase != "execution":
             profile = self.store.get(HarnessProfile, session.harness_profile_id)
-            if (
-                profile.kind
-                not in {HarnessKind.CLAUDE_AGENT_SDK, HarnessKind.CODEX_APP_SERVER}
-                or profile.permission_mode != "managed"
-                or session.metadata.get("harness_permission_mode") == "unrestricted"
-                or (
-                    profile.kind == HarnessKind.CODEX_APP_SERVER
-                    and not profile.capabilities.mcp
-                )
-            ):
+            managed_claude = (
+                profile.kind == HarnessKind.CLAUDE_AGENT_SDK
+                and profile.permission_mode == "managed"
+                and session.metadata.get("harness_permission_mode") != "unrestricted"
+            )
+            contained_codex = (
+                profile.kind == HarnessKind.CODEX_APP_SERVER
+                and profile.capabilities.mcp
+            )
+            if not (managed_claude or contained_codex):
                 reason = (
                     "This harness configuration cannot enforce restricted discovery "
                     "and native pre-use checks. Choose a managed Claude Agent SDK "
