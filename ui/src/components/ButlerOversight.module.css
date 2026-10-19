@@ -41,6 +41,15 @@
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .actions button, .section > button, .disclosure > button { min-height: 44px; }
 .workLink { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-top: 3px; color: var(--text); font-size: .8rem; }
+.transcript { min-width: 0; margin-top: 9px; border-top: 1px solid var(--border); }
+.transcript > summary { min-height: 44px; padding: 12px 0 0; box-sizing: border-box; cursor: pointer; font-size: .82rem; font-weight: 600; }
+.transcript > summary span { float: right; color: var(--muted); font-size: .76rem; font-weight: 400; }
+.transcriptBody { min-width: 0; display: grid; gap: 9px; padding: 8px 0 2px; }
+.transcriptAnswer { min-width: 0; border-left: 3px solid var(--focus); padding: 7px 10px; background: var(--surface); font-size: .82rem; }
+.transcriptProse { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.recoveryReports { min-width: 0; }
+.recoveryReports h4 { margin: 0 0 6px; font-size: .82rem; }
+.recoveryGoal { min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .settings { padding: 2px 0 0; font-size: .82rem; }
 .settings p { margin: 5px 0; }
 .settings ul { margin: 5px 0 0; padding-left: 20px; }

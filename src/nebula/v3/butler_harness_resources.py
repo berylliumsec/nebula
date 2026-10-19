@@ -244,6 +244,7 @@ def record_harness_quota(
     if snapshot.source not in {
         "codex.account/rateLimits/read",
         "claude.RateLimitEvent",
+        "grok._x.ai/billing",
     }:
         return 0
     observation_key = _hash(
@@ -508,7 +509,7 @@ def record_harness_rate_limit(
 
 
 class HarnessQuotaObserver:
-    """Read Codex quota after use and accept Claude numeric activity notices."""
+    """Read Codex and Grok account windows after use; accept Claude notices."""
 
     def __init__(self, store: NebulaStore, runtime_usage: RuntimeUsageService) -> None:
         self.store = store
@@ -541,7 +542,10 @@ class HarnessQuotaObserver:
             # diagnostic-expected: the profile may be removed after scheduling;
             # there is no configured harness left to check.
             return
-        if not profile.enabled or profile.kind != HarnessKind.CODEX_APP_SERVER:
+        if not profile.enabled or profile.kind not in {
+            HarnessKind.CODEX_APP_SERVER,
+            HarnessKind.GROK_ACP,
+        }:
             return
         loop = self._loop
         if loop is not None and loop.is_running():
@@ -642,7 +646,7 @@ class HarnessQuotaObserver:
         self, profile_id: str, *, force: bool = False
     ) -> HarnessQuotaRead:
         profile = self.store.get(HarnessProfile, profile_id)
-        if profile.kind != HarnessKind.CODEX_APP_SERVER:
+        if profile.kind not in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}:
             return await self.runtime_usage.read_harness_quota(
                 profile_id, refresh=force
             )

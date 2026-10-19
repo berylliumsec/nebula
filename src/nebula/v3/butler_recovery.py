@@ -126,7 +126,16 @@ _GLOBAL_INSTRUCTIONS = (
     "A project must be active before you create, start, or resume a main goal. "
     "You may create a draft main goal, start it separately, and create a child "
     "project under an Act project. "
+    "When a paused or blocked main goal needs a separate recovery goal, use "
+    "nebula.global.create_recovery_goal with the exact source goal ID. That "
+    "route requires Codex gpt-6-sol, max effort, and Daybreak Blue and links "
+    "the recovery result to this scheduled check. Save a concrete main-agent "
+    "plan with the goal and pass relevant steps to any delegated subagents. Do not use create_goal for "
+    "recovery work. The recovery goal must report an evidence-backed result and "
+    "the original goal must still be resumed separately when safe. "
     "Read existing projects, goals, chats, revisions, and runtimes before writes. "
+    "Query nebula.global.harness_quota before choosing a Codex or Grok runtime "
+    "when capacity matters; treat unavailable numeric quota as unknown. "
     "When a paused harness goal failed before admission because Plan before acting "
     "cannot be enforced, inspect its saved provider choice and use "
     "nebula.global.handoff_goal if Core declares the handoff safe. Continue in "
@@ -310,6 +319,29 @@ class ButlerRecoveryAgent:
             raise ValueError("Butler has no configured chat in this project")
         return session
 
+    def _record_model_turn(
+        self,
+        case_id: str,
+        backend: ChatBackend,
+        profile_id: str,
+        model: str,
+        turn_id: str,
+    ) -> None:
+        """Keep the scheduled check's transcript link as soon as its turn exists."""
+
+        current = self.store.get(ButlerRecoveryCase, case_id)
+        self.store.update(
+            ButlerRecoveryCase,
+            case_id,
+            {
+                "model_backend": backend,
+                "model_profile_id": profile_id,
+                "model": model,
+                "model_turn_id": turn_id,
+            },
+            expected_revision=current.revision,
+        )
+
     def _packet(self, case: ButlerRecoveryCase) -> str:
         event = ButlerRecoveryService(self.store).source_event(case)
         payload = ButlerEventPayload.model_validate(event.payload)
@@ -371,6 +403,37 @@ class ButlerRecoveryAgent:
             ),
             "precedents": precedent.model_dump(mode="json") if precedent else None,
         }
+        if case.signal == "butler.global_periodic_check":
+            recent_cases = self.store.find_entities(
+                ButlerRecoveryCase,
+                {"signal": "butler.global_periodic_check"},
+                engagement_id=case.engagement_id,
+                limit=10,
+                newest_first=True,
+            )
+            reports: list[dict[str, Any]] = []
+            for prior in recent_cases:
+                for goal_id in prior.recovery_goal_ids:
+                    goal = self.store.find_entity(ChatGoal, "id", goal_id)
+                    if goal is None:
+                        continue
+                    reports.append(
+                        {
+                            "case_id": prior.id,
+                            "recovery_goal_id": goal.id,
+                            "source_goal_id": goal.metadata.get(
+                                "butler_recovery_source_goal_id"
+                            ),
+                            "project_id": goal.engagement_id,
+                            "session_id": goal.session_id,
+                            "status": goal.status.value,
+                            "current_step": goal.current_step,
+                            "report": (
+                                goal.completion_summary or goal.blocked_reason or ""
+                            )[:700],
+                        }
+                    )
+            packet["recent_recovery_goals"] = reports[:8]
         return json.dumps(packet, ensure_ascii=False)[:16_000]
 
     async def run(
@@ -414,6 +477,9 @@ class ButlerRecoveryAgent:
                     reasoning_effort=config["harness_reasoning_effort"],
                     nebula_tools=True,
                     butler_recovery_case_id=case.id,
+                    on_turn_created=lambda started: self._record_model_turn(
+                        case.id, backend, profile_id, model, started.id
+                    ),
                 )
                 if turn.status != HarnessTurnStatus.COMPLETE:
                     raise ValueError("Butler's harness investigation did not complete")

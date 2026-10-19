@@ -30,6 +30,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["butler", "model", "effort", "reasoning", "max", "scheduled", "15 minutes", "background"],
   },
   {
+    id: "settings.butler-activity",
+    label: "Butler scheduled activity",
+    description: "Read Butler's saved scheduled-check transcript and linked recovery reports in Oversight",
+    category: "Automation",
+    scope: "Project",
+    target: "butler-oversight",
+    keywords: ["butler", "scheduled", "checks", "transcript", "history", "recovery goals", "oversight"],
+  },
+  {
     id: "settings.butler-voice",
     label: "Butler Voice timeout",
     description: "Pause paid Voice sessions after quiet time; open the compact control in Butler settings",
@@ -45,7 +54,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Models",
     scope: "Workspace",
     target: "usage-settings",
-    keywords: ["usage", "credits", "balance", "remaining", "quota", "rate limit", "tokens", "provider", "harness", "codex", "openrouter", "deepseek"],
+    keywords: ["usage", "credits", "balance", "remaining", "quota", "rate limit", "tokens", "provider", "harness", "codex", "grok", "grok build", "openrouter", "deepseek"],
   },
   {
     id: "settings.appearance",
@@ -104,11 +113,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.harnesses",
     label: "Assistant harnesses",
-    description: "Configure assistant harnesses; Plan before acting is a saved switch in each chat's Assistant settings, and Butler can hand off a pre-admission planning failure to a provider goal",
+    description: "Configure assistant harnesses; main agents can save Plan before acting and pass that plan to subagents, and Butler can hand off a pre-admission planning failure to a provider goal",
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "planning", "plan only", "safe handoff", "provider goal"],
+    keywords: ["harness", "codex", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "main agent planning", "subagent plan", "plan only", "safe handoff", "provider goal"],
   },
   {
     id: "settings.mcp",

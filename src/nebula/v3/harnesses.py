@@ -7583,6 +7583,24 @@ async def _grok_model_catalog(
 class GrokAcpAdapter(HarnessAdapter):
     kind = HarnessKind.GROK_ACP
 
+    async def read_account_usage(
+        self, profile: HarnessProfile, credential_store: CredentialStore
+    ) -> dict[str, Any]:
+        """Read Grok's billing extension without opening a model turn."""
+
+        del credential_store
+        rpc = await asyncio.wait_for(self._connect(profile, Path.cwd()), timeout=12)
+        try:
+            await asyncio.wait_for(self._initialize(rpc), timeout=30)
+            result = await asyncio.wait_for(
+                rpc.request("_x.ai/billing", {}), timeout=12
+            )
+            if not isinstance(result, dict):
+                raise HarnessTransportError("Grok returned invalid billing data")
+            return result
+        finally:
+            await rpc.close()
+
     # ACP's terminal capability flag describes client-provided terminals. Grok also
     # ships its own host-backed workspace tools, so remove those at process launch;
     # project I/O and commands must cross the audited Nebula MCP gateway instead.
@@ -9813,6 +9831,7 @@ class HarnessRuntimeService:
         files: dict[str, str] | None = None,
         nebula_tools: bool = True,
         butler_recovery_case_id: str | None = None,
+        on_turn_created: Callable[[HarnessTurn], None] | None = None,
         planning_target_turn_id: str | None = None,
         planning_tool_names: list[str] | None = None,
         planning_native_categories: list[str] | None = None,
@@ -9909,6 +9928,8 @@ class HarnessRuntimeService:
             )
         )
         try:
+            if on_turn_created is not None:
+                on_turn_created(turn)
             async for _event in self.stream_turn(turn.id):
                 pass
             completed = self.store.get(HarnessTurn, turn.id)
@@ -10556,10 +10577,14 @@ class HarnessRuntimeService:
         saved_chat = (
             self.store.get(ChatSession, chat_session_id) if chat_session_id else None
         )
-        planning_enabled = bool(
-            planning_enabled
-            if planning_enabled is not None
-            else saved_chat and saved_chat.metadata.get("planning_enabled", False)
+        planning_enabled = (
+            False
+            if saved_chat and isinstance(saved_chat.metadata.get("subagent_id"), str)
+            else bool(
+                planning_enabled
+                if planning_enabled is not None
+                else saved_chat and saved_chat.metadata.get("planning_enabled", False)
+            )
         )
         if planning_enabled and harness_mode in {"plan", "planning"}:
             raise HarnessConfigurationError(
@@ -18202,7 +18227,7 @@ class HarnessRuntimeService:
                     event.type == "usage" and event.reason_code != "rate_limited",
                 )
             if (
-                event.vendor == HarnessKind.CODEX_APP_SERVER
+                event.vendor in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
                 and event.type in {"usage", "completed"}
                 and self._quota_read_observer
             ):

@@ -21,7 +21,7 @@ from nebula.v3.domain import (
     HarnessTurnOrigin,
     ProviderProfile,
 )
-from nebula.v3.harnesses import CodexAppServerAdapter
+from nebula.v3.harnesses import CodexAppServerAdapter, GrokAcpAdapter
 from nebula.v3.runtime_usage import (
     parse_codex_usage,
     parse_deepseek_usage,
@@ -119,9 +119,46 @@ def test_codex_account_read_sends_no_model_turn(monkeypatch, tmp_path):
     assert rpc.closed
 
 
+def test_grok_billing_read_uses_control_rpc_without_model_turn(monkeypatch):
+    class Rpc:
+        def __init__(self):
+            self.calls = []
+            self.closed = False
+
+        async def request(self, method, params):
+            self.calls.append((method, params))
+            return {"config": {"creditUsagePercent": 35}}
+
+        async def close(self):
+            self.closed = True
+
+    rpc = Rpc()
+    adapter = GrokAcpAdapter()
+
+    async def connect(*args, **kwargs):
+        return rpc
+
+    async def initialize(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(adapter, "_connect", connect)
+    monkeypatch.setattr(adapter, "_initialize", initialize)
+    profile = HarnessProfile(
+        id="grok", name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+    )
+    result = asyncio.run(adapter.read_account_usage(profile, object()))
+    assert result["config"]["creditUsagePercent"] == 35
+    assert rpc.calls == [("_x.ai/billing", {})]
+    assert rpc.closed
+
+
 def test_runtime_usage_api_tracks_turns_and_refreshes_balance_without_leaking_key(
     tmp_path, monkeypatch
 ):
+    async def unreadable_grok_account(self, profile, credentials):
+        return {"config": {}}
+
+    monkeypatch.setattr(GrokAcpAdapter, "read_account_usage", unreadable_grok_account)
     monkeypatch.setenv("NEBULA_USAGE_TEST_KEY", "secret-for-test")
     store = NebulaStore(tmp_path / "nebula.db")
     store.create(

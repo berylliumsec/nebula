@@ -1531,6 +1531,7 @@ interface WireHarnessTurn extends WireEntity {
   chat_session_id?: string | null;
   run_id?: string | null;
   error?: string | null;
+  response?: string | null;
   metadata?: JsonObject;
 }
 
@@ -6621,9 +6622,10 @@ export class ApiClient {
     id: string,
     after = 0,
     signal?: AbortSignal,
+    limit = 10_000,
   ): Promise<HarnessActivityEventPage> {
     return this.request<WireHarnessActivityEventPage>(
-      `harness-turns/${encodeURIComponent(id)}/events?after=${after}&limit=10000`,
+      `harness-turns/${encodeURIComponent(id)}/events?after=${after}&limit=${limit}`,
       { signal },
     ).then((value) => ({
       events: value.events.map(mapHarnessActivityEvent),
@@ -6643,6 +6645,7 @@ export class ApiClient {
       chatSessionId: value.chat_session_id ?? undefined,
       runId: value.run_id ?? undefined,
       error: value.error ?? undefined,
+      response: value.response ?? undefined,
       retryOfTurnId:
         typeof value.metadata?.retry_of_turn_id === "string"
           ? value.metadata.retry_of_turn_id

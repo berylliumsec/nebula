@@ -36,6 +36,8 @@ from .domain import (
     ChatBackend,
     ChatGoal,
     ChatGoalStatus,
+    ChatMessage,
+    ChatRole,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -1630,7 +1632,52 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "resources": resources,
             "decisions": [item.model_dump(mode="json") for item in decisions],
             "actions": [item.model_dump(mode="json") for item in actions],
-            "recovery_cases": [item.model_dump(mode="json") for item in recovery_cases],
+            "recovery_cases": [
+                {
+                    **item.model_dump(mode="json"),
+                    "recovery_goals": [
+                        {
+                            "id": recovery_goal.id,
+                            "project_id": recovery_goal.engagement_id,
+                            "session_id": recovery_goal.session_id,
+                            "source_goal_id": recovery_goal.metadata.get(
+                                "butler_recovery_source_goal_id"
+                            ),
+                            "objective": recovery_goal.objective,
+                            "status": recovery_goal.status.value,
+                            "current_step": recovery_goal.current_step,
+                            "updated_at": recovery_goal.updated_at.isoformat(),
+                            "report": (
+                                recovery_goal.completion_summary
+                                or recovery_goal.blocked_reason
+                                or next(
+                                    (
+                                        message.content
+                                        for message in service.store.list_session_entities(
+                                            ChatMessage,
+                                            recovery_goal.session_id,
+                                            newest_first=True,
+                                            limit=10,
+                                        )
+                                        if message.role == ChatRole.ASSISTANT
+                                        and not message.metadata.get("retracted_at")
+                                        and message.content.strip()
+                                    ),
+                                    "",
+                                )
+                            )[:1000],
+                        }
+                        for goal_id in item.recovery_goal_ids
+                        if (
+                            recovery_goal := service.store.find_entity(
+                                ChatGoal, "id", goal_id
+                            )
+                        )
+                        is not None
+                    ],
+                }
+                for item in recovery_cases
+            ],
             "last_event_sequence": state.last_event_sequence if state else 0,
             "summary": {
                 "watched_goals": watch_count,
@@ -1690,7 +1737,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "coverage_gaps": [
                 "Agent reporting requires a goal turn with verified provider tools; harness report adapters are not connected yet.",
                 "OpenRouter account checks require a separate management key and run after provider setup or use and manual refresh; external spending is not polled periodically.",
-                "Harness quota alerts require authoritative Codex account windows or numeric Claude SDK rate-limit notices; Grok and missing percentages remain unavailable.",
+                "Harness quota alerts require reported Codex or Grok account windows or numeric Claude SDK notices; missing percentages remain unavailable.",
                 "Semantic review uses a project goal's provider when background evidence sharing is permitted; unsupported runtimes and model failures produce explicit unavailable decisions. Steer and Delegate use only explicitly advertised bounded actions.",
                 "Live event push is not connected yet.",
             ],

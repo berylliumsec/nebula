@@ -2660,7 +2660,13 @@ def create_app(
     from .control_assistant_work import ControlAssistantWork
 
     control_assistant_work = ControlAssistantWork(
-        store, provider_chat, chat_queue, harness_runtime, app, token
+        store,
+        provider_chat,
+        chat_queue,
+        harness_runtime,
+        app,
+        token,
+        harness_quota_observer,
     )
     from .butler_authority import ButlerAuthorityService
 

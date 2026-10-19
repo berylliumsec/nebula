@@ -81,6 +81,15 @@ EMPTY_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {},
 }
+HARNESS_QUOTA_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "refresh": {"type": "boolean"},
+    },
+    "required": ["profile_id"],
+}
 TIMELINE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -177,7 +186,7 @@ REQUIRE_PLAN_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
-        "target_kind": {"type": "string", "enum": ["agent", "goal", "child", "turn"]},
+        "target_kind": {"type": "string", "enum": ["agent", "goal", "turn"]},
         "target_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "expected_revision": {"type": "integer", "minimum": 1},
         "reason": {"type": "string", "minLength": 20, "maxLength": 2000},
@@ -538,6 +547,7 @@ class ControlAssistantWork:
         harness: HarnessRuntimeService,
         app: FastAPI,
         token: str,
+        quota_observer: Any | None = None,
     ) -> None:
         self.store = store
         self.chat = chat
@@ -545,6 +555,7 @@ class ControlAssistantWork:
         self.harness = harness
         self.app = app
         self.token = token
+        self.quota_observer = quota_observer
         self.goals = ChatGoalService(store, harness)
         self.schedules = ChatScheduleService(store)
         self.timeline = ButlerTimeline(store)
@@ -810,6 +821,10 @@ class ControlAssistantWork:
         """Force planning for one exact target using fresh Core revisions."""
 
         session = self._chat(project_id, arguments.get("session_id"))
+        if isinstance(session.metadata.get("subagent_id"), str):
+            raise ValueError(
+                "require a plan on the main agent; its subagents receive that plan"
+            )
         kind = arguments.get("target_kind")
         target_id = _text(arguments.get("target_id"), "target_id", 200)
         expected = arguments.get("expected_revision")
@@ -1024,6 +1039,36 @@ class ControlAssistantWork:
             "more_missions": len(runs) > 30,
             "attention": attention[:5],
             "more_attention": len(attention) > 5,
+        }
+
+    async def harness_quota(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Read a configured harness's measured account window for agents."""
+
+        self._project(project_id)
+        profile = self.store.get(
+            HarnessProfile, _text(arguments.get("profile_id"), "profile_id", 200)
+        )
+        if not profile.enabled:
+            raise ValueError(
+                "choose an enabled harness profile from the runtime catalog"
+            )
+        if self.quota_observer is None:
+            return {
+                "profile_id": profile.id,
+                "state": "unavailable",
+                "detail": "Quota reads are unavailable in this Core.",
+                "snapshots": [],
+            }
+        read = await self.quota_observer.refresh(
+            profile.id, force=arguments.get("refresh") is True
+        )
+        return {
+            "profile_id": profile.id,
+            "profile_name": profile.name,
+            "harness_kind": profile.kind.value,
+            **read.model_dump(mode="json"),
         }
 
     def chat_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
@@ -1288,6 +1333,11 @@ class ControlAssistantWork:
                     "allow_agent_messaging",
                     "max_active_subagents",
                     "subagent_reasoning_effort",
+                    "harness_reasoning_effort",
+                    "harness_service_tier",
+                    "harness_cyber_access_program",
+                    "butler_recovery_case_id",
+                    "butler_recovery_source_goal_id",
                 }
             },
             **goal.model_dump(),
@@ -2714,6 +2764,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.harness_quota",
+        "Read one enabled harness's vendor-reported account quota windows by profile ID from the runtime catalog. Grok and Codex can report included-credit percentages; unavailable is unknown, not zero. Set refresh true for a new vendor read.",
+        HARNESS_QUOTA_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.chat",
         "Read recent messages and pending activity for one listed assistant chat. After a follow-up, inspect this and the queue before reporting what the agent achieved.",
         CHAT_TARGET_SCHEMA,
@@ -3007,6 +3063,8 @@ async def dispatch_work_tool(
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
         return work.overview(project_id)
+    if name == "nebula.work.harness_quota":
+        return await work.harness_quota(project_id, arguments)
     if name == "nebula.work.chat":
         return work.chat_detail(project_id, arguments.get("session_id"))
     if name == "nebula.work.timeline":

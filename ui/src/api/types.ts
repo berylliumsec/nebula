@@ -1931,11 +1931,12 @@ export interface HarnessTurnDetail {
     | "failed"
     | "cancelled"
     | "interrupted";
-  origin: "chat" | "mission";
+  origin: "chat" | "mission" | "analysis";
   harnessSessionId: Identifier;
   chatSessionId?: Identifier;
   runId?: Identifier;
   error?: string;
+  response?: string;
   retryOfTurnId?: Identifier;
 }
 

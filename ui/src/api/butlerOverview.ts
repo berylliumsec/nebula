@@ -89,9 +89,24 @@ export interface ButlerRecoveryCase {
   outcome: string;
   sourceSessionId?: string;
   targetSessionId?: string;
+  modelBackend?: "provider" | "harness";
+  modelTurnId?: string;
+  recoveryGoals: ButlerRecoveryGoal[];
   createdAt?: string;
   finishedAt?: string;
   steps: Array<{ id: string; operation: string; status: string; started_at?: string; finished_at?: string }>;
+}
+
+export interface ButlerRecoveryGoal {
+  id: string;
+  projectId: string;
+  sessionId: string;
+  sourceGoalId?: string;
+  objective: string;
+  status: string;
+  currentStep: number;
+  updatedAt: string;
+  report: string;
 }
 
 export interface ButlerOpenRouterResource {
@@ -246,6 +261,19 @@ interface WireButlerOverview {
     outcome: string;
     source_session_id?: string | null;
     target_session_id?: string | null;
+    model_backend?: "provider" | "harness" | null;
+    model_turn_id?: string | null;
+    recovery_goals?: Array<{
+      id: string;
+      project_id: string;
+      session_id: string;
+      source_goal_id?: string | null;
+      objective: string;
+      status: string;
+      current_step: number;
+      updated_at: string;
+      report: string;
+    }>;
     created_at?: string | null;
     finished_at?: string | null;
     steps?: ButlerRecoveryCase["steps"];
@@ -392,6 +420,19 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       outcome: item.outcome,
       sourceSessionId: item.source_session_id ?? undefined,
       targetSessionId: item.target_session_id ?? undefined,
+      modelBackend: item.model_backend ?? undefined,
+      modelTurnId: item.model_turn_id ?? undefined,
+      recoveryGoals: (item.recovery_goals ?? []).map((goal) => ({
+        id: goal.id,
+        projectId: goal.project_id,
+        sessionId: goal.session_id,
+        sourceGoalId: goal.source_goal_id ?? undefined,
+        objective: goal.objective,
+        status: goal.status,
+        currentStep: goal.current_step,
+        updatedAt: goal.updated_at,
+        report: goal.report,
+      })),
       createdAt: item.created_at ?? undefined,
       finishedAt: item.finished_at ?? undefined,
       steps: item.steps ?? [],

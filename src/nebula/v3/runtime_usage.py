@@ -27,8 +27,12 @@ from .domain import (
     ProviderProfile,
     RunBackend,
 )
-from .harnesses import CodexAppServerAdapter
-from .harness_quota import HarnessQuotaSnapshot, codex_quota_snapshots
+from .harnesses import CodexAppServerAdapter, GrokAcpAdapter
+from .harness_quota import (
+    HarnessQuotaSnapshot,
+    codex_quota_snapshots,
+    grok_quota_snapshots,
+)
 from .storage import NebulaStore
 
 
@@ -268,6 +272,35 @@ def parse_codex_usage(payload: Any) -> VendorUsage:
     )
 
 
+def parse_grok_usage(payload: Any) -> VendorUsage:
+    """Expose Grok's reported included-credit window with its shared scope."""
+
+    checked_at = datetime.now(timezone.utc)
+    snapshots = grok_quota_snapshots(payload, observed_at=checked_at)
+    if not snapshots:
+        return VendorUsage(
+            state="unavailable",
+            source="Grok account",
+            detail="Grok did not report a numeric included-credit window for this account.",
+            checked_at=checked_at,
+        )
+    snapshot = snapshots[0]
+    return VendorUsage(
+        state="available",
+        source="Grok account",
+        detail="Grok reported included-credit use for this period. A shared pool may include other Grok products.",
+        checked_at=checked_at,
+        windows=[
+            UsageWindow(
+                label=snapshot.window_label,
+                used_percent=round(snapshot.used_percent),
+                resets_at=snapshot.resets_at,
+            )
+        ],
+        quota_snapshots=snapshots,
+    )
+
+
 def parse_openrouter_usage(payload: Any) -> VendorUsage:
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
@@ -351,10 +384,10 @@ class RuntimeUsageService:
         cached = self._cache.get(key)
         if not refresh and cached and time.monotonic() - cached[0] < 120:
             return cached[1]
-        if (
-            isinstance(profile, HarnessProfile)
-            and profile.kind.value != "codex_app_server"
-        ):
+        if isinstance(profile, HarnessProfile) and profile.kind.value not in {
+            "codex_app_server",
+            "grok_acp",
+        }:
             return _unsupported(profile)
         if isinstance(profile, ProviderProfile) and profile.provider_type not in {
             "openrouter",
@@ -384,10 +417,16 @@ class RuntimeUsageService:
                 )
         try:
             if isinstance(profile, HarnessProfile):
-                payload = await CodexAppServerAdapter().read_account_usage(
-                    profile, self.credentials
-                )
-                value = parse_codex_usage(payload)
+                if profile.kind.value == "grok_acp":
+                    payload = await GrokAcpAdapter().read_account_usage(
+                        profile, self.credentials
+                    )
+                    value = parse_grok_usage(payload)
+                else:
+                    payload = await CodexAppServerAdapter().read_account_usage(
+                        profile, self.credentials
+                    )
+                    value = parse_codex_usage(payload)
             else:
                 secret_ref = profile.secret_ref
                 if secret_ref is None:

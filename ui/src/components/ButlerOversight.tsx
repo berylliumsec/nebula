@@ -6,6 +6,7 @@ import { acknowledgeButlerIncident, butlerResourceKey, getButlerAuthority, updat
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useButlerOverview } from "./useButlerOverview";
 import { ButlerIssues } from "./ButlerIssues";
+import { ButlerScheduledTranscript } from "./ButlerScheduledTranscript";
 import styles from "./ButlerOversight.module.css";
 
 function timeLabel(value?: string): string | undefined {
@@ -117,9 +118,11 @@ function ActionRow({ action, projectId, onNavigate }: {
   </li>;
 }
 
-function RecoveryRow({ item, projectId, onNavigate }: {
+function RecoveryRow({ item, projectId, onNavigate, api, coreState }: {
   item: ButlerRecoveryCase;
   projectId: string;
+  api?: ApiClient;
+  coreState: "checking" | "online" | "offline";
   onNavigate?(path: string): void;
 }) {
   const status = item.status.replaceAll("_", " ");
@@ -132,6 +135,7 @@ function RecoveryRow({ item, projectId, onNavigate }: {
     {item.steps.length > 0 && <details className={styles.evidence}><summary>Investigation steps · {item.steps.length}</summary>
       <ul>{item.steps.map((step) => <li key={step.id}>{step.operation.replace("nebula.work.", "").replaceAll("_", " ")} · {step.status}</li>)}</ul>
     </details>}
+    {item.trigger === "periodic" && <ButlerScheduledTranscript item={item} api={api} coreState={coreState} onNavigate={onNavigate} />}
     <WorkLink projectId={projectId} sessionId={item.targetSessionId ?? item.sourceSessionId} onNavigate={onNavigate} label="Open parent chat" />
   </li>;
 }
@@ -296,22 +300,28 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
 }
 
 /** Standalone project oversight surface. Core's overview is the sole state authority. */
-export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncidentChanged, compact = false }: {
+export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncidentChanged, compact = false, openRevision = 0 }: {
   api?: ApiClient;
   projectId: string;
   coreState: "checking" | "online" | "offline";
   onNavigate?(path: string): void;
   onIncidentChanged?(): void;
   compact?: boolean;
+  openRevision?: number;
 }) {
   const { overview, loading, loadingMore, error, refresh, loadMore } = useButlerOverview(api, projectId, coreState);
-  const [expanded, setExpanded] = useState(!compact);
+  const [expanded, setExpanded] = useState(!compact || openRevision > 0);
+  useEffect(() => { if (openRevision > 0) setExpanded(true); }, [openRevision]);
   const incidentsAvailable = overview?.capabilities.incidents ?? false;
   const decisionsAvailable = overview?.capabilities.decisions ?? false;
   const uncertainActions = overview?.actions.filter((action) => action.status === "uncertain" || action.status === "held") ?? [];
   const recoveryAttention = overview?.recoveryCases.filter((item) => item.status === "needs_attention" || item.status === "uncertain") ?? [];
   const recoveryActive = overview?.recoveryCases.filter((item) => ["observed", "investigating", "verifying"].includes(item.status)) ?? [];
   const recoverySettled = overview?.recoveryCases.filter((item) => !recoveryAttention.includes(item) && !recoveryActive.includes(item)) ?? [];
+  const scheduled = overview?.recoveryCases.filter((item) => item.trigger === "periodic") ?? [];
+  const immediateAttention = recoveryAttention.filter((item) => item.trigger === "immediate");
+  const immediateActive = recoveryActive.filter((item) => item.trigger === "immediate");
+  const immediateSettled = recoverySettled.filter((item) => item.trigger === "immediate");
   const otherActions = overview?.actions.filter((action) => action.status !== "uncertain" && action.status !== "held") ?? [];
   const shownActions = [...uncertainActions, ...otherActions.slice(0, 3)];
   const olderActions = otherActions.slice(3);
@@ -358,7 +368,7 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
       {ackError?.projectId === projectId && <p role="alert" className={styles.error}>Could not acknowledge incident. {ackError.message}</p>}
       {openIncident && <ul className={styles.list} aria-label="Open Butler incidents"><IncidentRow incident={openIncident} goals={overview?.watchedGoals ?? []} projectId={projectId} onNavigate={onNavigate} onAcknowledge={(incident) => void acknowledge(incident)} acknowledging={acknowledging?.projectId === projectId && acknowledging.incidentId === openIncident.id} canAcknowledge={canAcknowledge} compact /></ul>}
       {uncertainActions.length > 0 && <ul className={styles.list} aria-label="Uncertain Butler actions"><ActionRow action={uncertainActions[0]} projectId={projectId} onNavigate={onNavigate} /></ul>}
-      {recoveryAttention.length > 0 && <ul className={styles.list} aria-label="Butler recovery needing attention"><RecoveryRow item={recoveryAttention[0]} projectId={projectId} onNavigate={onNavigate} /></ul>}
+      {recoveryAttention.length > 0 && <ul className={styles.list} aria-label="Butler recovery needing attention"><RecoveryRow item={recoveryAttention[0]} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} /></ul>}
       {openCount > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {openCount} open incidents</button>}
       {uncertainActions.length > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {uncertainActions.length} uncertain actions</button>}
       {recoveryAttention.length > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {recoveryAttention.length} recovery cases needing attention</button>}
@@ -387,15 +397,23 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
         {overview.globalInstructions.lastCheckAt && <p className={styles.note}>Last check: <time dateTime={overview.globalInstructions.lastCheckAt}>{new Date(overview.globalInstructions.lastCheckAt).toLocaleString()}</time></p>}
         {overview.globalInstructions.nextCheckAt && <p className={styles.note}>Next due: <time dateTime={overview.globalInstructions.nextCheckAt}>{new Date(overview.globalInstructions.nextCheckAt).toLocaleString()}</time></p>}
       </details>}
-      {overview.capabilities.recovery && (overview.authority === "act" || overview.summary.recoveryCases > 0) && <div className={styles.section} role="region" aria-label="Butler recovery">
-        <h3>Autonomous recovery <span>{overview.summary.recoveryActive} active · {overview.summary.recoveryAttention} need attention</span></h3>
-        {recoveryAttention.length + recoveryActive.length > 0 ? <ul className={styles.list}>
-          {[...recoveryAttention, ...recoveryActive].map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} />)}
-        </ul> : <p className={styles.note}>No recovery cases need attention.</p>}
-        {recoverySettled.length > 0 && <details className={styles.disclosure}><summary>Past checks <span>{recoverySettled.length}</span></summary>
-          <ul className={styles.list}>{recoverySettled.map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} />)}</ul>
+      {overview.capabilities.recovery && (overview.globalInstructions || scheduled.length > 0) && <div className={styles.section} role="region" aria-label="Butler scheduled activity">
+        <h3>Scheduled activity <span>{scheduled.length} saved check{scheduled.length === 1 ? "" : "s"}</span></h3>
+        {scheduled.length > 0 ? <ul className={styles.list}><RecoveryRow item={scheduled[0]} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} /></ul>
+          : <p className={styles.note}>No scheduled checks saved in this project yet.</p>}
+        {scheduled.length > 1 && <details className={styles.disclosure}><summary>Earlier checks <span>{scheduled.length - 1}</span></summary>
+          <ul className={styles.list}>{scheduled.slice(1).map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} />)}</ul>
         </details>}
         {overview.nextRecoveryOffset !== undefined && <button className="button quiet" type="button" disabled={loadingMore !== undefined || coreState !== "online"} onClick={() => void loadMore("recovery")}>{loadingMore === "recovery" ? "Loading…" : "Show more checks"}</button>}
+      </div>}
+      {overview.capabilities.recovery && (overview.authority === "act" || immediateAttention.length + immediateActive.length + immediateSettled.length > 0) && <div className={styles.section} role="region" aria-label="Butler recovery">
+        <h3>Autonomous recovery <span>{immediateActive.length} active · {immediateAttention.length} need attention</span></h3>
+        {immediateAttention.length + immediateActive.length > 0 ? <ul className={styles.list}>
+          {[...immediateAttention, ...immediateActive].map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} />)}
+        </ul> : <p className={styles.note}>No recovery cases need attention.</p>}
+        {immediateSettled.length > 0 && <details className={styles.disclosure}><summary>Past checks <span>{immediateSettled.length}</span></summary>
+          <ul className={styles.list}>{immediateSettled.map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} />)}</ul>
+        </details>}
       </div>}
       {incidentsAvailable ? <div className={styles.section} aria-label="Butler incidents">
         <h3>Needs attention <span>{overview.summary.openIncidents} open · {overview.summary.acknowledgedIncidents} acknowledged</span></h3>

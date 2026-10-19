@@ -9,6 +9,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES, ButlerCapabilities
 from nebula.v3.butler_authority import policy_id
 from nebula.v3.butler_instructions import read_butler_instructions
+from nebula.v3.butler_global_capabilities import ButlerGlobalActions
 from nebula.v3.butler_oversight import ButlerEventPayload, _append_project_event
 from nebula.v3.domain import (
     ButlerAuthorityPolicy,
@@ -18,6 +19,13 @@ from nebula.v3.domain import (
     ProviderProfile,
     EngagementStatus,
     ChatGoal,
+    ChatGoalStatus,
+    HarnessCapabilities,
+    HarnessKind,
+    HarnessModelOptions,
+    HarnessProfile,
+    HarnessRuntimeOption,
+    HarnessSession,
     utc_now,
 )
 from nebula.v3.runtime_platform import RuntimePlatform
@@ -63,6 +71,114 @@ def _capabilities(tmp_path):
         store, artifacts, selected.id, work=app.state.control_assistant_work
     )
     return store, selected, own_chat, foreign_chat, capabilities
+
+
+def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path):
+    store, selected, own_chat, _, ordinary = _capabilities(tmp_path)
+    selected = store.update(
+        Engagement,
+        selected.id,
+        {"status": EngagementStatus.ACTIVE},
+        expected_revision=selected.revision,
+    )
+    policy = store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(selected.id), engagement_id=selected.id, authority="act"
+        )
+    )
+    profile = store.create(
+        HarnessProfile(
+            name="Recovery Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="gpt-6-sol",
+            privacy={"local_only": True},
+            capabilities=HarnessCapabilities(
+                models=["gpt-6-sol"],
+                model_options=[
+                    HarnessModelOptions(
+                        model="gpt-6-sol",
+                        reasoning_efforts=[HarnessRuntimeOption(id="max", label="Max")],
+                        cyber_access_programs=["daybreakBlue"],
+                    ),
+                ],
+            ),
+        )
+    )
+    source = store.create(
+        ChatGoal(
+            engagement_id=selected.id,
+            session_id=own_chat.id,
+            objective="Continue existing work",
+            completion_criteria=["Report result"],
+            status=ChatGoalStatus.PAUSED,
+        )
+    )
+    folder = tmp_path / ".butler"
+    folder.mkdir()
+    (folder / "BUTLER.md").write_text("Recover paused goals with evidence.")
+    digest = read_butler_instructions(tmp_path).sha256
+    with store.transaction(immediate=True) as transaction:
+        event = _append_project_event(
+            transaction,
+            engagement_id=selected.id,
+            event_type="butler.global_periodic_check",
+            payload=ButlerEventPayload(
+                project_id=selected.id,
+                source="core",
+                actor_role="core",
+                summary="Global work check",
+                metrics={"instructions_sha256": digest},
+                verification_state="core_observed",
+            ),
+            idempotency_key="recovery-goal-case",
+            now=utc_now(),
+        )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=selected.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id=event.id,
+            source_event_sequence=event.sequence,
+            authority_revision=policy.revision,
+            status="investigating",
+            summary="Global work check",
+        )
+    )
+    actions = ButlerGlobalActions(
+        store, ordinary._work, tmp_path, case.id, runtime_local=True
+    )
+    arguments = {
+        "project_id": selected.id,
+        "source_goal_id": source.id,
+        "expected_project_revision": selected.revision,
+        "expected_authority_revision": policy.revision,
+        "objective": "Unblock the existing goal",
+        "completion_criteria": ["Report the safe resume path"],
+        "plan": ["Inspect the paused goal", "Report evidence to Butler"],
+        "start": False,
+    }
+    created = asyncio.run(actions.create_recovery_goal(arguments))
+    assert created["created"] is True
+    goal = store.get(ChatGoal, created["goal"]["id"])
+    assert goal.metadata == {
+        "butler_recovery_case_id": case.id,
+        "butler_recovery_source_goal_id": source.id,
+    }
+    assert goal.plan == arguments["plan"]
+    assert store.get(ButlerRecoveryCase, case.id).recovery_goal_ids == [goal.id]
+    session = store.get(ChatSession, goal.session_id)
+    assert session.harness_profile_id == profile.id and session.model == "gpt-6-sol"
+    harness_session = store.get(HarnessSession, session.harness_session_id)
+    assert harness_session.metadata["runtime_options"]["reasoning_effort"] == "max"
+    assert (
+        harness_session.metadata["runtime_options"]["cyber_access_program"]
+        == "daybreakBlue"
+    )
+    again = asyncio.run(actions.create_recovery_goal(arguments))
+    assert again["already_exists"] is True
+    assert store.get(ButlerRecoveryCase, case.id).recovery_goal_ids == [goal.id]
 
 
 def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
@@ -189,6 +305,25 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             selected.id,
             other.id,
         }
+
+        async def quota(project_id, arguments):
+            assert project_id == selected.id
+            assert arguments["profile_id"] == "grok"
+            return {"state": "available", "snapshots": [{"remaining_percent": 19}]}
+
+        monkeypatch.setattr(ordinary._work, "harness_quota", quota)
+        quota_matches = await global_butler.search({"query": "Grok remaining quota"})
+        assert "nebula.global.harness_quota" in {
+            item["operation"] for item in quota_matches["matches"]
+        }
+        quota_result = await global_butler.invoke(
+            {
+                "operation": "nebula.global.harness_quota",
+                "arguments": {"project_id": selected.id, "profile_id": "grok"},
+            },
+            change=False,
+        )
+        assert quota_result["snapshots"][0]["remaining_percent"] == 19
         handoff_matches = await global_butler.search(
             {"query": "handoff a paused harness planning goal"}
         )

@@ -1,13 +1,13 @@
 {
-  "change_digest": "f4baf41e3ddd36a94b46b9bae84bd93d170b12cfa4e70551ddb20d2bb317bbf8",
-  "reviewed_by": "Codex focused review for Core restart subagent recovery",
-  "reason": "Five collected Python cases cover paused-goal time settlement, nested running children, bounded sibling scans, pending-message restart selection, active-time accounting, and interrupted child recovery.",
-  "exclusions": "No frontend, Playwright, or native code changed. The operator-visible entry is Core restart, checked separately with a synthetic LAN Core instance and the simulation deployment gate.",
+  "change_digest": "d0ee2acce0124df9a9f70e058d574a8083a4446fae568ba48d94893f1ca8216b",
+  "reviewed_by": "Codex focused review for Butler scheduled history, recovery, planning, and Grok quota",
+  "reason": "Eighteen exact backend cases cover scheduled recovery linkage and runtime, saved transcript projection, precedent review, main-agent plan handoff and legacy child rounds, Grok billing reads and agent queries, the 10001st linked turn, settings discovery, and Chroma digest sync. Five UI files cover the mapped transcript, failure and reload states, usage, and assistant navigation. Selected browser journeys exercise the production LAN Butler check and direct history link, planning control, and provider/harness usage at desktop and mobile Chromium/WebKit widths.",
+  "exclusions": "No native code changed. Unrelated suites are excluded. Three full-file Python failures were reproduced on unchanged origin/main (background child message validation, cloud subagent consent-family expectation, and child-budget error wording), so exact relevant Python cases are selected. The Butler global browser journey covers Oversight, avoiding a redundant separate oversight case.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 0,
+    "python": 18,
+    "frontend": 43,
     "native": 0,
-    "playwright": 0
+    "playwright": 15
   },
   "python_versions": [
     "3.12"
@@ -15,13 +15,45 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_subagents.py::test_root_goal_sees_running_grandchild_below_completed_child",
-    "tests/v3/test_chat_subagents.py::test_restart_replays_only_subagents_with_unfinished_delivery",
-    "tests/v3/test_chat_subagents.py::test_restart_keeps_recoverable_subagent_round_live",
-    "tests/v3/test_chat_subagent_lifecycle.py::test_paused_goal_settlement_skips_subagent_scan",
-    "tests/v3/test_chat_subagent_lifecycle.py::test_goal_active_time_runs_while_a_subagent_works"
+    "tests/v3/test_butler_capabilities.py::test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue",
+    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
+    "tests/v3/test_butler_harness_resources.py::test_manual_codex_quota_refresh_persists_project_resource",
+    "tests/v3/test_butler_harness_resources.py::test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent",
+    "tests/v3/test_butler_oversight.py::test_scheduled_check_overview_links_saved_turn_and_recovery_report",
+    "tests/v3/test_butler_review.py::test_completed_turn_has_precedent_query_before_semantic_review",
+    "tests/v3/test_chat_planning.py::test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot",
+    "tests/v3/test_chat_planning.py::test_legacy_harness_subagent_cannot_start_a_second_planning_gate",
+    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
+    "tests/v3/test_chat_subagents.py::test_message_to_a_finished_subagent_starts_another_round",
+    "tests/v3/test_harness_quota.py::test_grok_billing_percentage_and_period_are_vendor_scoped",
+    "tests/v3/test_harness_quota.py::test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown",
+    "tests/v3/test_runtime_usage.py::test_grok_billing_read_uses_control_rpc_without_model_turn",
+    "tests/v3/test_runtime_usage.py::test_runtime_usage_api_tracks_turns_and_refreshes_balance_without_leaking_key",
+    "tests/v3/test_chat_goals.py::test_goal_turn_after_ten_thousand_links_persists_and_completes",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_scheduled_history_and_grok_quota",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/butlerOverview.test.ts",
+    "ui/src/components/ButlerOversight.test.tsx",
+    "ui/src/components/RuntimeUsagePanel.test.tsx",
+    "ui/src/assistantDestinations.test.ts",
+    "ui/src/components/nebulaAssistantActions.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "butler-global/assistant-real-desktop",
+    "butler-global/assistant-real-chromium-390",
+    "butler-global/assistant-real-webkit-390",
+    "chat-planning/assistant-real-desktop",
+    "chat-planning/assistant-real-chromium-390",
+    "chat-planning/assistant-real-webkit-390",
+    "runtime-usage/desktop",
+    "runtime-usage/mobile-chromium",
+    "runtime-usage/mobile-webkit",
+    "runtime-usage/assistant-real-desktop",
+    "runtime-usage/assistant-real-chromium-390",
+    "runtime-usage/assistant-real-webkit-390"
+  ]
 }

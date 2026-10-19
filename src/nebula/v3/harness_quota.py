@@ -19,7 +19,9 @@ class HarnessQuotaSnapshot(BaseModel):
     """One vendor-reported quota window; never inferred from turn usage."""
 
     harness_kind: HarnessKind
-    source: Literal["codex.account/rateLimits/read", "claude.RateLimitEvent"]
+    source: Literal[
+        "codex.account/rateLimits/read", "claude.RateLimitEvent", "grok._x.ai/billing"
+    ]
     window_id: str = Field(min_length=1, max_length=160)
     window_label: str = Field(min_length=1, max_length=160)
     used_percent: float = Field(ge=0, le=100)
@@ -114,6 +116,59 @@ def codex_quota_snapshots(
     if not snapshots and candidates and isinstance(payload.get("rateLimits"), dict):
         snapshots = extract([("included_usage", payload["rateLimits"])])
     return snapshots
+
+
+def grok_quota_snapshots(
+    payload: Any, *, observed_at: datetime | None = None
+) -> list[HarnessQuotaSnapshot]:
+    """Read Grok's reported included-credit window, never session token use.
+
+    A shared subscription pool can include other Grok products. Missing or
+    malformed percentages remain unknown; no spend-derived estimate is used.
+    """
+
+    config = payload.get("config") if isinstance(payload, dict) else None
+    if not isinstance(config, dict):
+        return []
+    used = _percent(config.get("creditUsagePercent"))
+    period = config.get("currentPeriod")
+    if used is None or not isinstance(period, dict):
+        return []
+    kind = period.get("type")
+    if not isinstance(kind, str):
+        return []
+    label = {
+        "USAGE_PERIOD_TYPE_WEEKLY": "Weekly",
+        "USAGE_PERIOD_TYPE_MONTHLY": "Monthly",
+    }.get(kind)
+    if label is None:
+        return []
+    resets_at = None
+    end = period.get("end")
+    if isinstance(end, str):
+        try:
+            candidate = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            if candidate.utcoffset() is not None:
+                resets_at = candidate.astimezone(timezone.utc)
+        except ValueError:
+            pass  # diagnostic-expected: the percentage remains usable without a reset time.
+    return [
+        HarnessQuotaSnapshot(
+            harness_kind=HarnessKind.GROK_ACP,
+            source="grok._x.ai/billing",
+            window_id=f"included_credits:{label.lower()}",
+            window_label=(
+                f"Shared Grok credits · {label}"
+                if config.get("isUnifiedBillingUser") is True
+                else f"Grok included credits · {label}"
+            ),
+            used_percent=used,
+            remaining_percent=100 - used,
+            observed_at=_observed_at(observed_at),
+            resets_at=resets_at,
+            basis="vendor_used_percent",
+        )
+    ]
 
 
 def claude_quota_snapshot(

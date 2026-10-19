@@ -201,12 +201,25 @@ scheduled harness run uses the model and reasoning effort saved in that Butler
 chat's settings. Changing the effort applies to new runs and the next direct
 message; an already running turn keeps its selected effort. Global actions
 can resume a paused project or main goal, create and start a
-main goal, hand off a planning-blocked harness goal to one linked provider goal,
+main goal, create one linked recovery goal for a paused or blocked main goal,
+hand off a planning-blocked harness goal to one linked provider goal,
 or create a managed child project under an Act parent. A child may
 receive an initial goal as part of its creation; it otherwise starts with the
 normal Watch authority. Goal and child-project creation check existing work
 before writing. The model cannot grant Act to another project, expand scope,
 or treat a pending approval or uncertain write as permission to retry.
+
+Butler Oversight displays the durable scheduled-check transcript as a compact
+section. Expanding a check reads its saved harness turn and paged event stream
+from Core; it survives refresh and reconnect. The check's linked recovery goals
+show their current Core status and report in that same section. For recovery
+work Butler records the main agent's plan, then creates a linked Codex goal
+using an advertised `gpt-6-sol` route with `max` effort and Daybreak Blue.
+The main agent passes its saved plan to subagents; subagents do not run a
+separate Plan before acting gate. Butler can query Codex or Grok's reported
+remaining quota through the profile-scoped `nebula.work.harness_quota` and
+`nebula.global.harness_quota` read tools. Grok's included-credit period may be
+shared with other Grok products; missing vendor percentages remain unknown.
 
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |
@@ -214,6 +227,8 @@ or treat a pending approval or uncertain write as permission to retry.
 | Schedule | Exactly one global check is recorded after 15 minutes even if all goals are idle | Core global state and event stream | Core unit and real Core |
 | Choose | Butler can inspect all eligible Act projects before selecting work | Core project and authority records | Tool unit and real Core |
 | Set effort | Saving an advertised effort in Butler settings is reflected in the next direct turn and scheduled harness session | Core chat settings and harness runtime options | Core unit, component and real Core |
+| Review transcript | Opening a saved check shows its report, paged activity, and linked recovery-goal reports after refresh or reconnect | Core case, harness turn, event stream, and goal records | Core unit, component and real Core browser |
+| Read quota | An agent can query a configured Codex or Grok profile for vendor-reported remaining percentage; missing values stay unknown | Harness vendor read and Core quota observation | Core unit and real Core |
 | Act | A stale Act revision, removed file, local-only boundary, or stale goal revision prevents a write | Core policy, instruction digest and goal records | Core unit and real Core |
 | Reconnect | The clock and action receipts survive Core restart without duplicating a project or goal | Core database and recovery cases | Core unit and real Core |
 

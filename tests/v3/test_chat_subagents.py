@@ -12,6 +12,7 @@ from nebula.v3.chat import (
     ChatToolResultConsentRequired,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+from nebula.v3.chat_planning import PlanSubmission
 from nebula.v3.chat_subagents import _capability_selection, subagent_specs
 from nebula.v3.chat_turn_ledger import turn_history
 from nebula.v3.mission_delegation import DelegatedMissionService
@@ -290,6 +291,86 @@ async def _until(predicate, timeout: float = 5.0) -> None:
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("condition was not reached in time")
         await asyncio.sleep(0.01)
+
+
+def test_main_agent_plan_is_handed_to_child_without_child_planning_gate(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "start",
+                    "start_subagent",
+                    task="Inspect auth routes.",
+                    name="Auth",
+                    context=None,
+                ),
+                _finish("finish"),
+                _response(text="Delegated."),
+            ],
+            child=[_response(text="Auth routes checked.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(
+                project,
+                content="Inspect the auth routes with a subagent.",
+                planning_enabled=True,
+                allow_subagents=True,
+            )
+        )
+        assert prepared.turn is not None
+        parent_session = prepared.session or prepared.pending_session
+        assert parent_session is not None
+        plan = chat.plans.ensure(prepared.turn, parent_session)
+        assert plan is not None
+        chat.plans.submit(
+            plan,
+            PlanSubmission(
+                steps=[
+                    {
+                        "action": "Inspect auth routes",
+                        "expected_outcome": "List reachable auth paths",
+                    }
+                ],
+                tool_names=["start_subagent", "finish_response"],
+                no_file_work=True,
+            ),
+            available_tools={"start_subagent", "finish_response"},
+            native_categories=set(),
+            workspace=tmp_path,
+        )
+        await _drain(chat, chat.start_provider_turn(prepared))
+        await _until(lambda: bool(provider.child_requests))
+        (record,) = store.list_entities(ChatSubagent)
+        child_session = store.get(ChatSession, record.child_session_id)
+        assert record.parent_request["planning_enabled"] is False
+        assert child_session.metadata["planning_enabled"] is False
+        assert (
+            "Inspect auth routes (expected: List reachable auth paths)"
+            in provider.child_requests[0].messages[-1].content
+        )
+        child_turn = store.get(ChatTurn, record.child_turn_id)
+        assert child_turn.request_snapshot["planning_enabled"] is False
+        assert chat.plans.required(child_turn, child_session) is False
+        assert chat.plans.for_turn(child_turn.id) is None
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
+        direct_child = await chat.prepare_async(
+            _request(
+                project,
+                content="Check one more route.",
+                session_id=child_session.id,
+                planning_enabled=True,
+            )
+        )
+        assert direct_child.source_request is not None
+        assert direct_child.source_request.planning_enabled is False
+        await chat.shutdown()
+
+    asyncio.run(scenario())
 
 
 def _messages(store: NebulaStore, session_id: str) -> list[ChatMessage]:
@@ -2667,6 +2748,15 @@ def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> 
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
         first_post = store.get(ChatSubagent, record.id).result_message_id
+        # Older child records inherited a planning flag. A later message must
+        # execute the delegated task without starting a second planner.
+        record = store.get(ChatSubagent, record.id)
+        store.update(
+            ChatSubagent,
+            record.id,
+            {"parent_request": {**record.parent_request, "planning_enabled": True}},
+            expected_revision=record.revision,
+        )
 
         provider.parent.extend(
             [
@@ -2711,6 +2801,12 @@ def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> 
 
         record = store.get(ChatSubagent, record.id)
         assert record.rounds == 2
+        assert (
+            store.get(ChatTurn, record.child_turn_id).request_snapshot[
+                "planning_enabled"
+            ]
+            is False
+        )
         # The new round follows the parent's current turn.
         assert record.parent_turn_id == second_turn_id
         child_messages = _messages(store, record.child_session_id)

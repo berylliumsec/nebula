@@ -94,6 +94,10 @@ export function AppShell() {
       window.dispatchEvent(new Event("nebula:open-butler-settings"));
       return;
     }
+    if (entry.target === "butler-oversight") {
+      window.dispatchEvent(new Event("nebula:open-butler-oversight"));
+      return;
+    }
     setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
   }, []);
   const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => {

@@ -66,7 +66,7 @@ describe("ButlerOversight", () => {
     );
   });
 
-  it("shows Act recovery status and keeps past checks behind disclosure", async () => {
+  it("shows Act recovery status and a separate scheduled activity section", async () => {
     const request = vi.fn().mockResolvedValue({
       ...overview,
       authority: "act",
@@ -84,8 +84,42 @@ describe("ButlerOversight", () => {
     const recovery = await screen.findByRole("region", { name: "Butler recovery" });
     expect(within(recovery).getByText("Subagent start failed")).toBeInTheDocument();
     expect(within(recovery).getByText("Parent retry queued")).toBeInTheDocument();
-    expect(within(recovery).getByText("Past checks")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Butler scheduled activity" })).toHaveTextContent("Scheduled work check");
+    expect(within(recovery).queryByText("Scheduled work check")).not.toBeInTheDocument();
     expect(within(recovery).getByRole("link", { name: /Open parent chat/ })).toHaveAttribute("href", "/projects/project-a/workbench?view=chat&session=chat-main");
+  });
+
+  it("reopens saved scheduled transcript and recovery report after a retry and remount", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn().mockResolvedValue({ ...overview, authority: "act",
+      capabilities: { ...overview.capabilities, recovery: true },
+      recovery_cases: [{ id: "scheduled", trigger: "periodic", signal: "butler.global_periodic_check",
+        status: "resolved", summary: "Scheduled work check", outcome: "Created a recovery goal",
+        model_backend: "harness", model_turn_id: "turn-saved", steps: [],
+        recovery_goals: [{ id: "goal-recovery", project_id: "project-a", session_id: "chat-recovery",
+          source_goal_id: "goal-main", objective: "Unblock parser goal", status: "running",
+          current_step: 2, updated_at: "2026-10-19T12:00:00Z", report: "Inspecting saved state." }] }],
+    });
+    const events = vi.fn().mockRejectedValueOnce(new Error("connection lost")).mockResolvedValue({ events: [{
+      schemaVersion: "nebula.harness-activity/v2", sequence: 1, type: "tool_started", vendor: "codex_app_server",
+      harnessTurnId: "turn-saved", itemId: "tool-1", itemKind: "tool", title: "Read Core goals",
+      artifactIds: [], payload: {},
+    }], nextSequence: 1 });
+    const turn = vi.fn().mockResolvedValue({ id: "turn-saved", status: "complete", origin: "analysis",
+      harnessSessionId: "analysis-session", response: "I inspected the paused goal and started recovery." });
+    const api = { ...client(request), getHarnessTurnEvents: events, getHarnessTurn: turn } as unknown as ApiClient;
+    const first = render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText(/connection lost/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("I inspected the paused goal and started recovery.")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Butler check activity" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open recovery goal" })).toHaveAttribute("href", "/projects/project-a/workbench?view=chat&session=chat-recovery");
+    first.unmount();
+    render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText("I inspected the paused goal and started recovery.")).toBeVisible();
+    expect(events).toHaveBeenCalledTimes(3);
   });
 
   it("keeps Watch compact beside the chat while surfacing open incidents", async () => {
