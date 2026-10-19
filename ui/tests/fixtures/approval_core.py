@@ -136,9 +136,17 @@ class InertConnection(HarnessConnection):
         if self.runtime.scenario == "planning_managed":
             if (
                 self.request.profile.kind == HarnessKind.CODEX_APP_SERVER
-                and self.request.workspace == self.runtime.fixture_root
-            ):
-                raise RuntimeError("Planned Codex was given the linked host workspace")
+                or self.request.profile.kind == HarnessKind.GROK_ACP
+                and (
+                    self.request.session.metadata.get("core_plan_isolated") is True
+                    or bool(
+                        self.request.session.metadata.get("planning_target_turn_id")
+                    )
+                )
+            ) and self.request.workspace == self.runtime.fixture_root:
+                raise RuntimeError(
+                    "Planned harness was given the linked host workspace"
+                )
             if self.request.session.metadata.get("planning_target_turn_id"):
                 found = await self.runtime._gateway_call(
                     self.request.session, "workspace.find", {"query": "plan-target"}
@@ -396,7 +404,8 @@ class InertAdapter(HarnessAdapter):
             authentication_state="verified",
             capabilities=HarnessCapabilities(
                 detailed_usage=self.runtime.scenario == "goal",
-                mcp=profile.kind == HarnessKind.CODEX_APP_SERVER,
+                mcp=profile.kind == HarnessKind.CODEX_APP_SERVER
+                or profile.capabilities.mcp,
                 models=["fixture", "fixture-next"]
                 if self.runtime.scenario in {"settings", "daybreak", "goal"}
                 else ["fixture"],
@@ -658,7 +667,8 @@ if __name__ == "__main__":
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},
                 capabilities=HarnessCapabilities(
-                    detailed_usage=args.scenario == "goal"
+                    detailed_usage=args.scenario == "goal",
+                    mcp=args.scenario != "planning",
                 ),
                 native_capabilities=HarnessNativeCapabilities(
                     shell=args.scenario in {"planning", "planning_managed"}
@@ -674,6 +684,7 @@ if __name__ == "__main__":
                 executable="/bin/true",
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(models=["fixture"], mcp=False),
                 native_capabilities=HarnessNativeCapabilities(shell=True),
             )
         )
@@ -682,6 +693,19 @@ if __name__ == "__main__":
                 id="inert-codex",
                 name="Unrestricted Codex planning fixture",
                 kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="fixture",
+                permission_mode="unrestricted",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
+                native_capabilities=HarnessNativeCapabilities(shell=True),
+            )
+        )
+        store.create(
+            HarnessProfile(
+                id="inert-grok",
+                name="Unrestricted Grok planning fixture",
+                kind=HarnessKind.GROK_ACP,
                 executable="/bin/true",
                 default_model="fixture",
                 permission_mode="unrestricted",
