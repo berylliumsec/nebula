@@ -401,6 +401,11 @@ class InertAdapter(HarnessAdapter):
                         reasoning_efforts=[
                             HarnessRuntimeOption(id="low", label="Low"),
                             HarnessRuntimeOption(id="high", label="High"),
+                            *(
+                                [HarnessRuntimeOption(id="max", label="Max")]
+                                if self.runtime.scenario == "goal"
+                                else []
+                            ),
                         ],
                         default_reasoning_effort="low",
                         cyber_access_programs=(

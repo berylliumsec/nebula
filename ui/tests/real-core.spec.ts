@@ -10440,6 +10440,7 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     await page.goto(`${core.origin}/?view=chat`);
 
     const goalPanel = page.getByRole("region", {name: "Conversation goal"});
+    const settingsDialog = page.getByRole("dialog", {name: "Assistant settings"});
     const revealGoal = async () => {
       const pointerFine = await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
       if (pointerFine) {
@@ -10458,6 +10459,7 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     };
     const addGoal = async (objective: string, steps: number) => {
       await revealGoal();
+      if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
       await goalPanel.getByRole("button", {name: "Add goal"}).click({timeout: 10_000});
       await goalPanel.getByRole("textbox", {name: "Objective"}).fill(objective);
       await goalPanel.getByRole("textbox", {name: "Completion criteria"}).fill("A durable reply is retained");
@@ -10495,7 +10497,6 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     const messages = await (await core.api.get(`chat/sessions/${newSessionId}/messages`)).json() as Array<{role: string}>;
     expect(messages.filter(message => message.role === "assistant")).toHaveLength(2);
 
-    const settingsDialog = page.getByRole("dialog", {name: "Assistant settings"});
     if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
     await page.getByRole("button", {name: "New chat", exact: true}).click();
     await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Start an ordinary harness chat");
@@ -10528,13 +10529,29 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     const blockedGoal = await (await core.api.get(`chat/sessions/${blockedSessionId}/goal`)).json() as {current_step: number; blocked_reason: string};
     expect(blockedGoal.current_step).toBe(1);
     expect(blockedGoal.blocked_reason).toBe("Inert worker route is unavailable");
+    const blockedChatBefore = await (await core.api.get(`chat-sessions/${blockedSessionId}`)).json() as {harness_session_id: string};
+    const blockedHarnessBefore = await (await core.api.get(`harness-sessions/${blockedChatBefore.harness_session_id}`)).json() as {metadata: {runtime_options: {reasoning_effort: string}}};
+    expect(blockedHarnessBefore.metadata.runtime_options.reasoning_effort).toBe("low");
+    if (!await settingsDialog.isVisible()) await clickAssistantSettings(page);
+    await settingsDialog.getByRole("combobox", {name: "Harness reasoning effort"}).selectOption("max");
+    await expect.poll(async () => {
+      const config = await (await core.api.get(`chat-sessions/${blockedSessionId}/assistant-config`)).json() as {settings: {harness_reasoning_effort: string}};
+      return config.settings.harness_reasoning_effort;
+    }).toBe("max");
+    await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
     await page.reload();
     await revealGoal();
     await expect(goalPanel).toContainText("Inert worker route is unavailable");
+    if (!await settingsDialog.isVisible()) await clickAssistantSettings(page);
+    await expect(settingsDialog.getByRole("combobox", {name: "Harness reasoning effort"})).toHaveValue("max");
     if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
     await goalPanel.getByRole("button", {name: "Resume"}).click();
     await expect.poll(async () => (await (await core.api.get(`chat/sessions/${blockedSessionId}/goal`)).json()).status).toBe("paused");
     await expect(goalPanel).toContainText("Goal step budget is exhausted.");
+    const blockedChatAfter = await (await core.api.get(`chat-sessions/${blockedSessionId}`)).json() as {harness_session_id: string};
+    expect(blockedChatAfter.harness_session_id).not.toBe(blockedChatBefore.harness_session_id);
+    const blockedHarnessAfter = await (await core.api.get(`harness-sessions/${blockedChatAfter.harness_session_id}`)).json() as {metadata: {runtime_options: {reasoning_effort: string}}};
+    expect(blockedHarnessAfter.metadata.runtime_options.reasoning_effort).toBe("max");
 
     if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
     await page.getByRole("button", {name: "New chat", exact: true}).click();
