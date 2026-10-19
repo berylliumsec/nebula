@@ -1,5 +1,5 @@
 {
-  "change_digest": "407469afb6485a9bd6db29ea8e5cd6db846ec9cf802cfe8cd68ca8d972170693",
+  "change_digest": "5965bdd3d3a320ffa98012f183e1ad38a63ad1e53ae5bb51fbac7f5e959ee618",
   "reviewed_by": "Codex focused review for Butler conversation grouping",
   "reason": "Butler-created session provenance, legacy recovery goal read-back, sidebar hierarchy and search, assistant destination discovery, and product guidance are covered at their changed boundaries. Browser selection exercises the visible journey across the required desktop and mobile engines plus synthetic real Core on a LAN origin; existing subagent hierarchy checks protect the shared sidebar behavior.",
   "exclusions": "No Rust or native code changed. Unrelated provider, mission, storage, and editor journeys are excluded. The real-Core fixture uses inert synthetic sessions and credentials; no operator data or live Core is exercised.",
