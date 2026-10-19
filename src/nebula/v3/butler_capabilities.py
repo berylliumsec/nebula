@@ -560,8 +560,10 @@ class ButlerCapabilities:
         if plugin.spec.name == "nebula.work.message_chat":
             return (
                 "Send parent guidance to a main assistant chat with "
-                "delivery=immediate. Core steers an active harness turn or starts "
-                "a new turn when idle. For delegated subagents and goal children, "
+                "delivery=immediate. Core steers an active harness turn when "
+                "supported or starts a new turn when idle. Busy Grok turns "
+                "cannot be steered; their guidance is held, not delivered. "
+                "For delegated subagents and goal children, "
                 "message the parent main agent. A held result is not delivered; "
                 "inspect the Core receipt before claiming a handoff."
             )

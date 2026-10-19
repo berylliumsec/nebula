@@ -347,19 +347,19 @@ def test_main_agent_plan_is_handed_to_child_without_child_planning_gate(
         await _until(lambda: bool(provider.child_requests))
         (record,) = store.list_entities(ChatSubagent)
         child_session = store.get(ChatSession, record.child_session_id)
-        assert record.parent_request["planning_enabled"] is False
-        assert child_session.metadata["planning_enabled"] is False
+        assert record.parent_request["planning_enabled"] is True
+        assert child_session.metadata["planning_enabled"] is True
         child_prompt = provider.child_requests[0].messages[-1].content
-        assert "Main agent's Core-validated task plan:" in child_prompt
+        assert "Main agent's shared task plan:" in child_prompt
         assert '"action": "Inspect auth routes"' in child_prompt
         assert '"expected_outcome": "List reachable auth paths"' in child_prompt
         assert '"tool_names": ["start_subagent", "finish_response"]' in child_prompt
         assert '"native_categories": ["isolated_workspace_read"]' in child_prompt
         assert '"unresolved_dependencies": ["Confirm the route owner"]' in child_prompt
         child_turn = store.get(ChatTurn, record.child_turn_id)
-        assert child_turn.request_snapshot["planning_enabled"] is False
+        assert child_turn.request_snapshot["planning_enabled"] is True
         assert chat.plans.required(child_turn, child_session) is False
-        assert chat.plans.for_turn(child_turn.id) is None
+        assert chat.plans.for_turn(child_turn.id).phase == "discovery"
         await _until(
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
@@ -372,7 +372,7 @@ def test_main_agent_plan_is_handed_to_child_without_child_planning_gate(
             )
         )
         assert direct_child.source_request is not None
-        assert direct_child.source_request.planning_enabled is False
+        assert direct_child.source_request.planning_enabled is True
         await chat.shutdown()
 
     asyncio.run(scenario())

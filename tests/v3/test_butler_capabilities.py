@@ -364,6 +364,7 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             {"operation": "nebula.work.message_chat"}
         )
         assert "delivery=immediate" in guidance["description"]
+        assert "Busy Grok turns cannot be steered" in guidance["description"]
         assert guidance["input_schema"]["properties"]["delivery"]["enum"] == [
             "immediate"
         ]

@@ -412,7 +412,7 @@ class ButlerAuthorityService:
                     if event.event_type == "goal.read_only_tool_failures_repeated"
                     else "Ask the parent main agent to reassess the changed goal plan."
                     if kind == "request_parent_plan_reassessment"
-                    else "Require one Core-validated plan for the changed goal."
+                    else "Ask the changed goal to share one task plan."
                     if kind == "force_one_task_plan"
                     else "Pause the main goal after an urgent agent-reported machine blocker."
                 )

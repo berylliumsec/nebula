@@ -2061,7 +2061,9 @@ class SubagentService:
         parent_request: dict[str, Any] = {
             "idempotency_key": invocation.idempotency_key,
             "tools_enabled": tools_enabled,
-            "planning_enabled": False,
+            "planning_enabled": bool(
+                parent_turn.request_snapshot.get("planning_enabled", False)
+            ),
             "include_knowledge": include_knowledge,
             "allow_cloud_knowledge": allow_cloud_knowledge,
             "allow_subagents": allow_subagents,
@@ -2072,7 +2074,7 @@ class SubagentService:
         parent_plan = self.chat.plans.for_turn(parent_turn.id)
         plan_context = parent_session.metadata.get("delegated_plan_context")
         if parent_plan is not None and parent_plan.phase == "execution":
-            plan_context = "Main agent's Core-validated task plan:\n" + json.dumps(
+            plan_context = "Main agent's shared task plan:\n" + json.dumps(
                 {
                     "plan_version": parent_plan.plan_version,
                     "steps": parent_plan.steps,
@@ -2084,7 +2086,30 @@ class SubagentService:
                 },
                 ensure_ascii=False,
             )
-        elif not plan_context and parent_turn.goal_id:
+        elif (
+            not plan_context
+            and parent_session.harness_session_id
+            and self.harness_runtime is not None
+        ):
+            try:
+                native_plan = self.harness_runtime.session_activity(
+                    parent_session.harness_session_id
+                ).plan
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.subagent.native_plan_unavailable",
+                    "The parent harness plan could not be read for delegation.",
+                    exc,
+                    stage="subagent-plan",
+                )
+                native_plan = []
+            if native_plan:
+                plan_context = "Main agent's reported harness plan:\n" + json.dumps(
+                    [item.model_dump(mode="json") for item in native_plan],
+                    ensure_ascii=False,
+                )
+        if not plan_context and parent_turn.goal_id:
             goal = self.store.get(ChatGoal, parent_turn.goal_id)
             if goal.plan:
                 plan_context = "Main goal's plan:\n" + "\n".join(
