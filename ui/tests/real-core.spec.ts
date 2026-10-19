@@ -8230,7 +8230,7 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
 
 const reliabilityTest = test.extend({serviceWorkers: "block"});
 
-reliabilityTest("assistant planning saved toggle blocks an unenforceable harness and survives refresh on production LAN Core", async ({page}, testInfo) => {
+reliabilityTest("assistant planning advisory lets a harness work without submitting a plan and survives refresh on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "planning");
   await withOwnedCleanup(async () => {
@@ -8250,7 +8250,7 @@ reliabilityTest("assistant planning saved toggle blocks an unenforceable harness
     await clickAssistantSettings(page);
     const settings = page.getByRole("dialog", {name: "Assistant settings"});
     await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("harness");
-    const planning = settings.getByRole("checkbox", {name: /Plan before acting/});
+    const planning = settings.getByRole("checkbox", {name: /Ask for a plan first/});
     await expect(planning).not.toBeChecked();
     await planning.check();
     await settings.getByRole("button", {name: "Close assistant settings"}).click();
@@ -8258,26 +8258,27 @@ reliabilityTest("assistant planning saved toggle blocks an unenforceable harness
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
     const sessionId = new URL(page.url()).searchParams.get("session")!;
-    await expect(page.getByRole("alert").filter({hasText: "Plan before acting · blocked"})).toBeVisible({timeout: 20_000});
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("PLAN_OPTIONAL_COMPLETE", {timeout: 20_000});
     const plansResponse = await core.api.get(`chat/sessions/${sessionId}/task-plans`);
     expect(plansResponse.ok(), await plansResponse.text()).toBe(true);
-    const plans = await plansResponse.json() as {plans: Array<{phase: string; reason: string}>};
-    expect(plans.plans[0]).toMatchObject({phase: "blocked"});
-    expect(plans.plans[0].reason).toContain("cannot enforce restricted discovery");
+    const plans = await plansResponse.json() as {plans: Array<{phase: string}>};
+    expect(plans.plans[0]).toMatchObject({phase: "discovery"});
     const saved = await (await core.api.get(`chat-sessions/${sessionId}/assistant-config`)).json() as {settings: {planning_enabled: boolean}};
     expect(saved.settings.planning_enabled).toBe(true);
     expect(await core.receipts()).toEqual([]);
     await page.reload();
-    await expect(page.getByRole("alert").filter({hasText: "Plan before acting · blocked"})).toBeVisible({timeout: 20_000});
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("PLAN_OPTIONAL_COMPLETE");
+    await expect(page.locator(".chat-task-plan").filter({hasText: "requested"})).toBeVisible();
+    await expect(page.getByRole("alert").filter({hasText: "Previous plan attempt blocked"})).toHaveCount(0);
     await clickAssistantSettings(page);
-    await expect(settings.getByRole("checkbox", {name: /Plan before acting/})).toBeChecked();
+    await expect(settings.getByRole("checkbox", {name: /Ask for a plan first/})).toBeChecked();
     expect(await settings.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     expect((await new AxeBuilder({page}).include(".chat-settings-popover").analyze()).violations).toEqual([]);
     await testInfo.attach("chat-planning-lan", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, phase: plans.plans[0].phase}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
-for (const plannedHarness of [{name: "managed Claude", id: "inert-fixture"}, {name: "unrestricted Codex", id: "inert-codex"}, {name: "unrestricted Grok", id: "inert-grok"}]) reliabilityTest(`assistant planning discovers a file and executes a saved ${plannedHarness.name} plan on production LAN Core`, async ({page}, testInfo) => {
+for (const plannedHarness of [{name: "managed Claude", id: "inert-fixture"}, {name: "unrestricted Codex", id: "inert-codex"}, {name: "unrestricted Grok", id: "inert-grok"}]) reliabilityTest(`assistant planning advisory keeps tools available before and after a saved ${plannedHarness.name} plan on production LAN Core`, async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "planning_managed");
   await withOwnedCleanup(async () => {
@@ -8296,25 +8297,15 @@ for (const plannedHarness of [{name: "managed Claude", id: "inert-fixture"}, {na
     await clickAssistantSettings(page);
     const settings = page.getByRole("dialog", {name: "Assistant settings"});
     await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("harness");
-    await settings.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption("inert-unsupported");
-    await settings.getByRole("checkbox", {name: /Plan before acting/}).check();
+    await settings.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption(plannedHarness.id);
+    await settings.getByRole("checkbox", {name: /Ask for a plan first/}).check();
     await settings.getByRole("button", {name: "Close assistant settings"}).click();
     await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Read the synthetic file and report its result.");
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
     const sessionId = new URL(page.url()).searchParams.get("session")!;
-    await expect(page.getByRole("alert").filter({hasText: "Plan before acting · blocked"})).toBeVisible({timeout: 20_000});
-    expect(await core.receipts()).toEqual([]);
-    await clickAssistantSettings(page);
-    await settings.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption(plannedHarness.id);
-    await expect.poll(async () => {
-      const saved = await (await core.api.get(`chat-sessions/${sessionId}/assistant-config`)).json() as {settings: {profile_id: string; planning_enabled: boolean}};
-      return [saved.settings.profile_id, saved.settings.planning_enabled];
-    }).toEqual([plannedHarness.id, true]);
-    await settings.getByRole("button", {name: "Close assistant settings"}).click();
-    await page.getByRole("button", {name: "Retry as linked turn"}).click();
-    await page.getByRole("dialog", {name: "Retry harness turn?"}).getByRole("button", {name: "Start retry"}).click();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("PLANNED_READ_COMPLETE", {timeout: 30_000});
+    expect(await core.receipts()).toEqual([]);
     const plansResponse = await core.api.get(`chat/sessions/${sessionId}/task-plans`);
     expect(plansResponse.ok(), await plansResponse.text()).toBe(true);
     const plans = await plansResponse.json() as {plans: Array<{phase: string; files: string[]; tool_names: string[]; steps: Array<{action: string}>}>};
@@ -8324,18 +8315,18 @@ for (const plannedHarness of [{name: "managed Claude", id: "inert-fixture"}, {na
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("PLANNED_READ_COMPLETE", {timeout: 20_000});
     const planActivity = page.locator(".chat-task-plan").filter({hasText: "Read plan-target.txt"});
     await expect(planActivity).toBeVisible();
-    await expect(page.getByRole("alert").filter({hasText: "Plan before acting · blocked"})).toHaveCount(0);
+    await expect(page.getByRole("alert").filter({hasText: "Previous plan attempt blocked"})).toHaveCount(0);
     expect(await planActivity.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await clickAssistantSettings(page);
-    await expect(settings.getByRole("checkbox", {name: /Plan before acting/})).toBeChecked();
+    await expect(settings.getByRole("checkbox", {name: /Ask for a plan first/})).toBeChecked();
     expect((await new AxeBuilder({page}).include(".chat-settings-popover").analyze()).violations).toEqual([]);
     await testInfo.attach("chat-planning-success-lan", {body: JSON.stringify({origin: core.origin, build: "production", harness: plannedHarness.name, viewport: page.viewportSize(), sessionId, phase: plans.plans[0].phase}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
-reliabilityTest("assistant planning handoff links one provider draft and survives refresh on production LAN Core", async ({page}, testInfo) => {
+reliabilityTest("assistant planning historical handoff links one provider draft and survives refresh on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
-  const core = await startApprovalCore(localNetworkIpv4(), "planning");
+  const core = await startApprovalCore(localNetworkIpv4(), "planning_legacy");
   await withOwnedCleanup(async () => {
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));

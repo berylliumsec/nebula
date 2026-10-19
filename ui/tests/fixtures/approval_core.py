@@ -19,6 +19,7 @@ from nebula.v3.domain import (
     Approval,
     ChatGoal,
     ChatSession,
+    ChatTurn,
     ChatTokenUsage,
     HarnessCapabilities,
     HarnessDetailedUsage,
@@ -134,58 +135,52 @@ class InertConnection(HarnessConnection):
         if self.request.session.engagement_id == "diagnostic":
             yield HarnessEvent(type="completed", message="OK")
             return
-        if self.runtime.scenario == "planning_managed":
-            if (
-                self.request.profile.kind == HarnessKind.CODEX_APP_SERVER
-                or self.request.profile.kind == HarnessKind.GROK_ACP
-                and (
-                    self.request.session.metadata.get("core_plan_isolated") is True
-                    or bool(
-                        self.request.session.metadata.get("planning_target_turn_id")
-                    )
-                )
-            ) and self.request.workspace == self.runtime.fixture_root:
-                raise RuntimeError(
-                    "Planned harness was given the linked host workspace"
-                )
-            if self.request.session.metadata.get("planning_target_turn_id"):
-                found = await self.runtime._gateway_call(
-                    self.request.session, "workspace.find", {"query": "plan-target"}
-                )
-                if found.get("structuredContent", {}).get("matches") != [
-                    "plan-target.txt"
-                ]:
-                    raise RuntimeError(
-                        "Restricted planner did not find the synthetic file"
-                    )
-                submitted = await self.runtime._gateway_call(
-                    self.request.session,
-                    "plan.submit",
-                    {
-                        "steps": [
-                            {
-                                "action": "Read plan-target.txt",
-                                "expected_outcome": "Report the synthetic evidence",
-                            }
-                        ],
-                        "tool_names": ["workspace.read"],
-                        "files": ["plan-target.txt"],
-                        "no_file_work": False,
-                    },
-                )
-                if submitted.get("structuredContent", {}).get("phase") != "execution":
-                    raise RuntimeError("Core did not save the fixture task plan")
-                yield HarnessEvent(type="completed", message="PLANNER_COMPLETE")
+        if self.runtime.scenario in {"planning", "planning_managed"}:
+            if self.runtime.scenario == "planning":
+                answer = "PLAN_OPTIONAL_COMPLETE"
+                yield HarnessEvent(type="message_delta", delta=answer)
+                yield HarnessEvent(type="completed", message=answer)
                 return
-            read = await self.runtime._gateway_call(
-                self.request.session,
-                "workspace.read",
-                {"path": "plan-target.txt", "starting_line": 1, "line_count": 5},
-            )
-            if read.get("isError") or "Synthetic planner evidence" not in json.dumps(
-                read
-            ):
-                raise RuntimeError("Planned workspace read did not complete")
+            catalog = {
+                tool["name"]
+                for tool in self.runtime._gateway_catalog(self.request.session)["tools"]
+            }
+            if not {"workspace.read", "plan.submit"} <= catalog:
+                raise RuntimeError(
+                    "The advisory plan and normal tool were not offered together"
+                )
+            for _ in range(2):
+                read = await self.runtime._gateway_call(
+                    self.request.session,
+                    "workspace.read",
+                    {"path": "plan-target.txt", "starting_line": 1, "line_count": 5},
+                )
+                if read.get(
+                    "isError"
+                ) or "Synthetic planner evidence" not in json.dumps(read):
+                    raise RuntimeError(
+                        "Normal tool use was blocked by advisory planning"
+                    )
+                if _ == 0:
+                    submitted = await self.runtime._gateway_call(
+                        self.request.session,
+                        "plan.submit",
+                        {
+                            "steps": [
+                                {
+                                    "action": "Read plan-target.txt",
+                                    "expected_outcome": "Report the synthetic evidence",
+                                }
+                            ],
+                            "tool_names": ["workspace.read"],
+                            "files": ["plan-target.txt"],
+                        },
+                    )
+                    if (
+                        submitted.get("structuredContent", {}).get("phase")
+                        != "execution"
+                    ):
+                        raise RuntimeError("Core did not save the advisory task plan")
             yield HarnessEvent(type="message_delta", delta="PLANNED_READ_COMPLETE")
             yield HarnessEvent(type="completed", message="PLANNED_READ_COMPLETE")
             return
@@ -457,6 +452,20 @@ class InertAdapter(HarnessAdapter):
 class FailureInjectionRuntime(HarnessRuntimeService):
     """Process barriers belong only to this inert acceptance executable."""
 
+    async def _ensure_harness_plan(self, turn, session):
+        if self.scenario == "planning_legacy" and turn.chat_turn_id:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
+                snapshot = dict(chat_turn.request_snapshot)
+                snapshot.pop("plan_behavior")
+                self.store.update(
+                    ChatTurn,
+                    chat_turn.id,
+                    {"request_snapshot": snapshot},
+                    expected_revision=chat_turn.revision,
+                )
+        return await super()._ensure_harness_plan(turn, session)
+
     async def resolve_approval(self, approval):
         if self.scenario == "crash_after_record":
             os._exit(81)
@@ -537,6 +546,7 @@ if __name__ == "__main__":
             "goal",
             "navigation",
             "planning",
+            "planning_legacy",
             "planning_managed",
         ],
         default="single",
@@ -546,7 +556,7 @@ if __name__ == "__main__":
         (args.root / "plan-target.txt").write_text("Synthetic planner evidence\n")
     store = NebulaStore(args.root / "nebula.db")
     scratch_id = bootstrap_scratch_project(store)
-    if args.scenario == "planning" and not any(
+    if args.scenario == "planning_legacy" and not any(
         profile.id == "handoff-provider"
         for profile in store.list_entities(ProviderProfile)
     ):
@@ -687,10 +697,11 @@ if __name__ == "__main__":
                 privacy={"local_only": True, "permits_sensitive_data": True},
                 capabilities=HarnessCapabilities(
                     detailed_usage=args.scenario == "goal",
-                    mcp=args.scenario != "planning",
+                    mcp=args.scenario not in {"planning", "planning_legacy"},
                 ),
                 native_capabilities=HarnessNativeCapabilities(
-                    shell=args.scenario in {"planning", "planning_managed"}
+                    shell=args.scenario
+                    in {"planning", "planning_legacy", "planning_managed"}
                 ),
             )
         )
