@@ -5380,7 +5380,9 @@ class ChatService:
             )
         else:
             new_messages = durable_incoming
-        if request.planning_enabled is None:
+        if session and isinstance(session.metadata.get("subagent_id"), str):
+            request = request.model_copy(update={"planning_enabled": False})
+        elif request.planning_enabled is None:
             request = request.model_copy(
                 update={
                     "planning_enabled": bool(
