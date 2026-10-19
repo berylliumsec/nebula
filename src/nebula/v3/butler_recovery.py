@@ -195,6 +195,7 @@ def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
     try:
         turn = store.get(HarnessTurn, case.model_turn_id)
     except NotFoundError:
+        # diagnostic-expected: an absent analysis turn cannot authorize a retry.
         return False
     if (
         turn.engagement_id != case.engagement_id
