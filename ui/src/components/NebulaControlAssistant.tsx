@@ -65,6 +65,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [sessionRuntime, setSessionRuntime] = useState<{ kind: "provider" | "harness"; id: string; model: string }>();
   const [sessionConfig, setSessionConfig] = useState<ChatAssistantConfig>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [oversightOpenRevision, setOversightOpenRevision] = useState(0);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [settingsStatus, setSettingsStatus] = useState("");
@@ -427,6 +428,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return () => window.removeEventListener("nebula:open-butler-settings", openVoiceSettings);
   });
 
+  useEffect(() => {
+    const openOversight = () => {
+      setOpen(true);
+      setHidden(false);
+      setOversightOpenRevision((revision) => revision + 1);
+    };
+    window.addEventListener("nebula:open-butler-oversight", openOversight);
+    return () => window.removeEventListener("nebula:open-butler-oversight", openOversight);
+  }, []);
+
   const saveSettings = async () => {
     if (!api || !selectedSettingsRuntime || settingsBusy || busy) return;
     setSettingsBusy(true);
@@ -652,14 +663,18 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `${engagement.name} headless security browser: ${observed.state}${observed.session_id ? ` · session ${observed.session_id}` : ""}.`;
   };
 
+  const openSelectedSetting = (entry: SettingCatalogEntry) => {
+    onOpenSetting(entry);
+    setHidden(entry.target !== "butler-oversight");
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
     if (action.kind === "project_execution_mode") return applyProjectMode(action);
     if (action.kind === "project_scope") return applyProjectScope(action.changes);
     if (action.kind === "headless_session") return applyHeadlessSession(action.action);
     if (action.kind === "navigate") return openDestination(action.destination);
-    onOpenSetting(action.setting);
-    setHidden(true);
+    openSelectedSetting(action.setting);
     return `Opened ${action.setting.label}.`;
   };
 
@@ -821,8 +836,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const setting = settingToOpen(prompt);
     if (!hasImages && setting) {
       setDraft("");
-      onOpenSetting(setting);
-      setHidden(true);
+      openSelectedSetting(setting);
       return;
     }
     if (!hasImages && isSettingNavigationRequest(prompt) && (!api || !engagement || !runtime || settingNavigationCandidates(prompt).length > 0)) {
@@ -1176,7 +1190,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         </div>
       </section>}
       {!hidden && engagement && <div className={styles.butlerWorkspace}>
-        <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
+        <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact openRevision={oversightOpenRevision} onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
         <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />
       </div>}
       <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation" data-selection-source-kind="conversation" data-selection-source-id={sessionId} data-selection-source-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
@@ -1185,7 +1199,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         const workLink = engagement && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
           && href.startsWith(`/projects/${encodeURIComponent(engagement.id)}/workbench?`) ? href : undefined;
         return setting
-          ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); setHidden(true); }}>{children}</a>
+          ? <a href={href} onClick={(event) => { event.preventDefault(); openSelectedSetting(setting); }}>{children}</a>
           : destination ? <a href={href} onClick={(event) => { event.preventDefault(); openDestination(destination); }}>{children}</a>
           : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); setHidden(true); }}>{children}</a>
           : <a href={href} {...props}>{children}</a>;
@@ -1198,12 +1212,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           <button className="button quiet" type="button" onClick={() => { setDraft("Start a mission to "); input.current?.focus(); }}>Start mission</button>
         </div>
       </details>}
-      {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setSuggestions([]); setHidden(true); }}>{entry.label}</button>)}</div>}
+      {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { openSelectedSetting(entry); setSuggestions([]); }}>{entry.label}</button>)}</div>}
       <details ref={destinationCatalogRef} className={styles.catalog}><summary>Places I can open</summary><input aria-label="Find a place" placeholder="Find a place" value={destinationQuery} onChange={(event) => setDestinationQuery(event.target.value)} />
         <div className={styles.settingList}>{destinationMatches.length ? destinationMatches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { const confirmation = openDestination(entry); setMessages((current) => [...current, { role: "assistant", content: confirmation }]); }}><span>{entry.label}</span><small>{entry.path.includes("{project_id}") ? "Selected project" : "Open page"}</small></button>) : <p>No place found.</p>}</div>
       </details>
       <details ref={catalogRef} className={styles.catalog}><summary>Settings I can help with</summary><input aria-label="Find a setting" placeholder="Find a setting" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setHidden(true); }}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
+        <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => openSelectedSetting(entry)}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
         <div className={styles.themes}>{THEME_OPTIONS.map((theme) => <button key={theme.value} className="button quiet" type="button" aria-pressed={preference === theme.value} onClick={() => setPreference(theme.value)}>{theme.label}</button>)}</div>
       </details>
       {error && <p role="alert">{error}</p>}

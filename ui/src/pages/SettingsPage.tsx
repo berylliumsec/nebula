@@ -273,6 +273,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     if (embedded) return;
     const hash = locationHash.slice(1);
     if (hash === "butler-settings") window.dispatchEvent(new Event("nebula:open-butler-settings"));
+    if (hash === "butler-oversight") window.dispatchEvent(new Event("nebula:open-butler-oversight"));
     const section = sectionFromHash(hash);
     setSettingsSection(section);
     if (section === "advanced-settings") setOpenAdvancedGroup(advancedGroupFromHash(hash));
