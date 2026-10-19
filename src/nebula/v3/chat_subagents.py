@@ -4776,6 +4776,7 @@ class SubagentService:
                 },
             )
         }
+        delivered_pending_parents: set[str] = set()
         for record in records:
             if record.status not in CHAT_SUBAGENT_TERMINAL_STATUSES:
                 continue
@@ -4789,11 +4790,19 @@ class SubagentService:
                 and record.result_message_id is not None
                 and record.pending_goal_charge_turn_id is None
                 and record.parent_session_id not in child_session_ids
-                and record.parent_session_id not in pending_parent_ids
+                and (
+                    record.parent_session_id not in pending_parent_ids
+                    or record.parent_session_id in delivered_pending_parents
+                )
             ):
                 continue
             try:
-                await self._repair_settled_after_restart(record)
+                delivered = await self._repair_settled_after_restart(record)
+                # One successful delivery pass handles every pending message
+                # for the parent. Keep trying another terminal child only if
+                # this one was restored without reaching delivery or failed.
+                if delivered is not False:
+                    delivered_pending_parents.add(record.parent_session_id)
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -4819,7 +4828,7 @@ class SubagentService:
                     stage="startup-recovery",
                 )
 
-    async def _repair_settled_after_restart(self, record: ChatSubagent) -> None:
+    async def _repair_settled_after_restart(self, record: ChatSubagent) -> bool:
         """Re-run one finished child's settlement, delivery and goal charge."""
 
         turn = self._child_turn(record)
@@ -4834,11 +4843,12 @@ class SubagentService:
                 ConflictError
             ):  # diagnostic-expected: recovery rereads a concurrent old-worker write
                 pass
-            return
+            return False
         if turn is not None and turn.id == record.pending_goal_charge_turn_id:
             self._charge_parent_goal(record, turn)
         await self._deliver(record)
         await self._propagate_descendant_report(record)
+        return True
 
     async def _reconcile_running_after_restart(
         self, record: ChatSubagent, *, preserve_graceful: bool

@@ -894,6 +894,25 @@ def test_settle_charges_only_what_accrual_left_uncharged(tmp_path: Path) -> None
 # -- GOAL-5: active time is time Nebula works on the goal --------------------
 
 
+def test_paused_goal_settlement_skips_subagent_scan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store, _, _, _ = _setup(tmp_path, RoutedProvider([], []))
+    session = _session(store)
+    goals, running = _running_goal(store, session)
+    paused = goals.write(
+        session.id,
+        GoalWrite(expected_revision=running.revision, action="pause"),
+    )
+
+    def unexpected_scan(_session_id: str) -> bool:
+        raise AssertionError("a paused goal cannot accrue active time")
+
+    monkeypatch.setattr(goals, "has_working_subagents", unexpected_scan)
+    goals.settle_active_time(session.id)
+    assert goals.get(session.id).revision == paused.revision
+
+
 def test_goal_active_time_excludes_idle_gaps_between_turns(
     tmp_path: Path, monkeypatch
 ) -> None:

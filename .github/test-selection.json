@@ -1,23 +1,27 @@
 {
-  "change_digest": "4a1e4d85c970fee188eb0e703034340b31f3ddbe7aff1212d936efa88db64ffa",
-  "reviewed_by": "Codex focused review for Butler settings cold-load restore",
-  "reason": "Thirty-nine collected Butler component cases cover deep-link opening before project readiness, saved Core effort readback, settings mutation, and conversation behavior. Eight catalogued production-bundle LAN Core journeys cover Butler effort save and refresh at desktop, compact, and Chromium/WebKit mobile widths.",
-  "exclusions": "Python and native behavior is unchanged. Unrelated frontend and browser journeys are excluded. Physical-device Safari is not available; WebKit mobile emulation is selected.",
+  "change_digest": "f4baf41e3ddd36a94b46b9bae84bd93d170b12cfa4e70551ddb20d2bb317bbf8",
+  "reviewed_by": "Codex focused review for Core restart subagent recovery",
+  "reason": "Five collected Python cases cover paused-goal time settlement, nested running children, bounded sibling scans, pending-message restart selection, active-time accounting, and interrupted child recovery.",
+  "exclusions": "No frontend, Playwright, or native code changed. The operator-visible entry is Core restart, checked separately with a synthetic LAN Core instance and the simulation deployment gate.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 39,
+    "python": 5,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/components/NebulaControlAssistant.test.tsx"],
+  "python": [
+    "tests/v3/test_chat_subagents.py::test_root_goal_sees_running_grandchild_below_completed_child",
+    "tests/v3/test_chat_subagents.py::test_restart_replays_only_subagents_with_unfinished_delivery",
+    "tests/v3/test_chat_subagents.py::test_restart_keeps_recoverable_subagent_round_live",
+    "tests/v3/test_chat_subagent_lifecycle.py::test_paused_goal_settlement_skips_subagent_scan",
+    "tests/v3/test_chat_subagent_lifecycle.py::test_goal_active_time_runs_while_a_subagent_works"
+  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:butler-effort"
-  ]
+  "playwright": []
 }
