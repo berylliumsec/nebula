@@ -1,5 +1,5 @@
 {
-  "change_digest": "3aa5a689d7012e9ecdd0b7409499810a63917a56b1d70c13b7eb5c21a48ddaeb",
+  "change_digest": "d0ee2acce0124df9a9f70e058d574a8083a4446fae568ba48d94893f1ca8216b",
   "reviewed_by": "Codex focused review for Butler scheduled history, recovery, planning, and Grok quota",
   "reason": "Eighteen exact backend cases cover scheduled recovery linkage and runtime, saved transcript projection, precedent review, main-agent plan handoff and legacy child rounds, Grok billing reads and agent queries, the 10001st linked turn, settings discovery, and Chroma digest sync. Five UI files cover the mapped transcript, failure and reload states, usage, and assistant navigation. Selected browser journeys exercise the production LAN Butler check and direct history link, planning control, and provider/harness usage at desktop and mobile Chromium/WebKit widths.",
   "exclusions": "No native code changed. Unrelated suites are excluded. Three full-file Python failures were reproduced on unchanged origin/main (background child message validation, cloud subagent consent-family expectation, and child-budget error wording), so exact relevant Python cases are selected. The Butler global browser journey covers Oversight, avoiding a redundant separate oversight case.",

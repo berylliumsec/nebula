@@ -1637,25 +1637,25 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                     **item.model_dump(mode="json"),
                     "recovery_goals": [
                         {
-                            "id": goal.id,
-                            "project_id": goal.engagement_id,
-                            "session_id": goal.session_id,
-                            "source_goal_id": goal.metadata.get(
+                            "id": recovery_goal.id,
+                            "project_id": recovery_goal.engagement_id,
+                            "session_id": recovery_goal.session_id,
+                            "source_goal_id": recovery_goal.metadata.get(
                                 "butler_recovery_source_goal_id"
                             ),
-                            "objective": goal.objective,
-                            "status": goal.status.value,
-                            "current_step": goal.current_step,
-                            "updated_at": goal.updated_at.isoformat(),
+                            "objective": recovery_goal.objective,
+                            "status": recovery_goal.status.value,
+                            "current_step": recovery_goal.current_step,
+                            "updated_at": recovery_goal.updated_at.isoformat(),
                             "report": (
-                                goal.completion_summary
-                                or goal.blocked_reason
+                                recovery_goal.completion_summary
+                                or recovery_goal.blocked_reason
                                 or next(
                                     (
                                         message.content
                                         for message in service.store.list_session_entities(
                                             ChatMessage,
-                                            goal.session_id,
+                                            recovery_goal.session_id,
                                             newest_first=True,
                                             limit=10,
                                         )
@@ -1668,7 +1668,11 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                             )[:1000],
                         }
                         for goal_id in item.recovery_goal_ids
-                        if (goal := service.store.find_entity(ChatGoal, "id", goal_id))
+                        if (
+                            recovery_goal := service.store.find_entity(
+                                ChatGoal, "id", goal_id
+                            )
+                        )
                         is not None
                     ],
                 }

@@ -135,6 +135,8 @@ def grok_quota_snapshots(
     if used is None or not isinstance(period, dict):
         return []
     kind = period.get("type")
+    if not isinstance(kind, str):
+        return []
     label = {
         "USAGE_PERIOD_TYPE_WEEKLY": "Weekly",
         "USAGE_PERIOD_TYPE_MONTHLY": "Monthly",

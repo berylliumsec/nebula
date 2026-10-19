@@ -26,6 +26,7 @@ from nebula.v3.butler_oversight import (
     watch_id,
 )
 from nebula.v3.butler_reporting_tools import ButlerReportBroker, report_specs
+from nebula.v3.butler_recovery import ButlerRecoveryAgent
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.domain import (
@@ -135,10 +136,18 @@ def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path)
             authority_revision=1,
             status="resolved",
             summary="Scheduled work check",
-            model_backend=ChatBackend.HARNESS,
-            model_turn_id="saved-harness-turn",
             recovery_goal_ids=[goal.id],
         )
+    )
+    ButlerRecoveryAgent(
+        store,
+        provider_factory=lambda _: None,
+        harness_runtime=None,
+        artifact_store=None,
+        work=None,
+        memory=None,
+    )._record_model_turn(
+        case.id, ChatBackend.HARNESS, "profile", "model", "saved-harness-turn"
     )
     app = FastAPI()
     app.include_router(butler_router(ButlerOversightService(store)), prefix="/api/v1")

@@ -319,6 +319,29 @@ class ButlerRecoveryAgent:
             raise ValueError("Butler has no configured chat in this project")
         return session
 
+    def _record_model_turn(
+        self,
+        case_id: str,
+        backend: ChatBackend,
+        profile_id: str,
+        model: str,
+        turn_id: str,
+    ) -> None:
+        """Keep the scheduled check's transcript link as soon as its turn exists."""
+
+        current = self.store.get(ButlerRecoveryCase, case_id)
+        self.store.update(
+            ButlerRecoveryCase,
+            case_id,
+            {
+                "model_backend": backend,
+                "model_profile_id": profile_id,
+                "model": model,
+                "model_turn_id": turn_id,
+            },
+            expected_revision=current.revision,
+        )
+
     def _packet(self, case: ButlerRecoveryCase) -> str:
         event = ButlerRecoveryService(self.store).source_event(case)
         payload = ButlerEventPayload.model_validate(event.payload)
@@ -454,12 +477,8 @@ class ButlerRecoveryAgent:
                     reasoning_effort=config["harness_reasoning_effort"],
                     nebula_tools=True,
                     butler_recovery_case_id=case.id,
-                    on_turn_created=lambda started: self._update_case(
-                        self.store.get(ButlerRecoveryCase, case.id),
-                        model_backend=backend,
-                        model_profile_id=profile_id,
-                        model=model,
-                        model_turn_id=started.id,
+                    on_turn_created=lambda started: self._record_model_turn(
+                        case.id, backend, profile_id, model, started.id
                     ),
                 )
                 if turn.status != HarnessTurnStatus.COMPLETE:
