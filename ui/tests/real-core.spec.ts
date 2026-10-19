@@ -8772,6 +8772,43 @@ reliabilityTest("assistant upgrade real Core nests durable subagent conversation
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
+reliabilityTest("assistant upgrade real Core groups Butler initiated chats after reload", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    const servedAsset = await (await page.request.get(`${core.origin}/${entry}`)).body();
+    expect(createHash("sha256").update(servedAsset).digest("hex")).toBe(build.assets[entry!]);
+    console.info(`Butler grouping LAN fixture: ${core.origin}; build ${build.commit}; asset ${entry} sha256 ${build.assets[entry!]}`);
+    const listed = await (await core.api.get("chat-sessions")).json() as Array<{id: string; metadata: Record<string, unknown>}>;
+    expect(listed.find(item => item.id === "sidebar-recovery")?.metadata.butler_initiated).toBe(true);
+    expect(listed.find(item => item.id === "sidebar-butler-chat")?.metadata.butler_initiated).toBe(true);
+    expect(listed.find(item => item.id === "sidebar-ordinary-recovery")?.metadata.butler_initiated).toBeUndefined();
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Butler grouping acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Butler grouping acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "Show conversations"}).click();
+    const sidebar = page.getByRole("complementary", {name: "Conversations"});
+    await expect(sidebar.locator('[data-session-id="sidebar-butler"]')).toBeVisible();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toHaveCount(0);
+    await expect(sidebar.locator('[data-session-id="sidebar-ordinary-recovery"]')).toBeVisible();
+    await sidebar.getByRole("button", {name: "Expand 2 chats for Butler"}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
+    await expect(sidebar.locator('[data-session-id="sidebar-butler-chat"]')).toBeVisible();
+    await sidebar.locator('[data-session-id="sidebar-recovery"]').click();
+    await expect(page).toHaveURL(/session=sidebar-recovery/);
+    await page.reload();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
+    await testInfo.attach("butler-sidebar-real-core", {body: JSON.stringify({origin: core.origin, build: "production", buildCommit: build.commit, builtAt: build.builtAt, asset: entry, assetSha256: build.assets[entry!], viewport: page.viewportSize(), sessionId: "sidebar-recovery"}), contentType: "application/json"});
+    await testInfo.attach("butler-sidebar-screen", {body: await page.screenshot(), contentType: "image/png"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
 reliabilityTest("assistant upgrade conversation bulk delete clears rows already absent from real Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
