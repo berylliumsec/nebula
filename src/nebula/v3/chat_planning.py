@@ -113,6 +113,11 @@ class ChatPlanService:
         return None
 
     def required(self, turn: ChatTurn, session: ChatSession) -> bool:
+        # A delegated child executes the main agent's plan. An old child turn
+        # may still carry a planning snapshot or directive from before this
+        # rule; neither may start a second planner or gate its tools.
+        if isinstance(session.metadata.get("subagent_id"), str):
+            return False
         return bool(
             turn.request_snapshot.get("planning_enabled")
             or self.for_turn(turn.id)
@@ -120,6 +125,8 @@ class ChatPlanService:
         )
 
     def ensure(self, turn: ChatTurn, session: ChatSession) -> ChatTaskPlan | None:
+        if isinstance(session.metadata.get("subagent_id"), str):
+            return None
         if not self.required(turn, session):
             return None
         existing = self.for_turn(turn.id)

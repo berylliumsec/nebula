@@ -2061,10 +2061,7 @@ class SubagentService:
         parent_request: dict[str, Any] = {
             "idempotency_key": invocation.idempotency_key,
             "tools_enabled": tools_enabled,
-            "planning_enabled": bool(
-                parent_turn.request_snapshot.get("planning_enabled")
-                or self.chat.plans.for_turn(parent_turn.id)
-            ),
+            "planning_enabled": False,
             "include_knowledge": include_knowledge,
             "allow_cloud_knowledge": allow_cloud_knowledge,
             "allow_subagents": allow_subagents,
@@ -2072,6 +2069,22 @@ class SubagentService:
             "mcp_server_ids": mcp_server_ids,
             **({"capabilities": selection} if selection is not None else {}),
         }
+        parent_plan = self.chat.plans.for_turn(parent_turn.id)
+        plan_context = parent_session.metadata.get("delegated_plan_context")
+        if parent_plan is not None and parent_plan.phase == "execution":
+            plan_context = "Main agent's saved plan:\n" + "\n".join(
+                f"{index}. {step['action']} (expected: {step['expected_outcome']})"
+                for index, step in enumerate(parent_plan.steps, 1)
+            )
+        elif not plan_context and parent_turn.goal_id:
+            goal = self.store.get(ChatGoal, parent_turn.goal_id)
+            if goal.plan:
+                plan_context = "Main goal's plan:\n" + "\n".join(
+                    f"{index}. {step}" for index, step in enumerate(goal.plan, 1)
+                )
+        if not isinstance(plan_context, str):
+            plan_context = ""
+        plan_context = _bounded(plan_context, 24_000)
         subagent_id = str(uuid4())
         harness_session = (
             self.harness_runtime.create_session(
@@ -2100,6 +2113,7 @@ class SubagentService:
                 "subagent_parent_session_id": parent_session.id,
                 "subagent_parent_turn_id": parent_turn.id,
                 "planning_enabled": parent_request["planning_enabled"],
+                **({"delegated_plan_context": plan_context} if plan_context else {}),
             },
         )
         record = ChatSubagent(
@@ -2127,6 +2141,8 @@ class SubagentService:
                 f"{task}\n\nContext from the delegating assistant:\n{context.strip()}"
             )
         )
+        if plan_context:
+            content += f"\n\n{plan_context}\nFollow the delegated task within this plan; report progress to the main agent."
         child_turn_id: str | None = None
         try:
             if harness_id:
@@ -2510,7 +2526,7 @@ class SubagentService:
                 mcp_server_ids=None,
                 include_knowledge=bool(flags.get("include_knowledge")),
                 allow_cloud_knowledge=bool(flags.get("allow_cloud_knowledge")),
-                planning_enabled=bool(flags.get("planning_enabled")),
+                planning_enabled=False,
             )
             prepared = None
         else:
@@ -2536,7 +2552,7 @@ class SubagentService:
                     allow_subagents=bool(flags.get("allow_subagents")),
                     max_active_subagents=flags.get("max_active_subagents"),
                     tools_enabled=bool(flags.get("tools_enabled")),
-                    planning_enabled=bool(flags.get("planning_enabled")),
+                    planning_enabled=False,
                     mcp_server_ids=list(flags.get("mcp_server_ids") or []),
                     hook_ids=selection.get("hook_ids", []),
                     skill_selections=selection.get("skills", []),

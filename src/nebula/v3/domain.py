@@ -4277,6 +4277,7 @@ class ButlerRecoveryCase(Entity):
     model_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
     model_turn_id: str | None = Field(default=None, max_length=200)
+    recovery_goal_ids: list[str] = Field(default_factory=list, max_length=20)
     queued_item_id: str | None = Field(default=None, max_length=200)
     delivered_turn_id: str | None = Field(default=None, max_length=200)
     delivery_hold_reason: str | None = Field(default=None, max_length=200)

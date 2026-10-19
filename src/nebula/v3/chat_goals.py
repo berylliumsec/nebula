@@ -17,6 +17,7 @@ from .domain import (
     ChatBackend,
     Approval,
     ApprovalStatus,
+    ButlerRecoveryCase,
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
@@ -100,9 +101,23 @@ class GoalConversationCreate(GoalCreate):
     max_active_subagents: int | None = Field(
         default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
     )
+    butler_recovery_case_id: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
+    butler_recovery_source_goal_id: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
 
     @model_validator(mode="after")
     def selections_are_unique(self) -> "GoalConversationCreate":
+        if bool(self.butler_recovery_case_id) != bool(
+            self.butler_recovery_source_goal_id
+        ):
+            raise ValueError(
+                "a Butler recovery goal requires both its case and source goal"
+            )
+        if self.butler_recovery_case_id and self.backend != ChatBackend.HARNESS:
+            raise ValueError("Butler recovery goals require a harness runtime")
         if self.backend == ChatBackend.PROVIDER:
             if not self.provider_id or self.harness_profile_id:
                 raise ValueError("provider goals require only provider_id")
@@ -292,6 +307,22 @@ class ChatGoalService:
         """Persist an empty conversation and its goal draft as one unit."""
 
         self.store.get(Engagement, body.engagement_id)
+        recovery_metadata: dict[str, str] = {}
+        if body.butler_recovery_case_id:
+            case = self.store.get(ButlerRecoveryCase, body.butler_recovery_case_id)
+            source = self.store.get(ChatGoal, body.butler_recovery_source_goal_id or "")
+            if (
+                case.signal != "butler.global_periodic_check"
+                or case.status != "investigating"
+                or source.engagement_id != body.engagement_id
+                or source.parent_goal_id is not None
+                or source.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}
+            ):
+                raise ConflictError("Butler recovery source or scheduled case changed")
+            recovery_metadata = {
+                "butler_recovery_case_id": case.id,
+                "butler_recovery_source_goal_id": source.id,
+            }
         if body.backend == ChatBackend.HARNESS:
             if self.harness_runtime is None:
                 raise ConflictError("harness goals are unavailable in this Core")
@@ -304,6 +335,25 @@ class ChatGoalService:
                     "this harness does not report token usage; use a step or time limit"
                 )
             with self.store.transaction() as transaction:
+                if body.butler_recovery_case_id:
+                    from .butler_oversight import _entity_in_transaction
+
+                    current_case = _entity_in_transaction(
+                        transaction, ButlerRecoveryCase, body.butler_recovery_case_id
+                    )
+                    current_source = _entity_in_transaction(
+                        transaction, ChatGoal, body.butler_recovery_source_goal_id or ""
+                    )
+                    if (
+                        current_case is None
+                        or current_case.status != "investigating"
+                        or current_source is None
+                        or current_source.status
+                        not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}
+                    ):
+                        raise ConflictError(
+                            "Butler recovery source or scheduled case changed"
+                        )
                 harness_session = self.harness_runtime.create_session(
                     engagement_id=body.engagement_id,
                     profile_id=profile.id,
@@ -356,8 +406,26 @@ class ChatGoalService:
                     time_budget_seconds=body.time_budget_seconds,
                     step_budget=body.step_budget,
                     child_budget=body.child_budget,
+                    metadata=recovery_metadata,
                 )
                 transaction.add_all([session, goal])
+                if body.butler_recovery_case_id:
+                    assert current_case is not None
+                    if len(current_case.recovery_goal_ids) >= 20:
+                        raise ConflictError(
+                            "scheduled Butler check already linked 20 recovery goals"
+                        )
+                    transaction.update(
+                        ButlerRecoveryCase,
+                        current_case.id,
+                        {
+                            "recovery_goal_ids": [
+                                *current_case.recovery_goal_ids,
+                                goal.id,
+                            ]
+                        },
+                        expected_revision=current_case.revision,
+                    )
             return GoalConversationCreated(session=session, goal=goal)
         session, goal = self._provider_conversation_entities(body)
         with self.store.transaction() as transaction:
