@@ -612,7 +612,8 @@ def test_unenforceable_harness_adapter_blocks_before_connection(tmp_path):
 
 
 @pytest.mark.parametrize("permission_mode", ["managed", "unrestricted"])
-def test_codex_submits_formal_plan_through_restricted_core_gateway(
+# Keep this test ID available to the cumulative selection from PR #861.
+def test_managed_codex_submits_formal_plan_through_restricted_core_gateway(
     tmp_path, monkeypatch, permission_mode
 ):
     store, app, _ = _app(tmp_path)
