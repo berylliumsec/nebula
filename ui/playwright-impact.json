@@ -793,6 +793,17 @@
       {"area":"mission-supervisor-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN delegated Mission opens its durable supervisor chat","runtime":"real-core","shard":"1/1"}
 
     ],
+    "butler-sidebar": [
+      {"area":"butler-sidebar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane","runtime":"mock","shard":"1/1"},
+      {"area":"butler-sidebar","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core groups Butler initiated chats after reload","runtime":"real-core","shard":"1/1"}
+    ],
     "subagent-sidebar": [
       {"area":"subagent-sidebar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation|assistant upgrade sidebar follows subagents created during an active turn","runtime":"mock","shard":"1/1"},
       {"area":"subagent-sidebar","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation|assistant upgrade sidebar follows subagents created during an active turn","runtime":"mock","shard":"1/1"},
