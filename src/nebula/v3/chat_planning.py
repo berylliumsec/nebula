@@ -1,4 +1,4 @@
-"""Durable, Core-enforced plan gate for chat turns and delegated rounds."""
+"""Durable task plans, with advisory planning for new chat turns."""
 
 from __future__ import annotations
 
@@ -14,11 +14,14 @@ from .domain import (
     ChatTaskPlan,
     ChatTurn,
     NebulaModel,
+    RiskClass,
+    ScopePolicy,
 )
+from .runtime_platform import RuntimeToolComponents
 from .storage import NebulaStore, NotFoundError
 from .tool_results import ToolOutputAccessError, WorkspaceOutputService
-from .tools import ToolExecutionResult, ToolInvocation
-from .domain import Approval, ScopePolicy
+from .tools import ToolExecutionResult, ToolInvocation, ToolSpec
+from .domain import Approval
 
 
 DISCOVERY_TOOL_NAMES = frozenset(
@@ -43,8 +46,8 @@ class PlanSubmission(NebulaModel):
 
     @model_validator(mode="after")
     def coherent(self) -> "PlanSubmission":
-        if self.no_file_work == bool(self.files):
-            raise ValueError("specify verified files or explicitly set no_file_work")
+        if self.no_file_work and self.files:
+            raise ValueError("no_file_work cannot be combined with listed files")
         for field in ("tool_names", "native_categories", "files"):
             values = getattr(self, field)
             if len(values) != len(set(values)):
@@ -113,6 +116,10 @@ class ChatPlanService:
         return None
 
     def required(self, turn: ChatTurn, session: ChatSession) -> bool:
+        # Existing in-flight enforced turns retain their saved contract. New
+        # turns explicitly select advisory planning and never enter this gate.
+        if turn.request_snapshot.get("plan_behavior") == "advisory":
+            return False
         # A delegated child executes the main agent's plan. An old child turn
         # may still carry a planning snapshot or directive from before this
         # rule; neither may start a second planner or gate its tools.
@@ -124,10 +131,22 @@ class ChatPlanService:
             or self.pending_directive(turn, session)
         )
 
-    def ensure(self, turn: ChatTurn, session: ChatSession) -> ChatTaskPlan | None:
-        if isinstance(session.metadata.get("subagent_id"), str):
+    def requested(self, turn: ChatTurn, session: ChatSession) -> bool:
+        return bool(
+            turn.request_snapshot.get("planning_enabled")
+            or self.for_turn(turn.id)
+            or self.pending_directive(turn, session)
+        )
+
+    def ensure(
+        self, turn: ChatTurn, session: ChatSession, *, voluntary: bool = False
+    ) -> ChatTaskPlan | None:
+        if (
+            isinstance(session.metadata.get("subagent_id"), str)
+            and turn.request_snapshot.get("plan_behavior") != "advisory"
+        ):
             return None
-        if not self.required(turn, session):
+        if not voluntary and not self.requested(turn, session):
             return None
         existing = self.for_turn(turn.id)
         directive = self.pending_directive(turn, session)
@@ -144,7 +163,12 @@ class ChatPlanService:
                             "plan_version": existing.plan_version + 1
                             if existing.phase == "execution"
                             else existing.plan_version,
-                            "reason": "Butler required a fresh plan: "
+                            "reason": (
+                                "Butler requested a fresh plan: "
+                                if turn.request_snapshot.get("plan_behavior")
+                                == "advisory"
+                                else "Butler required a fresh plan: "
+                            )
                             + directive.reason,
                             "directive_id": directive.id,
                         },
@@ -214,15 +238,22 @@ class ChatPlanService:
         available_tools: set[str],
         native_categories: set[str],
         workspace: Path,
+        strict: bool = True,
     ) -> ChatTaskPlan:
         current = self.for_turn(plan.turn_id)
-        if current is None or current.phase not in {"discovery", "replanning"}:
+        if current is None or current.phase not in {
+            "discovery",
+            "replanning",
+            "execution",
+        }:
+            raise PlanningBlocked("task is not accepting a plan")
+        if strict and current.phase == "execution":
             raise PlanningBlocked("task is not accepting a plan")
         unknown = set(submission.tool_names) - available_tools
-        if unknown:
+        if strict and unknown:
             raise ValueError("unavailable planned tools: " + ", ".join(sorted(unknown)))
         unknown_native = set(submission.native_categories) - native_categories
-        if unknown_native:
+        if strict and unknown_native:
             raise ValueError(
                 "unavailable native categories: " + ", ".join(sorted(unknown_native))
             )
@@ -232,6 +263,8 @@ class ChatPlanService:
             current.id,
             {
                 "phase": "execution",
+                "plan_version": current.plan_version
+                + (1 if current.phase == "execution" else 0),
                 "steps": [item.model_dump() for item in submission.steps],
                 "tool_names": submission.tool_names,
                 "native_categories": submission.native_categories,
@@ -333,3 +366,61 @@ class PlanningBroker:
                 self.plans.ensure(turn, session)
                 self.plans.guard(turn_id, invocation.tool_name)
         return await self.broker.execute(invocation, scope, approval=approval)
+
+
+PLAN_SUBMIT_SPEC = ToolSpec(
+    name="plan.submit",
+    description=(
+        "Share an optional task plan with Core so subagents receive its steps. "
+        "Planning does not limit tool use; revise the plan as work changes."
+    ),
+    input_schema=PlanSubmission.model_json_schema(),
+    output_schema={"type": "object", "properties": {"plan_id": {"type": "string"}}},
+    risk_class=RiskClass.LOCAL_READ,
+)
+
+
+class AdvisoryPlanBroker:
+    def __init__(self, plans: ChatPlanService) -> None:
+        self.plans = plans
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: Approval | None = None,
+    ) -> ToolExecutionResult:
+        del scope, approval
+        if invocation.chat_turn_id is None:
+            raise ValueError("a chat turn is required to share a plan")
+        turn = self.plans.store.get(ChatTurn, invocation.chat_turn_id)
+        session = self.plans.store.get(ChatSession, turn.session_id)
+        plan = self.plans.ensure(turn, session, voluntary=True)
+        assert plan is not None
+        saved = self.plans.submit(
+            plan,
+            PlanSubmission.model_validate(invocation.arguments),
+            available_tools=set(),
+            native_categories=set(),
+            workspace=invocation.workspace,
+            strict=False,
+        )
+        return ToolExecutionResult(
+            output={
+                "plan_id": saved.id,
+                "version": saved.plan_version,
+                "phase": saved.phase,
+            }
+        )
+
+
+def advisory_plan_components(
+    plans: ChatPlanService, scope: ScopePolicy, workspace: Path
+) -> RuntimeToolComponents:
+    return RuntimeToolComponents(
+        broker=AdvisoryPlanBroker(plans),
+        scope=scope,
+        workspace=workspace,
+        specs={PLAN_SUBMIT_SPEC.name: PLAN_SUBMIT_SPEC},
+    )

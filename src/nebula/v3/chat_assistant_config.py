@@ -108,8 +108,6 @@ def chat_assistant_config(store: NebulaStore, session: ChatSession) -> dict[str,
     }
     if isinstance(saved, dict):
         current.update({key: value for key, value in saved.items() if key in current})
-    if isinstance(metadata.get("subagent_id"), str):
-        current["planning_enabled"] = False
     return current
 
 
@@ -137,13 +135,6 @@ def update_chat_assistant_config(
     current = chat_assistant_config(store, session)
     changes = patch.model_dump(exclude_unset=True, mode="json")
     selected = {**current, **changes}
-    if (
-        isinstance(session.metadata.get("subagent_id"), str)
-        and selected["planning_enabled"]
-    ):
-        raise ValueError(
-            "planning belongs to the main agent; subagents receive its plan"
-        )
     backend = selected["backend"]
     if backend not in {"provider", "harness"}:
         raise ValueError("choose Provider or Agent harness")
@@ -153,13 +144,6 @@ def update_chat_assistant_config(
     model = selected["model"]
     if not isinstance(profile_id, str) or not isinstance(model, str):
         raise ValueError("choose an enabled runtime and listed model")
-    if selected["planning_enabled"] and selected["harness_mode"] in {
-        "plan",
-        "planning",
-    }:
-        raise ValueError(
-            "Plan before acting cannot be combined with harness Plan only mode"
-        )
     if backend == "provider":
         provider_profile = store.get(ProviderProfile, profile_id)
         if (

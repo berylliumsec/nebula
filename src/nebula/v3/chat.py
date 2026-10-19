@@ -66,6 +66,7 @@ from .chat_planning import (
     PlanSubmission,
     PlanningBroker,
     PlanningBlocked,
+    advisory_plan_components,
 )
 from .chat_turn_headers import (
     ChatTurnHeader,
@@ -717,10 +718,6 @@ class ChatCompletionRequest(NebulaModel):
             raise ValueError("the final chat message must have role=user")
         if sum(len(item.text) for item in self.context_attachments) > 20_000:
             raise ValueError("selected context exceeds the 20000 character limit")
-        if self.planning_enabled and self.harness_mode in {"plan", "planning"}:
-            raise ValueError(
-                "Plan before acting cannot be combined with harness Plan only mode"
-            )
         if self.backend == ChatBackend.PROVIDER:
             if not self.provider_id:
                 raise ValueError("provider chat requires provider_id")
@@ -5383,9 +5380,7 @@ class ChatService:
             )
         else:
             new_messages = durable_incoming
-        if session and isinstance(session.metadata.get("subagent_id"), str):
-            request = request.model_copy(update={"planning_enabled": False})
-        elif request.planning_enabled is None:
+        if request.planning_enabled is None:
             request = request.model_copy(
                 update={
                     "planning_enabled": bool(
@@ -6129,6 +6124,12 @@ class ChatService:
                 raise ChatConfigurationError(
                     "no command, automation, MCP, or browser runtime capabilities were selected"
                 )
+            tool_components = combine_tool_components(
+                tool_components,
+                advisory_plan_components(
+                    self.plans, tool_components.scope, Path(tool_components.workspace)
+                ),
+            )
             if request.allowed_tool_names is not None:
                 try:
                     tool_components = restrict_tool_components(
@@ -6145,7 +6146,8 @@ class ChatService:
                             if skill_resources_selected
                             else frozenset()
                         )
-                        | (REPORT_TOOL_NAMES if goal is not None else frozenset()),
+                        | (REPORT_TOOL_NAMES if goal is not None else frozenset())
+                        | frozenset({"plan.submit"}),
                     )
                 except InvalidToolArguments as exc:
                     raise ChatConfigurationError(str(exc)) from exc
@@ -6156,6 +6158,7 @@ class ChatService:
                     tool_components.specs,
                     always_loaded=[
                         *tool_components.scope.always_loaded_tools,
+                        "plan.submit",
                         *(REPORT_TOOL_NAMES if goal is not None else ()),
                     ],
                     always_loaded_sources=[f"mcp:{item.id}" for item in mcp_profiles],
@@ -6268,6 +6271,14 @@ class ChatService:
             # Retrieved for this message, so it rides on this message rather
             # than the instructions every turn of the conversation begins with.
             reference = _reference_material(operator_help_chunks, engagement_chunks)
+            if request.planning_enabled:
+                instructions += (
+                    "\n\nPlanning preference: Make a concise plan before substantial "
+                    "task work when useful. Share it through plan.submit if that "
+                    "tool is available, and pass relevant steps to subagents "
+                    "when delegating. Normal tool use remains available even "
+                    "without a saved plan. Revise the plan as work changes."
+                )
             base_instructions = instructions
             # What the turn's requests add beside the conversation counts
             # toward the target too, or a tool-heavy turn is assembled to the
@@ -6531,6 +6542,7 @@ class ChatService:
                     "control_assistant": settings_only,
                     "available_tool_names": sorted(tool_components.specs),
                     "planning_enabled": bool(request.planning_enabled),
+                    "plan_behavior": "advisory",
                     "allowed_tool_names": request.allowed_tool_names,
                     "browser_session_id": browser_session_id,
                     "application_model_context": model_context,
@@ -6600,6 +6612,8 @@ class ChatService:
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
                     "include_oci_tools": False,
+                    "planning_enabled": bool(request.planning_enabled),
+                    "plan_behavior": "advisory",
                     "knowledge_enabled": request.include_knowledge,
                     "cloud_knowledge_confirmed": request.allow_cloud_knowledge,
                 },
@@ -8073,6 +8087,27 @@ class ChatService:
         self, prepared: PreparedChat
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         self._claim_execution(prepared)
+        if prepared.turn is not None:
+            session = self.store.get(ChatSession, prepared.turn.session_id)
+            if prepared.turn.request_snapshot.get(
+                "plan_behavior"
+            ) == "advisory" and self.plans.requested(prepared.turn, session):
+                plan = self.plans.ensure(prepared.turn, session)
+                if (
+                    plan is not None
+                    and plan.directive_id
+                    and not prepared.turn.request_snapshot.get("planning_enabled")
+                ):
+                    prepared.model_request = prepared.model_request.model_copy(
+                        update={
+                            "instructions": (
+                                "Planning preference for this turn: Make and share a "
+                                "concise plan when useful; include relevant steps in "
+                                "subagent tasks. Normal tools remain available.\n\n"
+                                + (prepared.model_request.instructions or "")
+                            )
+                        }
+                    )
         yield (
             "started",
             {
@@ -8383,6 +8418,7 @@ class ChatService:
         plan = self.plans.for_turn(turn_id)
         if plan is None or plan.phase != "execution":
             return ""
+        turn = self.store.get(ChatTurn, turn_id)
         detail = {
             "version": plan.plan_version,
             "steps": plan.steps,
@@ -8392,6 +8428,12 @@ class ChatService:
             "no_file_work": plan.no_file_work,
             "unresolved_dependencies": plan.unresolved_dependencies,
         }
+        if turn.request_snapshot.get("plan_behavior") == "advisory":
+            return (
+                "\n\nAgent-shared task plan (advisory). Use or revise these steps "
+                "as useful and pass relevant context to subagents. Normal tools "
+                "remain available.\n" + json.dumps(detail, ensure_ascii=False)
+            )
         return (
             "\n\nCore-validated task plan. Follow these steps and use only the listed "
             "capabilities. Existing scope and approval rules still apply.\n"
@@ -12783,6 +12825,13 @@ class ChatService:
                 )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
+            if turn.request_snapshot.get("plan_behavior") == "advisory":
+                components = combine_tool_components(
+                    components,
+                    advisory_plan_components(
+                        self.plans, components.scope, Path(components.workspace)
+                    ),
+                )
             allowed_names = turn.request_snapshot.get("allowed_tool_names")
             if isinstance(allowed_names, list):
                 components = restrict_tool_components(
@@ -12802,6 +12851,11 @@ class ChatService:
                         frozenset({"skill.read_resource"})
                         if skill_snapshots
                         and any(item.resources for item in skill_snapshots)
+                        else frozenset()
+                    )
+                    | (
+                        frozenset({"plan.submit"})
+                        if turn.request_snapshot.get("plan_behavior") == "advisory"
                         else frozenset()
                     ),
                 )
