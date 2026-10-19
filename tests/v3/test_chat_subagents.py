@@ -926,6 +926,7 @@ def test_stopping_delegated_mission_stops_supervisor_turn(tmp_path: Path) -> Non
 
 def test_root_goal_sees_running_grandchild_below_completed_child(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
     root = store.create(
@@ -1002,7 +1003,17 @@ def test_root_goal_sees_running_grandchild_below_completed_child(
         )
     )
     goals = ChatGoalService(store)
+    original_find_entities = store.find_entities
+    subagent_scans = []
+
+    def count_subagent_scans(model, filters, **kwargs):
+        if model is ChatSubagent:
+            subagent_scans.append(1)
+        return original_find_entities(model, filters, **kwargs)
+
+    monkeypatch.setattr(store, "find_entities", count_subagent_scans)
     assert goals.has_working_subagents(root.id)
+    assert len(subagent_scans) == 1
     assert [item.id for item in chat.subagents.descendants_for_session(root.id)] == [
         "first-record",
         "second-record",
@@ -1013,7 +1024,22 @@ def test_root_goal_sees_running_grandchild_below_completed_child(
         {"status": ChatSubagentStatus.COMPLETED, "finished_at": utc_now()},
         expected_revision=grandchild.revision,
     )
+    for index in range(64):
+        store.create(
+            ChatSubagent(
+                engagement_id=project.id,
+                parent_session_id=root.id,
+                parent_turn_id=root_turn.id,
+                child_session_id=f"settled-sibling-{index}",
+                name=f"Settled {index}",
+                task="Previously finished.",
+                status=ChatSubagentStatus.COMPLETED,
+                finished_at=utc_now(),
+            )
+        )
+    subagent_scans.clear()
     assert not goals.has_working_subagents(root.id)
+    assert len(subagent_scans) == 1
 
 
 def test_supervisor_can_enable_ready_command_runtime_for_one_child(
@@ -2321,6 +2347,11 @@ def test_restart_replays_only_subagents_with_unfinished_delivery(tmp_path, monke
                 content="A question not yet delivered.",
             )
         )
+        for index in range(32):
+            unfinished(
+                69 + index,
+                parent_session_id=pending_message.parent_session_id,
+            )
 
         repaired = []
 

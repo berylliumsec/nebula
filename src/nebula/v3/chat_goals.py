@@ -175,13 +175,16 @@ class ChatGoalService:
     def has_working_subagents(self, session_id: str) -> bool:
         """Whether this conversation has a running child at any depth."""
 
+        project_id = self.store.get(ChatSession, session_id).engagement_id
+        children_by_parent: dict[str, list[ChatSubagent]] = {}
+        for child in self.store.find_entities(
+            ChatSubagent, {}, engagement_id=project_id
+        ):
+            children_by_parent.setdefault(child.parent_session_id, []).append(child)
         pending = [session_id]
         seen = {session_id}
         while pending:
-            children = self.store.find_entities(
-                ChatSubagent, {"parent_session_id": pending.pop()}
-            )
-            for child in children:
+            for child in children_by_parent.get(pending.pop(), []):
                 if child.status == ChatSubagentStatus.RUNNING:
                     return True
                 if child.child_session_id in seen:
@@ -205,6 +208,8 @@ class ChatGoalService:
             except (
                 NotFoundError
             ):  # diagnostic-expected: most conversations have no goal
+                return
+            if goal.status != ChatGoalStatus.RUNNING:
                 return
             working = goal.execution_claim_id is not None or (
                 self.has_working_subagents(session_id)
