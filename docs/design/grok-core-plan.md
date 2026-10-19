@@ -1,27 +1,21 @@
-# Grok Core plan containment
+# Advisory task plans for agents
 
-The operator selects Grok as a main chat runtime, keeps **Plan before acting**
-enabled, and optionally delegates to a provider subagent. Core owns the saved
-assistant choice, bound chat runtime, task plan, and tool decisions. Grok owns its
-conversation, but its planned turns must receive only Core's gateway tools.
+The **Ask for a plan first** setting applies to provider, Codex, and Grok
+chats. Core asks the selected agent to make a concise plan and offers
+`plan.submit` as a way to share structured steps. The agent keeps its normal
+tools and permissions while planning. A missing, late, or changed plan does not
+pause the turn. The setting is a preference, not a pre-action safety boundary.
 
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |
-| Discover and select | Grok and Plan are available together; Butler can explain that settings apply on the next message | Core catalog and UI | component and browser |
-| Save and start | A new message rebinds the same chat to Grok and retains the chosen provider subagent | Core chat and harness session | real Core |
-| Plan and execute | A restricted Grok session can discover linked workspace files and submit a validated plan; no vendor-native or ambient tool runs before the plan | Core task plan and gateway | adapter, Core and real Grok |
-| Tool use | Every execution tool goes through Core's declared-tool guard; an undeclared tool requires replanning before effects | Core gateway and task plan | Core and real Grok |
-| Interrupt and refresh | The saved plan, turn status, and bound runtime survive interruption and reload | Core database | real Core and browser |
-| Failure and retry | Unsupported or failed planning is visible and does not silently run an unplanned task | Core turn and task plan | Core and browser |
-| Delete or revoke | Existing chat and profile removal rules continue to own cleanup | Core database | existing Core coverage |
+| Discover and select | The setting is available for provider, Codex, and Grok chats | Core catalog and UI | component and browser |
+| Save and start | The next message uses the saved setting and selected runtime in the same chat | Core chat and runtime session | real Core |
+| Plan and act | The agent receives the request and `plan.submit` while its ordinary tools remain available | Core turn and runtime | provider and harness integration |
+| Delegate | Core adds a shared plan, if one exists, to the subagent's task; a harness-reported plan is a fallback | Core plan and subagent context | Core integration |
+| Refresh | The saved setting, shared plan, and turn state survive reload | Core database | real Core and browser |
+| Missing plan | The task continues and the activity view shows that a plan was requested but not shared | Core turn and plan | Core and browser |
 
-For a planned Grok turn, Core uses an isolated account home containing only a
-link to the selected account's authentication file. Compatibility integrations,
-plugins, hooks, web search, and native subagents are unavailable. Native tool
-execution is denied even if Grok proposes one.
-Grok runs with a deny-by-default tool permission mode that explicitly allows
-only the session-scoped Core MCP gateway. Core rejects ambient permission rules.
-Grok runs from private scratch; the linked project workspace is available only
-through Core's gateway. Core validates `plan.submit`, permits only declared
-execution tools, and includes the saved plan in provider-subagent context.
-Ordinary Grok turns retain their selected profile behavior.
+Existing project scope, approvals, and tool policies still apply. The native
+harness Plan only mode is a separate operator choice. Historical turns that
+started under the older enforced plan flow retain their saved record; new
+turns use advisory planning.
