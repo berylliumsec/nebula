@@ -107,6 +107,17 @@ def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
     )
 
 
+def test_product_search_explains_butler_conversation_grouping(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where are chats Butler creates in Workbench conversations?"
+    )
+    assert any(
+        "chats Butler creates appear below Butler" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_chat_planning_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
