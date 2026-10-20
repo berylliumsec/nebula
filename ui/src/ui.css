@@ -345,6 +345,7 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-form fieldset input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; }
 .chat-goal-form fieldset small { display: block; overflow-wrap: anywhere; color: var(--text-muted); }
 .chat-goal-form textarea { min-height: 64px; resize: vertical; }
+@media (max-width: 760px), (pointer: coarse) { .chat-goal-resume-default { min-height: 44px; } }
 .chat-goal-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
 .chat-goal-form > div, .chat-goal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .chat-goal-actions { align-items: center; gap: 12px; }

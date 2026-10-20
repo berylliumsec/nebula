@@ -392,6 +392,12 @@ GOAL_CREATE_FIELDS: dict[str, Any] = {
         "maxItems": 50,
     },
     "plan": {"type": "array", "items": {"type": "string"}, "maxItems": 200},
+    "resume_instruction": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000,
+        "description": "Text Core sends as a new user turn when this paused or blocked goal is explicitly resumed. Omit to keep the existing or default instruction; automatic continuations use separate Core text.",
+    },
     "token_budget": {"type": ["integer", "null"], "minimum": 1},
     "time_budget_seconds": {"type": ["integer", "null"], "minimum": 1800},
     "step_budget": {"type": ["integer", "null"], "minimum": 1},
@@ -2940,7 +2946,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.update_goal",
-        "Edit objective, criteria, plan, or limits on a listed nonterminal goal after explicit operator instruction. Read goal first and pass its revision; omitted fields stay unchanged.",
+        "Edit objective, criteria, plan, resume instruction, or limits on a listed nonterminal goal after explicit operator instruction. Read goal first and pass its revision; omitted fields stay unchanged.",
         UPDATE_GOAL_SCHEMA,
         False,
     ),

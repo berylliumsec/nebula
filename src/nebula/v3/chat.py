@@ -14258,6 +14258,7 @@ class ChatService:
                             objective=goal.objective,
                             completion_criteria=goal.completion_criteria,
                             plan=goal.plan,
+                            resume_instruction=goal.resume_instruction,
                             token_budget=goal.token_budget,
                             time_budget_seconds=goal.time_budget_seconds,
                             step_budget=goal.step_budget,

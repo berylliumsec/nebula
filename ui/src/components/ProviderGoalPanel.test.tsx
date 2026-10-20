@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal } from "../api/types";
 import { DialogProvider } from "./DialogSystem";
-import { activeSeconds, estimateLiveTokens, estimateTokensFromBytes, ProviderGoalPanel, utf8Length } from "./ProviderGoalPanel";
+import { activeSeconds, DEFAULT_GOAL_RESUME_INSTRUCTION, estimateLiveTokens, estimateTokensFromBytes, ProviderGoalPanel, utf8Length } from "./ProviderGoalPanel";
 
 const draft: ChatGoal = {
   id: "goal", engagementId: "project", sessionId: "session",
@@ -82,6 +82,7 @@ it("creates a durable draft from explicit objective and criteria", async () => {
   fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Inspect safely" } });
   fireEvent.change(screen.getByLabelText("Completion criteria"), { target: { value: "Evidence retained\nChecks pass" } });
   fireEvent.change(screen.getByLabelText("Plan"), { target: { value: "Inspect\nValidate" } });
+  expect(screen.getByLabelText("Resume instruction")).toHaveValue(DEFAULT_GOAL_RESUME_INSTRUCTION);
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
   await waitFor(() => expect(createChatGoal).toHaveBeenCalledWith("session", {
     objective: "Inspect safely",
@@ -89,6 +90,21 @@ it("creates a durable draft from explicit objective and criteria", async () => {
     plan: ["Inspect", "Validate"],
   }));
   expect(onChange).toHaveBeenCalledWith(draft);
+});
+
+it("saves a custom resume instruction and restores the default in the goal editor", async () => {
+  const current = { ...draft, status: "paused" as const, resumeInstruction: "Check the saved proof first." };
+  const updateChatGoal = vi.fn().mockResolvedValue({ ...current, resumeInstruction: DEFAULT_GOAL_RESUME_INSTRUCTION, revision: 2 });
+  render(<DialogProvider><ProviderGoalPanel api={{ updateChatGoal } as unknown as ApiClient} sessionId="session" goal={current} onChange={vi.fn()} /></DialogProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
+  expect(screen.getByLabelText("Resume instruction")).toHaveValue("Check the saved proof first.");
+  fireEvent.click(screen.getByRole("button", { name: "Use default" }));
+  expect(screen.getByLabelText("Resume instruction")).toHaveValue(DEFAULT_GOAL_RESUME_INSTRUCTION);
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(updateChatGoal).toHaveBeenCalledWith("session", expect.objectContaining({
+    expectedRevision: 1,
+    resumeInstruction: DEFAULT_GOAL_RESUME_INSTRUCTION,
+  })));
 });
 
 it("requires a 30 minute active time limit and saves it in seconds", async () => {
@@ -125,12 +141,14 @@ it("creates the conversation with its goal before the first message", async () =
   fireEvent.click(screen.getByRole("button", { name: "Add goal" }));
   fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Start with a goal" } });
   fireEvent.change(screen.getByLabelText("Completion criteria"), { target: { value: "First turn is linked" } });
+  fireEvent.change(screen.getByLabelText("Resume instruction"), { target: { value: "Resume from the saved checkpoint." } });
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
 
   await waitFor(() => expect(onCreate).toHaveBeenCalledWith({
     objective: "Start with a goal",
     completionCriteria: ["First turn is linked"],
     plan: [],
+    resumeInstruction: "Resume from the saved checkpoint.",
   }));
   expect(onChange).toHaveBeenCalledWith(draft);
 });

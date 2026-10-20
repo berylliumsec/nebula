@@ -2,6 +2,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from fastapi import HTTPException
 from pydantic import ValidationError
 
@@ -14,10 +16,17 @@ from nebula.v3.chat import (
     ChatService,
     _goal_time_instruction,
 )
-from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalUpdate, GoalWrite
+from nebula.v3.chat_goals import (
+    ChatGoalService,
+    GoalCreate,
+    GoalUpdate,
+    GoalWrite,
+    goals_router,
+)
 from nebula.v3.context import estimate_model_request
 from nebula.v3.domain import (
     CHAT_GOAL_CHILD_LIMIT,
+    DEFAULT_GOAL_RESUME_INSTRUCTION,
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
@@ -290,6 +299,71 @@ def test_goal_content_can_be_edited_before_and_after_start(tmp_path):
     assert edited_running.completion_criteria == ["Running edit persisted"]
     assert edited_running.plan == ["Continue", "Verify"]
     assert edited_running.step_budget == 4
+
+
+def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
+    tmp_path,
+):
+    store, goals = setup_goal(tmp_path)
+    original = goals.create(
+        "session", GoalCreate(objective="Inspect", completion_criteria=["Done"])
+    )
+    assert original.resume_instruction == DEFAULT_GOAL_RESUME_INSTRUCTION
+    assert (
+        ChatGoal.model_validate(
+            original.model_dump(exclude={"resume_instruction"})
+        ).resume_instruction
+        == DEFAULT_GOAL_RESUME_INSTRUCTION
+    )
+
+    custom = "Review the saved findings, then verify the last open question."
+    edited = goals.update(
+        "session",
+        GoalUpdate(
+            expected_revision=original.revision,
+            objective=original.objective,
+            completion_criteria=original.completion_criteria,
+            resume_instruction=custom,
+        ),
+    )
+    retained = goals.update(
+        "session",
+        GoalUpdate(
+            expected_revision=edited.revision,
+            objective="Inspect and report",
+            completion_criteria=edited.completion_criteria,
+        ),
+    )
+    assert retained.resume_instruction == custom
+    running = goals.write(
+        "session", GoalWrite(expected_revision=retained.revision, action="start")
+    )
+    paused = goals.write(
+        "session", GoalWrite(expected_revision=running.revision, action="pause")
+    )
+    dispatched: list[tuple[str, str]] = []
+
+    async def dispatch(session_id: str, instruction: str) -> str:
+        dispatched.append((session_id, instruction))
+        return "turn"
+
+    app = FastAPI()
+    app.include_router(goals_router(store, goal_dispatcher=dispatch))
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat/sessions/session/goal/actions",
+            json={"expected_revision": paused.revision, "action": "resume"},
+        )
+    assert response.status_code == 200
+    assert response.json()["resume_instruction"] == custom
+    assert dispatched == [("session", custom)]
+
+    with pytest.raises(ValidationError, match="resume instruction cannot be blank"):
+        GoalCreate(
+            objective="Inspect",
+            completion_criteria=["Done"],
+            resume_instruction="  ",
+        )
 
 
 def test_goal_edit_rejects_stale_revision_and_terminal_history(tmp_path):

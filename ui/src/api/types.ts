@@ -2040,6 +2040,7 @@ export interface ChatGoal {
   objective: string;
   completionCriteria: string[];
   plan: string[];
+  resumeInstruction?: string;
   currentStep: number;
   status: "draft" | "running" | "paused" | "blocked" | "completed" | "cancelled";
   tokenBudget?: number;

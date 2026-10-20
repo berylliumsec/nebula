@@ -100,6 +100,16 @@ def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(tm
     )
     assert descriptor["name"] == "nebula.work.goals"
     assert descriptor["read_only"] is True
+    update = asyncio.run(
+        dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.catalog",
+            {"operation": "nebula.work.update_goal"},
+        )
+    )
+    assert "resume_instruction" in update["parameters"]["properties"]
+    assert "resume instruction" in update["description"]
     assert asyncio.run(
         dispatch_work_tool(
             work,
@@ -577,9 +587,14 @@ def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(tmp_p
                 "session_id": chat.id,
                 "expected_revision": revision,
                 "objective": "Inspect code and summarize",
+                "resume_instruction": "Read the saved checkpoint and finish the proof.",
             },
         )
         assert updated["goal"]["completion_criteria"] == ["Evidence retained"]
+        assert (
+            updated["goal"]["resume_instruction"]
+            == "Read the saved checkpoint and finish the proof."
+        )
         with pytest.raises(ValueError, match="goal changed"):
             await dispatch_work_tool(
                 work,
