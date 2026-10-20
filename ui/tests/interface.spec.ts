@@ -2303,6 +2303,7 @@ reloadTest("stabilization Butler Voice pauses and resumes without losing project
   });
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("button", { name: "Open Butler" }).click();
+  await page.getByRole("dialog", { name: "Butler" }).getByRole("button", { name: "More" }).click();
   await page.getByRole("button", { name: "Start Butler Voice" }).click();
   const voice = page.getByRole("dialog", { name: "Butler Voice" });
   await expect(voice).toBeVisible();
@@ -2396,6 +2397,53 @@ reloadTest("stabilization Butler Voice pauses and resumes without losing project
   await expect(voice).toHaveCount(0);
 });
 
+reloadTest("assistant popup Butler separates Chat, Work, and More without losing the draft", async ({ page }) => {
+  await installTruthfulCore(page);
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  const butler = page.getByRole("dialog", { name: "Butler" });
+  const composer = butler.getByRole("textbox", { name: "Ask Butler a question" });
+  await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+  await expect(butler.getByRole("region", { name: "Chat" })).toBeVisible();
+  await expect(butler.getByText("Ask Butler", { exact: true })).toBeVisible();
+  await composer.fill("Draft stays with Butler");
+  await butler.getByRole("button", { name: "Work" }).click();
+  await expect(butler.getByRole("region", { name: "Butler oversight" })).toBeVisible();
+  await expect(composer).toHaveValue("Draft stays with Butler");
+  await butler.getByRole("button", { name: "More" }).click();
+  await expect(butler.getByRole("button", { name: "Start Butler Voice" })).toBeVisible();
+  await expect(butler.getByRole("region", { name: "Butler memory" })).toBeVisible();
+  await expect(butler.getByText("Settings I can help with")).toBeVisible();
+  await butler.getByRole("button", { name: "Chat" }).click();
+  await expect(composer).toHaveValue("Draft stays with Butler");
+  await composer.focus();
+  await expect(composer).toBeFocused();
+  const panel = await butler.boundingBox();
+  const input = await composer.boundingBox();
+  expect(panel && input && input.y + input.height <= panel.y + panel.height).toBe(true);
+  const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
+  expect(input && input.y + input.height <= visualBottom + 1).toBe(true);
+  expect(await butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  for (const name of ["Chat", "Work", "More"]) {
+    const button = await butler.getByRole("button", { name }).boundingBox();
+    expectTouchTarget(button?.height, `${name} tab height`);
+  }
+  expect((await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+  const portrait = page.viewportSize()!;
+  if (portrait.width <= 430) {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect.poll(async () => butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    const landscapePanel = await butler.boundingBox();
+    const landscapeInput = await composer.boundingBox();
+    expect(landscapePanel && landscapeInput && landscapeInput.y + landscapeInput.height <= landscapePanel.y + landscapePanel.height).toBe(true);
+    await page.setViewportSize(portrait);
+  }
+  await butler.getByRole("button", { name: "Close Butler" }).click();
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+  await expect(composer).toHaveValue("Draft stays with Butler");
+});
+
 reloadTest("stabilization Butler opens from every screen and changes this device theme", async ({ page }) => {
   let policyMode: "docker" | "host" = "docker";
   let savedRequest: Record<string, unknown> | undefined;
@@ -2421,6 +2469,10 @@ reloadTest("stabilization Butler opens from every screen and changes this device
   await open.click();
   const assistant = page.getByRole("dialog", { name: "Butler" });
   await expect(assistant).toBeVisible();
+  await expect(assistant.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+  await assistant.getByRole("button", { name: "Work" }).click();
+  await expect(assistant.getByRole("button", { name: "Work" })).toHaveAttribute("aria-current", "page");
+  await assistant.getByRole("button", { name: "More" }).click();
   const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler"]').analyze();
   expect(assistantA11y.violations).toEqual([]);
   await assistant.getByText("Settings I can help with").click();
@@ -2534,6 +2586,7 @@ reloadTest("assistant popup Butler live status follows saved work without losing
     capability: "nebula.work.overview", display_name: "Inspect current agent reports", arguments: {}, step: 1,
   }));
   await expect(activity).toContainText("Using Inspect current agent reports");
+  await butler.getByRole("button", { name: "More" }).click();
   if (await butler.getByRole("button", { name: "Hide Butler" }).isVisible()) {
     await butler.getByRole("button", { name: "Hide Butler" }).click();
     await page.getByRole("button", { name: "Show Butler" }).click();
@@ -2664,6 +2717,7 @@ reloadTest("stabilization Butler launcher stays in shared chrome without coverin
   await launcher.click();
   const assistant = page.getByRole("dialog", { name: "Butler" });
   await expect(assistant).toBeVisible();
+  await assistant.getByRole("button", { name: "More" }).click();
   await assistant.getByRole("button", { name: "Hide Butler" }).click();
   await expect(topBar.getByRole("button", { name: "Show Butler" })).toBeVisible();
 
@@ -14970,6 +15024,7 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await page.getByRole("button", {name: "Open Butler"}).click();
   const controlAssistant = page.getByRole("dialog", {name: "Butler"});
   await expect(controlAssistant).toBeVisible();
+  await controlAssistant.getByRole("button", {name: "More"}).click();
   const startVoice = controlAssistant.getByRole("button", {name: "Start Butler Voice"});
   await expect(startVoice).toBeVisible();
   if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
