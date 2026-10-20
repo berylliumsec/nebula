@@ -1,23 +1,35 @@
 {
-  "change_digest": "8bc9121851d9c249ec8191dac10b5628733c45376e11c364eee9a3b3d32bafa6",
-  "reviewed_by": "Codex scoped review of simulation rollback snapshot retention",
-  "reason": "The ten selected Python cases exercise retention of the current coherent snapshot, deletion of older recognized snapshots without following links, refusal of unfamiliar paths before deletion, a visible cleanup failure or receipt-write failure that preserves a healthy Core, recovery from a partially completed cleanup, retry with no new candidate, preservation of unreviewed rollback state, cleanup order after accepted health, and failed-promotion rollback without pruning. The copied deployment gate is unchanged; it is included to make the installed deployer source complete.",
-  "exclusions": "This change affects simulation deployment automation and repository instructions, not Nebula UI, API, native code, or browser behavior. No frontend, native, or Playwright tests apply. A disposable LAN Core cannot exercise the host's systemd deployment boundary, so isolated filesystem and service-order tests cover the changed behavior. Full suites are excluded.",
+  "change_digest": "d5ac56588db3e2f43a5e67dfe7b8f607681490baa9d65596b0ec2b838d3cb1e1",
+  "reviewed_by": "Codex agent, 2026-10-20",
+  "reason": "Same-case blocked-agent check-in dialogue changes Butler case state, immediate-turn reply lookup, cross-project work routing, and settings assistant discovery. Select exact Core regressions, the settings list, and the production LAN global Butler journey in desktop Chromium and 390px mobile Chromium and WebKit.",
+  "exclusions": "No native code or device-specific layout changed. Other Python, frontend, and browser journeys and the remaining mobile widths are outside the changed behavior. The disposable authenticated LAN Core journey separately exercised two saved agent replies and three Butler turns in one case.",
   "expected_tests": {
-    "python": 10,
-    "frontend": 0,
+    "python": 9,
+    "frontend": 8,
     "native": 0,
-    "playwright": 0
+    "playwright": 3
   },
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
   "python": [
-    "tests/test_simulation_deployer_retention.py"
+    "tests/v3/test_control_assistant_work.py::test_await_chat_result_reads_exact_immediate_turn_reply",
+    "tests/v3/test_control_assistant_work.py::test_work_tools_are_bound_to_control_assistant_and_not_ordinary_chat",
+    "tests/v3/test_butler_recovery.py::test_blocked_goal_checkin_continues_same_case_through_agent_conversation",
+    "tests/v3/test_butler_recovery.py::test_completed_main_turn_waits_for_its_saved_reply",
+    "tests/v3/test_butler_recovery.py::test_legacy_global_parent_guidance_completion_does_not_require_a_subagent",
+    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_blocked_checkin_dialogue",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/CompactSettingsList.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "butler-global/assistant-real-desktop",
+    "butler-global/assistant-real-chromium-390",
+    "butler-global/assistant-real-webkit-390"
+  ],
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false
 }

@@ -4277,13 +4277,17 @@ class ButlerRecoveryCase(Entity):
     model_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
     model_turn_id: str | None = Field(default=None, max_length=200)
-    model_turn_ids: list[str] = Field(default_factory=list, max_length=3)
+    model_turn_ids: list[str] = Field(default_factory=list, max_length=8)
     capacity_retry_count: int = Field(default=0, ge=0, le=1)
     recovery_goal_ids: list[str] = Field(default_factory=list)
     queued_item_id: str | None = Field(default=None, max_length=200)
     delivered_turn_id: str | None = Field(default=None, max_length=200)
     delivery_hold_reason: str | None = Field(default=None, max_length=200)
     target_session_id: str | None = Field(default=None, max_length=200)
+    dialogue_pending_turns: list[dict[str, str]] = Field(default_factory=list)
+    dialogue_results: list[dict[str, str]] = Field(default_factory=list)
+    dialogue_read_turn_ids: list[str] = Field(default_factory=list)
+    dialogue_review_retries: int = Field(default=0, ge=0, le=1)
     next_check_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None

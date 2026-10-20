@@ -231,6 +231,14 @@ in force. A check with no running main goals and remaining paused or blocked
 main goals stays marked as needing attention when Butler only reads or changes
 unrelated state.
 
+When Butler sends immediate guidance to a blocked main agent, Core keeps that
+scheduled check open and follows the accepted chat turn. When the turn finishes,
+Butler reads its exact saved reply and can answer or take another scoped action
+in the same check. Further replies continue through that case without waiting
+for the next 15-minute check. A held message, missing saved reply, failed turn,
+or unresolved blocked goal remains visible as needing attention. Core bounds
+the exchange and preserves the turn and action receipts across worker restarts.
+
 Butler Oversight displays the durable scheduled-check transcript as a compact
 section. Expanding a check reads every saved harness attempt and its paged event stream
 from Core; it survives refresh and reconnect. A Codex `serverOverloaded` failure
@@ -258,6 +266,7 @@ shared with other Grok products; missing vendor values remain unknown.
 | Edit Assistant options | Butler can discover and save every Core next-turn Assistant field and project default under Act, and read back the saved revision | Core chat and project records | Schema parity, Core unit and real Core |
 | Use Assistant work controls | Scheduled Butler can list and invoke every project Assistant work action through `nebula.global.work_catalog`, `work_read`, and `work_change`; Core checks target Act authority, the action schema, project ownership, and saved revisions | Core Work catalog and action handlers | Catalog parity and Core integration |
 | Renew goal limits | Butler can extend a paused main goal's active time and step limits, then resume it on the new revision after reading other holds | Core goal and recovery ledger | Core unit and real Core |
+| Continue blocked check-in | Immediate guidance is followed through the main agent's saved reply, and Butler can respond again in the same case before it closes | Core case, chat turns and messages | Core unit and real Core |
 | Review transcript | Opening a saved check shows every attempt, paged activity, and linked recovery-goal reports after refresh or reconnect | Core case, harness turns, event streams, and goal records | Core unit, component and real Core browser |
 | Read quota | An agent can query a configured Codex or Grok profile for vendor-reported remaining percentage and separate credits; missing values stay unknown | Harness vendor read and Core quota observation | Core unit and real Core |
 | Retry server load | One failed scheduled analysis retries in the same case only after the exact vendor load code and absence of write attempts are verified | Core case and harness event ledger | Core unit, component and real Core browser |

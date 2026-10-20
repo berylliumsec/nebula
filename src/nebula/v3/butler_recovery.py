@@ -34,11 +34,14 @@ from .domain import (
     ChatBackend,
     ChatGoal,
     ChatGoalStatus,
+    ChatMessage,
     ChatQueue,
+    ChatRole,
     ChatSession,
     ChatSubagent,
     ChatSubagentStatus,
     ChatTurn,
+    ChatTurnStatus,
     Engagement,
     EngagementStatus,
     HarnessKind,
@@ -71,6 +74,7 @@ if TYPE_CHECKING:
 
 
 PERIODIC_INTERVAL = timedelta(minutes=15)
+MAX_DIALOGUE_TURNS = 8
 IMMEDIATE_EVENTS = frozenset(
     {
         "agent.subagent_start_failed",
@@ -112,6 +116,10 @@ _INSTRUCTIONS = (
     "it as local_read or passive and the request fits existing scope. Other "
     "approvals and secret questions stay visible for the operator. Deliver parent "
     "guidance with delivery=immediate; inspect its accepted turn before retry. "
+    "For a blocked goal, keep this check-in open for the main agent's reply. "
+    "Read each completed dialogue turn with nebula.work.await_chat_result using "
+    "its exact turn_id, then respond to the main agent or take a justified next "
+    "action in this same case. A pending turn is not a reply. "
     "Do not route an explicit task or safety-policy refusal to a more permissive "
     "provider. Do not expand execution or network scope, enable a new provider, or "
     "claim a delivered follow-up means the task succeeded. If evidence is insufficient, "
@@ -167,7 +175,10 @@ _GLOBAL_INSTRUCTIONS = (
     "Core policy or scope. If no work is due, report that plainly. "
     "Use nebula.capabilities.search and describe before invoking tools. "
     "Deliver parent guidance with delivery=immediate and verify the Core result "
-    "before retrying or claiming the message was received. Do not message child "
+    "before retrying or claiming the message was received. When a main agent "
+    "replies, read its exact dialogue turn with nebula.work.await_chat_result "
+    "or nebula.global.work_read and continue that conversation in this same "
+    "check-in before concluding it. Do not message child "
     "agents. Report exact Core results, not predicted outcomes."
 )
 GLOBAL_STATE_ID = "butler-global-periodic-state"
@@ -567,7 +578,31 @@ class ButlerRecoveryAgent:
                         }
                     )
             packet["recent_recovery_goals"] = reports[:8]
-        return json.dumps(packet, ensure_ascii=False)[:16_000]
+        if case.dialogue_results:
+            packet["dialogue_results"] = case.dialogue_results[-8:]
+            packet["dialogue_read_turn_ids"] = case.dialogue_read_turn_ids[-8:]
+            packet["dialogue_instruction"] = (
+                "These are replies to guidance sent in this check-in. For each turn "
+                "not in dialogue_read_turn_ids, read its exact reply with "
+                "nebula.work.await_chat_result (or the project-scoped "
+                "nebula.global.work_read route). Then respond to the main agent "
+                "or take the next justified action before ending this check-in."
+            )
+        if case.dialogue_pending_turns:
+            packet["dialogue_pending_turns"] = case.dialogue_pending_turns[-8:]
+        rendered = json.dumps(packet, ensure_ascii=False)
+        omitted: list[str] = []
+        for optional in ("recent_recovery_goals", "precedents", "metrics"):
+            if len(rendered) <= 16_000:
+                break
+            if optional in packet:
+                packet.pop(optional)
+                omitted.append(optional)
+                packet["omitted_for_size"] = omitted
+                rendered = json.dumps(packet, ensure_ascii=False)
+        if len(rendered) > 16_000:
+            raise ValueError("Butler recovery packet exceeds the bounded prompt size")
+        return rendered
 
     async def run(
         self, case: ButlerRecoveryCase
@@ -755,6 +790,31 @@ class ButlerRecoveryService:
             elif goal.status in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}:
                 waiting += 1
         return waiting if running == 0 else 0
+
+    def _dialogue_blocked_goal_count(self, case: ButlerRecoveryCase) -> int:
+        """Count replied-to main chats whose latest Core goal remains blocked."""
+
+        targets = {
+            (item["project_id"], item["session_id"]) for item in case.dialogue_results
+        }
+        blocked = 0
+        for project_id, session_id in targets:
+            policy = self.store.find_entity(
+                ButlerAuthorityPolicy, "engagement_id", project_id
+            )
+            if policy is None or policy.authority != "act":
+                blocked += 1
+                continue
+            goals = self.store.find_entities(
+                ChatGoal,
+                {"session_id": session_id},
+                engagement_id=project_id,
+                newest_first=True,
+                limit=1,
+            )
+            if goals and goals[0].status == ChatGoalStatus.BLOCKED:
+                blocked += 1
+        return blocked
 
     def global_status(self) -> dict[str, Any]:
         root = self.instructions_root
@@ -1238,7 +1298,11 @@ class ButlerRecoveryService:
         ):
             if case.started_at is None or case.started_at >= expired:
                 continue
-            if case.queued_item_id or case.delivered_turn_id:
+            if (
+                case.dialogue_pending_turns
+                or case.queued_item_id
+                or case.delivered_turn_id
+            ):
                 self._update_case(case, status="verifying", next_check_at=utc_now())
             elif _possible_change(case.steps) or _applied_change(case.steps):
                 self._update_case(
@@ -1336,6 +1400,85 @@ class ButlerRecoveryService:
     def verify_follow_up(self, case: ButlerRecoveryCase) -> ButlerRecoveryCase:
         """Verify scheduled guidance or the child result of an immediate retry."""
 
+        if case.status == "verifying" and case.dialogue_pending_turns:
+            pending: list[dict[str, str]] = []
+            results: list[dict[str, str]] = []
+            for target in case.dialogue_pending_turns:
+                project_id = target["project_id"]
+                session_id = target["session_id"]
+                dialogue_turn_id = target["turn_id"]
+                try:
+                    turn = self.store.get(ChatTurn, dialogue_turn_id)
+                except NotFoundError:
+                    # The missing accepted turn needs Butler's review, never a resend.
+                    results.append({**target, "status": "unavailable"})
+                    continue
+                if turn.engagement_id != project_id or turn.session_id != session_id:
+                    raise ValueError("Butler dialogue turn belongs to another chat")
+                if turn.status == ChatTurnStatus.COMPLETE and not any(
+                    self.store.find_entities(
+                        ChatMessage,
+                        {
+                            "role": ChatRole.ASSISTANT.value,
+                            field: value,
+                            "metadata.kind": None,
+                        },
+                        engagement_id=project_id,
+                        session_id=session_id,
+                        limit=1,
+                    )
+                    for field, value in (
+                        ("metadata.chat_turn_id", turn.id),
+                        ("metadata.harness_turn_id", turn.harness_turn_id),
+                    )
+                    if isinstance(value, str)
+                ):
+                    # Wait for the answer's durable save before reentering Butler.
+                    pending.append(target)
+                    continue
+                if turn.status.value in {
+                    "complete",
+                    "failed",
+                    "cancelled",
+                    "interrupted",
+                    "waiting_approval",
+                }:
+                    results.append({**target, "status": turn.status.value})
+                else:
+                    pending.append(target)
+            if results:
+                if (
+                    len(case.model_turn_ids) >= MAX_DIALOGUE_TURNS
+                    or len(case.dialogue_results) + len(results) > MAX_DIALOGUE_TURNS
+                ):
+                    return self._update_case(
+                        case,
+                        status="needs_attention",
+                        outcome="A main agent replied, but this check-in reached its bounded Butler dialogue limit.",
+                        finished_at=utc_now(),
+                    )
+                return self._update_case(
+                    case,
+                    status="observed",
+                    dialogue_pending_turns=pending,
+                    dialogue_results=[*case.dialogue_results, *results],
+                    dialogue_review_retries=0,
+                    delivered_turn_id=pending[-1]["turn_id"] if pending else None,
+                    target_session_id=pending[-1]["session_id"] if pending else None,
+                    queued_item_id=None,
+                    next_check_at=utc_now(),
+                    outcome="Main agent response recorded; Butler will continue this check-in.",
+                )
+            if case.started_at and utc_now() - case.started_at >= timedelta(minutes=20):
+                return self._update_case(
+                    case,
+                    status="needs_attention",
+                    outcome="The main-agent turn did not produce a saved reply within 20 minutes.",
+                    finished_at=utc_now(),
+                )
+            return self._update_case(
+                case, next_check_at=utc_now() + timedelta(seconds=30)
+            )
         if (
             case.status != "verifying"
             or not (case.queued_item_id or case.delivered_turn_id)
@@ -1564,7 +1707,27 @@ class ButlerRecoveryService:
         policy = self.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", project_id
         )
-        if current.queued_item_id or current.delivered_turn_id:
+        unread_replies = [
+            item
+            for item in current.dialogue_results
+            if item["turn_id"] not in current.dialogue_read_turn_ids
+        ]
+        dialogue_review_retries = current.dialogue_review_retries
+        if current.dialogue_pending_turns:
+            status = "verifying"
+            outcome = "Butler is waiting for the main agent's reply in this check-in."
+            next_check = utc_now() + timedelta(seconds=30)
+        elif unread_replies:
+            if dialogue_review_retries == 0:
+                status = "observed"
+                outcome = "Butler must read the exact main-agent reply before this check-in can close."
+                next_check = utc_now()
+                dialogue_review_retries = 1
+            else:
+                status = "needs_attention"
+                outcome = "Butler ended this check-in without reading the saved main-agent reply."
+                next_check = None
+        elif current.queued_item_id or current.delivered_turn_id:
             status = "verifying"
             outcome = (
                 "Butler delivered parent guidance and is checking its actual result."
@@ -1602,6 +1765,24 @@ class ButlerRecoveryService:
         ):
             status = "cancelled"
             outcome = "Act authority changed during the investigation."
+            next_check = None
+        elif current.dialogue_results:
+            blocked_goals = self._dialogue_blocked_goal_count(current)
+            failed_turns = sum(
+                item["status"] != "complete" for item in current.dialogue_results
+            )
+            status = (
+                "needs_attention"
+                if blocked_goals or idle_goals or failed_turns
+                else "resolved"
+            )
+            outcome = (
+                summary or "Butler reviewed the main-agent reply in this check-in."
+            )
+            if blocked_goals:
+                outcome += f" {blocked_goals} replied-to main goal(s) remain blocked."
+            if failed_turns:
+                outcome += f" {failed_turns} main-agent turn(s) need review."
             next_check = None
         elif _applied_change(current.steps):
             if idle_goals:
@@ -1645,7 +1826,8 @@ class ButlerRecoveryService:
             model_backend=backend,
             model_profile_id=profile_id,
             model=model,
+            dialogue_review_retries=dialogue_review_retries,
             model_turn_id=turn_id,
             next_check_at=next_check,
-            finished_at=utc_now() if status != "verifying" else None,
+            finished_at=utc_now() if status not in {"verifying", "observed"} else None,
         )
