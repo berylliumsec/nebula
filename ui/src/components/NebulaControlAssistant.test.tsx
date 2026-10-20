@@ -796,6 +796,50 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it.each([
+    { name: "desktop transcript", mobile: false },
+    { name: "mobile body", mobile: true },
+  ])("shows a jump to the latest Butler message when reading older messages in the $name", async ({ mobile }) => {
+    const user = userEvent.setup();
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: mobile, addListener: vi.fn(), removeListener: vi.fn(),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        listChatMessages: vi.fn().mockResolvedValue([
+          { id: "first", role: "user", content: "Earlier question" },
+          { id: "last", role: "assistant", content: "Latest answer" },
+        ]) },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", { name: "Open Butler" }));
+      const transcript = screen.getByRole("log", { name: "Butler conversation" });
+      expect(await screen.findByText("Latest answer")).toBeVisible();
+      const surface = mobile ? transcript.parentElement as HTMLElement : transcript;
+      Object.defineProperty(surface, "scrollHeight", { configurable: true, value: 700 });
+      Object.defineProperty(surface, "clientHeight", { configurable: true, value: 200 });
+      if (mobile) {
+        vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({ bottom: 200 } as DOMRect);
+        vi.spyOn(transcript.lastElementChild as HTMLElement, "getBoundingClientRect").mockReturnValue({ bottom: 700 } as DOMRect);
+      }
+      surface.scrollTop = 100;
+      fireEvent.scroll(surface);
+      const jump = await screen.findByRole("button", { name: "Scroll to latest message" });
+      expect(jump).toHaveAttribute("title", "Scroll to latest message");
+      await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Draft stays here");
+      expect(jump).toBeVisible();
+      await user.click(jump);
+      expect(surface.scrollTop).toBe(700);
+      expect(screen.queryByRole("button", { name: "Scroll to latest message" })).not.toBeInTheDocument();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
   it("opens from the global icon, applies a device theme, and keeps the setting catalog reachable", async () => {
     const user = userEvent.setup();
     const onOpenSetting = vi.fn();

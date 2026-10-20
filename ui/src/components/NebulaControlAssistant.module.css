@@ -27,6 +27,8 @@
 .butlerWorkspace { min-width: 0; margin-bottom: 12px; }
 .butlerWorkspace > :last-child { border-top: 0; }
 .transcript { max-height: min(380px, 45dvh); overflow: auto; overflow-wrap: anywhere; }
+.scrollJumpRail { position: relative; z-index: 2; display: flex; justify-content: flex-end; height: 0; padding-right: 16px; pointer-events: none; }
+.scrollJumpRail button { position: static; flex: 0 0 44px; transform: translateY(-52px); pointer-events: auto; }
 .transcript pre { max-width: 100%; overflow: auto; }
 .tableScroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .tableScroll table { width: 100%; border-collapse: collapse; overflow-wrap: normal; }
