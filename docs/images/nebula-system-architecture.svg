@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1040" viewBox="0 0 1500 1040" role="img" aria-labelledby="title description">
+  <title id="title">Nebula system architecture</title>
+  <desc id="description">Operator clients connect to one Nebula Core process. Core contains the API, Butler, chat and goals, main agents and subagents, missions, and the tool broker. Core reads and writes its SQL database, Butler memory SQLite, Chroma indexes, artifact and workspace files, and credential sources. Configured model providers, vendor harnesses, MCP servers, execution and browsers connect Core to in-scope targets. Storage events, GPT-Live voice, and Mercury are additional optional paths.</desc>
+  <defs>
+    <style>
+      text { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
+      .canvas { fill: #0c171d; }
+      .panel { fill: #12232b; stroke: #365663; stroke-width: 1.5; }
+      .core-panel { fill: #132731; stroke: #80adb7; stroke-width: 1.7; }
+      .card { fill: #1a303a; stroke: #456a76; stroke-width: 1.2; }
+      .butler-card { fill: #252b3c; stroke: #9d8bb8; stroke-width: 1.3; }
+      .quiet-card { fill: #172831; stroke: #365663; stroke-width: 1.1; }
+      .kicker { fill: #8fbdc7; font-size: 14px; font-weight: 700; letter-spacing: 3px; }
+      .title { fill: #eef5f5; font-size: 34px; font-weight: 700; }
+      .subtitle { fill: #acc0c7; font-size: 17px; }
+      .panel-title { fill: #b9d5da; font-size: 15px; font-weight: 700; letter-spacing: 2px; }
+      .panel-note { fill: #8faab4; font-size: 14px; }
+      .card-title { fill: #edf5f5; font-size: 19px; font-weight: 600; }
+      .card-detail { fill: #a9c0c7; font-size: 14px; }
+      .butler-title { fill: #e6dcf1; font-size: 20px; font-weight: 650; }
+      .flow { fill: none; stroke: #83b1bb; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow); }
+      .branch { fill: none; stroke: #668e99; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+      .branch-end { fill: none; stroke: #83b1bb; stroke-width: 1.8; stroke-linecap: round; marker-end: url(#arrow); }
+      .optional-line { fill: none; stroke: #9688aa; stroke-width: 1.6; stroke-dasharray: 5 5; }
+      .rule { stroke: #2c4550; stroke-width: 1; }
+    </style>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 9 4.5 0 9z" fill="#83b1bb"/>
+    </marker>
+  </defs>
+
+  <rect class="canvas" width="1500" height="1040" rx="24"/>
+  <text class="kicker" x="48" y="55">NEBULA / SYSTEM MAP</text>
+  <text class="title" x="48" y="102">One Core, connected work</text>
+  <text class="subtitle" x="48" y="133">The main runtime boundaries and where authoritative data lives</text>
+  <line class="rule" x1="48" y1="157" x2="1452" y2="157"/>
+
+  <rect class="panel" x="44" y="180" width="252" height="440" rx="16"/>
+  <rect class="core-panel" x="328" y="180" width="620" height="440" rx="16"/>
+  <rect class="panel" x="980" y="180" width="476" height="440" rx="16"/>
+  <rect class="panel" x="44" y="662" width="1412" height="334" rx="16"/>
+
+  <text class="panel-title" x="64" y="210">OPERATOR CLIENTS</text>
+  <text class="panel-title" x="352" y="210">NEBULA CORE</text>
+  <text class="panel-note" x="924" y="210" text-anchor="end">one process</text>
+  <text class="panel-title" x="1004" y="210">STATE &amp; CREDENTIALS</text>
+  <text class="panel-title" x="64" y="693">CONNECTED SYSTEMS</text>
+  <text class="panel-note" x="1432" y="693" text-anchor="end">selected per project and turn</text>
+
+  <path class="flow" d="M296 276h56"/>
+  <path class="flow" d="M948 399h32"/>
+  <path class="branch" d="M638 311v20M487 331h301"/>
+  <path class="branch-end" d="M487 331v14M788 331v14"/>
+  <path class="flow" d="M622 386h30"/>
+  <path class="flow" d="M788 427v29"/>
+  <path class="branch-end" d="M487 538v27M788 538v27"/>
+  <path class="branch" d="M638 620v98M194 718h834"/>
+  <path class="branch-end" d="M194 718v15M472 718v15M750 718v15M1028 718v15"/>
+  <path class="flow" d="M1158 777h18"/>
+
+  <rect class="card" x="64" y="234" width="212" height="67" rx="10"/>
+  <text class="card-title" x="82" y="262">Desktop</text>
+  <text class="card-detail" x="82" y="284">Tauri + React</text>
+  <rect class="card" x="64" y="318" width="212" height="67" rx="10"/>
+  <text class="card-title" x="82" y="346">Web &amp; mobile</text>
+  <text class="card-detail" x="82" y="368">Paired React UI</text>
+  <rect class="card" x="64" y="402" width="212" height="67" rx="10"/>
+  <text class="card-title" x="82" y="430">iPhone</text>
+  <text class="card-detail" x="82" y="452">WKWebView shell</text>
+  <rect class="quiet-card" x="64" y="486" width="212" height="67" rx="10"/>
+  <text class="card-title" x="82" y="514">Project Browser</text>
+  <text class="card-detail" x="82" y="536">Desktop capture</text>
+  <text class="panel-note" x="64" y="586">REST + WebSocket to Core</text>
+
+  <rect class="card" x="352" y="246" width="572" height="65" rx="11"/>
+  <text class="card-title" x="374" y="276">API, auth &amp; pairing</text>
+  <text class="card-detail" x="374" y="297">Serves the UI and owns project state</text>
+  <rect class="butler-card" x="352" y="345" width="270" height="82" rx="11"/>
+  <text class="butler-title" x="374" y="376">Butler</text>
+  <text class="card-detail" x="374" y="399">Conversation · oversight · authority</text>
+  <rect class="card" x="652" y="345" width="272" height="82" rx="11"/>
+  <text class="card-title" x="674" y="376">Chat &amp; goals</text>
+  <text class="card-detail" x="674" y="399">Durable turns · follow-up queue</text>
+  <rect class="card" x="352" y="456" width="270" height="82" rx="11"/>
+  <text class="card-title" x="374" y="487">Missions</text>
+  <text class="card-detail" x="374" y="510">Supervisor · specialists</text>
+  <rect class="card" x="652" y="456" width="272" height="82" rx="11"/>
+  <text class="card-title" x="674" y="487">Main agents</text>
+  <text class="card-detail" x="674" y="510">Parent-coordinated subagents</text>
+  <rect class="quiet-card" x="352" y="565" width="572" height="42" rx="10"/>
+  <text class="card-title" x="638" y="592" text-anchor="middle">Scope · approvals · tool broker</text>
+
+  <rect class="card" x="1004" y="235" width="428" height="63" rx="10"/>
+  <text class="card-title" x="1024" y="262">Core database</text>
+  <text class="card-detail" x="1024" y="284">SQLite WAL default · PostgreSQL URL supported</text>
+  <rect class="butler-card" x="1004" y="307" width="428" height="63" rx="10"/>
+  <text class="card-title" x="1024" y="334">Butler memory</text>
+  <text class="card-detail" x="1024" y="356">Separate authoritative SQLite file</text>
+  <rect class="card" x="1004" y="379" width="428" height="63" rx="10"/>
+  <text class="card-title" x="1024" y="406">Chroma search</text>
+  <text class="card-detail" x="1024" y="428">Rebuildable knowledge and memory indexes</text>
+  <rect class="card" x="1004" y="451" width="428" height="63" rx="10"/>
+  <text class="card-title" x="1024" y="478">Artifact files &amp; workspaces</text>
+  <text class="card-detail" x="1024" y="500">SHA-256 immutable bytes · project files</text>
+  <rect class="quiet-card" x="1004" y="523" width="428" height="63" rx="10"/>
+  <text class="card-title" x="1024" y="550">Credential sources</text>
+  <text class="card-detail" x="1024" y="572">OS vault · environment · process session</text>
+
+  <rect class="card" x="64" y="733" width="260" height="84" rx="11"/>
+  <text class="card-title" x="84" y="766">Model providers</text>
+  <text class="card-detail" x="84" y="792">Cloud or local endpoints</text>
+  <rect class="card" x="342" y="733" width="260" height="84" rx="11"/>
+  <text class="card-title" x="362" y="766">Vendor harnesses</text>
+  <text class="card-detail" x="362" y="792">Codex · Grok · Claude</text>
+  <rect class="card" x="620" y="733" width="260" height="84" rx="11"/>
+  <text class="card-title" x="640" y="766">MCP servers</text>
+  <text class="card-detail" x="640" y="792">Trusted stdio · HTTP</text>
+  <rect class="card" x="898" y="733" width="260" height="84" rx="11"/>
+  <text class="card-title" x="918" y="766">Execution &amp; browsers</text>
+  <text class="card-detail" x="918" y="792">OCI · Host · Chromium · Tauri</text>
+  <rect class="quiet-card" x="1176" y="733" width="260" height="84" rx="11"/>
+  <text class="card-title" x="1196" y="766">In-scope targets</text>
+  <text class="card-detail" x="1196" y="792">Sites and networks</text>
+
+  <rect class="quiet-card" x="64" y="846" width="422" height="122" rx="11"/>
+  <text class="card-title" x="84" y="880">Storage event senders</text>
+  <text class="card-detail" x="84" y="906">Authenticated webhook into Core</text>
+  <text class="card-detail" x="84" y="928">Incident state and chats are durable</text>
+  <rect class="quiet-card" x="500" y="846" width="422" height="122" rx="11"/>
+  <text class="card-title" x="520" y="880">Butler Voice · optional</text>
+  <text class="card-detail" x="520" y="906">Core starts the GPT-Live session</text>
+  <text class="card-detail" x="520" y="928">Client audio uses direct WebRTC</text>
+  <rect class="quiet-card" x="936" y="846" width="500" height="122" rx="11"/>
+  <text class="card-title" x="956" y="880">Mercury · optional</text>
+  <text class="card-detail" x="956" y="906">Independent host and app controls</text>
+  <text class="card-detail" x="956" y="928">Separate project; no Core RPC dependency</text>
+</svg>

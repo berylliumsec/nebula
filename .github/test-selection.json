@@ -1,47 +1,16 @@
 {
-  "change_digest": "c0e2a8f9556947b86544fa14ee0eeb9c4ec9ad1c338c022f7cfd83bf94dd253e",
-  "reviewed_by": "Codex focused review for advisory planning and Butler busy-Grok delivery",
-  "reason": "The selected Python cases cover provider and harness advisory plans, legacy in-flight gates, child plan inheritance, Butler guidance and product-help Chroma sync. Frontend cases cover the saved plan transport and setting discovery. Real-Core browser cases exercise the production UI on a non-loopback LAN origin, including no-plan progress, normal tools before and after a shared plan for Claude/Codex/Grok, persistence, historic handoff and Butler supervision across the required desktop and mobile browser widths.",
-  "exclusions": "No native code changed, so native tests are omitted. Other provider, mission, storage, and research execution journeys are unrelated. All browser data, provider responses, harness activity and credentials are synthetic; no operator Core is used. Full suites are excluded.",
+  "change_digest": "0c1bfbb8f78cfdbb199b6865d3240ba248400c32c59c0c15e2b7c7970fbd0358",
+  "reviewed_by": "Codex source-level architecture review",
+  "reason": "This PR adds a checked-in SVG architecture map and documentation links only. It changes no application behavior, API, data model, build, or operator workflow. SVG rendering, XML structure, and relative links are checked directly.",
+  "exclusions": "No Python, frontend, native, or Playwright test is relevant to a documentation-only diff. A disposable LAN Core journey does not apply. Full suites are excluded.",
   "expected_tests": {
-    "python": 32,
-    "frontend": 4,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 36
+    "playwright": 0
   },
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_chat_planning.py",
-    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
-    "tests/v3/test_control_assistant_work.py::test_immediate_guidance_steers_active_harness_and_holds_active_provider",
-    "tests/v3/test_control_assistant_work.py::test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue",
-    "tests/v3/test_control_assistant_work.py::test_selected_harness_chat_can_be_steered_and_stopped",
-    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
-  ],
-  "frontend": [
-    "ui/src/components/AssistantSetupLinks.test.tsx",
-    "ui/src/api/chatPlanning.test.ts"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "chat-planning/assistant-real-desktop",
-    "chat-planning/assistant-real-compact",
-    "chat-planning/assistant-real-chromium-320",
-    "chat-planning/assistant-real-chromium-390",
-    "chat-planning/assistant-real-chromium-430",
-    "chat-planning/assistant-real-webkit-320",
-    "chat-planning/assistant-real-webkit-390",
-    "chat-planning/assistant-real-webkit-430",
-    "goal-handoff/assistant-real-desktop",
-    "control-assistant-work/assistant-real-desktop",
-    "control-assistant-work/assistant-real-chromium-390",
-    "control-assistant-work/assistant-real-webkit-390"
-  ]
+  "playwright": []
 }

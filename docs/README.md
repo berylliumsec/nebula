@@ -14,6 +14,7 @@ Start with the [main README](../README.md) for an overview and installation opti
 
 ## Technical reference
 
+- [System architecture](ARCHITECTURE.md): Core, Butler, clients, agents, storage, and integrations.
 - [Conversation history and context](CHAT_CONTEXT_LIFECYCLE.md).
 - [Assistant tool failures](TOOL_FAILURE_CONTRACT.md).
 - [Structured results](STRUCTURED-RESULTS.md).
