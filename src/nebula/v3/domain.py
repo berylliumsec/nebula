@@ -3960,6 +3960,12 @@ class ChatGoalStatus(StringEnum):
 CHAT_GOAL_CHILD_LIMIT = 32
 """Most child conversations one goal may list, and so the largest child budget."""
 
+DEFAULT_GOAL_RESUME_INSTRUCTION = (
+    "Resume work on the active conversation goal now. Review the "
+    "latest durable progress and continue without waiting for another "
+    "operator message."
+)
+
 
 class ChatGoal(Entity):
     """One Core-owned provider-chat objective with explicit lifecycle and limits."""
@@ -3970,6 +3976,9 @@ class ChatGoal(Entity):
     objective: str = Field(min_length=1, max_length=20_000)
     completion_criteria: list[str] = Field(min_length=1, max_length=50)
     plan: list[str] = Field(default_factory=list, max_length=200)
+    resume_instruction: str = Field(
+        default=DEFAULT_GOAL_RESUME_INSTRUCTION, min_length=1, max_length=4_000
+    )
     current_step: int = Field(default=0, ge=0)
     status: ChatGoalStatus = ChatGoalStatus.DRAFT
     token_budget: int | None = Field(default=None, ge=1)

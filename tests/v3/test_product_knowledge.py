@@ -160,6 +160,14 @@ def test_product_search_finds_butler_goal_handoff(monkeypatch):
     assert any("nebula.global.handoff_goal" in str(item["text"]) for item in matches)
 
 
+def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge("Where do I edit a goal resume instruction?")
+    assert any(
+        "Edit a goal's resume instruction" in str(item["text"]) for item in matches
+    )
+
+
 def test_product_search_finds_butler_effort_setting(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

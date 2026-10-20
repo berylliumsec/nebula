@@ -996,7 +996,7 @@ class ButlerGlobalActions:
             ),
             (
                 "nebula.global.update_goal",
-                "Edit any objective, criteria, plan, time, token, step, or child budget on one nonterminal main goal in an Act project. Read its revision first, then resume separately after verifying all other holds.",
+                "Edit any objective, criteria, plan, resume instruction, time, token, step, or child budget on one nonterminal main goal in an Act project. Read its revision first, then resume separately after verifying all other holds.",
                 {
                     "type": "object",
                     "additionalProperties": False,

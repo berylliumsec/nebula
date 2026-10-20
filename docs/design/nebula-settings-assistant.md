@@ -44,6 +44,7 @@ Settings assistant and the complete destination catalog.
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 | Ask for a task plan | The chat's Assistant settings asks any provider or harness agent to share a plan on future turns, or Butler records one exact one-task request with the target revision and reason. Normal tools remain available, and the activity view shows whether a plan was shared | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
 | Hand off a previously planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source; the new planning preference is advisory | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
+| Edit a goal's resume instruction | Chat → Goal → Edit goal shows the saved text; the current Core wording is the default. Saving it updates the goal by revision, and the next explicit Resume sends that text in the same conversation. Automatic continuation turns retain their separate Core instruction | Core goal record and resumed turn; goal editor owns the draft | Core unit, component, real Core and browser |
 
 The setting catalog lists every Settings section, Butler's Voice control, and
 the Nebula-wide Butler instruction editor. Dedicated actions handle
@@ -102,6 +103,14 @@ The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
 `nebula.work.stop_mission`. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
+The dedicated assistant reads and edits the saved goal resume instruction
+through `nebula.work.goal` and `nebula.work.update_goal`. It discovers those actions in its work
+catalog, reads the exact goal and revision, and updates only the named goal.
+The Chat destination accepts "goal settings" and "goal resume instruction";
+the operator then selects a conversation and opens its goal editor. The instruction applies to an explicit
+Resume action, including one invoked by Butler; it does not change automatic
+continuation turns or resume a paused goal merely by saving the edit.
+
 `nebula.work.chat_settings` and `nebula.work.set_chat_settings` expose the saved
 `planning_enabled` switch with revision checks and read-back. The switch lives
 in each conversation's Assistant settings. Provider, Codex, and Grok agents
