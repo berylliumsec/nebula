@@ -52,3 +52,8 @@ result in Core. Preserve work that was paused before the deployment; leave work
 blocked by an approval, limit, or uncertain effect paused and report it for
 operator resolution. Never put Core authentication secrets in the deployment
 record or PR.
+
+After a healthy Core promotion, keep only the current coherent rollback snapshot
+under `rollback-backups`. Verify the retained path matches the deployer state,
+record the removed snapshots, and report any incomplete cleanup. Never delete the
+current rollback snapshot or prune during an unverified cutover.
