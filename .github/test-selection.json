@@ -1,40 +1,34 @@
 {
-  "change_digest": "689ab6568e80b92609ada2d25b69816877e86e130ae13f98e4eaa0214e5d35e0",
+  "change_digest": "7b4096d0143545f39d3cb2f257e7f2912040623092af5932398707c04ee7a6f1",
   "reviewed_by": "Codex agent, 2026-10-20",
-  "reason": "The goal's new durable resume instruction crosses Core validation, explicit resume dispatch, Butler action discovery, the goal editor, product help, and the production LAN browser. The selected cases cover the default for old goals, custom edit and dispatch, assistant discovery and use, read-back, Chroma source digest, and the real-Core goal lifecycle in every required desktop and mobile profile.",
-  "exclusions": "No native code changed. Unrelated chat, settings, and browser journeys are excluded; the selected goal lifecycle case reaches the same Core entry point and visible result. No full suite is authorized or selected.",
+  "reason": "The Butler panel now opens on Chat, exposes actionable oversight through Work, and moves voice, memory, destinations, and settings to More. The selected component cases cover state transitions, attention, draft, settings, voice, and mobile scroll; the browser matrix covers the visible entry point, three views, draft retention, focus, touch, accessibility, and responsive layout; the disposable production LAN Core case covers saved work, memory, settings, reload, and model interaction.",
+  "exclusions": "No Python or native source changed. Other chat, mission, and settings workflows are excluded; their APIs and persisted state are unchanged. The browser matrix uses the selected Butler interface journey, not the full interface suite.",
   "expected_tests": {
-    "python": 8,
-    "frontend": 25,
+    "python": 0,
+    "frontend": 44,
     "native": 0,
-    "playwright": 8
+    "playwright": 9
   },
-  "python": [
-    "tests/v3/test_chat_goals.py::test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session",
-    "tests/v3/test_chat_goals.py::test_goal_content_can_be_edited_before_and_after_start",
-    "tests/v3/test_chat_goals.py::test_goal_edit_rejects_stale_revision_and_terminal_history",
-    "tests/v3/test_control_assistant_work.py::test_managed_goal_tools_are_discoverable_without_advertising_every_schema",
-    "tests/v3/test_control_assistant_work.py::test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_goal_resume_instruction_editor",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/assistantDestinations.test.ts"
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/NebulaControlAssistant.typing.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "provider-goal-lifecycle-core/assistant-real-desktop",
-    "provider-goal-lifecycle-core/assistant-real-compact",
-    "provider-goal-lifecycle-core/assistant-real-chromium-320",
-    "provider-goal-lifecycle-core/assistant-real-chromium-390",
-    "provider-goal-lifecycle-core/assistant-real-chromium-430",
-    "provider-goal-lifecycle-core/assistant-real-webkit-320",
-    "provider-goal-lifecycle-core/assistant-real-webkit-390",
-    "provider-goal-lifecycle-core/assistant-real-webkit-430"
+    "butler-interface-refinement/desktop",
+    "butler-interface-refinement/compact",
+    "butler-interface-refinement/mobile-chromium-small",
+    "butler-interface-refinement/mobile-chromium-ledger-390",
+    "butler-interface-refinement/mobile-chromium-wide",
+    "butler-interface-refinement/mobile-webkit-small",
+    "butler-interface-refinement/mobile-webkit",
+    "butler-interface-refinement/mobile-webkit-wide",
+    "butler-interface-refinement/assistant-real-desktop"
   ],
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false
 }
