@@ -18,7 +18,16 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "butler-instructions-settings",
-    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals", "blocked goal", "check-in conversation", "safe handoff", "provider continuation", "deepseek"],
+    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "scheduled", "act", "projects", "goals", "blocked goal", "check-in conversation", "safe handoff", "provider continuation", "deepseek"],
+  },
+  {
+    id: "settings.butler-check-interval",
+    label: "Butler check interval",
+    description: "Choose how often Butler checks work across projects; five minutes by default",
+    category: "Automation",
+    scope: "Workspace",
+    target: "butler-check-interval-settings",
+    keywords: ["butler", "check", "interval", "frequency", "schedule", "scheduled", "5 minutes", "five minutes", "idle projects", "periodic"],
   },
   {
     id: "settings.butler-effort",
@@ -27,7 +36,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Models",
     scope: "Workspace",
     target: "butler-settings",
-    keywords: ["butler", "model", "effort", "reasoning", "max", "scheduled", "15 minutes", "background"],
+    keywords: ["butler", "model", "effort", "reasoning", "max", "scheduled", "background"],
   },
   {
     id: "settings.butler-activity",

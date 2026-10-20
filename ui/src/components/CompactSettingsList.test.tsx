@@ -58,6 +58,17 @@ describe("CompactSettingsList", () => {
     );
   });
 
+  it("finds Butler's check interval and opens its control", () => {
+    const openSetting = vi.fn();
+    render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "check frequency" } });
+    fireEvent.click(screen.getByRole("button", { name: /Butler check interval/ }));
+    expect(openSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings.butler-check-interval", target: "butler-check-interval-settings" }),
+      expect.any(HTMLElement),
+    );
+  });
+
   it("finds scheduled Butler oversight for idle goal budgets", () => {
     const openSetting = vi.fn();
     render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);

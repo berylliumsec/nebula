@@ -51,6 +51,7 @@ from nebula.v3.providers import (
     ProviderKind,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
+from tests.v3.test_harnesses import FakeAdapter
 
 
 def _app(tmp_path):
@@ -1471,6 +1472,88 @@ def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
         "provider_profile_id": child.id,
         "model": "child-model",
     }
+
+
+def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path):
+    async def scenario() -> None:
+        store, app, _ = _app(tmp_path)
+        adapter = FakeAdapter()
+        work = app.state.control_assistant_work
+        work.harness.adapter_factory = lambda _: adapter
+        project = store.create(Engagement(name="Disposable switch check"))
+        old_profile = store.create(
+            HarnessProfile(
+                name="Codex fixture",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="old-model",
+                capabilities=HarnessCapabilities(models=["old-model"]),
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
+        )
+        next_profile = store.create(
+            HarnessProfile(
+                name="Grok fixture",
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+                default_model="next-model",
+                capabilities=HarnessCapabilities(models=["next-model"]),
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
+        )
+        old_harness = store.create(
+            HarnessSession(
+                engagement_id=project.id,
+                harness_profile_id=old_profile.id,
+                model="old-model",
+            )
+        )
+        chat = store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Disposable chat",
+                backend=ChatBackend.HARNESS,
+                harness_profile_id=old_profile.id,
+                harness_session_id=old_harness.id,
+                model="old-model",
+            )
+        )
+        before = work.chat_settings(project.id, chat.id)
+        saved = work.set_chat_settings(
+            project.id,
+            {
+                "session_id": chat.id,
+                "expected_revision": before["revision"],
+                "settings": {
+                    "backend": "harness",
+                    "profile_id": next_profile.id,
+                    "model": "next-model",
+                },
+            },
+        )
+        assert saved["settings"]["profile_id"] == next_profile.id
+        assert store.get(ChatSession, chat.id).harness_session_id == old_harness.id
+        sent = await work.message_chat(
+            project.id,
+            {"session_id": chat.id, "text": "Continue here", "delivery": "immediate"},
+        )
+        assert sent["delivery"] == "started"
+        rebound = store.get(ChatSession, chat.id)
+        assert rebound.id == chat.id
+        assert rebound.harness_session_id != old_harness.id
+        assert rebound.harness_profile_id == next_profile.id
+        assert rebound.model == "next-model"
+        assert store.get(ChatTurn, sent["turn_id"]).session_id == chat.id
+        for _ in range(300):
+            if store.get(ChatTurn, sent["turn_id"]).status == ChatTurnStatus.COMPLETE:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("disposable harness turn did not complete")
+        assert adapter.connections[0].request.profile.id == next_profile.id
+        await work.harness.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_immediate_guidance_steers_active_harness_and_holds_active_provider(

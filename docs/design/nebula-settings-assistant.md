@@ -209,8 +209,12 @@ UTF-8 file without following symlinks, limits it to 32 KiB, and reads it again
 for every scheduled run. An edit or removal during a run stops later writes
 from that run; a new file version is considered at the next check.
 
-When the file exists, Core records one Nebula-wide periodic check at least
-15 minutes after the preceding check. It can run with no running goals. A
+When the file exists, Core records one Nebula-wide periodic check after the
+saved check interval, five minutes by default. The operator changes it in
+Settings → Automation → Butler check interval from one minute to one day.
+Core persists the interval with a revision guard, reads it for each due check,
+and reports the next due time from the last saved check. Reducing the interval
+can make the next check due immediately. It can run with no running goals. A
 configured Butler chat in an Act project hosts the run. Butler reads the live
 Act-project roster and chooses where to work. Core still enforces each target
 project's Act revision and privacy boundary for reads and writes. The
@@ -244,7 +248,7 @@ When Butler sends immediate guidance to a blocked main agent, Core keeps that
 scheduled check open and follows the accepted chat turn. When the turn finishes,
 Butler reads its exact saved reply and can answer or take another scoped action
 in the same check. Further replies continue through that case without waiting
-for the next 15-minute check. A held message, missing saved reply, failed turn,
+for the next scheduled check. A held message, missing saved reply, failed turn,
 or unresolved blocked goal remains visible as needing attention. Core bounds
 the exchange and preserves the turn and action receipts across worker restarts.
 
@@ -269,7 +273,8 @@ shared with other Grok products; missing vendor values remain unknown.
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |
 | Discover | Butler Oversight shows the path, file state, and last scheduled check | Core data directory and global clock | Component, real Core and browser |
-| Schedule | Exactly one global check is recorded after 15 minutes even if all goals are idle | Core global state and event stream | Core unit and real Core |
+| Schedule | Exactly one global check is recorded after the saved interval, five minutes by default, even if all goals are idle | Core global state and event stream | Core unit and real Core |
+| Set interval | An authenticated operator saves a one-minute to one-day interval with a fresh revision and reads back the value and next due time | Core global state | Core unit, component, and real Core |
 | Choose | Butler can inspect all eligible Act projects before selecting work | Core project and authority records | Tool unit and real Core |
 | Set effort | Saving an advertised effort in Butler settings is reflected in the next direct turn and scheduled harness session | Core chat settings and harness runtime options | Core unit, component and real Core |
 | Edit Assistant options | Butler can discover and save every Core next-turn Assistant field and project default under Act, and read back the saved revision | Core chat and project records | Schema parity, Core unit and real Core |

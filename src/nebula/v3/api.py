@@ -11545,7 +11545,7 @@ def create_app(
     from .butler_instructions_management import butler_instructions_router
 
     app.include_router(
-        butler_instructions_router(butler_instructions_root),
+        butler_instructions_router(butler_instructions_root, store),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )

@@ -69,7 +69,7 @@ Core signals:
 1. **Immediate:** Core records a failed `subagent.start`, an agent attention
    report, or a blocked goal. The recovery worker consumes each saved event
    under the selected project's current Act policy.
-2. **Periodic:** every 15 minutes while a watched goal is running, Core records
+2. **Periodic:** every saved Butler check interval (five minutes by default) while a watched goal is running, Core records
    a coalesced project work check. Existing goal progress deadline and repeated
    read-only failure signals also enter this class.
 
