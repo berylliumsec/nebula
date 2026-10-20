@@ -737,6 +737,62 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
         saved_case = store.get(ButlerRecoveryCase, case.id)
         assert saved_case.steps[-1]["status"] == "applied"
         assert saved_case.delivered_turn_id == "turn-1"
+        assert saved_case.dialogue_pending_turns == [
+            {
+                "project_id": selected.id,
+                "session_id": own_chat.id,
+                "turn_id": "turn-1",
+                "guidance": "Check the proof gate",
+            }
+        ]
+
+        store.update(
+            ButlerRecoveryCase,
+            case.id,
+            {
+                "dialogue_pending_turns": [],
+                "dialogue_results": [
+                    {
+                        "project_id": selected.id,
+                        "session_id": own_chat.id,
+                        "turn_id": "turn-1",
+                        "status": "complete",
+                    }
+                ],
+            },
+            expected_revision=saved_case.revision,
+        )
+        reply = {
+            "session_id": own_chat.id,
+            "turn_id": "turn-1",
+            "turn_status": "complete",
+        }
+
+        async def read_reply(project_id, arguments):
+            assert project_id == selected.id
+            assert arguments["turn_id"] == "turn-1"
+            return dict(reply)
+
+        monkeypatch.setattr(ordinary._work, "await_chat_result", read_reply)
+        await global_butler.invoke(
+            {
+                "operation": "nebula.work.await_chat_result",
+                "arguments": {"session_id": own_chat.id, "turn_id": "turn-1"},
+            },
+            change=False,
+        )
+        assert store.get(ButlerRecoveryCase, case.id).dialogue_read_turn_ids == []
+        reply["saved_reply"] = "I am blocked on the trace."
+        await global_butler.invoke(
+            {
+                "operation": "nebula.work.await_chat_result",
+                "arguments": {"session_id": own_chat.id, "turn_id": "turn-1"},
+            },
+            change=False,
+        )
+        assert store.get(ButlerRecoveryCase, case.id).dialogue_read_turn_ids == [
+            "turn-1"
+        ]
 
         listed = await global_butler.invoke(
             {"operation": "nebula.global.projects", "arguments": {}}, change=False
@@ -877,6 +933,41 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
         )
         assert activated["project"]["status"] == "active"
         assert activated["resumed"] is True
+
+        async def deliver_other(project_id, arguments, *, idempotency_key=None):
+            assert project_id == other.id
+            assert arguments["session_id"] == foreign_chat.id
+            return {
+                "session_id": foreign_chat.id,
+                "delivery": "started",
+                "turn_id": "turn-other",
+            }
+
+        monkeypatch.setattr(ordinary._work, "message_chat", deliver_other)
+        await global_butler.invoke(
+            {
+                "operation": "nebula.global.work_change",
+                "arguments": {
+                    "project_id": other.id,
+                    "expected_authority_revision": other_policy.revision,
+                    "operation": "nebula.work.message_chat",
+                    "arguments": {
+                        "session_id": foreign_chat.id,
+                        "text": "What is blocking the trace?",
+                        "delivery": "immediate",
+                    },
+                },
+            },
+            change=True,
+        )
+        assert store.get(ButlerRecoveryCase, case.id).dialogue_pending_turns == [
+            {
+                "project_id": other.id,
+                "session_id": foreign_chat.id,
+                "turn_id": "turn-other",
+                "guidance": "What is blocking the trace?",
+            }
+        ]
 
         (folder / "BUTLER.md").write_text("Changed instructions.")
         with pytest.raises(ValueError, match="changed during this check"):

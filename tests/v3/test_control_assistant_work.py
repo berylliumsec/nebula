@@ -22,6 +22,7 @@ from nebula.v3.domain import (
     ChatSession,
     ChatSubagent,
     ChatTurn,
+    ChatTurnStatus,
     Engagement,
     HarnessCapabilities,
     HarnessKind,
@@ -2080,6 +2081,75 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
                     "timeout_seconds": 0,
                 },
             )
+        )
+
+
+def test_await_chat_result_reads_exact_immediate_turn_reply(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        ProviderProfile(name="Local", provider_type="ollama", is_local=True)
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research agent",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    work = app.state.control_assistant_work
+    advertised = work.catalog(project.id, "nebula.work.await_chat_result")
+    assert "turn_id" in advertised["parameters"]["properties"]
+    assert {"required": ["turn_id"]} in advertised["parameters"]["oneOf"]
+    target = {"session_id": chat.id, "turn_id": turn.id, "timeout_seconds": 0}
+    pending = asyncio.run(work.await_chat_result(project.id, target))
+    assert pending["turn_status"] == "routing"
+    assert "saved_reply" not in pending
+
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=chat.id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="What evidence is still missing?",
+            metadata={"chat_turn_id": turn.id, "kind": "turn_outcome"},
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=chat.id,
+            sequence=2,
+            role=ChatRole.ASSISTANT,
+            content="I need access to the saved trace to make progress.",
+            metadata={"chat_turn_id": turn.id},
+        )
+    )
+    store.update(
+        ChatTurn,
+        turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=turn.revision,
+    )
+    answer = asyncio.run(work.await_chat_result(project.id, target))
+    assert answer["turn_status"] == "complete"
+    assert answer["saved_reply"] == "I need access to the saved trace to make progress."
+    with pytest.raises(ValueError, match="work roster"):
+        asyncio.run(work.await_chat_result(other.id, target))
+    with pytest.raises(ValueError, match="exactly one"):
+        asyncio.run(
+            work.await_chat_result(project.id, {**target, "item_id": "queue-item"})
         )
 
 

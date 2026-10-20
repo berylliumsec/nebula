@@ -270,9 +270,11 @@ AWAIT_CHAT_RESULT_SCHEMA: dict[str, Any] = {
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "turn_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 25},
     },
-    "required": ["session_id", "item_id"],
+    "required": ["session_id"],
+    "oneOf": [{"required": ["item_id"]}, {"required": ["turn_id"]}],
 }
 START_MISSION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -2639,19 +2641,89 @@ class ControlAssistantWork:
             "status": item["status"],
         }
 
+    def _saved_chat_reply(
+        self,
+        project_id: str,
+        session_id: str,
+        turn_id: str | None,
+        harness_turn_id: str | None,
+    ) -> str | None:
+        for field, value in (
+            ("metadata.chat_turn_id", turn_id),
+            ("metadata.harness_turn_id", harness_turn_id),
+        ):
+            if not isinstance(value, str):
+                continue
+            messages = self.store.find_entities(
+                ChatMessage,
+                {"role": ChatRole.ASSISTANT.value, field: value, "metadata.kind": None},
+                engagement_id=project_id,
+                session_id=session_id,
+                newest_first=True,
+                limit=1,
+            )
+            if messages:
+                return messages[0].content[:4000]
+        return None
+
     async def await_chat_result(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """Wait briefly for one queued follow-up and return its linked saved reply."""
+        """Wait briefly for one queued or immediately delivered chat reply."""
 
         session = self._messageable_chat(project_id, arguments.get("session_id"))
-        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        item_id = arguments.get("item_id")
+        turn_id = arguments.get("turn_id")
+        if (item_id is None) == (turn_id is None):
+            raise ValueError("provide exactly one item_id or turn_id")
+        if item_id is not None:
+            item_id = _text(item_id, "item_id", 200)
+        if turn_id is not None:
+            turn_id = _text(turn_id, "turn_id", 200)
         timeout = arguments.get("timeout_seconds", 20)
         if type(timeout) is not int or not 0 <= timeout <= 25:
             raise ValueError("timeout_seconds must be between 0 and 25")
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
+            if turn_id is not None:
+                turn = self.store.get(ChatTurn, turn_id)
+                if turn.engagement_id != project_id or turn.session_id != session.id:
+                    raise ValueError("turn does not belong to this project chat")
+                status = turn.status.value
+                result = {
+                    "session_id": session.id,
+                    "turn_id": turn.id,
+                    "harness_turn_id": turn.harness_turn_id,
+                    "turn_status": status,
+                    "url": _chat_url(project_id, session.id),
+                }
+                if status in {
+                    "complete",
+                    "failed",
+                    "cancelled",
+                    "interrupted",
+                    "waiting_approval",
+                }:
+                    saved_reply = self._saved_chat_reply(
+                        project_id, session.id, turn.id, turn.harness_turn_id
+                    )
+                    if saved_reply is not None:
+                        result["saved_reply"] = saved_reply
+                    result["result"] = (
+                        "saved reply available"
+                        if status == "complete" and saved_reply is not None
+                        else "turn needs approval in the chat"
+                        if status == "waiting_approval"
+                        else "turn needs review in the chat"
+                        if status in {"failed", "cancelled", "interrupted"}
+                        else "no saved reply for this turn; inspect the chat"
+                    )
+                    return result
+                if loop.time() >= deadline:
+                    return {**result, "result": "still in progress"}
+                await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
+                continue
             queue = self.queue.get(session.id)
             item = next((row for row in queue.items if row.get("id") == item_id), None)
             if item is None:
@@ -2678,34 +2750,11 @@ class ControlAssistantWork:
                 turn_id = item.get("turn_id")
                 harness_turn_id = item.get("harness_turn_id")
                 if isinstance(turn_id, str) or isinstance(harness_turn_id, str):
-                    messages = self.store.find_entities(
-                        ChatMessage,
-                        {"session_id": session.id},
-                        engagement_id=project_id,
-                        newest_first=True,
-                        limit=100,
+                    saved_reply = self._saved_chat_reply(
+                        project_id, session.id, turn_id, harness_turn_id
                     )
-                    answer = next(
-                        (
-                            message
-                            for message in messages
-                            if message.role == ChatRole.ASSISTANT
-                            and (
-                                (
-                                    isinstance(turn_id, str)
-                                    and message.metadata.get("chat_turn_id") == turn_id
-                                )
-                                or (
-                                    isinstance(harness_turn_id, str)
-                                    and message.metadata.get("harness_turn_id")
-                                    == harness_turn_id
-                                )
-                            )
-                        ),
-                        None,
-                    )
-                    if answer is not None:
-                        result["saved_reply"] = answer.content[:4000]
+                    if saved_reply is not None:
+                        result["saved_reply"] = saved_reply
                 result["result"] = (
                     "saved reply available"
                     if result.get("saved_reply") and status == "complete"
@@ -3023,13 +3072,13 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.message_chat",
-        "Send a durable next message to a main assistant chat, or steer its active harness turn when supported. Immediate guidance to a busy Grok chat is held and not delivered; read fresh state and send again when idle. A new idle turn applies saved next-turn settings and may rebind the same chat to another harness. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
+        "Send a durable next message to a main assistant chat, or steer its active harness turn when supported. Immediate guidance to a busy Grok chat is held and not delivered; read fresh state and send again when idle. A new idle turn applies saved next-turn settings and may rebind the same chat to another harness. For delegated subagents and goal children, message the parent main agent instead. Delivery is not a completed answer; use await_chat_result with item_id for queued delivery or turn_id for immediate delivery to inspect the saved reply.",
         MESSAGE_CHAT_SCHEMA,
         False,
     ),
     (
         "nebula.work.await_chat_result",
-        "Wait up to 25 seconds for one message_chat queued item. Return its exact queue status and linked saved assistant reply when available. If still in progress, call again or tell the operator it is running; never invent a completed result.",
+        "Wait up to 25 seconds for one message_chat result. Use item_id for queued delivery or turn_id for immediate delivery. Return the exact saved assistant reply when available. If still in progress, call again or report that it is running; never invent a completed result.",
         AWAIT_CHAT_RESULT_SCHEMA,
         True,
     ),

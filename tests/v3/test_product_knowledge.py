@@ -197,6 +197,18 @@ def test_product_search_finds_scheduled_history_and_grok_quota(monkeypatch):
     assert any(item["heading"] == "Usage and credits" for item in credits)
 
 
+def test_product_search_explains_blocked_checkin_dialogue(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Does Butler wait for a blocked agent reply in the same check-in?"
+    )
+    assert any(
+        "exact saved reply" in str(item["text"])
+        and "15-minute check" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

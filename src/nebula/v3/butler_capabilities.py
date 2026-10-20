@@ -379,7 +379,21 @@ class ButlerCapabilities:
                 **({"error_type": type(error).__name__} if error else {}),
             }
             updates: dict[str, Any] = {"steps": steps}
-            if error is None and operation == "nebula.work.message_chat":
+            parent_message = operation == "nebula.work.message_chat" or (
+                operation == "nebula.global.work_change"
+                and arguments.get("operation") == "nebula.work.message_chat"
+            )
+            if error is None and parent_message:
+                message_arguments = (
+                    arguments.get("arguments", {})
+                    if operation == "nebula.global.work_change"
+                    else arguments
+                )
+                target_project_id = (
+                    arguments.get("project_id")
+                    if operation == "nebula.global.work_change"
+                    else case.engagement_id
+                )
                 updates["queued_item_id"] = result.get("item_id") if result else None
                 updates["delivered_turn_id"] = (
                     result.get("turn_id")
@@ -391,7 +405,61 @@ class ButlerCapabilities:
                     if result and result.get("delivery") == "held"
                     else None
                 )
-                updates["target_session_id"] = arguments.get("session_id")
+                updates["target_session_id"] = message_arguments.get("session_id")
+                turn_id = updates["delivered_turn_id"]
+                session_id = message_arguments.get("session_id")
+                if (
+                    isinstance(turn_id, str)
+                    and isinstance(session_id, str)
+                    and isinstance(target_project_id, str)
+                    and not any(
+                        item.get("turn_id") == turn_id
+                        for item in [
+                            *case.dialogue_pending_turns,
+                            *case.dialogue_results,
+                        ]
+                    )
+                ):
+                    updates["dialogue_pending_turns"] = [
+                        *case.dialogue_pending_turns,
+                        {
+                            "project_id": target_project_id,
+                            "session_id": session_id,
+                            "turn_id": turn_id,
+                            "guidance": str(message_arguments.get("text") or "")[:1000],
+                        },
+                    ]
+            reply_read = operation == "nebula.work.await_chat_result" or (
+                operation == "nebula.global.work_read"
+                and arguments.get("operation") == "nebula.work.await_chat_result"
+            )
+            if error is None and reply_read and isinstance(result, dict):
+                read_turn_id = result.get("turn_id")
+                if (
+                    isinstance(read_turn_id, str)
+                    and any(
+                        item.get("turn_id") == read_turn_id
+                        and item.get("session_id") == result.get("session_id")
+                        for item in case.dialogue_results
+                    )
+                    and read_turn_id not in case.dialogue_read_turn_ids
+                    and result.get("turn_status")
+                    in {
+                        "complete",
+                        "failed",
+                        "cancelled",
+                        "interrupted",
+                        "waiting_approval",
+                    }
+                    and (
+                        result.get("turn_status") != "complete"
+                        or isinstance(result.get("saved_reply"), str)
+                    )
+                ):
+                    updates["dialogue_read_turn_ids"] = [
+                        *case.dialogue_read_turn_ids,
+                        read_turn_id,
+                    ]
             transaction.update(
                 ButlerRecoveryCase,
                 case.id,
@@ -583,7 +651,9 @@ class ButlerCapabilities:
                 "cannot be steered; their guidance is held, not delivered. "
                 "For delegated subagents and goal children, "
                 "message the parent main agent. A held result is not delivered; "
-                "inspect the Core receipt before claiming a handoff."
+                "inspect the Core receipt before claiming a handoff. For a "
+                "started or steered turn, use nebula.work.await_chat_result "
+                "with its turn_id to read the saved reply in this check-in."
             )
         return (
             description.replace(

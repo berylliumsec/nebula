@@ -18,7 +18,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "butler-instructions-settings",
-    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals", "safe handoff", "provider continuation", "deepseek"],
+    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals", "blocked goal", "check-in conversation", "safe handoff", "provider continuation", "deepseek"],
   },
   {
     id: "settings.butler-effort",
@@ -32,11 +32,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-activity",
     label: "Butler scheduled activity",
-    description: "Read Butler's saved scheduled-check transcript and linked recovery reports in Oversight",
+    description: "Read Butler's saved scheduled-check conversations and linked recovery reports in Oversight",
     category: "Automation",
     scope: "Project",
     target: "butler-oversight",
-    keywords: ["butler", "scheduled", "checks", "transcript", "history", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings"],
+    keywords: ["butler", "scheduled", "checks", "transcript", "history", "blocked goal", "check-in", "agent reply", "conversation", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings"],
   },
   {
     id: "settings.butler-voice",
