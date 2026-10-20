@@ -76,6 +76,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const confirm = useConfirmation();
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
+  const [view, setView] = useState<"chat" | "work" | "more">("chat");
   const [query, setQuery] = useState("");
   const [destinationQuery, setDestinationQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -140,6 +141,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const actionOutcomesKey = storageKey ? `${storageKey}.action-outcomes` : undefined;
   const { overview: attentionOverview, refresh: refreshAttention } = useButlerOverview(engagement ? api : undefined, engagement?.id ?? "", coreState);
   const attentionCount = attentionOverview?.summary.openIncidents ?? 0;
+  const workAttentionCount = attentionCount
+    + (attentionOverview?.actions.filter((action) => action.status === "uncertain" || action.status === "held").length ?? 0)
+    + (attentionOverview?.summary.recoveryAttention ?? 0);
   const activePendingTurn = pendingTurn?.id === settledTurnId.current ? undefined : pendingTurn;
   const activeBusy = busy || Boolean(activePendingTurn) || awaitingTurnResolution;
   const pendingReady = !sessionId || !api?.getPendingChatTurn || (pendingCheckedSessionId === sessionId && !pendingStatusError);
@@ -154,11 +158,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return element.scrollHeight - element.scrollTop - element.clientHeight;
   }, []);
   const handleConversationScroll = useCallback((element: HTMLDivElement) => {
+    if (view !== "chat") return;
     if (element !== scrollSurface()) return;
     const awayFromLatest = distanceFromLatest(element) > 24;
     followsLatest.current = !awayFromLatest;
     setHasNewerMessages(awayFromLatest);
-  }, [distanceFromLatest, scrollSurface]);
+  }, [distanceFromLatest, scrollSurface, view]);
 
   useEffect(() => {
     if (!activeBusy) return;
@@ -334,7 +339,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   }, [api, sessionId, open, coreState, actionOutcomesKey]);
 
   useEffect(() => {
-    const visible = open && !hidden;
+    const visible = open && !hidden && view === "chat";
     const previous = lastScroll.current;
     if (visible) {
       const mobile = window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches;
@@ -352,7 +357,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       if (surface) setHasNewerMessages(messages.length > 0 && distanceFromLatest(surface) > 24);
     }
     lastScroll.current = { visible, messages, attentionCount, loadingHistory };
-  }, [messages, open, hidden, attentionCount, loadingHistory, distanceFromLatest, scrollSurface]);
+  }, [messages, open, hidden, view, attentionCount, loadingHistory, distanceFromLatest, scrollSurface]);
 
   useEffect(() => {
     if (!open || hidden) return;
@@ -425,6 +430,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   };
 
   const openSettings = () => {
+    setView("more");
     if (settingsOpen) { setSettingsOpen(false); return; }
     setSettingsOpen(true);
     setSettingsBusy(true);
@@ -481,6 +487,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const openOversight = () => {
       setOpen(true);
       setHidden(false);
+      setView("work");
       setOversightOpenRevision((revision) => revision + 1);
     };
     window.addEventListener("nebula:open-butler-oversight", openOversight);
@@ -714,6 +721,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   const openSelectedSetting = (entry: SettingCatalogEntry) => {
     onOpenSetting(entry);
+    if (entry.target === "butler-oversight") setView("work");
     setHidden(entry.target !== "butler-oversight");
   };
 
@@ -799,6 +807,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const send = async (currentText = draft) => {
     const prompt = currentText.trim() || (pendingImages.length ? "Attached image" : "");
     if (!prompt || activeBusy || loadingHistory || uploadingImage || !pendingReady) return;
+    setView("chat");
     const hasImages = pendingImages.length > 0;
     if (hasImages && !imageInputSupported) { setImageHelp(true); return; }
     setSuggestions([]);
@@ -900,6 +909,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       ]);
       setSuggestions(candidates);
       if (!candidates.length) {
+        setView("more");
         catalogRef.current?.setAttribute("open", "");
         destinationCatalogRef.current?.setAttribute("open", "");
       }
@@ -1209,12 +1219,46 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     <div className={styles.header}>
       <button className={`icon-button subtle ${styles.dragButton}`} type="button" aria-label="Move Butler" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
       <div className={styles.identity}><strong>Butler</strong><small>{engagement?.name ?? "Choose a project"}</small></div>
-      <button className={`icon-button subtle ${styles.voiceButton}`} type="button" aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} /><span className={styles.voiceLabel}>Start Voice</span></button>
-      <button className={`icon-button subtle ${styles.hideButton}`} type="button" aria-label="Hide Butler" title="Hide Butler" onClick={() => setHidden(true)}><Minimize2 size={18} /></button>
-      <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen} aria-controls="butler-settings" title="Butler settings" disabled={!api || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
-      <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setSettingsOpen(false); setPendingCheckedSessionId(undefined); }}><X size={18} /></button>
+      <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen && view === "more"} aria-controls="butler-settings" title="Butler settings" disabled={!api || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
+      <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setView("chat"); setSettingsOpen(false); setPendingCheckedSessionId(undefined); }}><X size={18} /></button>
     </div>
+    <nav className={styles.viewTabs} aria-label="Butler views">
+      <button id="butler-tab-chat" type="button" className={styles.viewTab} aria-current={view === "chat" ? "page" : undefined} aria-controls="butler-view-chat" onClick={() => setView("chat")}>Chat</button>
+      <button id="butler-tab-work" type="button" className={styles.viewTab} aria-current={view === "work" ? "page" : undefined} aria-controls="butler-view-work" onClick={() => setView("work")}>Work{workAttentionCount > 0 && <span className={styles.workCount} aria-label={`${workAttentionCount} need attention`}>{workAttentionCount}</span>}</button>
+      <button id="butler-tab-more" type="button" className={styles.viewTab} aria-current={view === "more" ? "page" : undefined} aria-controls="butler-view-more" onClick={() => setView("more")}>More</button>
+    </nav>
     <div ref={body} className={styles.body} onScroll={(event) => handleConversationScroll(event.currentTarget)}>
+      <section id="butler-view-chat" className={styles.viewPanel} aria-labelledby="butler-tab-chat" hidden={view !== "chat"}>
+        {workAttentionCount > 0 && <div className={styles.attentionLine} role="status"><span>{workAttentionCount} {workAttentionCount === 1 ? "item needs" : "items need"} attention</span><button className="button quiet" type="button" onClick={() => setView("work")}>Review work</button></div>}
+        {coreState === "offline" && <p className={styles.connectionLine} role="status">Butler is offline. Your conversation remains available.</p>}
+        {messages.length === 0 && !loadingHistory && <div className={styles.emptyConversation}><strong>Ask Butler</strong><p>Check on work, start an assistant or mission, or change a setting.</p></div>}
+      <ButlerTranscript messages={messages} api={api} projectId={engagement?.id} sessionId={sessionId} transcriptRef={transcript} onScroll={handleConversationScroll} onOpenSetting={onOpenSetting} onNavigate={onNavigate} onHide={setHidden} />
+      {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { openSelectedSetting(entry); setSuggestions([]); }}>{entry.label}</button>)}</div>}
+      {error && <p role="alert">{error}</p>}
+      {loadingHistory && <p role="status">Restoring your saved conversation…</p>}
+      {!engagement && <p role="status">Choose a project to start a conversation. Open More to change device appearance.</p>}
+      {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
+      </section>
+      <section id="butler-view-work" className={styles.viewPanel} aria-labelledby="butler-tab-work" hidden={view !== "work"}>
+        <div className={styles.viewHeading}><strong>Work</strong><span>{workAttentionCount ? `${workAttentionCount} need attention` : "No items need attention"}</span></div>
+      {!hidden && engagement && <div className={styles.butlerWorkspace}>
+        <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact openRevision={oversightOpenRevision} onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
+      </div>}
+      {engagement && runtime && !loadingHistory && <details className={styles.catalog} open={messages.length === 0}>
+        <summary>Work I can help with</summary>
+        <div className={styles.quickActions} role="group" aria-label="Assistant work requests">
+          <button className="button quiet" type="button" onClick={() => { setDraft("What are my assistants and missions doing in this project?"); setView("chat"); input.current?.focus(); }}>Check work</button>
+          <button className="button quiet" type="button" onClick={() => { setDraft("Start an assistant to "); setView("chat"); input.current?.focus(); }}>Start assistant</button>
+          <button className="button quiet" type="button" onClick={() => { setDraft("Start a mission to "); setView("chat"); input.current?.focus(); }}>Start mission</button>
+        </div>
+      </details>}
+        {!engagement && <p role="status">Choose a project to review Butler’s work.</p>}
+      </section>
+      <section id="butler-view-more" className={styles.viewPanel} aria-labelledby="butler-tab-more" hidden={view !== "more"}>
+        <div className={styles.moreActions} role="group" aria-label="Butler options">
+          <button className="button quiet" type="button" aria-label="Start Butler Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} aria-hidden="true" /> Start Voice</button>
+          <button className="button quiet" type="button" onClick={() => setHidden(true)}><Minimize2 size={18} aria-hidden="true" /> Hide Butler</button>
+        </div>
       {settingsOpen && <section id="butler-settings" className={styles.ownSettings} aria-label="Butler settings">
         <div className={styles.settingsHeading}><strong>Butler settings</strong><span>{selectedSettingsRuntime?.model ?? ""}</span></div>
         <form onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
@@ -1238,20 +1282,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           {voiceSettingsError && <p role="alert">{voiceSettingsError}</p>}
         </div>
       </section>}
-      {!hidden && engagement && <div className={styles.butlerWorkspace}>
-        <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact openRevision={oversightOpenRevision} onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
-        <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />
-      </div>}
-      <ButlerTranscript messages={messages} api={api} projectId={engagement?.id} sessionId={sessionId} transcriptRef={transcript} onScroll={handleConversationScroll} onOpenSetting={onOpenSetting} onNavigate={onNavigate} onHide={setHidden} />
-      {engagement && runtime && !loadingHistory && <details className={styles.catalog} open={messages.length === 0}>
-        <summary>Work I can help with</summary>
-        <div className={styles.quickActions} role="group" aria-label="Assistant work requests">
-          <button className="button quiet" type="button" onClick={() => { setDraft("What are my assistants and missions doing in this project?"); input.current?.focus(); }}>Check work</button>
-          <button className="button quiet" type="button" onClick={() => { setDraft("Start an assistant to "); input.current?.focus(); }}>Start assistant</button>
-          <button className="button quiet" type="button" onClick={() => { setDraft("Start a mission to "); input.current?.focus(); }}>Start mission</button>
-        </div>
-      </details>}
-      {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { openSelectedSetting(entry); setSuggestions([]); }}>{entry.label}</button>)}</div>}
+        {engagement && <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />}
       <details ref={destinationCatalogRef} className={styles.catalog}><summary>Places I can open</summary><input aria-label="Find a place" placeholder="Find a place" value={destinationQuery} onChange={(event) => setDestinationQuery(event.target.value)} />
         <div className={styles.settingList}>{destinationMatches.length ? destinationMatches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { const confirmation = openDestination(entry); setMessages((current) => [...current, { role: "assistant", content: confirmation }]); }}><span>{entry.label}</span><small>{entry.path.includes("{project_id}") ? "Selected project" : "Open page"}</small></button>) : <p>No place found.</p>}</div>
       </details>
@@ -1259,12 +1290,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => openSelectedSetting(entry)}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
         <div className={styles.themes}>{THEME_OPTIONS.map((theme) => <button key={theme.value} className="button quiet" type="button" aria-pressed={preference === theme.value} onClick={() => setPreference(theme.value)}>{theme.label}</button>)}</div>
       </details>
-      {error && <p role="alert">{error}</p>}
-      {loadingHistory && <p role="status">Restoring your saved conversation…</p>}
-      {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
-      {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
+      </section>
     </div>
-    {messages.length > 0 && hasNewerMessages && <div className={styles.scrollJumpRail}><button className="chat-scroll-jump" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => {
+    {view === "chat" && messages.length > 0 && hasNewerMessages && <div className={styles.scrollJumpRail}><button className="chat-scroll-jump" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => {
       followsLatest.current = true;
       const surface = scrollSurface();
       if (surface === body.current) {

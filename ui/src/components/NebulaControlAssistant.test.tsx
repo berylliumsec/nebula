@@ -25,6 +25,47 @@ describe("NebulaControlAssistant", () => {
     vi.mocked(useWorkspace).mockReturnValue({ api: undefined, engagement: undefined, providers: [], harnesses: [] } as unknown as ReturnType<typeof useWorkspace>);
   });
 
+  it("starts in Chat and keeps the draft while Work and More reveal secondary controls", async () => {
+    const user = userEvent.setup();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("log", { name: "Butler conversation" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start Butler Voice" })).not.toBeInTheDocument();
+    const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
+    await user.type(composer, "Keep this draft");
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.getByRole("button", { name: "Start Butler Voice" })).toBeVisible();
+    expect(screen.getByText("Settings I can help with")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Work" }));
+    expect(screen.getByText("Choose a project to review Butler’s work.")).toBeVisible();
+    expect(composer).toHaveValue("Keep this draft");
+    await user.click(screen.getByRole("button", { name: "Chat" }));
+    expect(screen.getByRole("log", { name: "Butler conversation" })).toBeVisible();
+  });
+
+  it("takes attention from the conversation summary to Work", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn().mockResolvedValue({
+      project_id: "project", authority: "watch", watched_goals: [], incidents: [], decisions: [], resources: [],
+      coverage_gaps: [], actions: [], recovery_cases: [],
+      summary: { watched_goals: 0, open_incidents: 2, acknowledged_incidents: 0, resolved_incidents: 0,
+        account_resources: 0, harness_quota_resources: 0, recovery_attention: 0 },
+      capabilities: { authority_levels: ["watch"], incidents: true, decisions: false, agent_reports: true,
+        machine_alerts: true, resource_alerts: true, live_events: false },
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { request, getControlAssistantSession: vi.fn().mockResolvedValue(null) }, coreState: "online",
+      engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(await screen.findByRole("button", { name: "Open Butler; 2 open incidents need attention in the selected project" }));
+    expect(screen.getByText("2 items need attention")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Review work" }));
+    expect(screen.getByRole("button", { name: /Work 2 need attention/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("region", { name: "Butler oversight" })).toBeVisible();
+  });
+
   it("uploads a Butler screenshot, shows its preview, and sends its saved image block", async () => {
     const user = userEvent.setup();
     const createObjectURL = vi.fn(() => "blob:butler-preview");
@@ -329,6 +370,7 @@ describe("NebulaControlAssistant", () => {
     } as unknown as ReturnType<typeof useWorkspace>);
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Start Butler Voice" }));
     expect(await screen.findByRole("dialog", { name: "Butler Voice" })).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent("trusted HTTPS address");
@@ -405,8 +447,10 @@ describe("NebulaControlAssistant", () => {
     } as unknown as ReturnType<typeof useWorkspace>);
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.click(screen.getByRole("button", { name: "Work" }));
     await user.click(await screen.findByRole("button", { name: "Start mission" }));
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Start a mission to ");
+    await user.click(screen.getByRole("button", { name: "Work" }));
     await user.click(screen.getByRole("button", { name: "Check work" }));
     await user.click(screen.getByRole("button", { name: "Send to Butler" }));
     await waitFor(() => expect(streamChat).toHaveBeenCalledWith(
@@ -414,6 +458,7 @@ describe("NebulaControlAssistant", () => {
       expect.any(Function), expect.any(AbortSignal),
     ));
     expect(await screen.findByText("One mission is running.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Work" }));
     expect(screen.getByText("Work I can help with")).toBeInTheDocument();
     await user.click(screen.getByText("Work I can help with"));
     await user.click(screen.getByRole("button", { name: "Start assistant" }));
@@ -475,6 +520,7 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(streamChat).toHaveBeenLastCalledWith(expect.objectContaining({
       harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue",
     }), expect.any(Function), expect.any(AbortSignal)));
+    await user.click(screen.getByRole("button", {name: "More"}));
     await user.click(screen.getByRole("button", {name: "Full Assistant settings"}));
     expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
   });
@@ -648,6 +694,7 @@ describe("NebulaControlAssistant", () => {
       const user = userEvent.setup();
       render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
       await user.click(screen.getByRole("button", { name: "Open Butler" }));
+      await user.click(screen.getByRole("button", { name: "More" }));
       await user.click(await screen.findByRole("button", { name: "Start Butler Voice" }));
       await waitFor(() => expect(VoicePeer.latest).toBeDefined());
       VoicePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "Remember blue.", start_ms: 100, end_ms: 600 });
@@ -717,6 +764,7 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getAllByRole("button", { name: "Open Butler" })).toHaveLength(1);
     await user.click(launcher);
     await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Help me find a setting");
+    await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Hide Butler" }));
     await user.click(screen.getByRole("button", { name: "Show Butler" }));
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me find a setting");
@@ -786,7 +834,7 @@ describe("NebulaControlAssistant", () => {
     try {
       render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
       await user.click(screen.getByRole("button", { name: "Open Butler" }));
-      const body = screen.getByRole("log", { name: "Butler conversation" }).parentElement as HTMLElement;
+      const body = screen.getByRole("log", { name: "Butler conversation" }).parentElement?.parentElement as HTMLElement;
       Object.defineProperty(body, "scrollHeight", { configurable: true, value: 700 });
       await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Check the mission{enter}");
       expect(await screen.findByText("I checked the mission.")).toBeVisible();
@@ -819,7 +867,7 @@ describe("NebulaControlAssistant", () => {
       await user.click(screen.getByRole("button", { name: "Open Butler" }));
       const transcript = screen.getByRole("log", { name: "Butler conversation" });
       expect(await screen.findByText("Latest answer")).toBeVisible();
-      const surface = mobile ? transcript.parentElement as HTMLElement : transcript;
+      const surface = mobile ? transcript.parentElement?.parentElement as HTMLElement : transcript;
       Object.defineProperty(surface, "scrollHeight", { configurable: true, value: 700 });
       Object.defineProperty(surface, "clientHeight", { configurable: true, value: 200 });
       if (mobile) {
@@ -845,6 +893,7 @@ describe("NebulaControlAssistant", () => {
     const onOpenSetting = vi.fn();
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={onOpenSetting} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByText("Settings I can help with"));
     await user.click(screen.getByRole("button", { name: "Light" }));
     expect(document.documentElement.dataset.theme).toBe("light");
@@ -1017,6 +1066,7 @@ describe("NebulaControlAssistant", () => {
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Help me choose a theme");
+    await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Hide Butler" }));
     await user.click(screen.getByRole("button", { name: "Show Butler" }));
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me choose a theme");
