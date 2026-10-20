@@ -23,7 +23,7 @@
     "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/test_playwright_impact.py"
+    "tests/test_playwright_impact.py",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
@@ -55,7 +55,7 @@
   ],
   "python_node": true,
   "python_versions": [
-    "3.12"
+    "3.12",
     "chat-planning/assistant-real-desktop",
     "chat-planning/assistant-real-compact",
     "chat-planning/assistant-real-chromium-320",
