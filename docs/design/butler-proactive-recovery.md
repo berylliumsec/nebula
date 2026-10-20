@@ -46,10 +46,19 @@ records the model's reason, each tool call, Core's result, and the verification
 target. The operator's Butler conversation is not filled with synthetic user
 messages; its oversight view summarizes these separate recovery cases.
 
-The recovery loop has a bounded tool budget and one active case per exact
-failure. Repeating the same failed operation without new evidence terminates
+The recovery loop has one active case per exact failure and no fixed
+investigation time, model-step, or tool-step ceiling. Repeating the same failed
+operation without new evidence terminates
 the case and surfaces a concrete blocker. Agent reports and tool output are
 evidence to assess, never instructions that can enlarge Butler's authority.
+Project background Butler can discover every project Assistant work control.
+The Nebula-wide scheduled Butler uses `nebula.global.work_catalog` to inspect
+the exact action schema, then `work_read` or `work_change` for the chosen Act
+project. These routes cover chats, goals, missions, subagents, follow-up queues,
+schedules, approvals, questions, and saved Assistant settings. Core validates
+each target, current revision, and project authority before a change. Device
+controls and global provider or harness setup remain separate from the project
+Assistant work catalog.
 The event detector, capability schemas, project authority, and verifier are
 Core contracts. The model selects the remedy and may combine tools; it is not
 limited to a table of preset responses.
@@ -136,12 +145,14 @@ closed.
 
 When a running goal makes a scheduled check due, Core owns the project lease,
 records the case, and lets Butler inspect the selected project's current work.
-The model investigation has a three-minute ceiling; Core renews its 60-second
-lease while it runs and cancels the investigation if that lease is lost. No
+Core renews its 60-second lease while the investigation runs and cancels the
+investigation if that lease is lost. No
 background action can be treated as verified solely because a tool returned.
 
-A periodic check that only reads live Core state can resolve when the model
-finishes. A saved change without a confirmed downstream result needs attention;
+A periodic check that only reads live Core state can resolve when no idle main
+goals require work. If no main goal is running and paused or blocked goals remain,
+the check needs attention even after successful reads or unrelated changes.
+A saved change without a confirmed downstream result needs attention;
 a change whose side effects are unclear remains uncertain. After a restart,
 read-only steps can be replayed, while a possible write is held for review.
 The focused Core tests cover these outcomes, lease renewal and loss, and the

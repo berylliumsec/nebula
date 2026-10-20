@@ -20,6 +20,7 @@ from nebula.v3.domain import (
     ButlerProjectState,
     ButlerRecoveryCase,
     ChatBackend,
+    ChatGoal,
     ChatGoalStatus,
     ChatQueue,
     ChatSession,
@@ -754,6 +755,59 @@ def test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease(
     assert settled.status == expected_status
     renewed = store.get(ButlerProjectState, state.id)
     assert renewed.lease_expires_at > utc_now() + timedelta(seconds=45)
+
+
+def test_global_periodic_reads_do_not_resolve_when_all_goals_are_idle(tmp_path):
+    store, project, parent, _, policy, worker_id = _setup(tmp_path)
+    store.create(
+        ChatGoal(
+            engagement_id=project.id,
+            session_id=parent.id,
+            objective="Finish the research",
+            completion_criteria=["Evidence saved"],
+            status=ChatGoalStatus.PAUSED,
+            elapsed_seconds=14_401,
+            time_budget_seconds=14_400,
+        )
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id="global-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="observed",
+            summary="Check all goals",
+        )
+    )
+
+    class Agent:
+        async def run(self, claimed):
+            current = store.get(ButlerRecoveryCase, claimed.id)
+            store.update(
+                ButlerRecoveryCase,
+                claimed.id,
+                {
+                    "steps": [
+                        {
+                            "id": "read-step",
+                            "operation": "nebula.global.project",
+                            "status": "applied",
+                        }
+                    ]
+                },
+                expected_revision=current.revision,
+            )
+            return "All goals are okay", ChatBackend.PROVIDER, "provider", "model", None
+
+    asyncio.run(
+        ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id)
+    )
+    settled = store.get(ButlerRecoveryCase, case.id)
+    assert settled.status == "needs_attention"
+    assert "No main goal is running" in settled.outcome
 
 
 @pytest.mark.parametrize(

@@ -70,8 +70,30 @@ _BROWSER_ACTIONS = frozenset(
 )
 _BACKGROUND_CHANGES = frozenset(
     {
+        "nebula.work.create_goal",
+        "nebula.work.create_goal_conversation",
+        "nebula.work.handoff_goal",
+        "nebula.work.create_goal_child",
+        "nebula.work.stop_subagent",
+        "nebula.work.stop_subagents",
+        "nebula.work.stop_native_subagent",
+        "nebula.work.queue_action",
+        "nebula.work.create_schedule",
+        "nebula.work.set_schedule",
+        "nebula.work.require_plan",
+        "nebula.work.start_chat",
+        "nebula.work.stop_chat",
+        "nebula.work.start_mission",
+        "nebula.work.steer_mission",
+        "nebula.work.stop_mission",
+        "nebula.work.answer_question",
+        "nebula.work.update_chat",
+        "nebula.work.fork_chat",
+        "nebula.work.delete_chat",
         "nebula.work.set_chat_settings",
+        "nebula.work.set_assistant_defaults",
         "nebula.work.message_chat",
+        "nebula.work.update_goal",
         "nebula.work.goal_action",
         "nebula.work.decide_approval",
         "nebula.work.retry_chat_turn",
@@ -81,11 +103,13 @@ _BACKGROUND_CHANGES = frozenset(
         "nebula.global.create_recovery_goal",
         "nebula.global.handoff_goal",
         "nebula.global.goal_action",
+        "nebula.global.update_goal",
+        "nebula.global.set_chat_settings",
+        "nebula.global.set_assistant_defaults",
+        "nebula.global.work_change",
         "nebula.global.create_child_project",
     }
 )
-_BACKGROUND_STEP_LIMIT = 12
-_GLOBAL_STEP_LIMIT = 40
 _CATEGORIES = (
     {
         "id": "work",
@@ -262,12 +286,12 @@ class ButlerCapabilities:
         metrics = ButlerEventPayload.model_validate(event.payload).metrics
         category = metrics.get("category")
         rule = metrics.get("rule")
-        if category == "budget_exhausted" or (
+        if (category == "budget_exhausted" and name != "nebula.work.update_goal") or (
             category == "permission_denied"
             and rule not in {"subagents.turned_off", "subagents.runtime_model"}
         ):
             raise ValueError(
-                "Core's budget or policy refusal cannot be bypassed by Act"
+                "Core's budget or policy refusal requires an authorized edit or operator review"
             )
         if category == "capacity_reached" and name == "nebula.work.set_chat_settings":
             raise ValueError(
@@ -294,17 +318,11 @@ class ButlerCapabilities:
                 current is None
                 or current.status != "investigating"
                 or current.revision != case.revision
-                or len(current.steps)
-                >= (
-                    _GLOBAL_STEP_LIMIT
-                    if current.signal == "butler.global_periodic_check"
-                    else _BACKGROUND_STEP_LIMIT
-                )
                 or policy is None
                 or policy.authority != "act"
                 or policy.revision != current.authority_revision
             ):
-                raise ValueError("Butler recovery step budget or state changed")
+                raise ValueError("Butler Act authority or recovery case changed")
             transaction.update(
                 ButlerRecoveryCase,
                 current.id,
@@ -719,8 +737,15 @@ class ButlerCapabilities:
                 )
                 if target.engagement_id != self._project_id or target.parent_session_id:
                     raise ValueError("background Butler may act only on a main chat")
-            if change and name == "nebula.work.goal_action":
-                goal = self._store.get(ChatGoal, str(payload.get("goal_id") or ""))
+            if change and name in {
+                "nebula.work.goal_action",
+                "nebula.work.update_goal",
+            }:
+                goal = self._store.find_entity(
+                    ChatGoal, "session_id", str(payload.get("session_id") or "")
+                )
+                if goal is None:
+                    raise ValueError("read a Core-owned goal before changing it")
                 if goal.engagement_id != self._project_id or goal.parent_goal_id:
                     raise ValueError("background Butler may act only on a main goal")
             if (

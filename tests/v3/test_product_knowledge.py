@@ -168,6 +168,21 @@ def test_product_search_finds_butler_effort_setting(monkeypatch):
     assert any(item["heading"] == "Butler model and effort" for item in matches)
 
 
+def test_product_search_explains_butler_goal_budget_and_assistant_authority(
+    monkeypatch,
+):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler extend paused goal time step budget resume"
+    )
+    assert any(
+        "Increasing an exhausted budget does not itself resume a goal"
+        in str(item["text"])
+        and "every saved next-turn Assistant setting" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_scheduled_history_and_grok_quota(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     history = search_product_knowledge(

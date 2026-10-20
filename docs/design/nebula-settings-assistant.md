@@ -204,7 +204,7 @@ When the file exists, Core records one Nebula-wide periodic check at least
 15 minutes after the preceding check. It can run with no running goals. A
 configured Butler chat in an Act project hosts the run. Butler reads the live
 Act-project roster and chooses where to work. Core still enforces each target
-project's Act revision and privacy boundary for reads and writes. The bounded
+project's Act revision and privacy boundary for reads and writes. The
 scheduled harness run uses the model and reasoning effort saved in that Butler
 chat's settings. Changing the effort applies to new runs and the next direct
 message; an already running turn keeps its selected effort. Global actions
@@ -216,6 +216,20 @@ receive an initial goal as part of its creation; it otherwise starts with the
 normal Watch authority. Goal and child-project creation check existing work
 before writing. The model cannot grant Act to another project, expand scope,
 or treat a pending approval or uncertain write as permission to retry.
+Butler can also read and edit every saved next-turn Assistant setting on a main
+chat, every saved project Assistant default for future chats, and every editable
+field of a nonterminal main goal, including token, active-time, step, and child
+budgets. The direct and scheduled catalogs use the same Core field schemas as
+the Assistant settings and goal services. A scheduled cross-project edit requires
+the target project's current Act revision plus the target chat or goal revision.
+Increasing an exhausted budget does not itself resume a goal: Butler reads the
+saved result, checks other holds, then invokes resume on the new revision.
+There is no fixed Butler investigation time, model-step, or tool-step budget;
+the project lease is renewed while it works. Losing Act authority or the lease
+still stops the investigation, and Core's target policy and approval checks remain
+in force. A check with no running main goals and remaining paused or blocked
+main goals stays marked as needing attention when Butler only reads or changes
+unrelated state.
 
 Butler Oversight displays the durable scheduled-check transcript as a compact
 section. Expanding a check reads every saved harness attempt and its paged event stream
@@ -241,6 +255,9 @@ shared with other Grok products; missing vendor values remain unknown.
 | Schedule | Exactly one global check is recorded after 15 minutes even if all goals are idle | Core global state and event stream | Core unit and real Core |
 | Choose | Butler can inspect all eligible Act projects before selecting work | Core project and authority records | Tool unit and real Core |
 | Set effort | Saving an advertised effort in Butler settings is reflected in the next direct turn and scheduled harness session | Core chat settings and harness runtime options | Core unit, component and real Core |
+| Edit Assistant options | Butler can discover and save every Core next-turn Assistant field and project default under Act, and read back the saved revision | Core chat and project records | Schema parity, Core unit and real Core |
+| Use Assistant work controls | Scheduled Butler can list and invoke every project Assistant work action through `nebula.global.work_catalog`, `work_read`, and `work_change`; Core checks target Act authority, the action schema, project ownership, and saved revisions | Core Work catalog and action handlers | Catalog parity and Core integration |
+| Renew goal limits | Butler can extend a paused main goal's active time and step limits, then resume it on the new revision after reading other holds | Core goal and recovery ledger | Core unit and real Core |
 | Review transcript | Opening a saved check shows every attempt, paged activity, and linked recovery-goal reports after refresh or reconnect | Core case, harness turns, event streams, and goal records | Core unit, component and real Core browser |
 | Read quota | An agent can query a configured Codex or Grok profile for vendor-reported remaining percentage and separate credits; missing values stay unknown | Harness vendor read and Core quota observation | Core unit and real Core |
 | Retry server load | One failed scheduled analysis retries in the same case only after the exact vendor load code and absence of write attempts are verified | Core case and harness event ledger | Core unit, component and real Core browser |

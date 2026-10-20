@@ -41,6 +41,7 @@ from .domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    AssistantDefaults,
     ChatBackend,
     ChatGoal,
     ChatMessage,
@@ -180,6 +181,31 @@ SET_CHAT_SETTINGS_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["session_id", "expected_revision", "settings"],
+}
+ASSISTANT_DEFAULTS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {},
+}
+SET_ASSISTANT_DEFAULTS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "settings": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                **AssistantDefaults.model_json_schema(by_alias=False)["properties"],
+                "backend": {
+                    "type": ["string", "null"],
+                    "enum": [None, "provider", "harness"],
+                },
+            },
+            "minProperties": 1,
+        },
+    },
+    "required": ["expected_revision", "settings"],
 }
 REQUIRE_PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -770,6 +796,39 @@ class ControlAssistantWork:
             },
             "applies_to": "next message; queued and running turns keep their submitted settings",
         }
+
+    def assistant_defaults(self, project_id: str) -> dict[str, Any]:
+        project = self._project(project_id)
+        return {
+            "project_id": project.id,
+            "revision": project.revision,
+            "settings": project.assistant_defaults.model_dump(mode="json"),
+            "available": model_choices(self.store),
+        }
+
+    def set_assistant_defaults(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        project = self._project(project_id)
+        if project.revision != arguments.get("expected_revision"):
+            raise ValueError("project changed; read Assistant defaults again")
+        changes = arguments.get("settings")
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError("choose at least one Assistant default")
+        unknown = set(changes) - set(AssistantDefaults.model_fields)
+        if unknown:
+            raise ValueError(f"unknown Assistant defaults: {sorted(unknown)}")
+        selected = AssistantDefaults.model_validate(
+            {**project.assistant_defaults.model_dump(mode="json"), **changes}
+        )
+        if selected != project.assistant_defaults:
+            project = self.store.update(
+                Engagement,
+                project.id,
+                {"assistant_defaults": selected.model_dump(mode="json")},
+                expected_revision=project.revision,
+            )
+        return self.assistant_defaults(project.id)
 
     def set_chat_settings(
         self, project_id: str, arguments: dict[str, Any]
@@ -2927,6 +2986,18 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.assistant_defaults",
+        "Read this project's saved Assistant defaults for future chats, revision, and available runtimes.",
+        ASSISTANT_DEFAULTS_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.set_assistant_defaults",
+        "Change any saved Assistant default for future chats after reading the project revision. Existing chats keep their own next-turn settings.",
+        SET_ASSISTANT_DEFAULTS_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.set_chat_settings",
         "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To switch the main harness, save its profile, model, advisory planning preference, MCP servers, and subagent together, then send a new message in the same chat. The saved choice is not the bound runtime until that message starts; read back the chat and turn result before resuming a goal. Running and queued turns keep their submitted settings.",
         SET_CHAT_SETTINGS_SCHEMA,
@@ -3134,6 +3205,10 @@ async def dispatch_work_tool(
         return await work.set_schedule(project_id, arguments)
     if name == "nebula.work.chat_settings":
         return work.chat_settings(project_id, arguments.get("session_id"))
+    if name == "nebula.work.assistant_defaults":
+        return work.assistant_defaults(project_id)
+    if name == "nebula.work.set_assistant_defaults":
+        return work.set_assistant_defaults(project_id, arguments)
     if name == "nebula.work.set_chat_settings":
         return work.set_chat_settings(project_id, arguments)
     if name == "nebula.work.require_plan":
