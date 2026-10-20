@@ -1,13 +1,13 @@
 {
-  "change_digest": "b0c483a308085dc36e25e53108b0c819758f9dc27e70efcd0d7acecaf490a4bd",
-  "reviewed_by": "Codex focused Butler Voice cost-control review",
-  "reason": "The Voice lifecycle, Core-wide timeout, Butler settings control, and assistant discovery changed. Fifteen focused Python cases cover transport, authenticated validation, revision and cross-project persistence, settings-tool discovery, and product-help synchronization. Fifty-seven component cases cover Voice activity, mute, slow work, resume, background and close races plus the Butler settings interaction and project hydration. Fifteen browser cases exercise the updated Voice journey at desktop and 320-430 px mobile Chromium/WebKit boundaries, saved-chat continuity, Core-wide settings persistence, and one opt-in real GPT-Live close receipt through disposable production HTTPS LAN Core.",
-  "exclusions": "No native shell code changed, so no native test is selected. Existing unrelated settings, chat, storage and browser journeys are excluded despite shared API and catalog files; exact Voice and settings boundaries are selected instead. The real GPT-Live check is skipped in ordinary CI unless NEBULA_LIVE_VOICE_CHECK=1; mocked WebRTC alone is not proof of provider duration. Physical-device testing and full suites are excluded.",
+  "change_digest": "ec6f348c2f428c3d913187427d37831874fc30934da632179aedb177400dc762",
+  "reviewed_by": "Codex focused E2E wiring review",
+  "reason": "Preserve the previous Butler Voice and settings regression selection at the user's request, alongside the seven newly registered real-Core fixture journeys and Python CI-selector checks. The retained tests cover Voice lifecycle, Core-wide timeout persistence, settings-assistant discovery and product guidance. The new journeys cover browser viewing, catch-up, host mode, deletion, working knowledge, quota and recovery across eight profiles. Counts for frontend and browser cases retain the previous collected estimates; Python counts are refreshed for the current checkout.",
+  "exclusions": "This is a bounded combined selection, not a full suite. Unrelated journeys and native tests remain excluded. The retained real GPT-Live check stays opt-in via NEBULA_LIVE_VOICE_CHECK=1 and is skipped in ordinary CI. Physical devices and installed desktop testing are excluded. No product behavior changes are introduced by this selection update.",
   "expected_tests": {
-    "python": 15,
+    "python": 53,
     "frontend": 57,
     "native": 0,
-    "playwright": 15
+    "playwright": 71
   },
   "python": [
     "tests/v3/test_voice.py",
@@ -16,7 +16,8 @@
     "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
     "tests/v3/test_settings_assistant_tools.py::test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/test_playwright_impact.py"
   ],
   "frontend": [
     "ui/src/components/NebulaVoice.test.tsx",
@@ -36,6 +37,17 @@
     "entry:nebula-voice/assistant-real-desktop",
     "entry:nebula-voice/assistant-real-chromium-390",
     "entry:nebula-voice/assistant-real-webkit-390",
-    "entry:nebula-voice-live/assistant-real-desktop"
+    "entry:nebula-voice-live/assistant-real-desktop",
+    "area:assistant-browser-viewer",
+    "area:catch-up",
+    "area:host-mode",
+    "area:project-deletion",
+    "area:working-knowledge",
+    "area:workspace-quota",
+    "area:workspace-recovery"
+  ],
+  "python_node": true,
+  "python_versions": [
+    "3.12"
   ]
 }

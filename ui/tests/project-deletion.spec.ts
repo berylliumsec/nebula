@@ -20,7 +20,7 @@ test("archived project deletion confirms, persists and preserves its linked fold
   await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20000 });
   await page.goto("/projects/linked-model-regression/workbench?view=files");
   const openArchives = async () => {
-    const sidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
+    const sidebar = page.getByRole("button", { name: "Open navigation", exact: true });
     const switcher = page.getByRole("button", { name: "Switch project", exact: true });
     await expect(sidebar.or(switcher).filter({ visible: true }).first()).toBeVisible();
     if (await sidebar.isVisible()) await sidebar.click();

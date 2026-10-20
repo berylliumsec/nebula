@@ -116,6 +116,7 @@ jobs:
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
       NEBULA_PLAYWRIGHT_MATRIX: "1"
+      NEBULA_TEST_PYTHON: poetry run python
       PLAYWRIGHT_LANE: "1"
     steps: &playwright_steps
       - name: Check out the candidate
@@ -158,7 +159,8 @@ jobs:
           if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
           if test "$PROJECT" = real-core && test "$TEST_SHARD" != 1/1; then args+=(--fully-parallel); fi
           npm --prefix ui run test:e2e -- "${args[@]}" --list | tee "$RUNNER_TEMP/selected-tests.txt"
-          if grep -Fq 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' "$RUNNER_TEMP/selected-tests.txt" ||
+          if test "$TEST_MATCH" = tests/assistant-browser-viewer.spec.ts ||
+             grep -Fq 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' "$RUNNER_TEMP/selected-tests.txt" ||
              grep -Fq 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core' "$RUNNER_TEMP/selected-tests.txt"; then
             echo 'managed_browser=true' >> "$GITHUB_OUTPUT"
           fi
@@ -206,7 +208,7 @@ jobs:
             if test "$SECURITY_PROXY" = true; then
               export NEBULA_TEST_SECURITY_PROXY_EXECUTABLE="$RUNNER_TEMP/nebula-security-proxy/bin/mitmdump"
             fi
-            NEBULA_TEST_MANAGED_BROWSER_RUNTIME="$RUNNER_TEMP/playwright-browsers" xvfb-run -a npm --prefix ui run test:e2e -- "${args[@]}"
+            NEBULA_TEST_BROWSER_RUNTIME="$RUNNER_TEMP/playwright-browsers" NEBULA_TEST_MANAGED_BROWSER_RUNTIME="$RUNNER_TEMP/playwright-browsers" xvfb-run -a npm --prefix ui run test:e2e -- "${args[@]}"
           else
             npm --prefix ui run test:e2e -- "${args[@]}"
           fi
@@ -229,6 +231,7 @@ jobs:
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
       NEBULA_PLAYWRIGHT_MATRIX: "1"
+      NEBULA_TEST_PYTHON: poetry run python
       PLAYWRIGHT_LANE: "2"
     steps: *playwright_steps
 
@@ -242,6 +245,7 @@ jobs:
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
       NEBULA_PLAYWRIGHT_MATRIX: "1"
+      NEBULA_TEST_PYTHON: poetry run python
       PLAYWRIGHT_LANE: "3"
     steps: *playwright_steps
 
@@ -255,6 +259,7 @@ jobs:
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
       NEBULA_PLAYWRIGHT_MATRIX: "1"
+      NEBULA_TEST_PYTHON: poetry run python
       PLAYWRIGHT_LANE: "4"
     steps: *playwright_steps
 

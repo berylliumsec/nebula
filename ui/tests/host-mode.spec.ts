@@ -19,7 +19,9 @@ test("warm chat adopts acknowledged host mode without losing its conversation", 
   await page.goto(`/projects/${fixture.project}/workbench?view=chat&session=${fixture.chat}`);
   await expect(page.getByText("Harness answer for Remember this fixture", { exact: true })).toBeVisible();
   const openPolicy = async () => {
-    await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
+    const search = page.getByRole("button", { name: "Search pages, actions, and settings" });
+    if (!await search.isVisible()) await page.getByRole("button", { name: "Open top menu", exact: true }).click();
+    await search.click();
     await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
     await page.getByRole("option", { name: /Project policy and network scope/ }).click();
   };
@@ -39,7 +41,7 @@ test("warm chat adopts acknowledged host mode without losing its conversation", 
   await page.goto(`/projects/${fixture.project}/workbench?view=chat&session=${fixture.chat}`);
   await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Continue with host tools");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  const status = page.locator(".chat-composer > .harness-status-rail");
+  const status = page.locator(".chat-composer").getByRole("region", { name: "Harness status", exact: true });
   await expect(status).toContainText("Working", { timeout: 20000 });
   await expect(status).toContainText("1/3 plan steps");
   const composer = (await page.locator(".chat-composer").boundingBox())!;
@@ -68,8 +70,15 @@ test("warm chat adopts acknowledged host mode without losing its conversation", 
   const sessionResponse = await request.get(`${origin}/api/v1/harness-sessions/${chat.harness_session_id}`, { headers });
   expect(sessionResponse.ok(), await sessionResponse.text()).toBe(true);
   const session = await sessionResponse.json();
-  expect(session.metadata.runtime_rollover_reason).toBe("command_runtime_changed");
-  expect(session.metadata.command_runtime_snapshot.specs.run_command.description).toMatch(/host/i);
+  expect(session.metadata).toMatchObject({
+    fork_reason: "execution_mode_changed",
+    forked_from_session_id: fixture.session,
+    execution_mode: "host",
+    native_capabilities: { workspace_access: "write", shell: true },
+  });
+  const original = await request.get(`${origin}/api/v1/harness-sessions/${fixture.session}`, { headers });
+  expect(original.ok()).toBe(true);
+  expect((await original.json()).metadata.execution_mode).toBe("docker");
   await page.reload();
   await expect(page.getByText("Harness answer for Continue with host tools", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
