@@ -14899,6 +14899,56 @@ reloadTest("assistant popup keeps Butler reply tables readable and contained aft
   await verifyLayout();
 });
 
+reloadTest("assistant popup Butler long history keeps the composer and jump to latest usable", async ({page}) => {
+  await installTruthfulCore(page);
+  const sessionId = "butler-long-history";
+  const history = Array.from({length: 80}, (_, index) => ({
+    ...entity, id: `butler-message-${index}`, engagement_id: "scratch-project", session_id: sessionId,
+    sequence: index + 1, role: index % 2 ? "assistant" : "user",
+    content: `Saved response ${index}. ${"A detailed project update. ".repeat(5)}`,
+    citations: [], metadata: {},
+  }));
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat/control-assistant/session")) return route.fulfill({json: {
+      ...entity, id: sessionId, engagement_id: "scratch-project", title: "Butler",
+      backend: "harness", harness_profile_id: "local", model: "model", metadata: {control_assistant: true},
+    }});
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) return route.fulfill({json: history});
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", {name: "Open Butler"}).click();
+  const butler = page.getByRole("dialog", {name: "Butler"});
+  const transcript = butler.getByRole("log", {name: "Butler conversation"});
+  await expect(transcript.getByText(/Saved response 79/)).toBeVisible();
+  await transcript.focus();
+  await expect(transcript).toBeFocused();
+  const composer = butler.getByRole("textbox", {name: "Ask Butler a question"});
+  await composer.fill("A new question after a long conversation");
+  await expect(composer).toHaveValue("A new question after a long conversation");
+  const mobile = await page.evaluate(() => matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches);
+  const surface = mobile ? transcript.locator("..") : transcript;
+  expect(await surface.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(24);
+  await surface.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll", {bubbles: true})); });
+  const jump = butler.getByRole("button", {name: "Scroll to latest message"});
+  await expect(jump).toBeVisible();
+  expectTouchTarget((await jump.boundingBox())?.width, "Butler jump width");
+  expectTouchTarget((await jump.boundingBox())?.height, "Butler jump height");
+  await jump.focus();
+  await expect(jump).toBeFocused();
+  await jump.press("Enter");
+  await expect.poll(async () => surface.evaluate((element, isMobile) => {
+    if (!isMobile) return element.scrollHeight - element.scrollTop - element.clientHeight;
+    const latest = element.querySelector('[role="log"] > :last-child');
+    return latest ? latest.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom : Infinity;
+  }, mobile)).toBeLessThanOrEqual(24);
+  await expect(jump).toHaveCount(0);
+  const accessibility = await new AxeBuilder({page}).include("#nebula-assistant-panel").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 reloadTest("iPhone assistant shell keeps chat and pending actions reachable without work tools", async ({page}, testInfo) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
