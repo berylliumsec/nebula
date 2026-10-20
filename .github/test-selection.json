@@ -1,5 +1,5 @@
 {
-  "change_digest": "d5ac56588db3e2f43a5e67dfe7b8f607681490baa9d65596b0ec2b838d3cb1e1",
+  "change_digest": "33b28cc22ae41f75f9563b507f5db34c078e3b110c84d62c593fc24fc83f0515",
   "reviewed_by": "Codex agent, 2026-10-20",
   "reason": "Same-case blocked-agent check-in dialogue changes Butler case state, immediate-turn reply lookup, cross-project work routing, and settings assistant discovery. Select exact Core regressions, the settings list, and the production LAN global Butler journey in desktop Chromium and 390px mobile Chromium and WebKit.",
   "exclusions": "No native code or device-specific layout changed. Other Python, frontend, and browser journeys and the remaining mobile widths are outside the changed behavior. The disposable authenticated LAN Core journey separately exercised two saved agent replies and three Butler turns in one case.",

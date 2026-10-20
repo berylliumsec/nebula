@@ -1410,7 +1410,7 @@ class ButlerRecoveryService:
                 try:
                     turn = self.store.get(ChatTurn, dialogue_turn_id)
                 except NotFoundError:
-                    # The missing accepted turn needs Butler's review, never a resend.
+                    # diagnostic-expected: record a missing accepted turn for Butler review, never resend it.
                     results.append({**target, "status": "unavailable"})
                     continue
                 if turn.engagement_id != project_id or turn.session_id != session_id:
