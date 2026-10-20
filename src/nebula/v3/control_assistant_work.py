@@ -153,7 +153,7 @@ CHAT_SETTINGS_FIELDS: dict[str, Any] = {
     },
     "planning_enabled": {
         "type": "boolean",
-        "description": "Require a Core-validated task plan before each tool-using turn. The saved next-turn switch defaults off.",
+        "description": "Ask the agent to share a task plan and pass it to subagents. Normal tool use remains available. The saved next-turn switch defaults off.",
     },
     "allow_subagents": {"type": "boolean"},
     "allow_agent_messaging": {"type": "boolean"},
@@ -818,13 +818,9 @@ class ControlAssistantWork:
     def require_plan(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """Force planning for one exact target using fresh Core revisions."""
+        """Request planning for one exact target using fresh Core revisions."""
 
         session = self._chat(project_id, arguments.get("session_id"))
-        if isinstance(session.metadata.get("subagent_id"), str):
-            raise ValueError(
-                "require a plan on the main agent; its subagents receive that plan"
-            )
         kind = arguments.get("target_kind")
         target_id = _text(arguments.get("target_id"), "target_id", 200)
         expected = arguments.get("expected_revision")
@@ -852,7 +848,7 @@ class ControlAssistantWork:
             raise ValueError("choose an exact agent, goal, child, or turn")
         if type(expected) is not int or target.revision != expected:
             raise ValueError(
-                "target changed; read its current revision before forcing a plan"
+                "target changed; read its current revision before requesting a plan"
             )
         active = self.chat.pending_turn(session.id)
         active_harness_in_flight = False
@@ -873,7 +869,7 @@ class ControlAssistantWork:
             and active_harness_in_flight
         ):
             raise ValueError(
-                "an active harness turn cannot accept a new enforced plan; "
+                "an active harness turn cannot accept a new plan request; "
                 "target its agent or goal for the next turn"
             )
         existing = [
@@ -2415,6 +2411,23 @@ class ControlAssistantWork:
                 and session.backend == ChatBackend.HARNESS
                 and pending.harness_turn_id
             ):
+                active_turn = self.store.get(HarnessTurn, pending.harness_turn_id)
+                active_session = self.store.get(
+                    HarnessSession, active_turn.harness_session_id
+                )
+                active_profile = self.store.get(
+                    HarnessProfile, active_session.harness_profile_id
+                )
+                if active_profile.kind == HarnessKind.GROK_ACP:
+                    # Grok ACP cannot steer, including while its turn is still
+                    # routing. Keep immediate guidance out of the follow-up
+                    # queue so it cannot arrive after the research state changes.
+                    return {
+                        "session_id": session.id,
+                        "delivery": "held",
+                        "reason": "active_turn_cannot_steer",
+                        "turn_id": pending.id,
+                    }
                 if delivery == "immediate":
                     await self.harness.steer_turn(
                         pending.harness_turn_id,
@@ -2915,13 +2928,13 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.set_chat_settings",
-        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To switch the main harness, save its profile, model, Plan before acting, MCP servers, and subagent together, then send a new message in the same chat. The saved choice is not the bound runtime until that message starts; read back the chat and turn result before resuming a goal. Running and queued turns keep their submitted settings.",
+        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To switch the main harness, save its profile, model, advisory planning preference, MCP servers, and subagent together, then send a new message in the same chat. The saved choice is not the bound runtime until that message starts; read back the chat and turn result before resuming a goal. Running and queued turns keep their submitted settings.",
         SET_CHAT_SETTINGS_SCHEMA,
         False,
     ),
     (
         "nebula.work.require_plan",
-        "Require one exact agent, goal, child round, or turn to save a Core-validated plan before its next enforceable action. Read current Core evidence and revision first, and record a concrete reason. An active harness turn applies this on its next turn.",
+        "Ask one exact agent, goal, child round, or turn to share a task plan. The request does not restrict tools or block work. Read current Core evidence and revision first, and record a concrete reason. An active harness turn receives this on its next turn.",
         REQUIRE_PLAN_SCHEMA,
         False,
     ),
@@ -2939,7 +2952,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.message_chat",
-        "Send a durable next message to a main assistant chat, or steer its active harness turn. A new idle turn applies saved next-turn settings and may rebind the same chat to another harness. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
+        "Send a durable next message to a main assistant chat, or steer its active harness turn when supported. Immediate guidance to a busy Grok chat is held and not delivered; read fresh state and send again when idle. A new idle turn applies saved next-turn settings and may rebind the same chat to another harness. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
         MESSAGE_CHAT_SCHEMA,
         False,
     ),

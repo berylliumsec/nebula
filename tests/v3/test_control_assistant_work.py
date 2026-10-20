@@ -1469,21 +1469,38 @@ def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
             executable="/bin/true",
         )
     )
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=harness.id,
+            model="model-a",
+        )
+    )
     session = store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main",
             backend=ChatBackend.HARNESS,
             harness_profile_id=harness.id,
-            harness_session_id="harness-session",
+            harness_session_id=harness_session.id,
             model="model-a",
+        )
+    )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=project.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id="turn",
+            prompt="Check evidence",
         )
     )
     work = app.state.control_assistant_work
     monkeypatch.setattr(
         work.chat,
         "pending_turn",
-        lambda _: SimpleNamespace(id="turn", harness_turn_id="harness-turn"),
+        lambda _: SimpleNamespace(id="turn", harness_turn_id=harness_turn.id),
     )
     seen = []
 
@@ -1502,7 +1519,7 @@ def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
         )
     )
     assert steered["delivery"] == "steered" and steered["turn_id"] == "turn"
-    assert seen == [("harness-turn", "Focus on saved evidence", "Butler guidance")]
+    assert seen == [(harness_turn.id, "Focus on saved evidence", "Butler guidance")]
     assert work.queue.get(session.id).items == []
 
     provider = store.create(
@@ -1533,6 +1550,77 @@ def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
     )
     assert held["delivery"] == "held" and held["reason"] == "active_turn_cannot_steer"
     assert work.queue.get(provider_session.id).items == []
+
+
+def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Grok",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+        )
+    )
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=profile.id,
+            model="grok-model",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness_session.id,
+            model="grok-model",
+        )
+    )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=project.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=chat.id,
+            chat_turn_id="chat-turn",
+            prompt="Read the current goal",
+        )
+    )
+    work = app.state.control_assistant_work
+    monkeypatch.setattr(
+        work.chat,
+        "pending_turn",
+        lambda _: SimpleNamespace(id="chat-turn", harness_turn_id=harness_turn.id),
+    )
+
+    async def unexpected_steer(*args, **kwargs):
+        raise AssertionError("Grok must not receive a live steer")
+
+    monkeypatch.setattr(work.harness, "steer_turn", unexpected_steer)
+    for delivery in ("immediate", "steer"):
+        held = asyncio.run(
+            work.message_chat(
+                project.id,
+                {
+                    "session_id": chat.id,
+                    "text": "Reload AGENTS.md",
+                    "delivery": delivery,
+                },
+            )
+        )
+        assert held == {
+            "session_id": chat.id,
+            "delivery": "held",
+            "reason": "active_turn_cannot_steer",
+            "turn_id": "chat-turn",
+        }
+    assert work.queue.get(chat.id).items == []
+    assert store.find_entities(ChatMessage, {"session_id": chat.id}) == []
 
 
 def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypatch):
@@ -1686,18 +1774,35 @@ def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch)
             name="Codex", kind=HarnessKind.CODEX_APP_SERVER, executable="/bin/true"
         )
     )
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=selected.id,
+            harness_profile_id=profile.id,
+            model="model-a",
+        )
+    )
     session = store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Running chat",
             backend=ChatBackend.HARNESS,
             harness_profile_id=profile.id,
-            harness_session_id="harness-session",
+            harness_session_id=harness_session.id,
             model="model-a",
         )
     )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=selected.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id="chat-turn",
+            prompt="Check status",
+        )
+    )
     work = app.state.control_assistant_work
-    active = [SimpleNamespace(id="chat-turn", harness_turn_id="harness-turn")]
+    active = [SimpleNamespace(id="chat-turn", harness_turn_id=harness_turn.id)]
     calls = []
     monkeypatch.setattr(
         work.chat, "pending_turn", lambda _id: active[0] if active else None
@@ -1734,13 +1839,13 @@ def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch)
         }
         assert calls[0] == (
             "steer",
-            "harness-turn",
+            harness_turn.id,
             "Check only the summary",
             "control-assistant",
         )
         stopped = await work.stop_chat(selected.id, session.id)
         assert stopped["stopped"] is True
-        assert calls[1][:2] == ("stop", "harness-turn")
+        assert calls[1][:2] == ("stop", harness_turn.id)
 
     asyncio.run(scenario())
 

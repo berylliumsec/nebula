@@ -1,4 +1,4 @@
-"""Focused durable task planning and pre-use gate contracts."""
+"""Focused advisory planning and legacy pre-use gate contracts."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ from nebula.v3.chat_planning import (
     ChatPlanService,
     PlanSubmission,
     PlanningBlocked,
+    advisory_plan_components,
 )
+from nebula.v3.browser_tools import combine_tool_components
 from nebula.v3.chat import ChatCompletionRequest
 from nebula.v3.chat_assistant_config import (
     ChatAssistantConfigPatch,
@@ -32,7 +34,6 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessSession,
     HarnessTurn,
-    HarnessTurnOrigin,
     HarnessTurnStatus,
     ProviderProfile,
     RiskClass,
@@ -42,9 +43,6 @@ from nebula.v3.harnesses import (
     ClaudeAgentSdkAdapter,
     HarnessConfigurationError,
     HarnessPermissionRequest,
-    _planned_grok_gateway_permission,
-    _portable_gateway_tool_name,
-    _session_native_capabilities,
 )
 from nebula.v3.providers import ToolCall
 from nebula.v3.storage import NebulaStore
@@ -68,9 +66,9 @@ def _submission(*tools: str, files: list[str] | None = None) -> PlanSubmission:
     )
 
 
-def _plan_call(*tools: str) -> ToolCall:
+def _plan_call(*tools: str, call_id: str = "submit-plan") -> ToolCall:
     return ToolCall(
-        id="submit-plan", name="plan.submit", arguments=_submission(*tools).model_dump()
+        id=call_id, name="plan.submit", arguments=_submission(*tools).model_dump()
     )
 
 
@@ -83,16 +81,97 @@ def _enable(store: NebulaStore, prepared):
     )
 
 
-def test_plan_only_mode_rejects_enforced_planning():
+def _enable_advisory(store: NebulaStore, service, prepared):
+    prepared.turn = store.update(
+        ChatTurn,
+        prepared.turn.id,
+        {
+            "request_snapshot": {
+                "planning_enabled": True,
+                "plan_behavior": "advisory",
+            }
+        },
+        expected_revision=prepared.turn.revision,
+    )
+    components = prepared.tool_components
+    prepared.tool_components = combine_tool_components(
+        components,
+        advisory_plan_components(
+            service.plans, components.scope, Path(components.workspace)
+        ),
+    )
+
+
+def _mark_historical_enforced_turn(store: NebulaStore, harness_turn: HarnessTurn):
+    chat_turn = store.get(ChatTurn, harness_turn.chat_turn_id)
+    snapshot = dict(chat_turn.request_snapshot)
+    snapshot.pop("plan_behavior", None)
+    return store.update(
+        ChatTurn,
+        chat_turn.id,
+        {"request_snapshot": snapshot},
+        expected_revision=chat_turn.revision,
+    )
+
+
+def test_plan_only_mode_allows_advisory_planning():
     for mode in ("plan", "planning"):
-        with pytest.raises(ValueError, match="cannot be combined"):
-            ChatCompletionRequest(
-                backend=ChatBackend.HARNESS,
-                harness_profile_id="harness",
-                messages=[{"role": "user", "content": "Inspect the project."}],
-                harness_mode=mode,
-                planning_enabled=True,
-            )
+        request = ChatCompletionRequest(
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness",
+            messages=[{"role": "user", "content": "Inspect the project."}],
+            harness_mode=mode,
+            planning_enabled=True,
+        )
+        assert request.planning_enabled is True
+
+
+def test_advisory_provider_uses_tools_without_sharing_a_plan(tmp_path):
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="work", name="safe_read", arguments={"value": "early"})]
+        ),
+        _response(text="Done."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    _enable_advisory(store, service, prepared)
+
+    result = asyncio.run(service.complete(prepared))
+
+    assert result.message.content == "Done."
+    assert [item.arguments["value"] for item in broker.calls] == ["early"]
+    assert ChatPlanService(store).for_turn("turn").phase == "discovery"
+    assert {tool.name for tool in provider.requests[0].tools} >= {
+        "safe_read",
+        "plan.submit",
+    }
+
+
+def test_advisory_provider_shares_plan_after_tool_and_continues(tmp_path):
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="early", name="safe_read", arguments={"value": "early"})]
+        ),
+        _response(calls=[_plan_call("safe_read")]),
+        _response(
+            calls=[ToolCall(id="later", name="safe_read", arguments={"value": "later"})]
+        ),
+        _response(calls=[_plan_call("safe_read", call_id="revised-plan")]),
+        _response(text="Done."),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    _enable_advisory(store, service, prepared)
+
+    result = asyncio.run(service.complete(prepared))
+
+    assert result.message.content == "Done."
+    assert [item.arguments["value"] for item in broker.calls] == ["early", "later"]
+    plan = ChatPlanService(store).for_turn("turn")
+    assert plan is not None and plan.phase == "execution"
+    assert plan.plan_version == 2
+    assert plan.steps[0]["action"] == "Inspect the selected task"
 
 
 def test_claude_planner_fails_closed_without_preuse_hook(tmp_path, monkeypatch):
@@ -474,10 +553,12 @@ def test_butler_force_is_revisioned_one_task_and_read_back(tmp_path):
             provider_profile_id=provider.id,
             model="m",
             tools_enabled=True,
+            request_snapshot={"plan_behavior": "advisory"},
         )
     )
     plan = ChatPlanService(store).ensure(turn, session)
     assert plan.directive_id == directive_id
+    assert ChatPlanService(store).required(turn, session) is False
     assert store.get(ChatPlanDirective, directive_id).status == "applied"
     assert ChatPlanService(store).pending_directive(turn, session) is None
 
@@ -536,9 +617,11 @@ def test_active_harness_force_waits_for_next_turn(tmp_path):
             model="m",
             tools_enabled=True,
             status=ChatTurnStatus.QUEUED,
+            request_snapshot={"plan_behavior": "advisory"},
         )
     )
-    assert ChatPlanService(store).required(next_turn, session) is True
+    assert ChatPlanService(store).requested(next_turn, session) is True
+    assert ChatPlanService(store).required(next_turn, session) is False
 
 
 def test_queued_harness_force_applies_before_that_turn_starts(tmp_path):
@@ -581,7 +664,7 @@ def test_queued_harness_force_applies_before_that_turn_starts(tmp_path):
     assert ChatPlanService(store).ensure(queued, session).directive_id == directive.id
 
 
-def test_unenforceable_harness_adapter_blocks_before_connection(tmp_path):
+def test_advisory_harness_planning_does_not_require_mcp_or_block(tmp_path):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
     profile = store.create(
@@ -607,13 +690,16 @@ def test_unenforceable_harness_adapter_blocks_before_connection(tmp_path):
         planning_enabled=True,
     )
     session = store.get(HarnessSession, harness_turn.harness_session_id)
-    with pytest.raises(PlanningBlocked, match="cannot enforce restricted discovery"):
-        asyncio.run(harness._ensure_harness_plan(harness_turn, session))
-    assert ChatPlanService(store).for_turn(harness_turn.chat_turn_id).phase == "blocked"
+    planned = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+    assert planned.id == harness_turn.id
+    assert (
+        ChatPlanService(store).for_turn(harness_turn.chat_turn_id).phase == "discovery"
+    )
+    assert session.metadata.get("core_plan_isolated") is not True
     assert session.id not in harness._connections
 
 
-def test_existing_grok_chat_rebinds_to_contained_plan_session(tmp_path):
+def test_existing_grok_chat_rebinds_out_of_old_contained_session(tmp_path):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
     profile = store.create(
@@ -628,7 +714,10 @@ def test_existing_grok_chat_rebinds_to_contained_plan_session(tmp_path):
         )
     )
     old_session = app.state.harness_runtime_service.create_session(
-        engagement_id=project.id, profile_id=profile.id, model="grok-test"
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model="grok-test",
+        core_plan_isolated=True,
     )
     chat = store.create(
         ChatSession(
@@ -651,16 +740,19 @@ def test_existing_grok_chat_rebinds_to_contained_plan_session(tmp_path):
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    contained = store.get(HarnessSession, turn.harness_session_id)
+    current = store.get(HarnessSession, turn.harness_session_id)
     assert saved.id == chat.id
-    assert contained.id != old_session.id
-    assert contained.metadata["core_plan_isolated"] is True
+    assert current.id != old_session.id
+    assert current.metadata.get("core_plan_isolated") is not True
     assert (
-        _session_native_capabilities(contained, profile) == HarnessNativeCapabilities()
+        store.get(ChatTurn, turn.chat_turn_id).request_snapshot["plan_behavior"]
+        == "advisory"
     )
 
 
-def test_contained_grok_submits_formal_plan_and_guards_gateway(tmp_path, monkeypatch):
+def test_advisory_grok_shares_plan_without_restricting_normal_tools(
+    tmp_path, monkeypatch
+):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
     profile = store.create(
@@ -687,49 +779,34 @@ def test_contained_grok_submits_formal_plan_and_guards_gateway(tmp_path, monkeyp
         planning_enabled=True,
     )
     session = store.get(HarnessSession, harness_turn.harness_session_id)
-    assert session.metadata["core_plan_isolated"] is True
-
-    async def planner(**kwargs):
-        assert kwargs["planning_native_categories"] == []
-        plan = harness.plans.for_turn(kwargs["planning_target_turn_id"])
-        harness.plans.submit(
-            plan,
-            _submission("workspace.read"),
-            available_tools=set(kwargs["planning_tool_names"]),
-            native_categories=set(kwargs["planning_native_categories"]),
-            workspace=tmp_path,
-        )
-
-    monkeypatch.setattr(harness, "analyze_structured", planner)
+    assert session.metadata.get("core_plan_isolated") is not True
+    assert "Planning is requested" in harness_turn.prompt
     planned = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
-    assert "Core-validated task plan" in planned.prompt
-    assert harness.plans.for_turn(chat_turn.id).phase == "execution"
-    session = store.get(HarnessSession, session.id)
-    assert _session_native_capabilities(session, profile) == HarnessNativeCapabilities()
-
-    offered = {"nebula__" + _portable_gateway_tool_name("workspace.read")}
-    request = HarnessPermissionRequest(
-        vendor_request_id="allow",
-        category="permission",
-        vendor_name="session/request_permission",
-        tool_name="workspace.read",
-        arguments={"rawInput": {"tool_name": next(iter(offered))}},
-    )
-    assert _planned_grok_gateway_permission(request, offered) is True
-    assert (
-        _planned_grok_gateway_permission(
-            request.model_copy(
-                update={"arguments": {"rawInput": {"tool_name": "other__write"}}}
-            ),
-            offered,
+    assert planned.id == harness_turn.id
+    assert harness.plans.for_turn(chat_turn.id).phase == "discovery"
+    monkeypatch.setattr(harness, "_active_gateway_turn", lambda _: harness_turn)
+    offered = {
+        item["name"]
+        for item in harness._gateway_catalog(session, turn=harness_turn)["tools"]
+    }
+    assert {"plan.submit", "workspace.read"} <= offered
+    submitted = asyncio.run(
+        harness._gateway_call_unwrapped(
+            session,
+            "plan.submit",
+            _submission("workspace.read").model_dump(),
         )
-        is False
     )
+    assert submitted["structuredContent"]["phase"] == "execution"
+    assert (
+        harness.plans.for_turn(chat_turn.id).steps[0]["action"]
+        == "Inspect the selected task"
+    )
+    assert session.metadata.get("planning_enforced") is not True
 
 
 @pytest.mark.parametrize("permission_mode", ["managed", "unrestricted"])
-# Keep this test ID available to the cumulative selection from PR #861.
-def test_managed_codex_submits_formal_plan_through_restricted_core_gateway(
+def test_codex_advisory_plan_shares_steps_with_normal_tools(
     tmp_path, monkeypatch, permission_mode
 ):
     store, app, _ = _app(tmp_path)
@@ -758,88 +835,26 @@ def test_managed_codex_submits_formal_plan_through_restricted_core_gateway(
         planning_enabled=True,
     )
     session = store.get(HarnessSession, harness_turn.harness_session_id)
-    if permission_mode == "unrestricted":
-        session = store.update(
-            HarnessSession,
-            session.id,
-            {
-                "metadata": {
-                    **session.metadata,
-                    "execution_mode": "host",
-                    "harness_permission_mode": "unrestricted",
-                    "scope_snapshot": {"bypass_permissions": True},
-                    "approval_policy": "never",
-                }
-            },
-            expected_revision=session.revision,
-        )
-    observed = {}
-
-    async def planner(**kwargs):
-        observed.update(kwargs)
-        planner_session = store.create(
-            HarnessSession(
-                engagement_id=project.id,
-                harness_profile_id=profile.id,
-                model="codex-test",
-                metadata={
-                    "analysis_only": True,
-                    "planning_target_turn_id": chat_turn.id,
-                    "planning_tool_names": kwargs["planning_tool_names"],
-                    "planning_native_categories": kwargs["planning_native_categories"],
-                },
-            )
-        )
-        assert {
-            item["name"] for item in harness._gateway_catalog(planner_session)["tools"]
-        } == {"workspace.find", "workspace.search", "workspace.read", "plan.submit"}
-        monkeypatch.setattr(harness, "_active_gateway_turn", lambda _: harness_turn)
-        await harness._gateway_call_unwrapped(
-            planner_session,
-            "plan.submit",
-            _submission("workspace.read").model_dump(),
-        )
-
-    monkeypatch.setattr(harness, "analyze_structured", planner)
-    planned_turn = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
-
-    plan = ChatPlanService(store).for_turn(chat_turn.id)
-    assert plan is not None and plan.phase == "execution"
-    assert plan.tool_names == ["workspace.read"]
-    assert plan.native_categories == []
-    assert observed["planning_native_categories"] == []
-    assert "Core-validated task plan" in planned_turn.prompt
-    session = store.get(HarnessSession, session.id)
-    assert session.metadata["planning_enforced"] is True
-    assert _session_native_capabilities(session, profile) == HarnessNativeCapabilities()
-
-    ordinary_chat_turn = store.create(
-        ChatTurn(
-            engagement_id=project.id,
-            session_id=chat_turn.session_id,
-            backend=ChatBackend.HARNESS,
-            model="codex-test",
-            tools_enabled=True,
-            request_snapshot={"planning_enabled": False},
+    planned = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+    assert planned.id == harness_turn.id
+    assert harness.plans.for_turn(chat_turn.id).phase == "discovery"
+    assert session.metadata.get("planning_enforced") is not True
+    monkeypatch.setattr(harness, "_active_gateway_turn", lambda _: harness_turn)
+    offered = {
+        item["name"]
+        for item in harness._gateway_catalog(session, turn=harness_turn)["tools"]
+    }
+    assert {"plan.submit", "workspace.read"} <= offered
+    submitted = asyncio.run(
+        harness._gateway_call_unwrapped(
+            session, "plan.submit", _submission().model_dump()
         )
     )
-    ordinary_harness_turn = store.create(
-        HarnessTurn(
-            engagement_id=project.id,
-            harness_session_id=session.id,
-            origin=HarnessTurnOrigin.CHAT,
-            chat_session_id=chat_turn.session_id,
-            chat_turn_id=ordinary_chat_turn.id,
-            prompt="ordinary follow-up",
-        )
-    )
-    asyncio.run(harness._ensure_harness_plan(ordinary_harness_turn, session))
-    session = store.get(HarnessSession, session.id)
-    assert session.metadata["planning_enforced"] is False
-    assert _session_native_capabilities(session, profile).web_search is True
+    assert submitted["structuredContent"]["phase"] == "execution"
+    assert harness.plans.for_turn(chat_turn.id).phase == "execution"
 
 
-def test_legacy_harness_subagent_cannot_start_a_second_planning_gate(tmp_path):
+def test_harness_subagent_inherits_advisory_planning_without_a_gate(tmp_path):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
     profile = store.create(
@@ -878,8 +893,9 @@ def test_legacy_harness_subagent_cannot_start_a_second_planning_gate(tmp_path):
         planning_enabled=True,
     )
     saved_child = store.get(ChatSession, child.id)
-    assert saved_child.metadata["planning_enabled"] is False
+    assert saved_child.metadata["planning_enabled"] is True
     assert ChatPlanService(store).required(chat_turn, saved_child) is False
+    assert ChatPlanService(store).requested(chat_turn, saved_child) is True
 
 
 def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(tmp_path, monkeypatch):
@@ -985,6 +1001,7 @@ def test_unrestricted_claude_configuration_blocks_before_connection(tmp_path):
         mcp_server_ids=[],
         planning_enabled=True,
     )
+    _mark_historical_enforced_turn(store, harness_turn)
     session = store.get(HarnessSession, harness_turn.harness_session_id)
     session = store.update(
         HarnessSession,
@@ -1024,6 +1041,7 @@ def test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan(
         mcp_server_ids=[],
         planning_enabled=True,
     )
+    _mark_historical_enforced_turn(store, harness_turn)
     session = store.get(HarnessSession, harness_turn.harness_session_id)
     observed = {}
 
@@ -1091,6 +1109,7 @@ def test_harness_gateway_and_native_permission_replan_before_effect(
         mcp_server_ids=[],
         planning_enabled=True,
     )
+    chat_turn = _mark_historical_enforced_turn(store, harness_turn)
     session = store.get(HarnessSession, harness_turn.harness_session_id)
     plans = ChatPlanService(store)
     plan = plans.ensure(chat_turn, store.get(ChatSession, chat_turn.session_id))

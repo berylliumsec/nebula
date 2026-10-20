@@ -10788,19 +10788,11 @@ class HarnessRuntimeService:
         saved_chat = (
             self.store.get(ChatSession, chat_session_id) if chat_session_id else None
         )
-        planning_enabled = (
-            False
-            if saved_chat and isinstance(saved_chat.metadata.get("subagent_id"), str)
-            else bool(
-                planning_enabled
-                if planning_enabled is not None
-                else saved_chat and saved_chat.metadata.get("planning_enabled", False)
-            )
+        planning_enabled = bool(
+            planning_enabled
+            if planning_enabled is not None
+            else saved_chat and saved_chat.metadata.get("planning_enabled", False)
         )
-        if planning_enabled and harness_mode in {"plan", "planning"}:
-            raise HarnessConfigurationError(
-                "Plan before acting cannot be combined with harness Plan only mode"
-            )
         messaging_choice = resolve_agent_messaging_choice(
             self.store,
             engagement_id,
@@ -10981,11 +10973,8 @@ class HarnessRuntimeService:
                 )
                 or session.harness_profile_id != profile_id
                 or session.model != selected_model
-                or (
-                    profile.kind == HarnessKind.GROK_ACP
-                    and (session.metadata.get("core_plan_isolated") is True)
-                    != planning_enabled
-                )
+                or session.metadata.get("core_plan_isolated") is True
+                or session.metadata.get("planning_enforced") is True
                 or set(session.mcp_server_ids) != set(selected_mcp)
                 or effort != frozen_options.get("reasoning_effort")
                 or tier != frozen_options.get("service_tier")
@@ -11013,9 +11002,7 @@ class HarnessRuntimeService:
                     cyber_access_program=cyber_program,
                     tools_enabled=True,
                     control_assistant=control_assistant,
-                    core_plan_isolated=(
-                        profile.kind == HarnessKind.GROK_ACP and planning_enabled
-                    ),
+                    core_plan_isolated=False,
                 )
                 chat = self._rebind_chat_session(
                     chat,
@@ -11055,10 +11042,6 @@ class HarnessRuntimeService:
                 session = self._compatible_session(
                     harness_session_id, engagement_id, profile_id, model
                 )
-                if profile.kind == HarnessKind.GROK_ACP and planning_enabled:
-                    raise HarnessConfigurationError(
-                        "Start a new Grok session for Plan before acting; an existing vendor session cannot be contained retroactively"
-                    )
                 if bool(session.metadata.get("control_assistant")) != control_assistant:
                     raise HarnessStateError(
                         "A settings assistant cannot attach an ordinary harness session."
@@ -11122,9 +11105,7 @@ class HarnessRuntimeService:
                     ),
                     tools_enabled=True,
                     control_assistant=control_assistant,
-                    core_plan_isolated=(
-                        profile.kind == HarnessKind.GROK_ACP and planning_enabled
-                    ),
+                    core_plan_isolated=False,
                 )
             chat = self.store.create(
                 ChatSession(
@@ -11461,6 +11442,7 @@ class HarnessRuntimeService:
                 "provider_subagent": subagent_setting,
                 "allow_agent_messaging": allow_agent_messaging,
                 "planning_enabled": planning_enabled,
+                "plan_behavior": "advisory",
             },
         )
         harness_turn = HarnessTurn(
@@ -11473,6 +11455,15 @@ class HarnessRuntimeService:
             prompt=clean_prompt
             + handoff_context
             + (runtime_context or "")
+            + (
+                "\n\nPlanning is requested for this turn. Make a concise plan before "
+                "substantial task work when useful, and share it through the "
+                "Core plan.submit tool. You may use your normal tools at any "
+                "time. Pass relevant steps to subagents when delegating. A "
+                "missing plan never blocks the task."
+                if planning_enabled
+                else ""
+            )
             + assistant_scope,
             metadata={
                 "user_prompt": clean_prompt,
@@ -12183,6 +12174,28 @@ class HarnessRuntimeService:
             return turn
         chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
         chat = self.store.get(ChatSession, turn.chat_session_id)
+        if chat_turn.request_snapshot.get(
+            "plan_behavior"
+        ) == "advisory" and self.plans.requested(chat_turn, chat):
+            advisory_plan = self.plans.ensure(chat_turn, chat)
+            if (
+                advisory_plan is not None
+                and advisory_plan.directive_id
+                and not chat_turn.request_snapshot.get("planning_enabled")
+                and "\n\nPlanning preference (advisory):" not in turn.prompt
+            ):
+                turn = self.store.update(
+                    HarnessTurn,
+                    turn.id,
+                    {
+                        "prompt": turn.prompt
+                        + "\n\nPlanning preference (advisory): Make a concise plan "
+                        "and share it through Core plan.submit when useful. "
+                        "Normal tool use remains available; pass relevant steps "
+                        "to subagents when delegating."
+                    },
+                    expected_revision=turn.revision,
+                )
         if not chat_turn.tools_enabled or not self.plans.required(chat_turn, chat):
             current_session = self.store.get(HarnessSession, session.id)
             if current_session.metadata.get("planning_enforced") is True:
@@ -14865,6 +14878,24 @@ class HarnessRuntimeService:
         if not current.metadata.get("analysis_only"):
             if turn is not None and turn.chat_turn_id and not settings_only:
                 chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+                if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
+                    tools.append(
+                        {
+                            "name": "plan.submit",
+                            "description": (
+                                "Share an optional task plan with Core so subagents "
+                                "receive its steps. Tools remain available even "
+                                "when no plan is shared."
+                            ),
+                            "inputSchema": PlanSubmission.model_json_schema(),
+                            "annotations": {
+                                "readOnlyHint": False,
+                                "destructiveHint": False,
+                                "idempotentHint": False,
+                                "openWorldHint": False,
+                            },
+                        }
+                    )
                 if (
                     chat_turn.goal_id
                     and chat_turn.session_id == turn.chat_session_id
@@ -15287,6 +15318,30 @@ class HarnessRuntimeService:
                 "structuredContent": value,
                 "isError": False,
             }
+        if name == "plan.submit" and turn.chat_turn_id is not None:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
+                chat = self.store.get(ChatSession, chat_turn.session_id)
+                plan = self.plans.ensure(chat_turn, chat, voluntary=True)
+                assert plan is not None
+                saved = self.plans.submit(
+                    plan,
+                    PlanSubmission.model_validate(arguments),
+                    available_tools=set(),
+                    native_categories=set(),
+                    workspace=self.workspace_resolver(chat_turn.engagement_id),
+                    strict=False,
+                )
+                value = {
+                    "plan_id": saved.id,
+                    "version": saved.plan_version,
+                    "phase": saved.phase,
+                }
+                return {
+                    "content": [{"type": "text", "text": json.dumps(value)}],
+                    "structuredContent": value,
+                    "isError": False,
+                }
         if turn.chat_turn_id is not None:
             chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
             chat = self.store.get(ChatSession, chat_turn.session_id)

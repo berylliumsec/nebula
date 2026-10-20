@@ -121,26 +121,29 @@ def test_product_search_explains_butler_conversation_grouping(monkeypatch):
 def test_product_search_finds_chat_planning_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
-        "Where is Plan before acting and how does Butler require a task plan?"
+        "Where is Ask for a plan first and can Butler request one?"
     )
-    assert any("Plan before acting" in str(item["text"]) for item in matches)
+    assert any(
+        item["heading"] == "Assistant harnesses"
+        and "ask for a plan" in str(item["text"]).lower()
+        and "/settings#harness-settings" in str(item["text"])
+        for item in matches
+    )
     assert any(
         "planning_enabled" in str(item["text"])
         or "Assistant settings" in str(item["text"])
         for item in matches
     )
     codex_matches = search_product_knowledge(
-        "Can unrestricted Codex submit a formal Core plan and give it to subagents?"
+        "Can providers, Codex and Grok share an advisory plan without blocking tools and give it to subagents?"
     )
     assert any(
-        "Codex App Server and Grok ACP profiles with Core MCP access"
-        in str(item["text"])
-        or "MCP-capable Codex and Grok can submit a formal Core plan"
-        in str(item["text"])
+        "Provider, Codex, and Grok agents" in str(item["text"])
+        and "normal tools remain available" in str(item["text"])
         for item in codex_matches
     )
     grok_matches = search_product_knowledge(
-        "Can Butler switch the main agent to Grok while keeping Plan before acting and a provider subagent?"
+        "Can Butler switch the main agent to Grok while keeping advisory planning and a provider subagent?"
     )
     assert any(
         "Butler can save a different main harness and provider subagent"

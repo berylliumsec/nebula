@@ -42,8 +42,8 @@ Settings assistant and the complete destination catalog.
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
-| Require a task plan | The chat's Assistant settings saves Plan before acting for future turns, or Butler records one exact one-task directive with the target revision and reason; the activity view shows the resulting plan and phase | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
-| Hand off a planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source, and Butler starts the draft under the selected Plan before acting setting | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
+| Ask for a task plan | The chat's Assistant settings asks any provider or harness agent to share a plan on future turns, or Butler records one exact one-task request with the target revision and reason. Normal tools remain available, and the activity view shows whether a plan was shared | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
+| Hand off a previously planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source; the new planning preference is advisory | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
 
 The setting catalog lists every Settings section, Butler's Voice control, and
 the Nebula-wide Butler instruction editor. Dedicated actions handle
@@ -104,21 +104,17 @@ by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
 `nebula.work.chat_settings` and `nebula.work.set_chat_settings` expose the saved
 `planning_enabled` switch with revision checks and read-back. The switch lives
-in each conversation's Assistant settings. The existing harness Plan only mode
-still ends after planning; it cannot run together with Plan before acting.
-Codex App Server and Grok ACP profiles with Core MCP access can submit a formal
-`plan.submit` receipt after bounded workspace discovery, even when the profile
-normally uses unrestricted host access. Each planned turn uses a private vendor
-workspace, denies vendor-native execution, and routes actions through
-Core's guarded gateway. Planned Grok turns also isolate account configuration,
-skills, and compatibility integrations. Ordinary later turns retain their saved
-profile mode. The main agent's validated steps, selected tools, files, and unresolved dependencies
-are included in a delegated subagent's task context.
+in each conversation's Assistant settings. Provider, Codex, and Grok agents
+receive an advisory planning request and can share structured steps with
+`plan.submit` while their normal tools remain available. A missing plan never
+blocks the turn. When a plan is shared, Core includes it in a delegated
+subagent's task context; a harness-reported native plan is a fallback. Child
+agents inherit the planning preference and may share their own plan.
 Butler can save a different main harness and provider subagent on the same chat.
 The saved choice becomes the bound runtime when a new message starts; Butler
 checks the resulting turn before reporting a goal resumed. Immediate messages
 carry the same saved MCP servers and Plan choice as queued next messages.
-`nebula.work.require_plan` records a one-task requirement against an exact
+`nebula.work.require_plan` records a one-task request against an exact
 agent, goal, child, or turn, using a fresh target revision and concrete reason.
 An active harness turn reports that the directive takes effect next turn. The
 saved plan and Butler reason remain visible in the chat activity after refresh.
@@ -230,8 +226,8 @@ The check's linked recovery goals
 show their current Core status and report in that same section. For recovery
 work Butler records the main agent's plan, then creates a linked Codex goal
 using an advertised `gpt-6-sol` route with `max` effort and Daybreak Blue.
-The main agent passes its saved plan to subagents; subagents do not run a
-separate Plan before acting gate. Butler can query Codex or Grok's reported
+The main agent passes its shared plan to subagents; subagents can also share
+their own plan without a tool gate. Butler can query Codex or Grok's reported
 included quota and credit balance through the profile-scoped `nebula.work.harness_quota`
 and `nebula.global.harness_quota` read tools. The Usage view shows both balances
 even when the included window is exhausted. Codex credits and Grok prepaid credits

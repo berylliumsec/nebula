@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Boxes, Settings2 } from "lucide-react";
 import { expect, it, vi } from "vitest";
-import { settingCatalogEntry } from "../settingsCatalog";
+import { settingCatalogEntry, settingCatalogText } from "../settingsCatalog";
 import { AssistantSetupLinks } from "./AssistantSetupLinks";
 
 it("presents assistant infrastructure as compact focused-setting links", async () => {
@@ -19,4 +19,15 @@ it("presents assistant infrastructure as compact focused-setting links", async (
   expect(within(setup).getByRole("button", { name: "Model providers, 2 enabled" })).toBeVisible();
   await userEvent.click(within(setup).getByRole("button", { name: "MCP tools, None configured" }));
   expect(onOpen).toHaveBeenCalledWith(mcp);
+});
+
+it("makes advisory planning discoverable from the harness setting", () => {
+  const harnesses = settingCatalogEntry("settings.harnesses");
+  const searchable = settingCatalogText(harnesses).toLowerCase();
+  expect(harnesses.target).toBe("harness-settings");
+  expect(searchable).toContain("ask for a plan");
+  expect(searchable).toContain("provider");
+  expect(searchable).toContain("codex");
+  expect(searchable).toContain("grok");
+  expect(harnesses.description).toContain("normal tools available");
 });
