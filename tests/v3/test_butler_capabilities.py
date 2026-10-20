@@ -6,12 +6,26 @@ import pytest
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES, ButlerCapabilities
+from nebula.v3.butler_capabilities import (
+    BUTLER_TOOL_NAMES,
+    ButlerCapabilities,
+    _BACKGROUND_CHANGES,
+)
 from nebula.v3.butler_authority import policy_id
 from nebula.v3.butler_instructions import read_butler_instructions
 from nebula.v3.butler_global_capabilities import ButlerGlobalActions
 from nebula.v3.butler_oversight import ButlerEventPayload, _append_project_event
+from nebula.v3.chat_assistant_config import ChatAssistantConfigPatch
+from nebula.v3.chat_goals import GoalCreate, GoalUpdate
+from nebula.v3.control_assistant_work import (
+    CHAT_SETTINGS_FIELDS,
+    GOAL_CREATE_FIELDS,
+    SET_ASSISTANT_DEFAULTS_SCHEMA,
+    UPDATE_GOAL_SCHEMA,
+    _ALL_WORK_TOOLS,
+)
 from nebula.v3.domain import (
+    AssistantDefaults,
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
     ChatSession,
@@ -71,6 +85,322 @@ def _capabilities(tmp_path):
         store, artifacts, selected.id, work=app.state.control_assistant_work
     )
     return store, selected, own_chat, foreign_chat, capabilities
+
+
+def _scheduled_capabilities(tmp_path):
+    store, project, chat, foreign_chat, ordinary = _capabilities(tmp_path)
+    project = store.update(
+        Engagement,
+        project.id,
+        {"status": EngagementStatus.ACTIVE},
+        expected_revision=project.revision,
+    )
+    policy = store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(project.id), engagement_id=project.id, authority="act"
+        )
+    )
+    folder = tmp_path / ".butler"
+    folder.mkdir()
+    (folder / "BUTLER.md").write_text("Inspect and repair Act project goals.")
+    digest = read_butler_instructions(tmp_path).sha256
+    with store.transaction(immediate=True) as transaction:
+        event = _append_project_event(
+            transaction,
+            engagement_id=project.id,
+            event_type="butler.global_periodic_check",
+            payload=ButlerEventPayload(
+                project_id=project.id,
+                source="core",
+                actor_role="core",
+                summary="Global work check",
+                metrics={"instructions_sha256": digest},
+                verification_state="core_observed",
+            ),
+            idempotency_key="scheduled-capability-case",
+            now=utc_now(),
+        )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id=event.id,
+            source_event_sequence=event.sequence,
+            authority_revision=policy.revision,
+            status="investigating",
+            summary="Global work check",
+        )
+    )
+    scheduled = ButlerCapabilities(
+        store,
+        ArtifactStore(tmp_path / "artifacts"),
+        project.id,
+        work=ordinary._work,
+        background_case_id=case.id,
+        instructions_root=tmp_path,
+        background_runtime_local=True,
+    )
+    return store, project, chat, foreign_chat, policy, case, scheduled
+
+
+def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_path):
+    store, project, chat, foreign_chat, policy, case, scheduled = (
+        _scheduled_capabilities(tmp_path)
+    )
+    goal = store.create(
+        ChatGoal(
+            engagement_id=project.id,
+            session_id=chat.id,
+            objective="Finish the research",
+            completion_criteria=["Evidence saved"],
+            status=ChatGoalStatus.PAUSED,
+            elapsed_seconds=14_401,
+            time_budget_seconds=14_400,
+            current_step=3,
+            step_budget=3,
+        )
+    )
+
+    async def scenario():
+        for _ in range(42):
+            result = await scheduled.invoke(
+                {"operation": "nebula.global.projects", "arguments": {}},
+                change=False,
+            )
+            assert result["projects"][0]["id"] == project.id
+        updated = await scheduled.invoke(
+            {
+                "operation": "nebula.work.update_goal",
+                "arguments": {
+                    "session_id": chat.id,
+                    "expected_revision": goal.revision,
+                    "time_budget_seconds": 18_000,
+                    "step_budget": 10,
+                },
+            },
+            change=True,
+        )
+        assert updated["goal"]["time_budget_seconds"] == 18_000
+        assert updated["goal"]["step_budget"] == 10
+        with pytest.raises(ValueError, match="Core-owned goal"):
+            await scheduled.invoke(
+                {
+                    "operation": "nebula.work.update_goal",
+                    "arguments": {
+                        "session_id": foreign_chat.id,
+                        "expected_revision": goal.revision,
+                        "step_budget": 11,
+                    },
+                },
+                change=True,
+            )
+        resumed = await scheduled.invoke(
+            {
+                "operation": "nebula.global.goal_action",
+                "arguments": {
+                    "project_id": project.id,
+                    "session_id": chat.id,
+                    "expected_authority_revision": policy.revision,
+                    "expected_revision": updated["goal"]["revision"],
+                    "action": "resume",
+                },
+            },
+            change=True,
+        )
+        assert resumed["goal"]["status"] == "running"
+        paused = await scheduled.invoke(
+            {
+                "operation": "nebula.work.goal_action",
+                "arguments": {
+                    "session_id": chat.id,
+                    "expected_revision": resumed["goal"]["revision"],
+                    "action": "pause",
+                    "reason": "Synthetic pause",
+                },
+            },
+            change=True,
+        )
+        assert paused["goal"]["status"] == "paused"
+
+    asyncio.run(scenario())
+    assert len(store.get(ButlerRecoveryCase, case.id).steps) == 45
+
+
+def test_scheduled_butler_can_edit_all_assistant_settings(tmp_path):
+    assert {
+        name for name, _, _, read_only in _ALL_WORK_TOOLS if not read_only
+    } <= _BACKGROUND_CHANGES
+    assert set(CHAT_SETTINGS_FIELDS) == set(ChatAssistantConfigPatch.model_fields)
+    assert set(GOAL_CREATE_FIELDS) == set(GoalCreate.model_fields)
+    assert set(UPDATE_GOAL_SCHEMA["properties"]) == {
+        "session_id",
+        *GoalUpdate.model_fields,
+    }
+    assert set(
+        SET_ASSISTANT_DEFAULTS_SCHEMA["properties"]["settings"]["properties"]
+    ) == set(AssistantDefaults.model_fields)
+    store, project, chat, _, policy, _, scheduled = _scheduled_capabilities(tmp_path)
+
+    async def scenario():
+        defaults = await scheduled.invoke(
+            {
+                "operation": "nebula.global.assistant_defaults",
+                "arguments": {"project_id": project.id},
+            },
+            change=False,
+        )
+        changed_defaults = await scheduled.invoke(
+            {
+                "operation": "nebula.global.set_assistant_defaults",
+                "arguments": {
+                    "project_id": project.id,
+                    "expected_authority_revision": policy.revision,
+                    "expected_revision": defaults["revision"],
+                    "settings": {"allow_agent_messaging": False},
+                },
+            },
+            change=True,
+        )
+        assert changed_defaults["settings"]["allow_agent_messaging"] is False
+        current = await scheduled.invoke(
+            {
+                "operation": "nebula.global.chat_settings",
+                "arguments": {"project_id": project.id, "session_id": chat.id},
+            },
+            change=False,
+        )
+        changed = await scheduled.invoke(
+            {
+                "operation": "nebula.global.set_chat_settings",
+                "arguments": {
+                    "project_id": project.id,
+                    "expected_authority_revision": policy.revision,
+                    "session_id": chat.id,
+                    "expected_revision": current["revision"],
+                    "settings": {
+                        "include_knowledge": False,
+                        "planning_enabled": True,
+                    },
+                },
+            },
+            change=True,
+        )
+        assert changed["settings"]["include_knowledge"] is False
+        assert changed["settings"]["planning_enabled"] is True
+        with pytest.raises(ValueError, match="changed"):
+            await scheduled.invoke(
+                {
+                    "operation": "nebula.global.set_chat_settings",
+                    "arguments": {
+                        "project_id": project.id,
+                        "expected_authority_revision": policy.revision,
+                        "session_id": chat.id,
+                        "expected_revision": current["revision"],
+                        "settings": {"planning_enabled": False},
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+    assert (
+        store.get(Engagement, project.id).assistant_defaults.allow_agent_messaging
+        is False
+    )
+
+
+def test_scheduled_butler_can_reach_every_project_assistant_work_action(tmp_path):
+    store, project, chat, foreign_chat, policy, _, scheduled = _scheduled_capabilities(
+        tmp_path
+    )
+
+    async def scenario():
+        catalog = await scheduled.invoke(
+            {
+                "operation": "nebula.global.work_catalog",
+                "arguments": {"project_id": project.id},
+            },
+            change=False,
+        )
+        assert set(catalog["actions"]) == {
+            name for name, *_ in _ALL_WORK_TOOLS if name != "nebula.work.catalog"
+        }
+        details = await scheduled.invoke(
+            {
+                "operation": "nebula.global.work_catalog",
+                "arguments": {
+                    "project_id": project.id,
+                    "operation": "nebula.work.update_chat",
+                },
+            },
+            change=False,
+        )
+        assert details["parameters"]["required"] == [
+            "session_id",
+            "expected_revision",
+        ]
+        current = await scheduled.invoke(
+            {
+                "operation": "nebula.global.work_read",
+                "arguments": {
+                    "project_id": project.id,
+                    "operation": "nebula.work.chat",
+                    "arguments": {"session_id": chat.id},
+                },
+            },
+            change=False,
+        )
+        with pytest.raises(ValueError, match="Invalid Assistant work arguments"):
+            await scheduled.invoke(
+                {
+                    "operation": "nebula.global.work_change",
+                    "arguments": {
+                        "project_id": project.id,
+                        "expected_authority_revision": policy.revision,
+                        "operation": "nebula.work.update_chat",
+                        "arguments": {"session_id": chat.id, "title": "Edited"},
+                    },
+                },
+                change=True,
+            )
+        renamed = await scheduled.invoke(
+            {
+                "operation": "nebula.global.work_change",
+                "arguments": {
+                    "project_id": project.id,
+                    "expected_authority_revision": policy.revision,
+                    "operation": "nebula.work.update_chat",
+                    "arguments": {
+                        "session_id": chat.id,
+                        "expected_revision": current["revision"],
+                        "title": "Edited by scheduled Butler",
+                    },
+                },
+            },
+            change=True,
+        )
+        assert renamed["title"] == "Edited by scheduled Butler"
+        assert store.get(ChatSession, chat.id).title == renamed["title"]
+        with pytest.raises(ValueError, match="Act and privacy scope"):
+            await scheduled.invoke(
+                {
+                    "operation": "nebula.global.work_change",
+                    "arguments": {
+                        "project_id": foreign_chat.engagement_id,
+                        "expected_authority_revision": policy.revision,
+                        "operation": "nebula.work.update_chat",
+                        "arguments": {
+                            "session_id": foreign_chat.id,
+                            "expected_revision": foreign_chat.revision,
+                            "title": "Should not change",
+                        },
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
 
 
 def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path):

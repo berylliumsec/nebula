@@ -1,16 +1,44 @@
 {
-  "change_digest": "0c1bfbb8f78cfdbb199b6865d3240ba248400c32c59c0c15e2b7c7970fbd0358",
-  "reviewed_by": "Codex source-level architecture review",
-  "reason": "This PR adds a checked-in SVG architecture map and documentation links only. It changes no application behavior, API, data model, build, or operator workflow. SVG rendering, XML structure, and relative links are checked directly.",
-  "exclusions": "No Python, frontend, native, or Playwright test is relevant to a documentation-only diff. A disposable LAN Core journey does not apply. Full suites are excluded.",
+  "change_digest": "cae28f3789c314e51c6ed1276e8f13c43977604f522b47e249bd7fe8f38d19f2",
+  "reviewed_by": "Codex focused review of scheduled Butler goal budgets and Assistant authority",
+  "reason": "The Python selection exercises the previously failing 40-step read path and recovery-case storage bound, goal budget save and resume, Assistant field and full Work catalog parity, cross-project Work dispatch, Act and revision boundaries, lease handling, false resolution, and product-help Chroma sync. The frontend case checks Settings discovery and its Butler activity icon. The real-Core browser cases cover the scheduled check and saved Assistant defaults at the operator entry point on desktop Chromium, mobile Chromium, and mobile WebKit.",
+  "exclusions": "No native code changed, so native tests are omitted. The work does not change browser layout, device APIs, general providers, missions, storage, or unrelated research workflows. The browser and LAN fixtures use synthetic projects and credentials. Full suites are excluded.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 16,
+    "frontend": 7,
     "native": 0,
-    "playwright": 0
+    "playwright": 6
   },
-  "python": [],
-  "frontend": [],
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_butler_capabilities.py::test_scheduled_butler_renews_goal_budget_after_more_than_40_reads",
+    "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings",
+    "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_reach_every_project_assistant_work_action",
+    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
+    "tests/v3/test_butler_recovery.py::test_global_periodic_reads_do_not_resolve_when_all_goals_are_idle",
+    "tests/v3/test_butler_recovery.py::test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease",
+    "tests/v3/test_butler_recovery.py::test_active_parent_turn_hold_does_not_block_read_only_global_check",
+    "tests/v3/test_butler_recovery.py::test_lost_project_lease_cancels_investigation",
+    "tests/v3/test_control_assistant_work.py::test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets",
+    "tests/v3/test_control_assistant_work.py::test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_butler_goal_budget_and_assistant_authority",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+  ],
+  "frontend": [
+    "ui/src/components/CompactSettingsList.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "butler-global/assistant-real-desktop",
+    "butler-global/assistant-real-chromium-390",
+    "butler-global/assistant-real-webkit-390",
+    "assistant-defaults/assistant-real-desktop",
+    "assistant-defaults/assistant-real-chromium-390",
+    "assistant-defaults/assistant-real-webkit-390"
+  ]
 }

@@ -36,7 +36,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Project",
     target: "butler-oversight",
-    keywords: ["butler", "scheduled", "checks", "transcript", "history", "recovery goals", "oversight"],
+    keywords: ["butler", "scheduled", "checks", "transcript", "history", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings"],
   },
   {
     id: "settings.butler-voice",

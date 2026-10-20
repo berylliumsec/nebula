@@ -33,6 +33,7 @@ const categoryOrder = ["Setup", "Models", "Automation", "Environments", "Integra
 export const settingIcons: Record<string, LucideIcon> = {
   "settings.butler-instructions": BookOpen,
   "settings.butler-effort": Bot,
+  "settings.butler-activity": Activity,
   "settings.butler-voice": Activity,
   "settings.usage": Activity,
   "settings.setup": SquareTerminal,

@@ -58,6 +58,17 @@ describe("CompactSettingsList", () => {
     );
   });
 
+  it("finds scheduled Butler oversight for idle goal budgets", () => {
+    const openSetting = vi.fn();
+    render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "goal budget" } });
+    fireEvent.click(screen.getByRole("button", { name: /Butler scheduled activity/ }));
+    expect(openSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings.butler-activity", target: "butler-oversight" }),
+      expect.any(HTMLElement),
+    );
+  });
+
   it("offers the native connection sheet only inside the iPhone shell", () => {
     const userAgent = vi.spyOn(navigator, "userAgent", "get");
     userAgent.mockReturnValue("Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0");
