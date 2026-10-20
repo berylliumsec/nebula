@@ -6667,6 +6667,46 @@ test("assistant upgrade Butler shows live work and restores it after reload on p
     await expect(butler.getByText(answer, {exact: true})).toBeVisible({timeout: 45_000});
     await expect(restored).toHaveCount(0);
     await expect(butler.getByRole("textbox", {name: "Ask Butler a question"})).toBeEnabled();
+    const saved = await (await api.get(`chat/sessions/${encodeURIComponent(session.id)}/messages`)).json() as Array<{sequence: number}>;
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const coreBinary = [process.env.NEBULA_TEST_CORE_BIN, process.env.NEBULA_CORE_BINARY, path.join(repository, ".venv/bin/nebula-core"), commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined].find(candidate => candidate && existsSync(candidate));
+    expect(coreBinary, "A Python environment matching the real Core binary is required").toBeTruthy();
+    const seed = spawnSync(path.join(path.dirname(coreBinary!), "python"), ["-c", `
+import sys
+from nebula.v3.domain import ChatMessage
+from nebula.v3.storage import NebulaStore
+store = NebulaStore(sys.argv[1])
+start = int(sys.argv[4])
+messages = [ChatMessage(id=f"butler-scroll-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=start + index, role="user" if index % 2 else "assistant", content=f"Saved Butler message {index}. " + "A detailed project update. " * 5, provider_profile_id=sys.argv[5], model="security-model") for index in range(80)]
+with store.transaction() as transaction:
+    transaction.add_chat_messages(messages)
+`, path.join(core.dataDir, "nebula.db"), projectId, session.id, String(Math.max(...saved.map(item => item.sequence)) + 1), provider.id], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.resolve(import.meta.dirname, "../../src")}, timeout: 30_000,
+    });
+    expect(seed.status, seed.error?.message ?? seed.stderr).toBe(0);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    butler = page.getByRole("dialog", {name: "Butler"});
+    const transcript = butler.getByRole("log", {name: "Butler conversation"});
+    await expect(transcript.getByText(/Saved Butler message 79/)).toBeVisible();
+    const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+    const surface = mobile ? transcript.locator("..") : transcript;
+    await surface.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll", {bubbles: true})); });
+    const jump = butler.getByRole("button", {name: "Scroll to latest message"});
+    await expect(jump).toBeVisible();
+    const composer = butler.getByRole("textbox", {name: "Ask Butler a question"});
+    await composer.pressSequentially("A new Butler question");
+    await expect(composer).toHaveValue("A new Butler question");
+    await jump.focus();
+    await jump.press("Enter");
+    await expect.poll(async () => surface.evaluate((element, isMobile) => {
+      if (!isMobile) return element.scrollHeight - element.scrollTop - element.clientHeight;
+      const latest = element.querySelector('[role="log"] > :last-child');
+      return latest ? latest.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom : Infinity;
+    }, mobile)).toBeLessThanOrEqual(24);
+    await expect(jump).toHaveCount(0);
+    await expect(composer).toHaveValue("A new Butler question");
     await testInfo.attach("butler-live-feedback-lan", {
       body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}),
       contentType: "application/json",

@@ -57,6 +57,7 @@
     {"name": "butler-timeline", "patterns": ["src/nebula/v3/butler_timeline.py"], "areas": ["butler-timeline"]},
     {"name": "butler-context", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/state/WorkbenchDraftContext.tsx", "ui/src/components/selection/SelectionActionsProvider.tsx"], "areas": ["butler-context"]},
     {"name": "butler-response-table", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["butler-response-table"]},
+    {"name": "butler-composer-scroll", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/components/NebulaControlAssistant.typing.test.tsx"], "areas": ["butler-composer-scroll"]},
     {"name": "chat-image-attachments", "patterns": ["ui/src/components/AuthenticatedChatImage.tsx", "ui/src/components/ChatAttachments.tsx", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["chat-image-attachments"]},
     {"name": "butler-live-feedback", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/components/butlerTurnFeedback.ts"], "areas": ["butler-live-feedback"]},
     {"name": "butler-oversight", "patterns": ["src/nebula/v3/butler_oversight.py", "src/nebula/v3/butler_review.py", "src/nebula/v3/butler_authority.py", "src/nebula/v3/butler_recovery.py", "src/nebula/v3/butler_improvements.py", "ui/src/components/ButlerOversight.tsx", "ui/src/components/ButlerIssues.tsx", "ui/src/components/ButlerOversight.module.css"], "areas": ["butler-oversight"]},
@@ -213,6 +214,16 @@
     ],
     "butler-response-table": [
       {"area":"butler-response-table","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler saved table stays readable after reload on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-composer-scroll": [
+      {"area":"butler-composer-scroll","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"},
+      {"area":"butler-composer-scroll","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"},
+      {"area":"butler-composer-scroll","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"},
+      {"area":"butler-composer-scroll","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"},
+      {"area":"butler-composer-scroll","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"},
+      {"area":"butler-composer-scroll","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"},
+      {"area":"butler-composer-scroll","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"},
+      {"area":"butler-composer-scroll","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler long history keeps the composer and jump to latest usable","runtime":"mock","shard":"1/1"}
     ],
     "butler-live-feedback": [
       {"area":"butler-live-feedback","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant popup Butler live status follows saved work without losing the composer","runtime":"mock","shard":"1/1"},

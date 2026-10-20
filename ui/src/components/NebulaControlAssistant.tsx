@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode } from "react";
-import { GripHorizontal, Image, Minimize2, Send, Settings2, Square, X } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { ChevronDown, GripHorizontal, Image, Minimize2, Send, Settings2, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
@@ -38,6 +38,30 @@ function readActionOutcomes(key: string): Record<string, string> {
   }
 }
 
+const ButlerTranscript = memo(function ButlerTranscript({ messages, api, projectId, sessionId, transcriptRef, onScroll, onOpenSetting, onNavigate, onHide }: {
+  messages: ChatMessage[];
+  api: ReturnType<typeof useWorkspace>["api"];
+  projectId?: string;
+  sessionId?: string;
+  transcriptRef: RefObject<HTMLDivElement | null>;
+  onScroll: (element: HTMLDivElement) => void;
+  onOpenSetting: (entry: SettingCatalogEntry) => void;
+  onNavigate: (path: string) => void;
+  onHide: (hidden: boolean) => void;
+}) {
+  return <div ref={transcriptRef} className={styles.transcript} role="log" aria-label="Butler conversation" tabIndex={0} data-selection-source-kind="conversation" data-selection-source-id={sessionId} data-selection-source-label="Butler conversation" onScroll={(event) => onScroll(event.currentTarget)}>{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
+    const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
+    const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, projectId));
+    const workLink = projectId && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
+      && href.startsWith(`/projects/${encodeURIComponent(projectId)}/workbench?`) ? href : undefined;
+    return setting
+      ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); onHide(setting.target !== "butler-oversight"); }}>{children}</a>
+      : destination ? <a href={href} onClick={(event) => { event.preventDefault(); onHide(true); onNavigate(assistantDestinationPath(destination, projectId) ?? "/projects"); }}>{children}</a>
+      : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); onHide(true); }}>{children}</a>
+      : <a href={href} {...props}>{children}</a>;
+  } }}>{message.content}</ReactMarkdown>{api && message.contentBlocks?.filter((block) => block.type === "image").map((block, imageIndex) => <AuthenticatedChatImage key={`${block.artifactId ?? "image"}-${imageIndex}`} api={api} block={block} className={styles.transcriptImage} />)}</div>)}</div>;
+});
+
 export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, onCloseSetting, onSavedSetting }: {
   children?: ReactNode;
   onOpenSetting: (entry: SettingCatalogEntry) => void;
@@ -59,6 +83,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [uploadingImage, setUploadingImage] = useState(false);
   const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const [memoryRefreshRevision, setMemoryRefreshRevision] = useState(0);
   const [suggestions, setSuggestions] = useState<SettingCatalogEntry[]>([]);
   const [sessionId, setSessionId] = useState<string>();
@@ -102,6 +127,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const body = useRef<HTMLDivElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const lastScroll = useRef({ visible: false, messages: [] as ChatMessage[], attentionCount: 0, loadingHistory: false });
+  const followsLatest = useRef(true);
   const catalogRef = useRef<HTMLDetailsElement>(null);
   const voiceSettingsRequest = useRef(0);
   const settingsProjectId = useRef(engagement?.id);
@@ -117,6 +143,22 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const activePendingTurn = pendingTurn?.id === settledTurnId.current ? undefined : pendingTurn;
   const activeBusy = busy || Boolean(activePendingTurn) || awaitingTurnResolution;
   const pendingReady = !sessionId || !api?.getPendingChatTurn || (pendingCheckedSessionId === sessionId && !pendingStatusError);
+
+  const scrollSurface = useCallback(() => window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches
+    ? body.current : transcript.current, []);
+  const distanceFromLatest = useCallback((element: HTMLDivElement) => {
+    if (element === body.current) {
+      const lastMessage = transcript.current?.lastElementChild;
+      return lastMessage ? lastMessage.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom : 0;
+    }
+    return element.scrollHeight - element.scrollTop - element.clientHeight;
+  }, []);
+  const handleConversationScroll = useCallback((element: HTMLDivElement) => {
+    if (element !== scrollSurface()) return;
+    const awayFromLatest = distanceFromLatest(element) > 24;
+    followsLatest.current = !awayFromLatest;
+    setHasNewerMessages(awayFromLatest);
+  }, [distanceFromLatest, scrollSurface]);
 
   useEffect(() => {
     if (!activeBusy) return;
@@ -168,6 +210,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSettingsError("");
     setSettingsStatus("");
     setMessages([]);
+    setHasNewerMessages(false);
+    followsLatest.current = true;
+    lastScroll.current = { visible: false, messages: [], attentionCount: 0, loadingHistory: false };
     setPendingImages([]);
     setUploadingImage(false);
     setImageHelp(false);
@@ -294,16 +339,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (visible) {
       const mobile = window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches;
       if (mobile && body.current) {
-        if (attentionCount > 0 && (!previous.visible || attentionCount > previous.attentionCount)) body.current.scrollTop = 0;
-        else if (!loadingHistory && (previous.messages !== messages || !previous.visible || previous.loadingHistory)) {
+        if (attentionCount > 0 && (!previous.visible || attentionCount > previous.attentionCount)) {
+          body.current.scrollTop = 0;
+          followsLatest.current = false;
+        } else if (!loadingHistory && followsLatest.current && (previous.messages !== messages || !previous.visible || previous.loadingHistory)) {
           const lastMessage = transcript.current?.lastElementChild;
           if (lastMessage && typeof lastMessage.scrollIntoView === "function") lastMessage.scrollIntoView({ block: "end" });
           else body.current.scrollTop = body.current.scrollHeight;
         }
-      } else if (transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
+      } else if (transcript.current && followsLatest.current) transcript.current.scrollTop = transcript.current.scrollHeight;
+      const surface = scrollSurface();
+      if (surface) setHasNewerMessages(messages.length > 0 && distanceFromLatest(surface) > 24);
     }
     lastScroll.current = { visible, messages, attentionCount, loadingHistory };
-  }, [messages, open, hidden, attentionCount, loadingHistory]);
+  }, [messages, open, hidden, attentionCount, loadingHistory, distanceFromLatest, scrollSurface]);
 
   useEffect(() => {
     if (!open || hidden) return;
@@ -1165,7 +1214,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen} aria-controls="butler-settings" title="Butler settings" disabled={!api || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
       <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setSettingsOpen(false); setPendingCheckedSessionId(undefined); }}><X size={18} /></button>
     </div>
-    <div ref={body} className={styles.body}>
+    <div ref={body} className={styles.body} onScroll={(event) => handleConversationScroll(event.currentTarget)}>
       {settingsOpen && <section id="butler-settings" className={styles.ownSettings} aria-label="Butler settings">
         <div className={styles.settingsHeading}><strong>Butler settings</strong><span>{selectedSettingsRuntime?.model ?? ""}</span></div>
         <form onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
@@ -1193,17 +1242,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact openRevision={oversightOpenRevision} onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
         <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />
       </div>}
-      <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation" data-selection-source-kind="conversation" data-selection-source-id={sessionId} data-selection-source-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
-        const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
-        const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, engagement?.id));
-        const workLink = engagement && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
-          && href.startsWith(`/projects/${encodeURIComponent(engagement.id)}/workbench?`) ? href : undefined;
-        return setting
-          ? <a href={href} onClick={(event) => { event.preventDefault(); openSelectedSetting(setting); }}>{children}</a>
-          : destination ? <a href={href} onClick={(event) => { event.preventDefault(); openDestination(destination); }}>{children}</a>
-          : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); setHidden(true); }}>{children}</a>
-          : <a href={href} {...props}>{children}</a>;
-      } }}>{message.content}</ReactMarkdown>{api && message.contentBlocks?.filter((block) => block.type === "image").map((block, imageIndex) => <AuthenticatedChatImage key={`${block.artifactId ?? "image"}-${imageIndex}`} api={api} block={block} className={styles.transcriptImage} />)}</div>)}</div>
+      <ButlerTranscript messages={messages} api={api} projectId={engagement?.id} sessionId={sessionId} transcriptRef={transcript} onScroll={handleConversationScroll} onOpenSetting={onOpenSetting} onNavigate={onNavigate} onHide={setHidden} />
       {engagement && runtime && !loadingHistory && <details className={styles.catalog} open={messages.length === 0}>
         <summary>Work I can help with</summary>
         <div className={styles.quickActions} role="group" aria-label="Assistant work requests">
@@ -1225,6 +1264,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
       {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
     </div>
+    {messages.length > 0 && hasNewerMessages && <div className={styles.scrollJumpRail}><button className="chat-scroll-jump" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => {
+      followsLatest.current = true;
+      const surface = scrollSurface();
+      if (surface === body.current) {
+        const lastMessage = transcript.current?.lastElementChild;
+        if (lastMessage && typeof lastMessage.scrollIntoView === "function") lastMessage.scrollIntoView({ block: "end" });
+        else if (surface) surface.scrollTop = surface.scrollHeight;
+      } else if (surface) surface.scrollTop = surface.scrollHeight;
+      setHasNewerMessages(false);
+    }}><ChevronDown size={16} aria-hidden="true" /></button></div>}
     {butlerDrafts.length > 0 && <section className={styles.contextPack} aria-label="Butler context pack">
       <div className={styles.contextHeading}><span>{butlerDrafts.length} selected context {butlerDrafts.length === 1 ? "item" : "items"} for Butler</span><button type="button" className="icon-button subtle" aria-label="Clear Butler context" title="Clear Butler context" disabled={busy} onClick={() => context?.clearButlerDrafts()}><X size={16} /></button></div>
       <div className={styles.contextItems}>{butlerDrafts.map((item, index) => <div className={styles.contextItem} key={`${item.source.kind}:${item.source.id ?? ""}:${index}`}><details><summary>{item.source.label}{item.truncated ? " · shortened" : ""}</summary><p>{item.text}</p></details><button type="button" className="icon-button subtle" aria-label={`Remove ${item.source.label} from Butler context`} title={`Remove ${item.source.label}`} disabled={busy} onClick={() => context?.removeButlerDraft(index)}><X size={16} /></button></div>)}</div>
