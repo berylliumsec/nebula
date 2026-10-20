@@ -3979,7 +3979,7 @@ class ChatGoal(Entity):
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     elapsed_seconds: float = Field(default=0, ge=0)
     children_started: int = Field(default=0, ge=0)
-    linked_turn_ids: list[str] = Field(default_factory=list, max_length=10_000)
+    linked_turn_ids: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     active_since: datetime | None = None
     paused_at: datetime | None = None
@@ -4065,6 +4065,14 @@ class ButlerProjectState(Entity):
     lease_expires_at: datetime | None = None
 
 
+class ButlerGlobalState(Entity):
+    """One durable clock for the Nebula-wide Butler mandate."""
+
+    entity_kind: ClassVar[str] = "butler_global_states"
+    last_periodic_at: datetime | None = None
+    last_project_id: str | None = Field(default=None, max_length=200)
+
+
 class ButlerIncident(Entity):
     """One project-scoped concern keyed by the underlying problem."""
 
@@ -4139,9 +4147,9 @@ class ButlerAuthorityPolicy(Entity):
     entity_kind: ClassVar[str] = "butler_authority_policies"
     engagement_id: str = Field(min_length=1, max_length=200)
     authority: Literal["watch", "steer", "delegate", "act"] = "watch"
-    delegate_actions: list[Literal["pause_urgent_machine_blocker"]] = Field(
-        default_factory=list, max_length=1
-    )
+    delegate_actions: list[
+        Literal["pause_urgent_machine_blocker", "force_one_task_plan"]
+    ] = Field(default_factory=list, max_length=2)
 
     @model_validator(mode="after")
     def grants_require_delegate(self) -> "ButlerAuthorityPolicy":
@@ -4166,9 +4174,16 @@ class ButlerAction(Entity):
         "request_parent_status",
         "request_parent_plan_reassessment",
         "pause_urgent_machine_blocker",
+        "force_one_task_plan",
     ]
     status: Literal[
-        "planned", "dispatching", "dispatched", "applied", "uncertain", "cancelled"
+        "planned",
+        "dispatching",
+        "dispatched",
+        "applied",
+        "held",
+        "uncertain",
+        "cancelled",
     ] = "planned"
     idempotency_key: str = Field(min_length=1, max_length=200)
     report_id: str | None = Field(default=None, max_length=200)
@@ -4177,6 +4192,59 @@ class ButlerAction(Entity):
     outcome: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class ButlerIssueDestination(Entity):
+    """An operator-granted issue target for one Nebula project."""
+
+    entity_kind: ClassVar[str] = "butler_issue_destinations"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=120)
+    repository: str = Field(min_length=3, max_length=300)
+    publisher: Literal["github", "mcp"]
+    credential_ref: str | None = Field(default=None, max_length=200)
+    mcp_profile_id: str | None = Field(default=None, max_length=200)
+    review_profile_id: str = Field(min_length=1, max_length=200)
+    auto_publish: bool = False
+    enabled: bool = True
+    observe_from: datetime = Field(default_factory=utc_now)
+
+
+class ButlerIssueScan(Entity):
+    """A durable receipt that prevents a finalized source being reviewed twice."""
+
+    entity_kind: ClassVar[str] = "butler_issue_scans"
+    engagement_id: str
+    destination_id: str
+    source_kind: Literal["chat_turn", "incident"]
+    source_id: str
+    status: Literal["reviewing", "reviewed", "held"] = "reviewing"
+    reason: str = ""
+    review_turn_id: str | None = None
+
+
+class ButlerIssueCandidate(Entity):
+    """Locally retained draft and publication receipt; source text stays in Core."""
+
+    entity_kind: ClassVar[str] = "butler_issue_candidates"
+    engagement_id: str
+    destination_id: str
+    source_kind: Literal["chat_turn", "incident"]
+    source_id: str
+    dedup_key: str = Field(min_length=1, max_length=100)
+    problem_key: str = Field(min_length=3, max_length=160)
+    title: str = Field(min_length=8, max_length=200)
+    body: str = Field(min_length=30, max_length=10000)
+    reproduction: str = Field(min_length=20, max_length=3000)
+    confidence: Literal["hypothesis", "observed", "verified"]
+    public_independent: bool = False
+    status: Literal["reviewed", "publishing", "held", "uncertain", "published"] = (
+        "reviewed"
+    )
+    reason: str = ""
+    issue_id: str | None = None
+    issue_url: str | None = None
+    review_turn_id: str | None = None
 
 
 class ButlerRecoveryCase(Entity):
@@ -4204,12 +4272,17 @@ class ButlerRecoveryCase(Entity):
     ] = "observed"
     summary: str = Field(min_length=1, max_length=500)
     outcome: str = Field(default="", max_length=1000)
-    steps: list[dict[str, Any]] = Field(default_factory=list, max_length=24)
+    steps: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
     model_backend: ChatBackend | None = None
     model_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
     model_turn_id: str | None = Field(default=None, max_length=200)
+    model_turn_ids: list[str] = Field(default_factory=list, max_length=3)
+    capacity_retry_count: int = Field(default=0, ge=0, le=1)
+    recovery_goal_ids: list[str] = Field(default_factory=list, max_length=20)
     queued_item_id: str | None = Field(default=None, max_length=200)
+    delivered_turn_id: str | None = Field(default=None, max_length=200)
+    delivery_hold_reason: str | None = Field(default=None, max_length=200)
     target_session_id: str | None = Field(default=None, max_length=200)
     next_check_at: datetime | None = None
     started_at: datetime | None = None
@@ -4378,6 +4451,47 @@ class ChatTurn(Entity):
         ):
             raise ValueError("turn execution ownership must be recorded atomically")
         return self
+
+
+class ChatTaskPlan(Entity):
+    """Core's durable pre-execution contract for one chat or child round."""
+
+    entity_kind: ClassVar[str] = "chat_task_plans"
+    engagement_id: str
+    session_id: str
+    turn_id: str
+    harness_turn_id: str | None = None
+    goal_id: str | None = None
+    subagent_id: str | None = None
+    schema_version: Literal[1] = 1
+    plan_version: int = Field(default=1, ge=1)
+    phase: Literal[
+        "discovery", "execution", "replanning", "blocked", "answered_without_tools"
+    ] = "discovery"
+    steps: list[dict[str, str]] = Field(default_factory=list, max_length=30)
+    tool_names: list[str] = Field(default_factory=list, max_length=128)
+    native_categories: list[str] = Field(default_factory=list, max_length=32)
+    files: list[str] = Field(default_factory=list, max_length=200)
+    discovered_files: list[str] = Field(default_factory=list, max_length=500)
+    discovery_calls: int = Field(default=0, ge=0, le=20)
+    no_file_work: bool = False
+    unresolved_dependencies: list[str] = Field(default_factory=list, max_length=30)
+    reason: str | None = Field(default=None, max_length=2000)
+    directive_id: str | None = Field(default=None, max_length=200)
+
+
+class ChatPlanDirective(Entity):
+    """Butler's one-task requirement, consumed at an enforceable boundary."""
+
+    entity_kind: ClassVar[str] = "chat_plan_directives"
+    engagement_id: str
+    session_id: str
+    target_kind: Literal["agent", "goal", "child", "turn"]
+    target_id: str
+    status: Literal["pending", "applied", "completed"] = "pending"
+    reason: str = Field(min_length=1, max_length=2000)
+    turn_id: str | None = None
+    deferred_after_turn_id: str | None = None
 
 
 class ChatSnapshotPart(Entity):
@@ -5492,10 +5606,14 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatGoal,
     ButlerGoalWatch,
     ButlerProjectState,
+    ButlerGlobalState,
     ButlerIncident,
     ButlerDecision,
     ButlerAuthorityPolicy,
     ButlerAction,
+    ButlerIssueDestination,
+    ButlerIssueScan,
+    ButlerIssueCandidate,
     ButlerRecoveryCase,
     ButlerAgentReport,
     ButlerAccountCredit,
@@ -5507,6 +5625,8 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatDecision,
     ChatReadCursor,
     ChatTurn,
+    ChatTaskPlan,
+    ChatPlanDirective,
     ChatSnapshotPart,
     ChatSubagent,
     ChatSubagentMessage,

@@ -13,7 +13,7 @@ import ipaddress
 import re
 from contextlib import suppress
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -36,6 +36,8 @@ from .domain import (
     ChatBackend,
     ChatGoal,
     ChatGoalStatus,
+    ChatMessage,
+    ChatRole,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -883,9 +885,11 @@ class ButlerOversightService:
         self.memory_service = memory_service
         self.authority_service: ButlerAuthorityService | None = None
         self.recovery_service: ButlerRecoveryService | None = None
+        self.improvement_service: Any | None = None
         self.worker_id = f"butler-worker-{uuid4()}"
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._issue_tasks: dict[str, asyncio.Task[None]] = {}
         self._signals: dict[str, asyncio.Event] = {}
         self.store.on_project_oversight_change(self.notify)
 
@@ -917,13 +921,14 @@ class ButlerOversightService:
 
     async def shutdown(self) -> None:
         self._loop = None
-        tasks = list(self._tasks.values())
+        tasks = list(self._tasks.values()) + list(self._issue_tasks.values())
         for task in tasks:
             task.cancel()
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
         self._tasks.clear()
+        self._issue_tasks.clear()
         self._signals.clear()
 
     def reconcile_watches(self) -> None:
@@ -1269,6 +1274,34 @@ class ButlerOversightService:
             return 30.0
         return max(0.25, min(30.0, (min(due_times) - now).total_seconds()))
 
+    async def _run_improvements(self, engagement_id: str) -> None:
+        if self.improvement_service is None:
+            return
+        try:
+            await self.improvement_service.process_project(engagement_id)
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.issue_review_failed",
+                "Butler issue review is held until the next project check.",
+                exc,
+                stage="issue-review",
+            )
+
+    def _schedule_improvements(self, engagement_id: str) -> None:
+        if self.improvement_service is None:
+            return
+        task = self._issue_tasks.get(engagement_id)
+        if task is not None and not task.done():
+            return
+        self._issue_tasks[engagement_id] = create_diagnostic_task(
+            self._run_improvements(engagement_id),
+            feature="butler",
+            event_code="butler.issue_worker_failed",
+            failure_message="Project issue review stopped unexpectedly.",
+            name=f"nebula-butler-issues-{engagement_id[:32]}",
+        )
+
     async def _run_project(self, engagement_id: str) -> None:
         signal = self._signals[engagement_id]
         while True:
@@ -1322,6 +1355,7 @@ class ButlerOversightService:
                                 exc,
                                 stage="memory_capture",
                             )
+                    self._schedule_improvements(engagement_id)
                 wait_seconds = await asyncio.to_thread(
                     self._next_wait_seconds, engagement_id
                 )
@@ -1586,6 +1620,11 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "project_id": engagement_id,
             "authority": authority["authority"],
             "authority_revision": authority["revision"],
+            "global_instructions": (
+                service.recovery_service.global_status()
+                if service.recovery_service is not None
+                else {"status": "unavailable", "path": None}
+            ),
             "delegate_actions": authority["delegate_actions"],
             "effective_actions": authority["effective_actions"],
             "watched_goals": watched_goals,
@@ -1593,7 +1632,52 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "resources": resources,
             "decisions": [item.model_dump(mode="json") for item in decisions],
             "actions": [item.model_dump(mode="json") for item in actions],
-            "recovery_cases": [item.model_dump(mode="json") for item in recovery_cases],
+            "recovery_cases": [
+                {
+                    **item.model_dump(mode="json"),
+                    "recovery_goals": [
+                        {
+                            "id": recovery_goal.id,
+                            "project_id": recovery_goal.engagement_id,
+                            "session_id": recovery_goal.session_id,
+                            "source_goal_id": recovery_goal.metadata.get(
+                                "butler_recovery_source_goal_id"
+                            ),
+                            "objective": recovery_goal.objective,
+                            "status": recovery_goal.status.value,
+                            "current_step": recovery_goal.current_step,
+                            "updated_at": recovery_goal.updated_at.isoformat(),
+                            "report": (
+                                recovery_goal.completion_summary
+                                or recovery_goal.blocked_reason
+                                or next(
+                                    (
+                                        message.content
+                                        for message in service.store.list_session_entities(
+                                            ChatMessage,
+                                            recovery_goal.session_id,
+                                            newest_first=True,
+                                            limit=10,
+                                        )
+                                        if message.role == ChatRole.ASSISTANT
+                                        and not message.metadata.get("retracted_at")
+                                        and message.content.strip()
+                                    ),
+                                    "",
+                                )
+                            )[:1000],
+                        }
+                        for goal_id in item.recovery_goal_ids
+                        if (
+                            recovery_goal := service.store.find_entity(
+                                ChatGoal, "id", goal_id
+                            )
+                        )
+                        is not None
+                    ],
+                }
+                for item in recovery_cases
+            ],
             "last_event_sequence": state.last_event_sequence if state else 0,
             "summary": {
                 "watched_goals": watch_count,
@@ -1653,7 +1737,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "coverage_gaps": [
                 "Agent reporting requires a goal turn with verified provider tools; harness report adapters are not connected yet.",
                 "OpenRouter account checks require a separate management key and run after provider setup or use and manual refresh; external spending is not polled periodically.",
-                "Harness quota alerts require authoritative Codex account windows or numeric Claude SDK rate-limit notices; Grok and missing percentages remain unavailable.",
+                "Harness quota alerts require reported Codex or Grok account windows or numeric Claude SDK notices; missing percentages remain unavailable.",
                 "Semantic review uses a project goal's provider when background evidence sharing is permitted; unsupported runtimes and model failures produce explicit unavailable decisions. Steer and Delegate use only explicitly advertised bounded actions.",
                 "Live event push is not connected yet.",
             ],

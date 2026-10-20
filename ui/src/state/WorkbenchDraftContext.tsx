@@ -3,6 +3,7 @@ import {
   type PropsWithChildren,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -49,6 +50,8 @@ interface AskNebulaPopupState {
 interface WorkbenchDraftContextValue {
   assistantDrafts: SelectionActionDraft[];
   assistantDraftNotice?: string;
+  butlerDrafts: SelectionActionDraft[];
+  butlerDraftNotice?: string;
   noteDraft?: SelectionActionDraft;
   executionDraft?: SelectionActionDraft;
   findingDraft?: FindingDraftRequest;
@@ -61,6 +64,10 @@ interface WorkbenchDraftContextValue {
   removeAssistantDraft(index: number): void;
   clearAssistantDrafts(): void;
   clearAssistantDraftNotice(): void;
+  removeButlerDraft(index: number): void;
+  clearButlerDrafts(): void;
+  consumeButlerDrafts(sent: SelectionActionDraft[]): void;
+  clearButlerDraftNotice(): void;
   clearNoteDraft(): void;
   clearExecutionDraft(): void;
   clearFindingDraft(): void;
@@ -195,14 +202,17 @@ function toSelectionDraft(request: NebulaDraftRequest): SelectionActionDraft | u
 }
 
 function sourceForRoute(pathname: string, element: Element | null): SelectionSource {
+  const butlerElement = element?.closest<HTMLElement>("[data-selection-recipient='butler']");
   const sourceElement = element?.closest<HTMLElement>("[data-selection-source-kind]");
   if (sourceElement) {
     return {
       kind: sourceElement.dataset.selectionSourceKind || "document",
       id: sourceElement.dataset.selectionSourceId || undefined,
       label: sourceElement.dataset.selectionSourceLabel || "Selected text",
+      metadata: butlerElement ? { recipient: "butler" } : undefined,
     };
   }
+  if (butlerElement) return { kind: "conversation", label: "Butler conversation", metadata: { recipient: "butler" } };
   if (pathname === "/") return { kind: "workbench", label: "Workbench" };
   const canonicalProject = /^\/projects\/[^/]+(?:\/([^/]+))?/.exec(pathname);
   if (canonicalProject) {
@@ -228,6 +238,12 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const navigate = useNavigate();
   const [assistantContext, setAssistantContext] = useState<AssistantDraftMerge>({ drafts: [] });
   const { drafts: assistantDrafts, notice: assistantDraftNotice } = assistantContext;
+  const [butlerContext, setButlerContext] = useState<AssistantDraftMerge & { projectId?: string }>({ drafts: [] });
+  const butlerDrafts = butlerContext.projectId === engagement?.id ? butlerContext.drafts : [];
+  const butlerDraftNotice = butlerContext.projectId === engagement?.id ? butlerContext.notice : undefined;
+  useEffect(() => {
+    setButlerContext((current) => current.projectId && current.projectId !== engagement?.id ? { drafts: [] } : current);
+  }, [engagement?.id]);
   const [noteDraft, setNoteDraft] = useState<SelectionActionDraft>();
   const [executionDraft, setExecutionDraft] = useState<SelectionActionDraft>();
   const [findingDraft, setFindingDraft] = useState<FindingDraftRequest>();
@@ -371,6 +387,13 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   }, [api, navigate]);
 
   const openAssistantSelection = useCallback((draft: SelectionActionDraft) => {
+    if (draft.source.metadata?.recipient === "butler") {
+      setButlerContext((current) => ({
+        ...mergeAssistantDraft(current.projectId === engagement?.id ? current.drafts : [], draft),
+        projectId: engagement?.id,
+      }));
+      return;
+    }
     const currentSessionId = engagement
       ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
         ?? (assistantSnapshot.current?.engagementId === engagement.id ? assistantSnapshot.current.sessionId : undefined)
@@ -385,6 +408,20 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
       : `/?view=${targetView}`);
     void persistSelectionHandoff(draft, "ask_nebula", targetView, currentSessionId);
   }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
+  const removeButlerDraft = useCallback((index: number) => {
+    setButlerContext((current) => ({ ...current, drafts: current.drafts.filter((_, position) => position !== index), notice: undefined }));
+  }, []);
+  const clearButlerDrafts = useCallback(() => setButlerContext({ drafts: [] }), []);
+  const consumeButlerDrafts = useCallback((sent: SelectionActionDraft[]) => {
+    setButlerContext((current) => ({
+      ...current,
+      drafts: current.drafts.filter((draft) => !sent.includes(draft)),
+      notice: undefined,
+    }));
+  }, []);
+  const clearButlerDraftNotice = useCallback(() => {
+    setButlerContext((current) => ({ ...current, notice: undefined }));
+  }, []);
   const openNoteSelection = useCallback((draft: SelectionActionDraft) => {
     setNoteDraft(draft);
     navigate(engagement ? `${projectSurface(engagement.id, "workbench")}?view=notes` : "/?view=notes");
@@ -429,6 +466,8 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const value = useMemo<WorkbenchDraftContextValue>(() => ({
     assistantDrafts,
     assistantDraftNotice,
+    butlerDrafts,
+    butlerDraftNotice,
     noteDraft,
     executionDraft,
     findingDraft,
@@ -441,6 +480,10 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     removeAssistantDraft,
     clearAssistantDrafts,
     clearAssistantDraftNotice,
+    removeButlerDraft,
+    clearButlerDrafts,
+    consumeButlerDrafts,
+    clearButlerDraftNotice,
     clearNoteDraft,
     clearExecutionDraft,
     clearFindingDraft,
@@ -448,6 +491,12 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     popups,
     assistantDrafts,
     assistantDraftNotice,
+    butlerDrafts,
+    butlerDraftNotice,
+    removeButlerDraft,
+    clearButlerDrafts,
+    consumeButlerDrafts,
+    clearButlerDraftNotice,
     clearAssistantDraftNotice,
     clearAssistantDrafts,
     clearNoteDraft,
@@ -487,4 +536,9 @@ export function useWorkbenchDrafts(): WorkbenchDraftContextValue {
   const value = useContext(WorkbenchDraftContext);
   if (!value) throw new Error("useWorkbenchDrafts must be used inside WorkbenchDraftProvider.");
   return value;
+}
+
+/** Butler is also rendered in isolated component tests without the app shell. */
+export function useOptionalWorkbenchDrafts(): WorkbenchDraftContextValue | undefined {
+  return useContext(WorkbenchDraftContext);
 }

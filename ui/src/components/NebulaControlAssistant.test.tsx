@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ChatStreamEvent } from "../api/types";
 import { ThemeProvider } from "../state/ThemeContext";
+import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
@@ -21,6 +23,298 @@ describe("NebulaControlAssistant", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.mocked(useWorkspace).mockReturnValue({ api: undefined, engagement: undefined, providers: [], harnesses: [] } as unknown as ReturnType<typeof useWorkspace>);
+  });
+
+  it("uploads a Butler screenshot, shows its preview, and sends its saved image block", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn(() => "blob:butler-preview");
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: createObjectURL});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const uploadChatImage = vi.fn()
+      .mockRejectedValueOnce(new Error("Upload interrupted. Choose the image again."))
+      .mockResolvedValueOnce({artifactId: "original", previewArtifactId: "preview", mediaType: "image/png", width: 1, height: 1});
+    const streamChat = vi.fn().mockResolvedValue({
+      sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+      message: {id: "answer", role: "assistant", content: "I can see the Mac settings screen."},
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), uploadChatImage,
+        fetchChatImagePreview: vi.fn().mockResolvedValue(new Blob(["png"], {type: "image/png"})), streamChat},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [{model: "model", imageInput: true, reasoningEfforts: [], serviceTiers: []}], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const image = new File(["png"], "mac-settings.png", {type: "image/png"});
+    const input = screen.getByLabelText("Choose images for Butler") as HTMLInputElement;
+    await user.upload(input, image);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Upload interrupted");
+    expect(screen.queryByRole("list", {name: "Butler image attachments"})).not.toBeInTheDocument();
+    await user.upload(input, image);
+    expect(await screen.findByRole("list", {name: "Butler image attachments"})).toBeVisible();
+    await waitFor(() => expect(screen.getByAltText("mac-settings.png")).toBeVisible());
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "What is this setting?");
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+    expect(streamChat.mock.calls[0][0].messages[0].contentBlocks).toEqual([
+      {type: "text", text: "What is this setting?"},
+      {type: "image", artifactId: "original", mediaType: "image/png", alt: "mac-settings.png",
+        metadata: {preview_artifact_id: "preview", width: 1, height: 1}},
+    ]);
+    expect(await screen.findByText("I can see the Mac settings screen.")).toBeVisible();
+    expect(screen.queryByRole("list", {name: "Butler image attachments"})).not.toBeInTheDocument();
+  });
+
+  it("explains when Butler's model cannot receive images and opens its conversation", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const uploadChatImage = vi.fn();
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), uploadChatImage},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [{model: "model", imageInput: false, reasoningEfforts: [], serviceTiers: []}], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.click(screen.getByRole("button", {name: "Attach image to Butler"}));
+    expect(await screen.findByText(/This Butler model cannot receive images/)).toBeVisible();
+    expect(uploadChatImage).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Open conversation to choose an image-capable model"}));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control"));
+  });
+
+  it("keeps an image ready when the saved Butler model loses image support", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: vi.fn(() => "blob:model-change-preview")});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const streamChat = vi.fn();
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, model: "text-model"}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null),
+        getChatAssistantConfig: vi.fn().mockResolvedValue({settings: {backend: "harness", profileId: "local", model: "text-model"}}),
+        uploadChatImage: vi.fn().mockResolvedValue({artifactId: "original", previewArtifactId: "preview", mediaType: "image/png", width: 1, height: 1}),
+        fetchChatImagePreview: vi.fn().mockResolvedValue(new Blob(["png"], {type: "image/png"})), streamChat},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model", "text-model"], modelOptions: [
+          {model: "model", imageInput: true, reasoningEfforts: [], serviceTiers: []},
+          {model: "text-model", imageInput: false, reasoningEfforts: [], serviceTiers: []}], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.upload(screen.getByLabelText("Choose images for Butler") as HTMLInputElement,
+      new File(["png"], "settings.png", {type: "image/png"}));
+    await screen.findByRole("list", {name: "Butler image attachments"});
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Explain this screenshot.");
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("saved model changed");
+    expect(streamChat).not.toHaveBeenCalled();
+    expect(screen.getByRole("list", {name: "Butler image attachments"})).toBeVisible();
+    expect(screen.getByRole("textbox", {name: "Ask Butler a question"})).toBeEnabled();
+    expect(screen.queryByRole("button", {name: "Stop assistant response"})).not.toBeInTheDocument();
+  });
+
+  it("keeps an unsaved Butler image ready after a confirmed send failure", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: vi.fn(() => "blob:retry-preview")});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const streamChat = vi.fn().mockRejectedValueOnce(new Error("Model unavailable"))
+      .mockResolvedValueOnce({sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: "answer", role: "assistant", content: "I can inspect the screenshot now."}});
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null),
+        uploadChatImage: vi.fn().mockResolvedValue({artifactId: "original", previewArtifactId: "preview", mediaType: "image/png", width: 1, height: 1}),
+        fetchChatImagePreview: vi.fn().mockResolvedValue(new Blob(["png"], {type: "image/png"})),
+        listChatMessages: vi.fn().mockResolvedValue([]), streamChat},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [{model: "model", imageInput: true, reasoningEfforts: [], serviceTiers: []}], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.upload(screen.getByLabelText("Choose images for Butler") as HTMLInputElement,
+      new File(["png"], "settings.png", {type: "image/png"}));
+    await screen.findByRole("list", {name: "Butler image attachments"});
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Explain this screenshot.");
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Model unavailable");
+    expect(screen.getByRole("alert")).toHaveTextContent("image remains attached");
+    expect(composer).toHaveValue("Explain this screenshot.");
+    expect(screen.getByRole("list", {name: "Butler image attachments"})).toBeVisible();
+    expect(screen.getByRole("log", {name: "Butler conversation"})).not.toHaveTextContent("Explain this screenshot.");
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
+    expect(streamChat.mock.calls[1][0].messages[0].contentBlocks[1].artifactId).toBe("original");
+    expect(await screen.findByText("I can inspect the screenshot now.")).toBeVisible();
+  });
+
+  it("does not attach an old project's image after switching projects during upload", async () => {
+    const user = userEvent.setup();
+    const savedImage = {artifactId: "old-original", previewArtifactId: "old-preview", mediaType: "image/png", width: 1, height: 1};
+    let completeUpload!: (value: {artifactId: string; previewArtifactId: string; mediaType: string; width: number; height: number}) => void;
+    const uploadChatImage = vi.fn(() => new Promise<typeof savedImage>((resolve) => {completeUpload = resolve;}));
+    const api = {getControlAssistantSession: vi.fn().mockResolvedValue(null), uploadChatImage};
+    const harnesses = [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+      permitsSensitiveData: true, models: ["model"], modelOptions: [{model: "model", imageInput: true, reasoningEfforts: [], serviceTiers: []}], defaultModel: "model"}];
+    let projectId = "project-a";
+    vi.mocked(useWorkspace).mockImplementation(() => ({api, engagement: {id: projectId, name: projectId}, providers: [], harnesses}) as unknown as ReturnType<typeof useWorkspace>);
+    const view = render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.upload(screen.getByLabelText("Choose images for Butler") as HTMLInputElement,
+      new File(["png"], "old-project.png", {type: "image/png"}));
+    await waitFor(() => expect(uploadChatImage).toHaveBeenCalledWith(expect.objectContaining({engagementId: "project-a"})));
+    projectId = "project-b";
+    view.rerender(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await act(async () => {completeUpload(savedImage);});
+    expect(screen.getByRole("dialog", {name: "Butler"})).toHaveTextContent("project-b");
+    expect(screen.queryByRole("list", {name: "Butler image attachments"})).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Attach image to Butler"})).toBeEnabled();
+  });
+
+  it("sends selected Butler text to Butler and keeps it available after a failed turn", async () => {
+    const user = userEvent.setup();
+    const response = (content: string) => ({
+      sessionId: "control", backend: "harness" as const, harnessProfileId: "local", model: "model",
+      message: { id: content, role: "assistant" as const, content },
+    });
+    const streamChat = vi.fn()
+      .mockResolvedValueOnce(response("The goal needs another turn."))
+      .mockRejectedValueOnce(new Error("Core connection failed"))
+      .mockResolvedValueOnce(response("The context reached Butler."));
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat },
+      engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<MemoryRouter><WorkbenchDraftProvider><DialogProvider><ThemeProvider>
+      <NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} />
+    </ThemeProvider></DialogProvider></WorkbenchDraftProvider></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "What happened?{enter}");
+    const answer = await screen.findByText("The goal needs another turn.");
+    const range = document.createRange();
+    range.selectNodeContents(answer);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    fireEvent.pointerUp(answer);
+    await user.click(screen.getByRole("button", { name: "Add context to chat" }));
+    expect(screen.getByRole("region", { name: "Butler context pack" })).toHaveTextContent("1 selected context item for Butler");
+    await user.type(composer, "Use that detail.{enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
+    expect(streamChat.mock.calls[1][0].contextAttachments).toEqual([expect.objectContaining({
+      sourceKind: "conversation", sourceId: "control", sourceLabel: "Butler conversation",
+      text: "The goal needs another turn.", sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })]);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Core connection failed");
+    expect(screen.getByRole("region", { name: "Butler context pack" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Send to Butler" }));
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(3));
+    expect(streamChat.mock.calls[2][0].contextAttachments).toEqual(streamChat.mock.calls[1][0].contextAttachments);
+    expect(await screen.findByText("The context reached Butler.")).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Butler context pack" })).not.toBeInTheDocument());
+  });
+
+  it("shows Core-backed steps while Butler works and clears them when the reply arrives", async () => {
+    const user = userEvent.setup();
+    let emit!: (event: ChatStreamEvent) => void;
+    let finish!: (value: unknown) => void;
+    const streamChat = vi.fn().mockImplementation((_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      emit = onEvent;
+      return new Promise(resolve => { finish = resolve; });
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), getPendingChatTurn: vi.fn().mockResolvedValue(undefined),
+        listChatMessages: vi.fn().mockResolvedValue([]), streamChat },
+      coreState: "online", engagement: { id: "project", name: "Project" }, providers: [],
+      harnesses: [{ id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model" }],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Check agent reports{enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+    const activity = screen.getByRole("region", { name: "Butler activity" });
+    expect(activity).toHaveTextContent("Starting Butler’s response");
+    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toBeDisabled();
+    act(() => emit({ type: "started", model: "model", turnId: "turn", sessionId: "control" }));
+    act(() => emit({ type: "tool_started", turnId: "turn", toolCallId: "call", capability: "nebula.work.overview",
+      displayName: "Inspect agent reports", arguments: {}, step: 1 }));
+    expect(activity).toHaveTextContent("Using Inspect agent reports");
+    act(() => emit({ type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.work.overview",
+      displayName: "Inspect agent reports", status: "complete", summary: "Read saved reports", evidenceIds: [], artifacts: [], step: 1 }));
+    expect(activity).toHaveTextContent("Finished Inspect agent reports; Butler is continuing");
+    await user.click(screen.getByText("Recent steps"));
+    expect(activity).toHaveTextContent("Using Inspect agent reports");
+    act(() => emit({ type: "message_delta", harnessSessionId: "session", model: "model", delta: "I checked the reports." }));
+    expect(activity).toHaveTextContent("Butler is writing a reply");
+    await act(async () => finish({ sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+      message: { id: "answer", role: "assistant", content: "I checked the reports." } }));
+    expect(await screen.findByText("I checked the reports.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Butler activity" })).not.toBeInTheDocument();
+  });
+
+  it("restores active Butler work after opening the saved pane and offers approval review", async () => {
+    const user = userEvent.setup();
+    const pending = { id: "turn", sessionId: "control", status: "routing", revision: 1,
+      startedAt: new Date(Date.now() - 65_000).toISOString(), toolCalls: [{ toolCallId: "call", capability: "overview",
+        displayName: "Inspect agent reports", status: "running", arguments: {} }] };
+    const getPendingChatTurn = vi.fn().mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce({ ...pending, revision: 2, status: "waiting_approval" })
+      .mockResolvedValueOnce({ ...pending, revision: 3, status: "failed", toolCalls: [] })
+      .mockResolvedValue(undefined);
+    const listChatMessages = vi.fn().mockResolvedValueOnce([{ id: "question", role: "user", content: "Check reports" }])
+      .mockResolvedValue([{ id: "question", role: "user", content: "Check reports" },
+        { id: "answer", role: "assistant", content: "The report is saved." }]);
+    const onNavigate = vi.fn();
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue({ ...savedButler, backend: "provider", providerId: "provider" }),
+        getPendingChatTurn, listChatMessages },
+      coreState: "online", engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const activity = await screen.findByRole("region", { name: "Butler activity" });
+    await waitFor(() => expect(activity).toHaveTextContent("Using Inspect agent reports"));
+    expect(activity).toHaveTextContent("Working for 1m");
+    fireEvent(window, new Event("online"));
+    await waitFor(() => expect(activity).toHaveTextContent("Approval needed to continue"));
+    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Review" }));
+    expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
+    await user.click(screen.getByRole("button", { name: "Show Butler" }));
+    await waitFor(() => expect(activity).toHaveTextContent("Butler’s reply needs recovery"));
+    expect(screen.queryByRole("button", { name: "Stop assistant response" })).not.toBeInTheDocument();
+    fireEvent(window, new Event("online"));
+    expect(await screen.findByText("The report is saved.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Butler activity" })).not.toBeInTheDocument();
+  });
+
+  it("blocks a new Butler turn while saved status is unknown and recovers with Retry status", async () => {
+    const user = userEvent.setup();
+    const getPendingChatTurn = vi.fn().mockRejectedValueOnce(new Error("Core timed out")).mockResolvedValue(undefined);
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getControlAssistantSession: vi.fn().mockResolvedValue({ ...savedButler, backend: "provider", providerId: "provider" }),
+        getPendingChatTurn, listChatMessages: vi.fn().mockResolvedValue([]) },
+      coreState: "online", engagement: { id: "project", name: "Project" }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    expect(await screen.findByText("Butler status unavailable")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Retry status" }));
+    await waitFor(() => expect(getPendingChatTurn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText("Butler status unavailable")).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toBeEnabled();
   });
 
   it("opens the full-screen voice mode from its assistant button and keeps an HTTPS recovery action visible", async () => {
@@ -126,7 +420,7 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Start an assistant to ");
   });
 
-  it("saves Butler's advertised effort and Daybreak Blue, then uses Core readback on its next turn", async () => {
+  it("saves Butler's advertised max effort and Daybreak Blue, then uses Core readback on its next turn", async () => {
     const user = userEvent.setup();
     const saved = {
       id: "control", engagementId: "project", backend: "harness", harnessProfileId: "local", model: "model",
@@ -156,7 +450,8 @@ describe("NebulaControlAssistant", () => {
       engagement: {id: "project", name: "Project"}, providers: [],
       harnesses: [{id: "local", name: "Local", kind: "codex_app_server", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [{model: "model", reasoningEfforts: [
-          {id: "low", label: "Low", description: ""}, {id: "high", label: "High", description: ""}],
+          {id: "low", label: "Low", description: ""}, {id: "high", label: "High", description: ""},
+          {id: "max", label: "Max", description: ""}],
           serviceTiers: [], cyberAccessPrograms: ["standard", "daybreakBlue"]}], defaultModel: "model"}],
     } as unknown as ReturnType<typeof useWorkspace>);
     const onNavigate = vi.fn();
@@ -170,15 +465,15 @@ describe("NebulaControlAssistant", () => {
     }), expect.any(Function), expect.any(AbortSignal)));
     await user.click(screen.getByRole("button", {name: "Butler settings"}));
     expect(await screen.findByRole("combobox", {name: "Butler effort"})).toHaveValue("high");
-    await user.selectOptions(screen.getByRole("combobox", {name: "Butler effort"}), "low");
+    await user.selectOptions(screen.getByRole("combobox", {name: "Butler effort"}), "max");
     await user.selectOptions(screen.getByRole("combobox", {name: "Butler cyber access"}), "daybreakBlue");
     await user.click(screen.getByRole("button", {name: "Save"}));
-    expect(await screen.findByText("Saved. Applies to Butler’s next message.")).toBeInTheDocument();
+    expect(await screen.findByText("Saved. Applies to Butler’s next message and scheduled check.")).toBeInTheDocument();
     expect(updateChatAssistantConfig).toHaveBeenCalledWith("control", 3,
-      {harnessReasoningEffort: "low", harnessCyberAccessProgram: "daybreakBlue"});
+      {harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue"});
     await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Continue{enter}");
     await waitFor(() => expect(streamChat).toHaveBeenLastCalledWith(expect.objectContaining({
-      harnessReasoningEffort: "low", harnessCyberAccessProgram: "daybreakBlue",
+      harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue",
     }), expect.any(Function), expect.any(AbortSignal)));
     await user.click(screen.getByRole("button", {name: "Full Assistant settings"}));
     expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
@@ -214,7 +509,7 @@ describe("NebulaControlAssistant", () => {
     await user.selectOptions(screen.getByRole("combobox", {name: "Butler effort"}), "high");
     await user.selectOptions(screen.getByRole("combobox", {name: "Butler cyber access"}), "daybreakBlue");
     await user.click(screen.getByRole("button", {name: "Save"}));
-    expect(screen.getByText("Saved for Butler’s first message.")).toBeInTheDocument();
+    expect(screen.getByText("Saved for Butler’s first message and scheduled check.")).toBeInTheDocument();
     expect(updateChatAssistantConfig).toHaveBeenCalledWith("control", 1,
       { harnessReasoningEffort: "high", harnessCyberAccessProgram: "daybreakBlue" });
     await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Start work{enter}");
@@ -246,6 +541,35 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByText("Loading Butler settings…")).toBeInTheDocument();
     resolveSession(saved);
     await waitFor(() => expect(screen.getByRole("combobox", {name: "Butler effort"})).toHaveValue("high"));
+    expect(getControlAssistantSession).toHaveBeenCalledWith("project");
+    expect(getChatAssistantConfig).toHaveBeenCalledWith("control");
+  });
+
+  it("loads saved effort after a settings deep link opens before the project is ready", async () => {
+    const saved = {
+      id: "control", engagementId: "project", backend: "harness" as const, harnessProfileId: "local", model: "model",
+      assistantConfig: {backend: "harness" as const, profileId: "local", model: "model", harnessReasoningEffort: "low"},
+    };
+    const getControlAssistantSession = vi.fn().mockResolvedValue(saved);
+    const getChatAssistantConfig = vi.fn().mockResolvedValue({sessionId: "control", revision: 2, settings: saved.assistantConfig});
+    const api = {getControlAssistantSession, getChatAssistantConfig, listChatMessages: vi.fn().mockResolvedValue([])};
+    let workspace = {api: undefined as typeof api | undefined, engagement: undefined as {id: string; name: string} | undefined,
+      providers: [], harnesses: [] as unknown[]};
+    vi.mocked(useWorkspace).mockImplementation(() => workspace as unknown as ReturnType<typeof useWorkspace>);
+    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>;
+    const view = render(assistant());
+    act(() => {window.dispatchEvent(new Event("nebula:open-butler-settings"));});
+    expect(screen.getByRole("button", {name: "Save"})).toBeDisabled();
+    expect(screen.getByText("Connect to Core to load Butler settings.")).toBeVisible();
+
+    workspace = {...workspace, api, engagement: {id: "project", name: "Project"},
+      harnesses: [{id: "local", name: "Local", kind: "codex_app_server", enabled: true, healthy: true,
+        localOnly: true, permitsSensitiveData: true, models: ["model"], defaultModel: "model",
+        modelOptions: [{model: "model", reasoningEfforts: [{id: "low", label: "Low", description: ""},
+          {id: "max", label: "Max", description: ""}], serviceTiers: []}]}]};
+    view.rerender(assistant());
+    await waitFor(() => expect(screen.getByRole("combobox", {name: "Butler effort"})).toHaveValue("low"));
+    expect(screen.getByRole("button", {name: "Save"})).toBeEnabled();
     expect(getControlAssistantSession).toHaveBeenCalledWith("project");
     expect(getChatAssistantConfig).toHaveBeenCalledWith("control");
   });

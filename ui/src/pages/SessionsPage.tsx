@@ -34,6 +34,7 @@ import { isGuideLayerTarget, useGuideAction } from "../guides/guideActions";
 import { ShowMeHow } from "../guides/ShowMeHow";
 import { ChatWorkspaceDrawer } from "../components/ChatWorkspaceDrawer";
 import { ChatAttachments } from "../components/ChatAttachments";
+import { AuthenticatedChatImage } from "../components/AuthenticatedChatImage";
 import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarget } from "../components/EnvironmentTargetPicker";
 import { sshApprovalTarget, type SshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
@@ -43,6 +44,7 @@ import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, mergeRecentListedSessions, reconcileListedSessions } from "./chatSessionList";
 import { nextSideChatNumber, sideChatForConversation, sideChatsForConversation, sideChatTabLabel } from "./sideChatSelection";
 import { appendSideToolTab, clearSideToolTabs, removeSideToolTab, sideToolLabel, sideToolTabs, type SideToolKind, type SideToolTab } from "./sidePanelTabs";
+import { SideToolSurface } from "./SideToolSurface";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
@@ -131,6 +133,8 @@ import type {
   ChatCompletionRequest,
   AssistantDefaults,
   ChatGoal,
+  ChatTaskPlan,
+  ChatPlanDirective,
   ChatContentBlock,
   ChatSessionActivity,
   ChatSubagentView,
@@ -441,41 +445,28 @@ async function readRecentChatHistory(api: ApiClient, id: string, signal?: AbortS
   };
 }
 
+async function listWorkbenchConversationPage(api: ApiClient, projectId: string, offset = 0, signal?: AbortSignal) {
+  const page = await api.listChatSessionsPage(projectId, offset, signal, true);
+  // A frequently active Butler child can be on the recent page while its
+  // project Butler conversation is older than that page. Fetch that parent
+  // without changing Core's pagination offset.
+  if (!page.items.some(item => item.isButlerInitiated) || page.items.some(item => item.isControlAssistant)) return page;
+  try {
+    const butler = await api.getControlAssistantSession(projectId, signal);
+    return butler ? { ...page, items: [...page.items, butler] } : page;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    void logCaughtDiagnostic("interface.sessions_page.butler_parent_failed", "Butler conversation could not be loaded.", error, "sessions_page");
+    return page;
+  }
+}
+
 interface ConversationMessage extends ReconciledConversationMessage {}
 
 interface PendingChatImage {
   block: ChatContentBlock;
   previewUrl: string;
   filename: string;
-}
-
-function AuthenticatedChatImage({ api, block }: { api: ApiClient; block: ChatContentBlock }) {
-  const previewArtifactId = typeof block.metadata?.preview_artifact_id === "string"
-    ? block.metadata.preview_artifact_id
-    : block.artifactId;
-  const [url, setUrl] = useState<string>();
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    if (!previewArtifactId) return;
-    const controller = new AbortController();
-    let objectUrl: string | undefined;
-    void api.fetchChatImagePreview(previewArtifactId, controller.signal).then((blob) => {
-      objectUrl = URL.createObjectURL(blob);
-      setUrl(objectUrl);
-    }).catch((error) => {
-      if (!controller.signal.aborted) {
-        logCaughtDiagnostic("interface.chat.image_preview_failed", "A chat image preview could not be loaded.", error, "chat-media");
-        setFailed(true);
-      }
-    });
-    return () => {
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [api, previewArtifactId]);
-  if (failed) return <p role="status">Image preview unavailable. The original remains retained as an artifact.</p>;
-  if (!url) return <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading image…</div>;
-  return <a href={url} target="_blank" rel="noreferrer" title="Open image preview"><img className="chat-content-image" src={url} alt={block.alt ?? "Attached image"} /></a>;
 }
 
 function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) {
@@ -697,6 +688,8 @@ interface TranscriptRowProps {
   replacements: ReplacedMessageGroup[];
   activityItems: HarnessActivityItem[];
   toolCards: ToolLifecycleCard[];
+  taskPlan?: ChatTaskPlan;
+  planDirective?: ChatPlanDirective;
   historicalState?: "loading" | "loaded" | "failed";
   historicalError?: string;
   subagentResult?: ChatSubagentView;
@@ -755,6 +748,7 @@ function ChatSubagentTranscriptGroup({groupKey, messages, results, selectedMessa
  */
 const ChatTranscriptRow = memo(function ChatTranscriptRow({
   message, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
+  taskPlan, planDirective,
   historicalState, historicalError, subagentResult, bookmarked, interactions, answers, waitingLabel,
   harnessProgressDetail, approval, focusPendingAction,
 }: TranscriptRowProps) {
@@ -851,6 +845,16 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
     <div className="chat-message-body">
       <header>{message.role === "assistant" && <><strong>{shared.assistantSource}</strong>{shared.runtimeConfiguration && <span>{shared.runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
+      {taskPlan && <details className="chat-task-plan" open={taskPlan.phase !== "execution"}>
+        <summary><ListTodo size={15} aria-hidden="true" /> Task plan <span>{taskPlan.phase === "execution" ? "shared" : taskPlan.phase === "discovery" ? "requested" : taskPlan.phase.replaceAll("_", " ")} · version {taskPlan.plan_version}</span></summary>
+        {taskPlan.reason && <p role="status">{taskPlan.reason}</p>}
+        {taskPlan.directive_id && <p>Butler requested a plan for this task{planDirective ? `: ${planDirective.reason}` : "."}</p>}
+        {taskPlan.steps.length > 0 && <ol>{taskPlan.steps.map((step, index) => <li key={index}><strong>{step.action}</strong><small>Expected: {step.expected_outcome}</small></li>)}</ol>}
+        {taskPlan.tool_names.length > 0 && <p><strong>Tools:</strong> {taskPlan.tool_names.join(", ")}</p>}
+        {taskPlan.native_categories.length > 0 && <p><strong>Native capabilities:</strong> {taskPlan.native_categories.join(", ")}</p>}
+        <p><strong>Files:</strong> {taskPlan.no_file_work ? "No file work" : taskPlan.files.join(", ")}</p>
+        {taskPlan.unresolved_dependencies.length > 0 && <p><strong>Unresolved:</strong> {taskPlan.unresolved_dependencies.join(", ")}</p>}
+      </details>}
       {message.state === "streaming" || message.state === "waiting_approval" ? activityNode : null}
       {message.role === "assistant" && !progressContent && <HarnessThinking items={messageActivityItems} />}
       {message.role === "assistant" && !progressContent && <ThinkingDisclosure
@@ -1483,6 +1487,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [harnessId, setHarnessId] = useState("");
   const [harnessSessionId, setHarnessSessionId] = useState("");
   const [harnessMode, setHarnessMode] = useState("");
+  const [planningEnabled, setPlanningEnabled] = useState(false);
+  const [taskPlans, setTaskPlans] = useState<ChatTaskPlan[]>([]);
+  const [planDirectives, setPlanDirectives] = useState<ChatPlanDirective[]>([]);
   const [harnessReasoningEffort, setHarnessReasoningEffort] = useState("");
   // Provider-side reasoning level. "" means the model's own default, which is
   // what most turns want; Core remembers whatever the operator chose here.
@@ -1992,11 +1999,49 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
   }, [activeFollowUpStorageKey]);
   const savedConversations = useMemo(() => sessions.filter(session => !session.isSideChat), [sessions]);
+  useEffect(() => {
+    if (!sessionId) return;
+    const byId = new Map(savedConversations.map(item => [item.id, item]));
+    const selected = byId.get(sessionId);
+    if (!selected) return;
+    const owners: string[] = [];
+    const parent = selected.isSubagent && selected.parentSessionId ? byId.get(selected.parentSessionId) : undefined;
+    if (parent) owners.push(parent.id);
+    const butlerChild = selected.isButlerInitiated ? selected : parent?.isButlerInitiated ? parent : undefined;
+    if (butlerChild) {
+      const butler = savedConversations.find(item => item.engagementId === butlerChild.engagementId && item.isControlAssistant && !item.archivedAt)
+        ?? savedConversations.find(item => item.engagementId === butlerChild.engagementId && item.isControlAssistant);
+      if (butler) owners.push(butler.id);
+    }
+    if (owners.length) setExpandedSubagentParents(current => {
+      if (owners.every(id => current.has(id))) return current;
+      return new Set([...current, ...owners]);
+    });
+  }, [sessionId, savedConversations, setExpandedSubagentParents]);
   const sidebarConversations = useMemo(() => groupSidebarConversations(
     savedConversations, sessionActivity, sessionQuery, expandedSubagentParents,
   ), [savedConversations, sessionActivity, sessionQuery, expandedSubagentParents]);
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+  useEffect(() => {
+    if (!api || !sessionId) return;
+    const controller = new AbortController();
+    const refreshPlans = () => {
+      if (document.visibilityState === "hidden") return;
+      void api.getChatTaskPlans(sessionId, controller.signal).then(result => {
+        if (!controller.signal.aborted) {
+          setTaskPlans(result.plans);
+          setPlanDirectives(result.directives);
+        }
+      }).catch(error => {
+        if (!controller.signal.aborted) void logCaughtDiagnostic("interface.chat.task_plans_refresh_failed", "Task plan activity could not be refreshed.", error, "chat-planning");
+      });
+    };
+    refreshPlans();
+    const interval = window.setInterval(refreshPlans, 10_000);
+    window.addEventListener("focus", refreshPlans);
+    return () => { controller.abort(); window.clearInterval(interval); window.removeEventListener("focus", refreshPlans); };
+  }, [api, sessionId]);
   const notebookPath = view === "chat" && sideView === "notebook" && activeChatSession?.notebookPath
     ? activeChatSession.notebookPath : searchParams.get("notebook") ?? undefined;
   const chooseNotebookPath = useCallback((next: string) => updateSearchParams(params => { if (next) params.set("notebook", next); else params.delete("notebook"); }, {replace: true}), [updateSearchParams]);
@@ -2011,6 +2056,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (!activeChatSession) return;
     if (pendingSubagentSaveSessionRef.current === activeChatSession.id) return;
     const next = activeChatSession.assistantConfig;
+    setPlanningEnabled(next?.planningEnabled ?? activeChatSession.planningEnabled === true);
     if (pendingAgentMessagingSaveSessionRef.current !== activeChatSession.id) {
       setAllowAgentMessaging(next?.allowAgentMessaging ?? activeChatSession.allowAgentMessaging === true);
     }
@@ -2108,6 +2154,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessServiceTier(saved.harnessServiceTier ?? "");
     setHarnessCyberAccessProgram("");
     setHarnessMode(saved.harnessMode ?? "");
+    setPlanningEnabled(false);
     setAllowSubagents(saved.allowSubagents);
     setSubagentProviderId(saved.subagentProviderId ?? "");
     setSubagentHarnessId(saved.subagentHarnessId ?? "");
@@ -2718,7 +2765,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setSessions([]);
     setSessionNextOffset(undefined);
     void (async () => {
-      if (!embeddedSideChat) return api.listChatSessionsPage(projectId, 0, controller.signal, true);
+      if (!embeddedSideChat) return listWorkbenchConversationPage(api, projectId, 0, controller.signal);
       if (!sideRequestedSessionId) return { items: [], nextOffset: undefined };
       // The focused pane needs its own durable session, not a second copy of
       // the project's conversation catalog. This also survives a refresh.
@@ -2861,7 +2908,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const selectionGeneration = sessionSelectionGenerationRef.current;
     const listed = embeddedSideChat
       ? { items: requestedSessionId ? [await api.getChatSession(requestedSessionId)] : [], nextOffset: undefined }
-      : await api.listChatSessionsPage(requestedEngagementId, 0, undefined, true);
+      : await listWorkbenchConversationPage(api, requestedEngagementId);
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
     // A read that started before a save may answer after it; keep the newer copy.
     setSessions((current) => mergeRecentListedSessions(current, listed.items, !listed.nextOffset));
@@ -2877,7 +2924,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const projectId = engagement.id;
     setLoadingOlderSessions(true);
     try {
-      const page = await api.listChatSessionsPage(projectId, sessionNextOffset, undefined, true);
+      const page = await listWorkbenchConversationPage(api, projectId, sessionNextOffset);
       if (activeEngagementIdRef.current !== projectId) return;
       setSessions((current) => mergeRecentListedSessions(current, page.items));
       setSessionNextOffset(page.nextOffset);
@@ -2910,6 +2957,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       harnessProfileId: runtimeKind === "harness" ? harnessId : undefined,
       model: model.trim(),
       toolsEnabled: runtimeKind === "harness" ? true : canUseTools,
+      planningEnabled,
       mcpServerIds: selectedMcpIds,
       hookIds: runtimeKind === "provider" ? selectedHookIds : [],
       // The goal's first turn is one Core starts, and it reads these from
@@ -2984,7 +3032,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       immediate: false,
       read: async (signal): Promise<PollOutcome> => {
         try {
-          const page = await api.listChatSessionsPage(requestedEngagementId, 0, signal, true);
+          const page = await listWorkbenchConversationPage(api, requestedEngagementId, 0, signal);
           if (signal.aborted || activeEngagementIdRef.current !== requestedEngagementId) return "stop";
           setSessions(current => {
             const next = mergeRecentListedSessions(current, page.items, !page.nextOffset);
@@ -3030,6 +3078,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessActivity(undefined);
     setHarnessActivityError(undefined);
     setHarnessProgress(undefined);
+    setTaskPlans([]);
+    setPlanDirectives([]);
     setMessages([]);
     setReplacedMessages([]);
     // The draft-key effect flushes the outgoing composer text under the
@@ -3930,6 +3980,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setChatError(undefined);
     setFailedProviderRecovery(undefined);
     setHarnessProgress(undefined);
+    setTaskPlans([]);
+    setPlanDirectives([]);
     setHarnessActivity(undefined);
     if (!preserveTranscript) { setMessages(preview?.messages ?? []); setReplacedMessages([]); }
     setToolCards(preview?.toolCards ?? []);
@@ -3954,9 +4006,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
+      setPlanningEnabled(next?.planningEnabled ?? summary.planningEnabled === true);
     }
     let authoritativeHistoryLoaded = false;
     try {
+      void api.getChatTaskPlans(id, loadController.signal).then(result => {
+        if (selectionIsCurrent()) { setTaskPlans(result.plans); setPlanDirectives(result.directives); }
+      }).catch(error => {
+        if (!loadController.signal.aborted) void logCaughtDiagnostic("interface.chat.task_plans_load_failed", "Saved task plans could not be loaded.", error, "chat-planning");
+      });
       const pendingTurnResult = api.getPendingChatTurn(id, loadController.signal).then(
         (turn) => ({turn} as const),
         (error: unknown) => ({error} as const),
@@ -4778,6 +4836,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
+      setPlanningEnabled(next?.planningEnabled ?? summary.planningEnabled === true);
     }
     // Selecting through selectSession advances the selection generation and
     // aborts any in-flight load, so an earlier selection cannot overwrite it.
@@ -4803,6 +4862,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, content: "", reasoning: "" }
         : message));
+      return;
+    }
+    if (streamEvent.type === "task_plan") {
+      setTaskPlans(current => [streamEvent.plan, ...current.filter(item => item.id !== streamEvent.plan.id)]);
       return;
     }
     // Events invalidate the durable snapshot; they never independently resolve
@@ -5425,6 +5488,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       includeKnowledge: nextSettings?.includeKnowledge ?? wantsKnowledge,
       allowCloudKnowledge: nextSettings?.allowCloudKnowledge ?? allowCloudKnowledge,
       toolsEnabled: !embeddedSideChat && (nextSettings?.toolsEnabled ?? (runtimeKind === "provider" ? canUseTools : wantsTools)),
+      planningEnabled: nextSettings?.planningEnabled ?? planningEnabled,
       allowCloudToolResults,
       allowAgentMessaging: !embeddedSideChat && allowAgentMessaging,
       harnessMode: runtimeKind === "harness" ? harnessMode || undefined : undefined,
@@ -6495,6 +6559,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const historicalTurnId = historicalHarnessTurnId(message);
     const interactions = pendingInteractionsByTurn.get(message.harnessTurnId) ?? NO_INTERACTIONS;
     const approvalHere = pendingResponse?.assistantId === message.id && pendingResponseActive ? transcriptApproval : undefined;
+    const rowTurnId = typeof message.metadata?.chat_turn_id === "string" ? message.metadata.chat_turn_id
+      : message.outcomeTurnId ?? (message.state === "streaming" || message.state === "waiting_approval" ? activeProviderTurnIdRef.current : undefined);
+    const taskPlan = message.role === "assistant" ? taskPlans.find(item => item.turn_id === rowTurnId || (message.harnessTurnId && item.harness_turn_id === message.harnessTurnId)) : undefined;
+    const planDirective = taskPlan?.directive_id ? planDirectives.find(item => item.id === taskPlan.directive_id) : undefined;
     return <ChatTranscriptRow
       key={message.runtimeId ?? message.id}
       message={message}
@@ -6508,6 +6576,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       replacements={anchoredReplacements.get(message.id) ?? NO_REPLACEMENTS}
       activityItems={activityItemsByAssistantId.get(message.id) ?? NO_ACTIVITY}
       toolCards={toolCardsByAssistantId.get(message.id) ?? NO_TOOL_CARDS}
+      taskPlan={taskPlan}
+      planDirective={planDirective}
       historicalState={historicalTurnId ? historicalActivityState[historicalTurnId] : undefined}
       historicalError={historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined}
       subagentResult={subagentResultsByMessage.get(message.id)}
@@ -6552,11 +6622,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={assistantSettingsBusy} onChange={(event) => { setHarnessServiceTier(event.target.value); void rememberAssistantDefaults({ harnessServiceTier: event.target.value || null }); setAssistantSettingsStatus("Speed updated. Applies to your next message."); void saveNextTurnSettings({harnessServiceTier: event.target.value || null}); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && (harnessCyberAccessPrograms?.length || harnessCyberAccessProgram) ? <label><span>Cyber access</span><select aria-label="Codex cyber access" value={harnessCyberAccessProgram} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => { setHarnessCyberAccessProgram(event.target.value as "" | "standard" | "daybreakBlue" | "daybreakRed"); setAssistantSettingsStatus("Cyber access updated. Applies to your next message."); void saveNextTurnSettings({harnessCyberAccessProgram: event.target.value || "automatic"}); }}><option value="">Codex automatic</option>{harnessCyberAccessProgram && !harnessCyberAccessPrograms?.includes(harnessCyberAccessProgram) && <option value={harnessCyberAccessProgram}>{harnessCyberAccessProgram} · saved</option>}{harnessCyberAccessPrograms?.map((program) => <option value={program} key={program}>{program === "standard" ? "Standard" : program === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label> : null}
                 {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && selectedHarnessModelOptions && !harnessCyberAccessPrograms?.length && !harnessCyberAccessProgram && <small role="status">This Codex runtime did not advertise a cyber access choice for this model and account.</small>}
-                {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending || assistantSettingsBusy} onChange={(event) => { setHarnessMode(event.target.value); void rememberAssistantDefaults({ harnessMode: event.target.value || null }); void saveNextTurnSettings({harnessMode: event.target.value || null}); }}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
+                {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending || assistantSettingsBusy} onChange={(event) => { const mode = event.target.value; setHarnessMode(mode); void rememberAssistantDefaults({ harnessMode: mode || null }); void saveNextTurnSettings({harnessMode: mode || null}); }}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Plan only" : item.replaceAll("_", " ")}</option>)}</select></label>}
+                <label className="chat-knowledge-toggle" data-guide="plan-before-acting"><input type="checkbox" checked={planningEnabled} disabled={sending || assistantSettingsBusy} onChange={(event) => { setPlanningEnabled(event.target.checked); void saveNextTurnSettings({planningEnabled: event.target.checked}); }} /><span><strong>Ask for a plan first</strong><small>Ask this agent to share a plan with Core and pass it to subagents. Tools remain available while it plans; the plan does not pause work.</small></span></label>
                 </>}
                 </div>
                 {assistantSettingsStatus && <p className="provider-dialog-note" role="status">{assistantSettingsStatus}</p>}
                 {assistantSettingsError && <p className="provider-dialog-note error" role="alert">{assistantSettingsError}</p>}
+                {planDirectives.filter(item => item.status === "pending").map(item => <p className="provider-dialog-note" role="status" key={item.id}>Butler requested a plan for {item.target_kind} {item.target_id}: {item.reason}</p>)}
                 {!shellOnly && <>{runtimeKind === "harness" && <details className="chat-advanced-session"><summary>Resume existing session</summary><label><span>Filter by name</span><input type="search" aria-label="Filter resumable sessions by name" value={externalSessionQuery} placeholder="Search Codex or Grok sessions" onChange={(event) => setExternalSessionQuery(event.target.value)} /></label><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId) || externalSessionsLoading} onChange={(event) => void selectHarnessSession(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => (item.harnessProfileId === harnessId || item.id === harnessSessionId) && (item.id === harnessSessionId || item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase()))).map((item) => <option value={item.id} key={item.id}>{item.displayName} · {item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}{item.serviceTier ? ` · ${item.serviceTier}` : ""} · {item.status} · {new Date(item.lastActivityAt).toLocaleString()}</option>)}{externalHarnessSessions.filter((item) => !item.internalSessionId && item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase())).map((item) => <option value={`external:${item.externalSessionId}`} key={`external:${item.externalSessionId}`}>{item.displayName}{item.model ? ` · ${item.model}` : ""}{item.updatedAt ? ` · ${new Date(item.updatedAt).toLocaleString()}` : ""}</option>)}</select></label>{externalSessionsLoading && <p className="provider-dialog-note" role="status">Loading resumable sessions…</p>}{externalSessionsError && <p className="provider-dialog-note error" role="alert">{externalSessionsError}</p>}</details>}
                 {sessionId && <p className="provider-dialog-note">{composerBusy ? "The running response keeps its model and effort. Changes apply to the next turn." : "Changes apply to your next message. Conversation history is kept."}</p>}
                 <div className="chat-settings-capabilities">
@@ -6639,6 +6711,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     requestAnimationFrame(scrollToTurn);
                   });
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
+                {planDirectives.filter(item => item.status === "pending").map(item => <div className="chat-task-plan" role="status" key={item.id}><strong>Butler requested a plan</strong><p>{item.reason}</p><small>Applies on the next turn for this {item.target_kind}; tools stay available.</small></div>)}
+                {taskPlans.slice(0, 1).filter(item => item.phase === "blocked").map(item => <div className="chat-task-plan" role="alert" key={item.id}><strong>Previous plan attempt blocked</strong><p>{item.reason ?? "This earlier turn could not finish planning."}</p></div>)}
                 {activeImagePreview ? <div className="chat-image-preview" data-testid="chat-image-preview" role="button" tabIndex={0} aria-label="Conversation image preview. Activate to read, copy, or edit the text." style={{width: activeImagePreview.width, minHeight: activeImagePreview.height}} onClick={revealImageText} onKeyDown={(event) => {if (event.key === "Enter" || event.key === " ") {event.preventDefault(); revealImageText();}}}>
                   {activeImagePreview.tiles.map((tile, index) => <img key={tile.url} src={tile.url} alt="" aria-hidden="true" width={activeImagePreview.width} height={tile.height} loading={index < 2 ? "eager" : "lazy"} decoding="async" />)}
                 </div> : loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
@@ -6753,7 +6827,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer className="chat-composer-toolbar"><div className="chat-composer-tools">{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{shellOnly && api && <button className="button quiet chat-composer-icon chat-goal-trigger" type="button" aria-label={providerGoal || providerGoalLoading || providerGoalError ? "Open goal" : "Create goal"} title={providerGoal ? `Open ${providerGoal.status} goal` : providerGoalError ? "Goal could not be loaded" : providerGoalLoading ? "Loading goal" : "Create goal"} aria-haspopup="dialog" aria-expanded={studioGoalOpen} data-status={providerGoal?.status} onClick={() => setStudioGoalOpen(true)}><Flag size={18} aria-hidden="true" /></button>}{!embeddedSideChat && !shellOnly && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button>{!shellOnly && <button ref={projectSnapshotButtonRef} className="button quiet chat-composer-icon" type="button" aria-label="Project Snapshot" title="Project Snapshot" aria-expanded={projectSnapshot === "floating"} disabled={!engagement} onClick={() => setProjectSnapshot(current => current === "floating" ? "closed" : "floating")}><LayoutDashboard size={18} aria-hidden="true" /></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}</div><div className="chat-composer-turn-actions">{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</div></footer>
+                <footer className="chat-composer-toolbar"><div className="chat-composer-tools">{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{shellOnly && api && <button className="button quiet chat-composer-icon chat-goal-trigger" type="button" aria-label={providerGoal || providerGoalLoading || providerGoalError ? "Open goal" : "Create goal"} title={providerGoal ? `Open ${providerGoal.status} goal` : providerGoalError ? "Goal could not be loaded" : providerGoalLoading ? "Loading goal" : "Create goal"} aria-haspopup="dialog" aria-expanded={studioGoalOpen} data-status={providerGoal?.status} onClick={() => setStudioGoalOpen(true)}><Flag size={18} aria-hidden="true" /></button>}{!embeddedSideChat && !shellOnly && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button>{!shellOnly && <button ref={projectSnapshotButtonRef} className="button quiet chat-composer-icon" type="button" aria-label="Project Snapshot" title="Project Snapshot" aria-expanded={projectSnapshot === "floating"} disabled={!engagement} onClick={() => setProjectSnapshot(current => current === "floating" ? "closed" : "floating")}><LayoutDashboard size={18} aria-hidden="true" /></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} onChooseImageRuntime={() => setAssistantSettingsOpen(true)} imagesSupported={imageInputEnabled} imagesBusy={composerBusy} />}</div><div className="chat-composer-turn-actions">{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</div></footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div></div>}
             </div>
@@ -6855,20 +6929,21 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
           <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
           <nav>
-            {sidebarConversations.groups.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.rootCount}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.rows.map(({ session, depth, childCount, waitingChildren, workingChildren, expanded, searchRevealed }) => {
+            {sidebarConversations.groups.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.rootCount}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.rows.map(({ session, depth, childCount, childKind, waitingChildren, workingChildren, expanded, searchRevealed }) => {
               const actionsOpen = sessionActionsId === session.id;
-              const activityState = sessionActivity[session.id] === "waiting" && !depth ? "waiting" : sessionActivity[session.id] === "working" || waitingChildren || workingChildren ? "working" : "idle";
+              const activityState = (sessionActivity[session.id] === "waiting" && !depth) || (childKind === "chats" && waitingChildren) ? "waiting" : sessionActivity[session.id] === "working" || waitingChildren || workingChildren ? "working" : "idle";
+              const childLabel = childKind === "chats" ? "chat" : "subagent";
               const subtitle = session.isSideChat
                 ? `From ${sessions.find(item => item.id === session.parentSessionId)?.title ?? "parent conversation"}`
                 : childCount
-                ? `${childCount} subagent${childCount === 1 ? "" : "s"}${waitingChildren ? ` · ${waitingChildren} with supervisor` : workingChildren ? ` · ${workingChildren} working` : ""}`
+                ? `${childCount} ${childLabel}${childCount === 1 ? "" : "s"}${waitingChildren ? ` · ${waitingChildren} ${childKind === "chats" ? "need you" : "with supervisor"}` : workingChildren ? ` · ${workingChildren} working` : ""}`
                 : depth && sessionActivity[session.id] === "waiting" ? "Waiting on supervisor"
                   : depth && activityState === "working" ? `Working${session.model ? ` · ${session.model}` : ""}`
                     : session.model || "Saved conversation";
               const displayTitle = session.isSideChat ? session.title.replace(/^Side chat\s*·\s*/, "") : depth ? session.title.replace(/^Subagent\s*·\s*/, "") : session.title;
               const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
-              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${session.id === sideChatId ? " side-open" : ""}${session.isSideChat ? " side-chat-item" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}${childCount ? " has-subagents" : ""}${depth ? " nested-subagent" : ""}${activityState === "waiting" ? " waiting" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => selectConversationFromList(session)}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{displayTitle}</strong><small title={subtitle}>{subtitle}</small></span></button>{childCount > 0 && <button className="icon-button subtle session-subagents-toggle" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount} subagent${childCount === 1 ? "" : "s"} for ${session.title}`} title={searchRevealed ? "Matching subagents stay visible while searching" : `${expanded ? "Collapse" : "Expand"} subagents`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedSubagentParents(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={16} aria-hidden="true" /></button>}<div className="session-item-actions"><button
+              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${session.id === sideChatId ? " side-open" : ""}${session.isSideChat ? " side-chat-item" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}${childCount ? " has-subagents" : ""}${depth === 1 ? " nested-subagent" : depth === 2 ? " nested-subagent nested-subagent-deep" : ""}${activityState === "waiting" ? " waiting" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => selectConversationFromList(session)}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{displayTitle}</strong><small title={subtitle}>{subtitle}</small></span></button>{childCount > 0 && <button className="icon-button subtle session-subagents-toggle" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount} ${childLabel}${childCount === 1 ? "" : "s"} for ${session.title}`} title={searchRevealed ? `Matching ${childLabel}s stay visible while searching` : `${expanded ? "Collapse" : "Expand"} ${childLabel}s`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedSubagentParents(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={16} aria-hidden="true" /></button>}<div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
                 id={`conversation-actions-trigger-${session.id}`}
                 className="icon-button subtle session-actions-trigger"
@@ -6916,7 +6991,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             })}</section>)}
             {loadingAllSessions && <p role="status">Searching saved conversations…</p>}
             {sessionQuery && !loadingAllSessions && !sidebarConversations.matchCount && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
-            {!sessionQuery && sessionNextOffset !== undefined && <button className="button quiet" type="button" disabled={loadingOlderSessions} onClick={() => void loadOlderConversations()}>{loadingOlderSessions ? "Loading older conversations…" : "Load older conversations"}</button>}
+            {!sessionQuery && sessionNextOffset !== undefined && <button className="button quiet session-list-load-more" type="button" disabled={loadingOlderSessions} onClick={() => void loadOlderConversations()}>{loadingOlderSessions ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}<span>{loadingOlderSessions ? "Loading older conversations…" : "Load older conversations"}</span></button>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
           {compact && mobileListOpen && <MobileDrawerFooter onNavigate={() => setMobileListOpen(false)} />}
@@ -7102,11 +7177,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           )}
           {view === "chat" && sidePanelOpen && sideChatSplit.resizeHandle}
           {view === "chat" && sideChatId && <MemoizedSideChat key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} sideChatTabs={sideChats} onSelectSideChat={sideChatActions.select} onSelectToolTab={sideChatActions.selectTool} onBackToMainChat={sideChatActions.back} onCloseSideChat={sideChatActions.close} onShowConversations={sideChatActions.showConversations} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={sideChatActions.unavailable} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} />}
-          {!shellOnly && api && engagement && toolTabs.length > 0 && <section id="side-tool-panel" className="side-tool-panel" role={activeToolTab && view === "chat" ? "region" : undefined} aria-label={activeToolTab && view === "chat" ? `${sideToolLabel(activeToolTab)} beside chat` : undefined} data-active={Boolean(activeToolTab && view === "chat")} hidden={!sidePanelOpen || view !== "chat"}>
-            <header className="side-chat-header"><div><strong>{activeToolTab ? sideToolLabel(activeToolTab) : "Side panels"}</strong><small>{activeToolTab?.kind === "code" ? "Workspace files" : "Beside this conversation"}</small></div>{activeToolTab && <button className="icon-button subtle" type="button" aria-label={`Close ${sideToolLabel(activeToolTab)} tab`} title={`Close ${sideToolLabel(activeToolTab)} tab`} onClick={() => sideChatActions.closeTool(activeToolTab.id)}><X size={16} aria-hidden="true" /></button>}</header>
+          {!shellOnly && api && engagement && toolTabs.length > 0 && <SideToolSurface activeTab={activeToolTab} visible={sidePanelOpen && view === "chat"} onClose={sideChatActions.closeTool}>
             <SidePanelTabs idPrefix="side-tools" sideChats={sideChats} toolTabs={toolTabs} activeSideId={sideChatId} activeToolId={activeToolId} onSelectSideChat={sideChatActions.select} onSelectTool={sideChatActions.selectTool} />
             {toolTabs.map(tab => <div key={tab.id} id={`side-tool-content-${tab.id}`} className={`side-tool-content side-tool-${tab.kind}`} role="tabpanel" aria-labelledby={`side-tools-tool-${tab.id}`} hidden={activeToolId !== tab.id}>{renderSideToolContent(tab)}</div>)}
-          </section>}
+          </SideToolSurface>}
         </section>
 
         {!shellOnly && (view === "chat" || view === "browser") && projectSnapshot !== "closed" && engagement && <ProjectSnapshotPanel

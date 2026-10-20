@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { useChatQueue, QueueItem } from "../pages/useChatQueue";
 export function ChatQueuePanel({queue: controller, onRefreshConversation}: {queue: ReturnType<typeof useChatQueue>; onRefreshConversation: () => void}) {
   const {queue, busy, error, mutate, reload} = controller;
-  const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState<QueueItem>(); const [text, setText] = useState("");
   // Once Core has linked a sending item to its durable turn, the transcript is
   // the operator-facing authority for that work. Keep the queue focused on
@@ -10,13 +9,19 @@ export function ChatQueuePanel({queue: controller, onRefreshConversation}: {queu
   // linked turn again if Core moves it to needs_review or failed.
   const items = queue?.items.filter(item => !["complete", "cancelled"].includes(item.status)
     && !(item.status === "sending" && item.turn_id)) ?? [];
+  const attention = Boolean(error || items.some(item => ["needs_review", "failed"].includes(item.status)));
+  const visible = Boolean(items.length || error || editing);
+  const [expanded, setExpanded] = useState(attention);
+  useEffect(() => {
+    if (attention) setExpanded(true);
+    else if (!visible) setExpanded(false);
+  }, [attention, visible]);
   const editable = items.filter(item => ["queued", "needs_review"].includes(item.status));
   const move = (item: QueueItem, direction: number) => { const order = editable.map(row => row.id); const index = order.indexOf(item.id); const target = index + direction; if (target < 0 || target >= order.length) return; [order[index], order[target]] = [order[target], order[index]]; void mutate({action: "reorder", order}); };
-  if (!items.length && !error && !editing) return null;
-  const attention = Boolean(error || items.some(item => ["needs_review", "failed"].includes(item.status)));
+  if (!visible) return null;
   return <section className="chat-follow-up-queue" aria-label="Core follow-up queue">
-    <details open={expanded || attention || Boolean(editing)} onToggle={event => setExpanded(event.currentTarget.open)}>
-    <summary onClick={event => { if (attention) event.preventDefault(); }}>{items.length} follow-up{items.length === 1 ? "" : "s"} · {attention ? "Needs attention" : queue?.paused ? "Paused" : items.some(item => item.status === "sending") ? "Sending" : "Queued"}</summary>
+    <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}>
+    <summary>{items.length} follow-up{items.length === 1 ? "" : "s"} · {attention ? "Needs attention" : queue?.paused ? "Paused" : items.some(item => item.status === "sending") ? "Sending" : "Queued"}</summary>
     {(items.length > 0 || error) && <><header><strong>Follow-ups · {queue?.paused ? "Paused" : "Core dispatches in order"}</strong><button className="button quiet" type="button" disabled={busy} onClick={() => void mutate({action: queue?.paused ? "resume" : "pause"})}>{queue?.paused ? "Resume queue" : "Pause queue"}</button><button className="button quiet" type="button" disabled={busy} onClick={() => void mutate({action: "clear"})}>Clear queue</button></header><p>Explicitly queued work continues after all browser tabs close.</p></>}
     {error && <div role="alert"><p>{error}</p><button className="button quiet" type="button" onClick={() => void reload()}>Reload queue</button></div>}
     <ol>{items.map((item, index) => <li key={item.id}><div><strong>{index + 1}. {item.status.replaceAll("_", " ")}</strong><p>{item.request?.messages[0]?.content}</p>{Boolean(item.request?.context_attachments?.length) && <small>{item.request?.context_attachments?.length} selected context attachment(s)</small>}{item.detail && <p>{item.detail}</p>}{item.turn_id && <button className="button quiet" type="button" onClick={onRefreshConversation}>Inspect conversation</button>}</div>{["queued", "needs_review"].includes(item.status) && <div><button className="button quiet" type="button" disabled={busy} onClick={() => {setEditing(item); setText(item.request?.messages[0]?.content ?? "");}}>Edit queued message {index + 1}</button><button className="button quiet" type="button" disabled={busy || editable.indexOf(item) === 0} onClick={() => move(item, -1)} aria-label={`Move message ${index + 1} up`}>↑</button><button className="button quiet" type="button" disabled={busy || editable.indexOf(item) === editable.length - 1} onClick={() => move(item, 1)} aria-label={`Move message ${index + 1} down`}>↓</button>{item.status === "needs_review" && <button className="button quiet" type="button" disabled={busy} onClick={() => void mutate({action: "retry", item_id: item.id})}>Retry as new message</button>}<button className="button quiet" type="button" disabled={busy} onClick={() => void mutate({action: "remove", item_id: item.id})}>Remove</button></div>}</li>)}</ol>

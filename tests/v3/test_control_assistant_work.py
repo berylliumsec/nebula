@@ -320,6 +320,7 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             title="Research",
             provider_profile_id=profile.id,
             model="model-a",
+            metadata={"butler_initiated": True},
         )
     )
     message = store.create(
@@ -379,6 +380,12 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             },
         )
         assert fork["parent_session_id"] == source.id
+        assert (
+            store.get(ChatSession, fork["session_id"]).metadata["butler_initiated"]
+            is True
+        )
+        ordinary_fork = work.chat.fork_session(source.id, through_message_id=message.id)
+        assert ordinary_fork.metadata.get("butler_initiated") is not True
         assert work.chat_detail(selected.id, fork["session_id"])["kind"] == "main"
         assert (
             work.chat_detail(selected.id, source.id)["recent_messages"][0]["id"]
@@ -640,6 +647,10 @@ def test_new_goal_conversation_is_draft_until_explicit_start(tmp_path):
         assert created["goal"]["status"] == "draft"
         assert work.overview(project.id)["chats"][0]["id"] == created["session_id"]
         assert work.goals_overview(project.id)["goals"][0]["status"] == "draft"
+        assert (
+            store.get(ChatSession, created["session_id"]).metadata["butler_initiated"]
+            is True
+        )
 
     asyncio.run(scenario())
 
@@ -1285,6 +1296,333 @@ def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
     asyncio.run(scenario())
 
 
+def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_queue(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Main",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create(
+        ChatQueue(
+            id="chat-queue-" + session.id,
+            engagement_id=project.id,
+            session_id=session.id,
+            paused=True,
+            items=[{"id": "old", "key": "old", "status": "queued"}],
+        )
+    )
+    work = app.state.control_assistant_work
+    calls = []
+
+    async def prepare(request):
+        calls.append(request.messages[-1].content)
+        return SimpleNamespace(turn=SimpleNamespace(id="new-turn"))
+
+    monkeypatch.setattr(work.chat, "prepare_async", prepare)
+    monkeypatch.setattr(
+        work.chat,
+        "start_provider_turn",
+        lambda prepared: calls.append(prepared.turn.id),
+    )
+    result = asyncio.run(
+        work.message_chat(
+            project.id,
+            {
+                "session_id": session.id,
+                "text": "Check the checkpoint",
+                "delivery": "immediate",
+            },
+        )
+    )
+    assert result == {
+        "session_id": session.id,
+        "delivery": "started",
+        "turn_id": "new-turn",
+    }
+    assert calls == ["Check the checkpoint", "new-turn"]
+    assert work.queue.get(session.id).paused
+    assert [item["id"] for item in work.queue.get(session.id).items] == ["old"]
+
+
+def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    old_profile = store.create(
+        HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="old-model",
+            capabilities=HarnessCapabilities(models=["old-model"], mcp=True),
+        )
+    )
+    grok = store.create(
+        HarnessProfile(
+            name="Grok",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+            default_model="grok-model",
+            capabilities=HarnessCapabilities(models=["grok-model"], mcp=True),
+        )
+    )
+    child = store.create(
+        ProviderProfile(
+            name="DeepSeek",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["child-model"],
+        )
+    )
+    old_session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=old_profile.id,
+            model="old-model",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=old_profile.id,
+            harness_session_id=old_session.id,
+            model="old-model",
+        )
+    )
+    work = app.state.control_assistant_work
+    mcp = app.state.agent_security_tools.register_profile()
+    before = work.chat_settings(project.id, chat.id)
+    saved = work.set_chat_settings(
+        project.id,
+        {
+            "session_id": chat.id,
+            "expected_revision": before["revision"],
+            "settings": {
+                "backend": "harness",
+                "profile_id": grok.id,
+                "model": "grok-model",
+                "planning_enabled": True,
+                "mcp_server_ids": [mcp.id],
+                "allow_subagents": True,
+                "subagent_provider_id": child.id,
+                "subagent_model": "child-model",
+            },
+        },
+    )
+    assert saved["settings"]["profile_id"] == grok.id
+    prepared = []
+
+    def prepare_chat(**kwargs):
+        prepared.append(kwargs)
+        return None, SimpleNamespace(id="chat-turn"), SimpleNamespace(id="harness-turn")
+
+    monkeypatch.setattr(work.harness, "prepare_chat", prepare_chat)
+    monkeypatch.setattr(work.harness, "start_chat_turn", lambda _: None)
+    result = asyncio.run(
+        work.message_chat(
+            project.id,
+            {
+                "session_id": chat.id,
+                "text": "Reload AGENTS.md before resuming",
+                "delivery": "immediate",
+            },
+        )
+    )
+    assert result["delivery"] == "started"
+    assert len(prepared) == 1
+    assert prepared[0]["profile_id"] == grok.id
+    assert prepared[0]["planning_enabled"] is True
+    assert prepared[0]["mcp_server_ids"] == [mcp.id]
+    assert prepared[0]["provider_subagent"] == {
+        "provider_profile_id": child.id,
+        "model": "child-model",
+    }
+
+
+def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    harness = store.create(
+        HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+        )
+    )
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=harness.id,
+            model="model-a",
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Main",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=harness.id,
+            harness_session_id=harness_session.id,
+            model="model-a",
+        )
+    )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=project.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id="turn",
+            prompt="Check evidence",
+        )
+    )
+    work = app.state.control_assistant_work
+    monkeypatch.setattr(
+        work.chat,
+        "pending_turn",
+        lambda _: SimpleNamespace(id="turn", harness_turn_id=harness_turn.id),
+    )
+    seen = []
+
+    async def steer(turn_id, text, **kwargs):
+        seen.append((turn_id, text, kwargs["title"]))
+
+    monkeypatch.setattr(work.harness, "steer_turn", steer)
+    steered = asyncio.run(
+        work.message_chat(
+            project.id,
+            {
+                "session_id": session.id,
+                "text": "Focus on saved evidence",
+                "delivery": "immediate",
+            },
+        )
+    )
+    assert steered["delivery"] == "steered" and steered["turn_id"] == "turn"
+    assert seen == [(harness_turn.id, "Focus on saved evidence", "Butler guidance")]
+    assert work.queue.get(session.id).items == []
+
+    provider = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    provider_session = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Provider",
+            provider_profile_id=provider.id,
+            model="model-a",
+        )
+    )
+    held = asyncio.run(
+        work.message_chat(
+            project.id,
+            {
+                "session_id": provider_session.id,
+                "text": "Check evidence",
+                "delivery": "immediate",
+            },
+        )
+    )
+    assert held["delivery"] == "held" and held["reason"] == "active_turn_cannot_steer"
+    assert work.queue.get(provider_session.id).items == []
+
+
+def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Grok",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+        )
+    )
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=profile.id,
+            model="grok-model",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness_session.id,
+            model="grok-model",
+        )
+    )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=project.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=chat.id,
+            chat_turn_id="chat-turn",
+            prompt="Read the current goal",
+        )
+    )
+    work = app.state.control_assistant_work
+    monkeypatch.setattr(
+        work.chat,
+        "pending_turn",
+        lambda _: SimpleNamespace(id="chat-turn", harness_turn_id=harness_turn.id),
+    )
+
+    async def unexpected_steer(*args, **kwargs):
+        raise AssertionError("Grok must not receive a live steer")
+
+    monkeypatch.setattr(work.harness, "steer_turn", unexpected_steer)
+    for delivery in ("immediate", "steer"):
+        held = asyncio.run(
+            work.message_chat(
+                project.id,
+                {
+                    "session_id": chat.id,
+                    "text": "Reload AGENTS.md",
+                    "delivery": delivery,
+                },
+            )
+        )
+        assert held == {
+            "session_id": chat.id,
+            "delivery": "held",
+            "reason": "active_turn_cannot_steer",
+            "turn_id": "chat-turn",
+        }
+    assert work.queue.get(chat.id).items == []
+    assert store.find_entities(ChatMessage, {"session_id": chat.id}) == []
+
+
 def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypatch):
     store, app, _ = _app(tmp_path)
     project = store.create(Engagement(name="Selected"))
@@ -1340,6 +1678,7 @@ def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypa
         saved = store.get(ChatSession, result["session_id"])
         assert saved.engagement_id == project.id
         assert saved.metadata.get("control_assistant") is not True
+        assert saved.metadata["butler_initiated"] is True
         assert (
             work.chat_detail(project.id, saved.id)["pending_turn"]["id"]
             == result["turn_id"]
@@ -1381,6 +1720,7 @@ def test_start_remote_harness_chat_keeps_peer_messaging_off(tmp_path, monkeypatc
         session = store.get(ChatSession, result["session_id"])
         assert session.metadata.get("allow_agent_messaging") is False
         assert session.metadata.get("control_assistant") is not True
+        assert session.metadata["butler_initiated"] is True
 
     asyncio.run(scenario())
 
@@ -1434,18 +1774,35 @@ def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch)
             name="Codex", kind=HarnessKind.CODEX_APP_SERVER, executable="/bin/true"
         )
     )
+    harness_session = store.create(
+        HarnessSession(
+            engagement_id=selected.id,
+            harness_profile_id=profile.id,
+            model="model-a",
+        )
+    )
     session = store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Running chat",
             backend=ChatBackend.HARNESS,
             harness_profile_id=profile.id,
-            harness_session_id="harness-session",
+            harness_session_id=harness_session.id,
             model="model-a",
         )
     )
+    harness_turn = store.create(
+        HarnessTurn(
+            engagement_id=selected.id,
+            harness_session_id=harness_session.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id="chat-turn",
+            prompt="Check status",
+        )
+    )
     work = app.state.control_assistant_work
-    active = [SimpleNamespace(id="chat-turn", harness_turn_id="harness-turn")]
+    active = [SimpleNamespace(id="chat-turn", harness_turn_id=harness_turn.id)]
     calls = []
     monkeypatch.setattr(
         work.chat, "pending_turn", lambda _id: active[0] if active else None
@@ -1482,13 +1839,13 @@ def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch)
         }
         assert calls[0] == (
             "steer",
-            "harness-turn",
+            harness_turn.id,
             "Check only the summary",
             "control-assistant",
         )
         stopped = await work.stop_chat(selected.id, session.id)
         assert stopped["stopped"] is True
-        assert calls[1][:2] == ("stop", "harness-turn")
+        assert calls[1][:2] == ("stop", harness_turn.id)
 
     asyncio.run(scenario())
 
@@ -1870,3 +2227,95 @@ def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
         },
     )
     assert stale.status_code in {400, 409, 422}
+
+
+def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        HarnessProfile(
+            name="Codex fixture",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            default_model="test-model",
+            executable="/bin/true",
+            privacy={"local_only": True},
+            capabilities=HarnessCapabilities(
+                models=["test-model"],
+                model_options=[
+                    HarnessModelOptions(
+                        model="test-model",
+                        reasoning_efforts=[
+                            HarnessRuntimeOption(id="low", label="Low"),
+                            HarnessRuntimeOption(id="max", label="Max"),
+                        ],
+                    )
+                ],
+            ),
+        )
+    )
+    harness = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=profile.id,
+            model="test-model",
+            metadata={"runtime_options": {"reasoning_effort": "low"}},
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness.id,
+            model="test-model",
+            metadata={"control_assistant": True},
+        )
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    url = f"/api/v1/chat-sessions/{chat.id}/assistant-config"
+    with TestClient(app) as client:
+        before = client.get(url, headers=headers)
+        assert before.status_code == 200
+        assert before.json()["settings"]["harness_reasoning_effort"] == "low"
+        concurrent = client.patch(
+            url,
+            headers=headers,
+            json={
+                "expected_revision": before.json()["revision"],
+                "settings": {"harness_reasoning_effort": "low"},
+            },
+        )
+        assert concurrent.status_code == 200, concurrent.text
+        stale = client.patch(
+            url,
+            headers=headers,
+            json={
+                "expected_revision": before.json()["revision"],
+                "settings": {"harness_reasoning_effort": "max"},
+            },
+        )
+        assert stale.status_code in {400, 409, 422}
+        changed = client.patch(
+            url,
+            headers=headers,
+            json={
+                "expected_revision": client.get(url, headers=headers).json()[
+                    "revision"
+                ],
+                "settings": {"harness_reasoning_effort": "max"},
+            },
+        )
+        assert changed.status_code == 200, changed.text
+        assert (
+            client.get(url, headers=headers).json()["settings"][
+                "harness_reasoning_effort"
+            ]
+            == "max"
+        )
+    assert (
+        store.get(HarnessSession, harness.id).metadata["runtime_options"][
+            "reasoning_effort"
+        ]
+        == "low"
+    )

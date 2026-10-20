@@ -12,6 +12,33 @@ export interface SettingCatalogEntry {
 
 export const settingCatalog: SettingCatalogEntry[] = [
   {
+    id: "settings.butler-instructions",
+    label: "Nebula-wide Butler instructions",
+    description: "Upload or edit the Nebula-wide BUTLER.md file and check its status",
+    category: "Automation",
+    scope: "Workspace",
+    target: "butler-instructions-settings",
+    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "always on", "15 minutes", "scheduled", "act", "projects", "goals", "safe handoff", "provider continuation", "deepseek"],
+  },
+  {
+    id: "settings.butler-effort",
+    label: "Butler model and effort",
+    description: "Choose Butler's model and reasoning effort for direct messages and scheduled checks",
+    category: "Models",
+    scope: "Workspace",
+    target: "butler-settings",
+    keywords: ["butler", "model", "effort", "reasoning", "max", "scheduled", "15 minutes", "background"],
+  },
+  {
+    id: "settings.butler-activity",
+    label: "Butler scheduled activity",
+    description: "Read Butler's saved scheduled-check transcript and linked recovery reports in Oversight",
+    category: "Automation",
+    scope: "Project",
+    target: "butler-oversight",
+    keywords: ["butler", "scheduled", "checks", "transcript", "history", "recovery goals", "oversight"],
+  },
+  {
     id: "settings.butler-voice",
     label: "Butler Voice timeout",
     description: "Pause paid Voice sessions after quiet time; open the compact control in Butler settings",
@@ -23,11 +50,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.usage",
     label: "Usage and credits",
-    description: "See provider and harness balances, rate limits, and Nebula activity",
+    description: "See Codex and Grok credits separately from included usage, plus other balances and Nebula activity",
     category: "Models",
     scope: "Workspace",
     target: "usage-settings",
-    keywords: ["usage", "credits", "balance", "remaining", "quota", "rate limit", "tokens", "provider", "harness", "codex", "openrouter", "deepseek"],
+    keywords: ["usage", "credits", "balance", "remaining", "quota", "rate limit", "tokens", "provider", "harness", "codex", "grok", "grok build", "openrouter", "deepseek"],
   },
   {
     id: "settings.appearance",
@@ -86,11 +113,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.harnesses",
     label: "Assistant harnesses",
-    description: "Configure Codex and other assistant harness capabilities",
+    description: "Configure assistant harnesses and ask providers, Codex, or Grok to share an optional task plan with subagents while keeping their normal tools available; Butler can switch the saved main harness for the next message",
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "assistant", "steer", "interrupt", "capabilities"],
+    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "plan only", "safe handoff", "provider goal", "main agent switch"],
   },
   {
     id: "settings.mcp",

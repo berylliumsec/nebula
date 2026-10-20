@@ -28,8 +28,11 @@ test("older conversation link restores after the recent page wins a Core read ra
     expect(pairResponse.ok(), await pairResponse.text()).toBe(true);
     const pairing = await pairResponse.json() as {secret: string; confirmation_code: string};
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    // PairingGate clears the fragment before redeeming, then reloads the page.
+    // Wait for that reload so it cannot abort the older-conversation navigation.
+    const pairedLoad = page.waitForEvent("load");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await page.waitForURL(url => !url.hash, {waitUntil: "load"});
+    await pairedLoad;
 
     let exactReads = 0;
     let terminalBootstrapReads = 0;
@@ -48,6 +51,15 @@ test("older conversation link restores after the recent page wins a Core read ra
     await expect(page.getByText("Older pinned context", {exact: true}).last()).toBeVisible();
     await page.reload();
     await expect(page.getByText("Older pinned context", {exact: true}).last()).toBeVisible();
+    const show = (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations";
+    await page.getByRole("button", {name: show, exact: true}).click();
+    const sidebar = page.getByRole("complementary", {name: "Conversations"});
+    const loadMore = sidebar.getByRole("button", {name: "Load older conversations"});
+    await expect(loadMore).toBeVisible();
+    await loadMore.focus();
+    await page.keyboard.press("Enter");
+    await expect(loadMore).toHaveCount(0);
+    await expect(sidebar.locator('.session-select[data-session-id="navigation-older"]')).toBeVisible();
     expect(exactReads).toBeGreaterThanOrEqual(2);
     expect(exactReads).toBeLessThanOrEqual(4);
     expect(terminalBootstrapReads).toBe(0);

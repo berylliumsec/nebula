@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import inspect
 
 from nebula.v3.api import create_app
-from nebula.v3.domain import ChatSession, Engagement, utc_now
+from nebula.v3.domain import ChatGoal, ChatSession, Engagement, utc_now
 from nebula.v3.storage import NebulaStore
 
 
@@ -102,3 +102,49 @@ def test_recent_conversation_page_is_scoped_ordered_and_indexed(tmp_path):
         index["name"]
         for index in inspect(store.database.engine).get_indexes("entities")
     }
+
+
+def test_older_butler_recovery_chat_has_read_only_sidebar_provenance(tmp_path):
+    store = NebulaStore(tmp_path / "recent.db")
+    store.create(Engagement(id="project-a", name="Project A"))
+    store.create_many(
+        [
+            ChatSession(
+                id="recovery",
+                engagement_id="project-a",
+                title="Paused goal",
+                provider_profile_id="provider",
+                model="model",
+            ),
+            ChatSession(
+                id="ordinary",
+                engagement_id="project-a",
+                title="Recover paused goal",
+                provider_profile_id="provider",
+                model="model",
+            ),
+        ]
+    )
+    store.create(
+        ChatGoal(
+            engagement_id="project-a",
+            session_id="recovery",
+            objective="Unblock",
+            completion_criteria=["Report result"],
+            metadata={"butler_recovery_case_id": "case-1"},
+        )
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    with TestClient(create_app(store, auth_token="test-token")) as client:
+        listed = client.get(
+            "/api/v1/chat-sessions",
+            params={"engagement_id": "project-a", "recent_first": "true"},
+            headers=headers,
+        )
+        recovered = client.get("/api/v1/chat-sessions/recovery", headers=headers)
+    assert listed.status_code == recovered.status_code == 200
+    by_id = {item["id"]: item for item in listed.json()}
+    assert by_id["recovery"]["metadata"]["butler_initiated"] is True
+    assert recovered.json()["metadata"]["butler_initiated"] is True
+    assert "butler_initiated" not in by_id["ordinary"]["metadata"]
+    assert "butler_initiated" not in store.get(ChatSession, "recovery").metadata

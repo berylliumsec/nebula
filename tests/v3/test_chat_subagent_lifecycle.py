@@ -826,15 +826,38 @@ def test_settle_charges_only_what_accrual_left_uncharged(tmp_path: Path) -> None
     child_turn = store.update(
         ChatTurn,
         child_turn.id,
-        {"usage": ChatTokenUsage(input_tokens=90, output_tokens=10, total_tokens=100)},
+        {
+            "usage": ChatTokenUsage(
+                input_tokens=90,
+                output_tokens=10,
+                total_tokens=100,
+                cached_input_tokens=60,
+                cache_creation_input_tokens=5,
+                cost_usd=0.10,
+            )
+        },
         expected_revision=child_turn.revision,
     )
     service.charge_child_usage(child_turn)
     assert store.get(ChatGoal, goal.id).usage.total_tokens == 100
+    assert store.get(ChatGoal, goal.id).usage.cached_input_tokens == 60
+    assert service.view(record)["usage"]["cached_input_tokens"] == 60
+    first_revision = store.get(ChatGoal, goal.id).revision
+    service.charge_child_usage(child_turn)
+    assert store.get(ChatGoal, goal.id).revision == first_revision
     child_turn = store.update(
         ChatTurn,
         child_turn.id,
-        {"usage": ChatTokenUsage(input_tokens=130, output_tokens=20, total_tokens=150)},
+        {
+            "usage": ChatTokenUsage(
+                input_tokens=130,
+                output_tokens=20,
+                total_tokens=150,
+                cached_input_tokens=100,
+                cache_creation_input_tokens=8,
+                cost_usd=0.15,
+            )
+        },
         expected_revision=child_turn.revision,
     )
     service._charge_parent_goal(store.get(ChatSubagent, record.id), child_turn)
@@ -842,11 +865,52 @@ def test_settle_charges_only_what_accrual_left_uncharged(tmp_path: Path) -> None
     service.charge_child_usage(child_turn)
 
     assert store.get(ChatGoal, goal.id).usage.total_tokens == 150
+    assert store.get(ChatGoal, goal.id).usage.cached_input_tokens == 100
+    assert store.get(ChatGoal, goal.id).usage.cache_creation_input_tokens == 8
+    assert store.get(ChatGoal, goal.id).usage.cost_usd == pytest.approx(0.15)
+    charged_revision = store.get(ChatGoal, goal.id).revision
+    service.charge_child_usage(child_turn)
+    assert store.get(ChatGoal, goal.id).revision == charged_revision
     (charge,) = store.list_entities(ChatGoalUsageCharge)
-    assert charge.usage.total_tokens == 150
+    assert charge.usage == child_turn.usage
+
+    completed = store.update(
+        ChatTurn,
+        child_turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=child_turn.revision,
+    )
+    asyncio.run(
+        service._child_settled(
+            store.get(ChatSubagent, record.id), completed, deliver=False
+        )
+    )
+    saved = store.get(ChatSubagent, record.id)
+    assert saved.usage.cached_input_tokens == 100
+    assert saved.usage.cache_creation_input_tokens == 8
+    assert saved.usage.cost_usd == pytest.approx(0.15)
 
 
 # -- GOAL-5: active time is time Nebula works on the goal --------------------
+
+
+def test_paused_goal_settlement_skips_subagent_scan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store, _, _, _ = _setup(tmp_path, RoutedProvider([], []))
+    session = _session(store)
+    goals, running = _running_goal(store, session)
+    paused = goals.write(
+        session.id,
+        GoalWrite(expected_revision=running.revision, action="pause"),
+    )
+
+    def unexpected_scan(_session_id: str) -> bool:
+        raise AssertionError("a paused goal cannot accrue active time")
+
+    monkeypatch.setattr(goals, "has_working_subagents", unexpected_scan)
+    goals.settle_active_time(session.id)
+    assert goals.get(session.id).revision == paused.revision
 
 
 def test_goal_active_time_excludes_idle_gaps_between_turns(

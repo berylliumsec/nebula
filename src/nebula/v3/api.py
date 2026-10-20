@@ -328,6 +328,8 @@ from .domain import (
     ChatMessage,
     ChatRole,
     ChatSession,
+    ChatTaskPlan,
+    ChatPlanDirective,
     ChatTurn,
     ChatTurnStatus,
     ChatTokenUsage,
@@ -695,6 +697,9 @@ CUSTOM_RESOURCES = {
     "butler_decisions",
     "butler_authority_policies",
     "butler_actions",
+    "butler_issue_destinations",
+    "butler_issue_scans",
+    "butler_issue_candidates",
     "butler_recovery_cases",
     "butler_agent_reports",
     "butler_account_credits",
@@ -1070,6 +1075,7 @@ class ChatSessionForkRequest(NebulaModel):
     through_latest: bool = False
     title: str | None = Field(default=None, min_length=1, max_length=300)
     side_chat: bool = False
+    butler_initiated: bool = False
 
 
 class ChatSessionRewindRequest(NebulaModel):
@@ -2548,6 +2554,16 @@ def create_app(
                     # Its scans run off the event loop and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
+                    try:
+                        await harness_runtime.reconcile_idle_running_goals()
+                    except Exception as exc:
+                        record_caught_exception(
+                            "harnesses",
+                            "harnesses.goal_recovery_tick_failed",
+                            "A running harness goal reconciliation pass failed; the next pass retries.",
+                            exc,
+                            stage="goal-recovery",
+                        )
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),
@@ -2645,7 +2661,13 @@ def create_app(
     from .control_assistant_work import ControlAssistantWork
 
     control_assistant_work = ControlAssistantWork(
-        store, provider_chat, chat_queue, harness_runtime, app, token
+        store,
+        provider_chat,
+        chat_queue,
+        harness_runtime,
+        app,
+        token,
+        harness_quota_observer,
     )
     from .butler_authority import ButlerAuthorityService
 
@@ -2653,8 +2675,20 @@ def create_app(
         store, control_assistant_work, memory_service=butler_memory_service
     )
     butler_oversight.authority_service = butler_authority
+    from .butler_improvements import ButlerImprovementService
+
+    butler_improvements = ButlerImprovementService(
+        store, harness_runtime, credentials, mcp_probes
+    )
+    butler_oversight.improvement_service = butler_improvements
     from .butler_recovery import ButlerRecoveryAgent, ButlerRecoveryService
 
+    butler_instructions_root = (
+        Path(execution_data_root).expanduser().resolve()
+        if execution_data_root is not None
+        else browser_root
+    )
+    harness_runtime.butler_instructions_root = butler_instructions_root
     butler_oversight.recovery_service = ButlerRecoveryService(
         store,
         ButlerRecoveryAgent(
@@ -2664,6 +2698,7 @@ def create_app(
             artifact_store=artifact_store,
             work=control_assistant_work,
             memory=butler_memory_service,
+            instructions_root=butler_instructions_root,
             settings_api=settings_assistant_api,
             notebooks=(
                 harness_runtime.mcp_service.notebook_tools.notebooks
@@ -2672,6 +2707,7 @@ def create_app(
                 else None
             ),
         ),
+        instructions_root=butler_instructions_root,
     )
     if tool_platform is not None:
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
@@ -2683,6 +2719,7 @@ def create_app(
     app.state.store = store
     app.state.butler_oversight = butler_oversight
     app.state.butler_authority = butler_authority
+    app.state.butler_improvements = butler_improvements
     app.state.openrouter_credit_observer = openrouter_credit_observer
     app.state.harness_quota_observer = harness_quota_observer
     app.state.butler_memory_service = butler_memory_service
@@ -2700,10 +2737,8 @@ def create_app(
     app.state.allow_browser_diagnostic_events = allow_browser_diagnostic_events
     app.state.allow_insecure_device_pairing = allow_insecure_device_pairing
     app.state.mission_service = missions
-    app.state.delegated_mission_service = delegated_missions
     app.state.harness_runtime_service = harness_runtime
     app.state.mcp_probe_service = mcp_probes
-    app.state.operator_profile_service = operators
     app.state.credential_store = credentials
     app.state.tool_platform = tool_platform
     app.state.automation_runtime = automation_runtime
@@ -2716,7 +2751,6 @@ def create_app(
     app.state.execution_ai_service = execution_ai
     app.state.writing_ai_service = writing_ai
     app.state.scope_import_service = scope_imports
-    app.state.setup_service = setup
     app.state.terminal_command_history = terminal_commands
     app.state.executable_missions_enabled = executable_missions_enabled
     app.add_middleware(
@@ -10470,6 +10504,7 @@ def create_app(
                 allow_cloud_knowledge=request.allow_cloud_knowledge,
                 max_artifact_queries=request.max_artifact_queries,
                 harness_mode=request.harness_mode,
+                planning_enabled=request.planning_enabled,
                 harness_reasoning_effort=request.harness_reasoning_effort,
                 harness_service_tier=request.harness_service_tier,
                 harness_cyber_access_program=request.harness_cyber_access_program,
@@ -11507,10 +11542,24 @@ def create_app(
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
+    from .butler_instructions_management import butler_instructions_router
+
+    app.include_router(
+        butler_instructions_router(butler_instructions_root),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
     from .butler_authority import authority_router
 
     app.include_router(
         authority_router(butler_authority),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+    from .butler_improvements import improvements_router
+
+    app.include_router(
+        improvements_router(butler_improvements, butler_oversight.notify),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
@@ -12091,6 +12140,29 @@ def create_app(
             "settings": chat_assistant_config(store, session),
         }
 
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/task-plans",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_chat_task_plans(session_id: str) -> dict[str, Any]:
+        session = store.get(ChatSession, session_id)
+        return {
+            "session_id": session.id,
+            "plans": [
+                item.model_dump(mode="json")
+                for item in store.list_session_entities(
+                    ChatTaskPlan, session.id, newest_first=True, limit=50
+                )
+            ],
+            "directives": [
+                item.model_dump(mode="json")
+                for item in store.list_session_entities(
+                    ChatPlanDirective, session.id, newest_first=True, limit=50
+                )
+            ],
+        }
+
     @app.patch(
         f"{API_PREFIX}/chat-sessions/{{session_id}}/assistant-config",
         tags=["chat-sessions"],
@@ -12367,6 +12439,7 @@ def create_app(
                 through_latest=request.through_latest,
                 title=request.title,
                 side_chat=request.side_chat,
+                butler_initiated=request.butler_initiated,
                 harness_session_id=harness_session_id,
             )
         except Exception:  # diagnostic-expected: the failure is re-raised once the vendor branch is discarded
@@ -15195,6 +15268,21 @@ def _register_crud_routes(
                 limit=limit,
                 recent_first=recent_first and model is ChatSession,
             )
+            if model is ChatSession:
+                legacy_ids = store.butler_recovery_session_ids(
+                    item.id
+                    for item in entities
+                    if isinstance(item, ChatSession)
+                    and item.metadata.get("butler_initiated") is not True
+                )
+                entities = [
+                    item.model_copy(
+                        update={"metadata": {**item.metadata, "butler_initiated": True}}
+                    )
+                    if isinstance(item, ChatSession) and item.id in legacy_ids
+                    else item
+                    for item in entities
+                ]
             if model is HarnessSession and entities:
 
                 def all_entities(related_model: type[Entity]) -> list[Entity]:
@@ -15280,6 +15368,14 @@ def _register_crud_routes(
     def make_get() -> Callable[..., Any]:
         async def get_entity(entity_id: str) -> Entity:
             entity = store.get(model, entity_id)
+            if (
+                isinstance(entity, ChatSession)
+                and entity.metadata.get("butler_initiated") is not True
+                and entity.id in store.butler_recovery_session_ids([entity.id])
+            ):
+                entity = entity.model_copy(
+                    update={"metadata": {**entity.metadata, "butler_initiated": True}}
+                )
             entity = (
                 knowledge_summary(entity)
                 if isinstance(entity, KnowledgeSource)

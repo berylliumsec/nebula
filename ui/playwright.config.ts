@@ -68,7 +68,7 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
         {name: `assistant-real-chromium-${width}`, use: {...devices["Pixel 5"], viewport: {width, height: 844}}},
         {name: `assistant-real-webkit-${width}`, use: {...devices["iPhone 13"], viewport: {width, height: 844}}},
       ]),
-    ].map(project => ({...project, testMatch: ["**/real-core.spec.ts", "**/work-import.spec.ts"], grep: /assistant upgrade|project removal|project execution mode|mcp import|ssh environments|work hub|runtime usage|notebook real Core/})),
+    ].map(project => ({...project, testMatch: ["**/real-core.spec.ts", "**/work-import.spec.ts"], grep: /assistant upgrade|assistant planning|project removal|project execution mode|mcp import|ssh environments|work hub|runtime usage|notebook real Core/})),
     ...[
       { name: "browser-chromium-landscape", device: "Pixel 5" },
       { name: "browser-webkit-landscape", device: "iPhone 13" },

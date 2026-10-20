@@ -17,15 +17,20 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     Approval,
+    ChatGoal,
     ChatSession,
+    ChatTurn,
     ChatTokenUsage,
     HarnessCapabilities,
     HarnessDetailedUsage,
     HarnessKind,
+    HarnessNativeCapabilities,
     HarnessProfile,
     HarnessModelOptions,
     HarnessRuntimeOption,
     ProviderProfile,
+    ProviderCapabilityVerification,
+    ProviderVerificationStatus,
     OperationEvent,
     ToolCall,
 )
@@ -130,12 +135,84 @@ class InertConnection(HarnessConnection):
         if self.request.session.engagement_id == "diagnostic":
             yield HarnessEvent(type="completed", message="OK")
             return
+        if self.runtime.scenario in {"planning", "planning_managed"}:
+            if self.runtime.scenario == "planning":
+                answer = "PLAN_OPTIONAL_COMPLETE"
+                yield HarnessEvent(type="message_delta", delta=answer)
+                yield HarnessEvent(type="completed", message=answer)
+                return
+            catalog = {
+                tool["name"]
+                for tool in self.runtime._gateway_catalog(self.request.session)["tools"]
+            }
+            if not {"workspace.read", "plan.submit"} <= catalog:
+                raise RuntimeError(
+                    "The advisory plan and normal tool were not offered together"
+                )
+            for _ in range(2):
+                read = await self.runtime._gateway_call(
+                    self.request.session,
+                    "workspace.read",
+                    {"path": "plan-target.txt", "starting_line": 1, "line_count": 5},
+                )
+                if read.get(
+                    "isError"
+                ) or "Synthetic planner evidence" not in json.dumps(read):
+                    raise RuntimeError(
+                        "Normal tool use was blocked by advisory planning"
+                    )
+                if _ == 0:
+                    submitted = await self.runtime._gateway_call(
+                        self.request.session,
+                        "plan.submit",
+                        {
+                            "steps": [
+                                {
+                                    "action": "Read plan-target.txt",
+                                    "expected_outcome": "Report the synthetic evidence",
+                                }
+                            ],
+                            "tool_names": ["workspace.read"],
+                            "files": ["plan-target.txt"],
+                        },
+                    )
+                    if (
+                        submitted.get("structuredContent", {}).get("phase")
+                        != "execution"
+                    ):
+                        raise RuntimeError("Core did not save the advisory task plan")
+            yield HarnessEvent(type="message_delta", delta="PLANNED_READ_COMPLETE")
+            yield HarnessEvent(type="completed", message="PLANNED_READ_COMPLETE")
+            return
         if self.runtime.scenario == "goal":
             turn = self.runtime._active_gateway_turn(self.request.session.id)
             failure_marker = self.runtime.fixture_root / "goal-failed-once"
             if "FAIL_ONCE" in prompt and not failure_marker.exists():
                 failure_marker.write_text(turn.id)
                 raise HarnessTransportError("Inert goal fixture failed once")
+            block_marker = (
+                self.runtime.fixture_root / f"goal-blocked-{turn.chat_session_id}"
+            )
+            if "BLOCK_ROUTE" in prompt and not block_marker.exists():
+                offered = {
+                    tool["name"]
+                    for tool in self.runtime._gateway_catalog(self.request.session)[
+                        "tools"
+                    ]
+                }
+                if "goal.block" not in offered:
+                    raise RuntimeError("The active Core goal cannot report a blocker")
+                result = await self.runtime._gateway_call(
+                    self.request.session,
+                    "goal.block",
+                    {"reason": "Inert worker route is unavailable"},
+                )
+                if (
+                    result.get("isError")
+                    or result.get("structuredContent", {}).get("status") != "blocked"
+                ):
+                    raise RuntimeError("The Core goal blocker was not saved")
+                block_marker.write_text(turn.id)
             yield HarnessEvent(
                 type="item_upsert",
                 item_id="native-goal",
@@ -319,10 +396,12 @@ class InertAdapter(HarnessAdapter):
         return HarnessHealth(
             profile_id=profile.id,
             healthy=True,
-            kind=self.kind,
+            kind=profile.kind,
             authentication_state="verified",
             capabilities=HarnessCapabilities(
                 detailed_usage=self.runtime.scenario == "goal",
+                mcp=profile.kind == HarnessKind.CODEX_APP_SERVER
+                or profile.capabilities.mcp,
                 models=["fixture", "fixture-next"]
                 if self.runtime.scenario in {"settings", "daybreak", "goal"}
                 else ["fixture"],
@@ -333,6 +412,11 @@ class InertAdapter(HarnessAdapter):
                         reasoning_efforts=[
                             HarnessRuntimeOption(id="low", label="Low"),
                             HarnessRuntimeOption(id="high", label="High"),
+                            *(
+                                [HarnessRuntimeOption(id="max", label="Max")]
+                                if self.runtime.scenario == "goal"
+                                else []
+                            ),
                         ],
                         default_reasoning_effort="low",
                         cyber_access_programs=(
@@ -367,6 +451,20 @@ class InertAdapter(HarnessAdapter):
 
 class FailureInjectionRuntime(HarnessRuntimeService):
     """Process barriers belong only to this inert acceptance executable."""
+
+    async def _ensure_harness_plan(self, turn, session):
+        if self.scenario == "planning_legacy" and turn.chat_turn_id:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
+                snapshot = dict(chat_turn.request_snapshot)
+                snapshot.pop("plan_behavior")
+                self.store.update(
+                    ChatTurn,
+                    chat_turn.id,
+                    {"request_snapshot": snapshot},
+                    expected_revision=chat_turn.revision,
+                )
+        return await super()._ensure_harness_plan(turn, session)
 
     async def resolve_approval(self, approval):
         if self.scenario == "crash_after_record":
@@ -447,12 +545,39 @@ if __name__ == "__main__":
             "agent_messaging",
             "goal",
             "navigation",
+            "planning",
+            "planning_legacy",
+            "planning_managed",
         ],
         default="single",
     )
     args = parser.parse_args()
+    if args.scenario == "planning_managed":
+        (args.root / "plan-target.txt").write_text("Synthetic planner evidence\n")
     store = NebulaStore(args.root / "nebula.db")
     scratch_id = bootstrap_scratch_project(store)
+    if args.scenario == "planning_legacy" and not any(
+        profile.id == "handoff-provider"
+        for profile in store.list_entities(ProviderProfile)
+    ):
+        store.create(
+            ProviderProfile(
+                id="handoff-provider",
+                name="Inert handoff provider",
+                provider_type="ollama",
+                is_local=True,
+                model_allowlist=["handoff-fixture"],
+                capability_verifications={
+                    "handoff-fixture": ProviderCapabilityVerification(
+                        model="handoff-fixture",
+                        status=ProviderVerificationStatus.VERIFIED,
+                    )
+                },
+                metadata={
+                    "options": {"context_window": 32_000, "max_output_tokens": 4_096}
+                },
+            )
+        )
     if args.scenario == "sidebar" and scratch_id:
         if not any(
             profile.id == "sidebar-provider"
@@ -480,6 +605,15 @@ if __name__ == "__main__":
                     {"subagent_id": "fixture-subagent"},
                 ),
                 ("sidebar-branch", "Ordinary branch", "sidebar-parent", {}),
+                ("sidebar-butler", "Butler", None, {"control_assistant": True}),
+                ("sidebar-recovery", "Recover paused goal", None, {}),
+                (
+                    "sidebar-butler-chat",
+                    "Review blocked goal",
+                    None,
+                    {"butler_initiated": True},
+                ),
+                ("sidebar-ordinary-recovery", "Recover ordinary goal", None, {}),
             ):
                 store.create(
                     ChatSession(
@@ -492,6 +626,15 @@ if __name__ == "__main__":
                         metadata=metadata,
                     )
                 )
+            store.create(
+                ChatGoal(
+                    engagement_id=scratch_id,
+                    session_id="sidebar-recovery",
+                    objective="Recover paused goal",
+                    completion_criteria=["Report result"],
+                    metadata={"butler_recovery_case_id": "fixture-case"},
+                )
+            )
     if args.scenario == "navigation" and scratch_id:
         store.create(
             ProviderProfile(
@@ -506,9 +649,13 @@ if __name__ == "__main__":
         for index in range(101):
             store.create(
                 ChatSession(
-                    id="navigation-older" if index == 0 else f"navigation-recent-{index}",
+                    id="navigation-older"
+                    if index == 0
+                    else f"navigation-recent-{index}",
                     engagement_id=scratch_id,
-                    title="Older pinned context" if index == 0 else f"Recent context {index}",
+                    title="Older pinned context"
+                    if index == 0
+                    else f"Recent context {index}",
                     provider_profile_id="navigation-provider",
                     model="fixture",
                 )
@@ -517,6 +664,8 @@ if __name__ == "__main__":
     adapter = InertAdapter()
     if args.scenario == "daybreak":
         adapter.kind = HarnessKind.CODEX_APP_SERVER
+    if args.scenario == "planning_managed":
+        adapter.kind = HarnessKind.CLAUDE_AGENT_SDK
     runtime = FailureInjectionRuntime(
         store,
         credential_store=CredentialStore(),
@@ -536,13 +685,63 @@ if __name__ == "__main__":
                 name="Codex Daybreak fixture"
                 if args.scenario == "daybreak"
                 else "Approval fixture",
-                kind="codex_app_server" if args.scenario == "daybreak" else "grok_acp",
+                kind=(
+                    "codex_app_server"
+                    if args.scenario == "daybreak"
+                    else "claude_agent_sdk"
+                    if args.scenario == "planning_managed"
+                    else "grok_acp"
+                ),
                 executable="/bin/true",
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},
                 capabilities=HarnessCapabilities(
-                    detailed_usage=args.scenario == "goal"
+                    detailed_usage=args.scenario == "goal",
+                    mcp=args.scenario not in {"planning", "planning_legacy"},
                 ),
+                native_capabilities=HarnessNativeCapabilities(
+                    shell=args.scenario
+                    in {"planning", "planning_legacy", "planning_managed"}
+                ),
+            )
+        )
+    if args.scenario == "planning_managed":
+        store.create(
+            HarnessProfile(
+                id="inert-unsupported",
+                name="Unsupported planning fixture",
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+                default_model="fixture",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(models=["fixture"], mcp=False),
+                native_capabilities=HarnessNativeCapabilities(shell=True),
+            )
+        )
+        store.create(
+            HarnessProfile(
+                id="inert-codex",
+                name="Unrestricted Codex planning fixture",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="fixture",
+                permission_mode="unrestricted",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
+                native_capabilities=HarnessNativeCapabilities(shell=True),
+            )
+        )
+        store.create(
+            HarnessProfile(
+                id="inert-grok",
+                name="Unrestricted Grok planning fixture",
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+                default_model="fixture",
+                permission_mode="unrestricted",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
+                native_capabilities=HarnessNativeCapabilities(shell=True),
             )
         )
     ssh_service = None

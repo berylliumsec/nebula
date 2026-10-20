@@ -217,9 +217,6 @@ class SshEnvironmentService:
             {"last_probe": snapshot},
         )
 
-    def resolve_for_chat(self, ids: list[str] | None) -> tuple[SshEnvironment, ...]:
-        return resolve_ssh_environments(self.store, ids, config_path=self.config_path)
-
 
 def resolve_ssh_environments(
     store: NebulaStore,

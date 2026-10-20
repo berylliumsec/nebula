@@ -347,6 +347,13 @@ textarea { border-radius: var(--radius-control); }
 .chat-message.operator:hover > .chat-message-body > header,
 .chat-message.operator:focus-within > .chat-message-body > header { opacity: 1; }
 .chat-message.assistant > .chat-message-body { min-width: 0; }
+.chat-task-plan { max-width: 100%; margin: 8px 0 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-muted); color: var(--text); font-size: var(--type-meta); overflow-wrap: anywhere; }
+.chat-task-plan > summary { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 36px; cursor: pointer; font-weight: var(--weight-semibold); }
+.chat-task-plan > summary span { margin-left: auto; color: var(--muted); font-weight: normal; }
+.chat-task-plan > p { margin: 6px 0; }
+.chat-task-plan ol { margin: 8px 0; padding-left: 24px; }
+.chat-task-plan li + li { margin-top: 6px; }
+.chat-task-plan li small { display: block; color: var(--muted); }
 .chat-message.assistant header { align-items: baseline; margin-bottom: 8px; }
 .chat-message.assistant header strong { color: var(--muted-strong); font-weight: var(--weight-semibold); }
 .chat-message.assistant header .chat-message-time { margin-left: auto; }

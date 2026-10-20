@@ -72,6 +72,116 @@ def test_product_search_finds_other_operator_destinations(monkeypatch):
         assert any(item["heading"] == destination for item in matches), question
 
 
+def test_product_search_explains_mcp_directory_and_full_schema_cost(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "MCP tool directory on demand checked servers always loaded full schemas"
+    )
+    assert any(
+        "compact" in str(item["text"]).lower()
+        and "full" in str(item["text"]).lower()
+        and "schema" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_explains_harness_goal_blocking(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Why does blocking a Work item not stop Core goal continuation?"
+    )
+    assert any(
+        "goal.block" in str(item["text"]) and "work item" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where do I put the Nebula-wide BUTLER.md instructions for idle projects?"
+    )
+    assert any(
+        ".butler/BUTLER.md" in str(item["text"]) and "15 minutes" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_explains_butler_conversation_grouping(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where are chats Butler creates in Workbench conversations?"
+    )
+    assert any(
+        "chats Butler creates appear below Butler" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_finds_chat_planning_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where is Ask for a plan first and can Butler request one?"
+    )
+    assert any(
+        item["heading"] == "Assistant harnesses"
+        and "ask for a plan" in str(item["text"]).lower()
+        and "/settings#harness-settings" in str(item["text"])
+        for item in matches
+    )
+    assert any(
+        "planning_enabled" in str(item["text"])
+        or "Assistant settings" in str(item["text"])
+        for item in matches
+    )
+    codex_matches = search_product_knowledge(
+        "Can providers, Codex and Grok share an advisory plan without blocking tools and give it to subagents?"
+    )
+    assert any(
+        "Provider, Codex, and Grok agents" in str(item["text"])
+        and "normal tools remain available" in str(item["text"])
+        for item in codex_matches
+    )
+    grok_matches = search_product_knowledge(
+        "Can Butler switch the main agent to Grok while keeping advisory planning and a provider subagent?"
+    )
+    assert any(
+        "Butler can save a different main harness and provider subagent"
+        in str(item["text"])
+        for item in grok_matches
+    )
+
+
+def test_product_search_finds_butler_goal_handoff(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does Butler hand off a paused harness planning goal to DeepSeek?"
+    )
+    assert any("nebula.global.handoff_goal" in str(item["text"]) for item in matches)
+
+
+def test_product_search_finds_butler_effort_setting(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where do I set Butler to max reasoning effort for scheduled checks?"
+    )
+    assert any(item["heading"] == "Butler model and effort" for item in matches)
+
+
+def test_product_search_finds_scheduled_history_and_grok_quota(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    history = search_product_knowledge(
+        "Where can I read Butler scheduled check transcript and linked recovery goal reports?"
+    )
+    quota = search_product_knowledge("Where do I see Grok remaining quota?")
+    credits = search_product_knowledge(
+        "Can I read Grok prepaid credits or Codex credits after included quota runs out?"
+    )
+    assert any(item["heading"] == "Butler scheduled activity" for item in history)
+    assert any(item["heading"] == "Usage and credits" for item in quota)
+    assert any(item["heading"] == "Usage and credits" for item in credits)
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

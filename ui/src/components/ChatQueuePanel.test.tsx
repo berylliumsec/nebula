@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { ChatQueuePanel } from "./ChatQueuePanel";
 import { SelectionActionsProvider } from "./selection";
@@ -18,11 +19,29 @@ it("keeps queued text and management controls behind a compact disclosure", () =
   fireEvent.click(screen.getByRole("button", { name: "Pause queue" }));
   expect(queue.mutate).toHaveBeenCalledWith({ action: "pause" });
 });
-it("exposes queue errors and review actions immediately", () => {
+it("opens review items, then lets the operator collapse and reopen them while attention stays visible", async () => {
+  const user = userEvent.setup();
   const view = render(<ChatQueuePanel queue={controller("needs_review", "Queue unavailable")} onRefreshConversation={vi.fn()} />);
-  expect(view.container.querySelector("details")!.open).toBe(true);
+  const details = view.container.querySelector("details")!;
+  const summary = screen.getByText("1 follow-up · Needs attention");
+  expect(details.open).toBe(true);
   expect(screen.getByRole("alert")).toHaveTextContent("Queue unavailable");
   expect(screen.getByRole("button", { name: "Retry as new message" })).toBeVisible();
+  await user.click(summary);
+  expect(details.open).toBe(false);
+  expect(summary).toBeVisible();
+  view.rerender(<ChatQueuePanel queue={controller("needs_review", "Queue unavailable")} onRefreshConversation={vi.fn()} />);
+  expect(details.open).toBe(false);
+  await user.click(summary);
+  expect(details.open).toBe(true);
+  expect(screen.getByRole("button", { name: "Reload queue" })).toBeVisible();
+});
+it("opens when a queued follow-up newly needs review", () => {
+  const view = render(<ChatQueuePanel queue={controller("queued")} onRefreshConversation={vi.fn()} />);
+  const details = view.container.querySelector("details")!;
+  expect(details.open).toBe(false);
+  view.rerender(<ChatQueuePanel queue={controller("needs_review")} onRefreshConversation={vi.fn()} />);
+  expect(details.open).toBe(true);
 });
 it("removes a dispatched follow-up from the visible queue once Core links its turn", () => {
   const {rerender} = render(<ChatQueuePanel queue={controller("sending")} onRefreshConversation={vi.fn()} />);

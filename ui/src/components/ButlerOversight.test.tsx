@@ -24,10 +24,29 @@ const overview = {
 };
 
 function client(request: ReturnType<typeof vi.fn>): ApiClient {
-  return { request } as unknown as ApiClient;
+  const readOverview = request as unknown as (path: string, options?: unknown) => Promise<unknown>;
+  return { request: (path: string, options?: unknown) => path.endsWith("/butler/issues")
+    ? Promise.resolve({ destinations: [], candidates: [], held_scans: [] })
+    : readOverview(path, options) } as unknown as ApiClient;
 }
 
 describe("ButlerOversight", () => {
+  it("shows the Nebula-wide user file path and refreshes its scheduled state", async () => {
+    const user = userEvent.setup();
+    const path = "/tmp/nebula-data/.butler/BUTLER.md";
+    const request = vi.fn()
+      .mockResolvedValueOnce({ ...overview, global_instructions: { status: "ready", path, last_check_at: "2026-10-18T12:00:00Z" } })
+      .mockResolvedValue({ ...overview, global_instructions: { status: "missing", path } });
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Nebula-wide Butler"));
+    expect(screen.getByText(path)).toBeVisible();
+    expect(screen.getByText(/Butler checks once every 15 minutes/)).toBeVisible();
+    expect(screen.getByText("Last check:")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh Butler oversight" }));
+    expect(await screen.findByText("No file")).toBeVisible();
+    expect(screen.getByText(path)).toBeVisible();
+  });
+
   it("opens the affected mission from a pending review incident", async () => {
     const request = vi.fn().mockResolvedValue({
       ...overview,
@@ -47,7 +66,7 @@ describe("ButlerOversight", () => {
     );
   });
 
-  it("shows Act recovery status and keeps past checks behind disclosure", async () => {
+  it("shows Act recovery status and a separate scheduled activity section", async () => {
     const request = vi.fn().mockResolvedValue({
       ...overview,
       authority: "act",
@@ -65,8 +84,72 @@ describe("ButlerOversight", () => {
     const recovery = await screen.findByRole("region", { name: "Butler recovery" });
     expect(within(recovery).getByText("Subagent start failed")).toBeInTheDocument();
     expect(within(recovery).getByText("Parent retry queued")).toBeInTheDocument();
-    expect(within(recovery).getByText("Past checks")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Butler scheduled activity" })).toHaveTextContent("Scheduled work check");
+    expect(within(recovery).queryByText("Scheduled work check")).not.toBeInTheDocument();
     expect(within(recovery).getByRole("link", { name: /Open parent chat/ })).toHaveAttribute("href", "/projects/project-a/workbench?view=chat&session=chat-main");
+  });
+
+  it("reopens saved scheduled transcript and recovery report after a retry and remount", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn().mockResolvedValue({ ...overview, authority: "act",
+      capabilities: { ...overview.capabilities, recovery: true },
+      recovery_cases: [{ id: "scheduled", trigger: "periodic", signal: "butler.global_periodic_check",
+        status: "resolved", summary: "Scheduled work check", outcome: "Created a recovery goal",
+        model_backend: "harness", model_turn_id: "turn-saved", steps: [],
+        recovery_goals: [{ id: "goal-recovery", project_id: "project-a", session_id: "chat-recovery",
+          source_goal_id: "goal-main", objective: "Unblock parser goal", status: "running",
+          current_step: 2, updated_at: "2026-10-19T12:00:00Z", report: "Inspecting saved state." }] }],
+    });
+    const events = vi.fn().mockRejectedValueOnce(new Error("connection lost")).mockResolvedValue({ events: [{
+      schemaVersion: "nebula.harness-activity/v2", sequence: 1, type: "tool_started", vendor: "codex_app_server",
+      harnessTurnId: "turn-saved", itemId: "tool-1", itemKind: "tool", title: "Read Core goals",
+      artifactIds: [], payload: {},
+    }], nextSequence: 1 });
+    const turn = vi.fn().mockResolvedValue({ id: "turn-saved", status: "complete", origin: "analysis",
+      harnessSessionId: "analysis-session", response: "I inspected the paused goal and started recovery." });
+    const api = { ...client(request), getHarnessTurnEvents: events, getHarnessTurn: turn } as unknown as ApiClient;
+    const first = render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText(/connection lost/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("I inspected the paused goal and started recovery.")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Butler check activity" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open recovery goal" })).toHaveAttribute("href", "/projects/project-a/workbench?view=chat&session=chat-recovery");
+    first.unmount();
+    render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText("I inspected the paused goal and started recovery.")).toBeVisible();
+    expect(events).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the overloaded turn beside its retry in the same saved check", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn().mockResolvedValue({ ...overview, authority: "act",
+      capabilities: { ...overview.capabilities, recovery: true },
+      recovery_cases: [{ id: "scheduled", trigger: "periodic", signal: "butler.global_periodic_check",
+        status: "resolved", summary: "Scheduled work check", outcome: "Core state inspected",
+        model_backend: "harness", model_turn_id: "turn-retry",
+        model_turn_ids: ["turn-overloaded", "turn-retry"], steps: [] }],
+    });
+    const events = vi.fn().mockResolvedValue({ events: [], nextSequence: 0 });
+    const turn = vi.fn().mockImplementation(async (id: string) => ({
+      id, origin: "analysis", harnessSessionId: "analysis-session",
+      status: id === "turn-overloaded" ? "interrupted" : "complete",
+      error: id === "turn-overloaded" ? "Selected model is at capacity" : undefined,
+      response: id === "turn-retry" ? "Core state inspected" : undefined,
+    }));
+    const api = { ...client(request), getHarnessTurnEvents: events, getHarnessTurn: turn } as unknown as ApiClient;
+    const mounted = render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText("Attempt 1")).toBeVisible();
+    expect(await screen.findByText("Attempt 2")).toBeVisible();
+    expect(await screen.findByText("Selected model is at capacity")).toBeVisible();
+    expect(await within(screen.getByRole("region", { name: "Attempt 2" })).findByText("Core state inspected")).toBeVisible();
+    mounted.unmount();
+    render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Check transcript"));
+    expect(await screen.findByText("Attempt 1")).toBeVisible();
+    expect(await screen.findByText("Attempt 2")).toBeVisible();
   });
 
   it("keeps Watch compact beside the chat while surfacing open incidents", async () => {
@@ -425,6 +508,27 @@ describe("ButlerOversight", () => {
     view.rerender(<ButlerOversight api={api} projectId="project-a" coreState="offline" />);
     expect(screen.getByRole("combobox", { name: "Butler authority" })).toBeDisabled();
     expect(screen.getByText("Reconnect to Core to change authority.")).toBeVisible();
+  });
+
+  it("saves Butler's one-task planning grant separately from urgent pause", async () => {
+    const user = userEvent.setup();
+    const policy = { project_id: "project-a", authority: "watch", revision: 2, delegate_actions: [], effective_actions: [],
+      supported_actions: ["request_parent_status", "pause_urgent_machine_blocker", "force_one_task_plan"] };
+    const request = vi.fn().mockImplementation((path: string, init?: RequestInit) => path.endsWith("/overview")
+      ? Promise.resolve({...overview, capabilities: {...overview.capabilities, authority_levels: ["watch", "steer", "delegate"]}})
+      : Promise.resolve(init?.method === "PUT" ? {...policy, authority: "delegate", revision: 3,
+        delegate_actions: ["force_one_task_plan"], effective_actions: policy.supported_actions} : policy));
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Oversight settings"));
+    await user.selectOptions(await screen.findByRole("combobox", {name: "Butler authority"}), "delegate");
+    const force = screen.getByRole("checkbox", {name: /Allow Butler to require one Core plan/});
+    expect(force).not.toBeChecked();
+    await user.click(force);
+    await user.click(screen.getByRole("button", {name: "Save authority"}));
+    expect(request).toHaveBeenCalledWith("engagements/project-a/butler/authority", {
+      method: "PUT", body: JSON.stringify({authority: "delegate", delegate_actions: ["force_one_task_plan"], expected_revision: 2}),
+    });
+    expect(force).toBeChecked();
   });
 
   it("offers a saved-policy reload after a stale authority revision", async () => {

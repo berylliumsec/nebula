@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -75,9 +76,16 @@ _BACKGROUND_CHANGES = frozenset(
         "nebula.work.decide_approval",
         "nebula.work.retry_chat_turn",
         "nebula.work.retry_mission",
+        "nebula.global.resume_project",
+        "nebula.global.create_goal",
+        "nebula.global.create_recovery_goal",
+        "nebula.global.handoff_goal",
+        "nebula.global.goal_action",
+        "nebula.global.create_child_project",
     }
 )
 _BACKGROUND_STEP_LIMIT = 12
+_GLOBAL_STEP_LIMIT = 40
 _CATEGORIES = (
     {
         "id": "work",
@@ -132,6 +140,8 @@ class ButlerCapabilities:
         operator_message: str = "",
         operator_turn_id: str | None = None,
         background_case_id: str | None = None,
+        instructions_root: Path | None = None,
+        background_runtime_local: bool = False,
     ) -> None:
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
@@ -169,6 +179,24 @@ class ButlerCapabilities:
                 and name != "nebula.work.catalog"
                 and self._read_only(plugin)
             }
+            case = store.get(ButlerRecoveryCase, background_case_id)
+            if case.signal == "butler.global_periodic_check":
+                if instructions_root is None or work is None:
+                    raise ValueError("Nebula-wide Butler tools are unavailable")
+                from .butler_global_capabilities import ButlerGlobalActions
+
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerGlobalActions(
+                            store,
+                            work,
+                            instructions_root,
+                            background_case_id,
+                            runtime_local=background_runtime_local,
+                        ).plugins()
+                    }
+                )
 
     def _background_case(self) -> ButlerRecoveryCase:
         if self._background_case_id is None:
@@ -266,7 +294,12 @@ class ButlerCapabilities:
                 current is None
                 or current.status != "investigating"
                 or current.revision != case.revision
-                or len(current.steps) >= _BACKGROUND_STEP_LIMIT
+                or len(current.steps)
+                >= (
+                    _GLOBAL_STEP_LIMIT
+                    if current.signal == "butler.global_periodic_check"
+                    else _BACKGROUND_STEP_LIMIT
+                )
                 or policy is None
                 or policy.authority != "act"
                 or policy.revision != current.authority_revision
@@ -321,7 +354,7 @@ class ButlerCapabilities:
                     "uncertain"
                     if error and operation in _BACKGROUND_CHANGES
                     else "failed"
-                    if error
+                    if error or result and result.get("delivery") == "held"
                     else "applied"
                 ),
                 "finished_at": utc_now().isoformat(),
@@ -330,6 +363,16 @@ class ButlerCapabilities:
             updates: dict[str, Any] = {"steps": steps}
             if error is None and operation == "nebula.work.message_chat":
                 updates["queued_item_id"] = result.get("item_id") if result else None
+                updates["delivered_turn_id"] = (
+                    result.get("turn_id")
+                    if result and result.get("delivery") in {"steered", "started"}
+                    else None
+                )
+                updates["delivery_hold_reason"] = (
+                    result.get("reason")
+                    if result and result.get("delivery") == "held"
+                    else None
+                )
                 updates["target_session_id"] = arguments.get("session_id")
             transaction.update(
                 ButlerRecoveryCase,
@@ -514,6 +557,16 @@ class ButlerCapabilities:
         description = plugin.spec.description
         if self._background_case_id is None:
             return description
+        if plugin.spec.name == "nebula.work.message_chat":
+            return (
+                "Send parent guidance to a main assistant chat with "
+                "delivery=immediate. Core steers an active harness turn when "
+                "supported or starts a new turn when idle. Busy Grok turns "
+                "cannot be steered; their guidance is held, not delivered. "
+                "For delegated subagents and goal children, "
+                "message the parent main agent. A held result is not delivered; "
+                "inspect the Core receipt before claiming a handoff."
+            )
         return (
             description.replace(
                 "after explicit operator instruction",
@@ -528,6 +581,26 @@ class ButlerCapabilities:
                 "when needed to repair the observed project work under Act authority",
             )
         )
+
+    def _input_schema(self, plugin: AnalysisTool) -> dict[str, Any]:
+        schema = plugin.spec.input_schema
+        if (
+            self._background_case_id is None
+            or plugin.spec.name != "nebula.work.message_chat"
+        ):
+            return schema
+        return {
+            **schema,
+            "properties": {
+                **schema["properties"],
+                "delivery": {
+                    "type": "string",
+                    "enum": ["immediate"],
+                    "description": "Required for background Butler parent guidance.",
+                },
+            },
+            "required": [*schema.get("required", []), "delivery"],
+        }
 
     async def search(self, arguments: dict[str, Any]) -> dict[str, Any]:
         query = arguments.get("query", "")
@@ -598,7 +671,7 @@ class ButlerCapabilities:
         return {
             "operation": name,
             "description": self._description(plugin),
-            "input_schema": plugin.spec.input_schema,
+            "input_schema": self._input_schema(plugin),
             "read_only": self._read_only(plugin),
             "invoke_with": (
                 "nebula.capabilities.read"
@@ -623,7 +696,7 @@ class ButlerCapabilities:
         if not isinstance(payload, dict):
             raise ValueError("provide an arguments object")
         try:
-            Draft202012Validator(plugin.spec.input_schema).validate(payload)
+            Draft202012Validator(self._input_schema(plugin)).validate(payload)
         except ValidationError as exc:
             raise ValueError(
                 f"invalid arguments for {name}: {exc.message}; "
@@ -652,11 +725,9 @@ class ButlerCapabilities:
                     raise ValueError("background Butler may act only on a main goal")
             if (
                 name == "nebula.work.message_chat"
-                and payload.get("delivery", "next") != "next"
+                and payload.get("delivery", "next") != "immediate"
             ):
-                raise ValueError(
-                    "background Butler sends an idempotent next-turn follow-up"
-                )
+                raise ValueError("background Butler requires immediate parent guidance")
             if name == "nebula.work.set_chat_settings" and self._work is not None:
                 settings = payload.get("settings")
                 if isinstance(settings, dict) and any(

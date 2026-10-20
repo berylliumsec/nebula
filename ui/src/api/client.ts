@@ -18,6 +18,8 @@ import type {
   ChatAttentionItem,
   ChatSessionSummary,
   ChatAssistantConfig,
+  ChatTaskPlan,
+  ChatPlanDirective,
   ChatSessionAssistantSettingsRequest,
   ChatStreamEvent,
   ChatTurn,
@@ -1408,6 +1410,7 @@ interface WireChatStreamEvent extends JsonObject {
     | "queued"
     | "admitted"
     | "started"
+    | "task_plan"
     | "delta"
     | "message_delta"
     | "reasoning_delta"
@@ -1528,6 +1531,7 @@ interface WireHarnessTurn extends WireEntity {
   chat_session_id?: string | null;
   run_id?: string | null;
   error?: string | null;
+  response?: string | null;
   metadata?: JsonObject;
 }
 
@@ -3625,6 +3629,7 @@ export function chatRequestBody(
     include_knowledge: body.includeKnowledge ?? true,
     allow_cloud_knowledge: body.allowCloudKnowledge ?? false,
     tools_enabled: body.toolsEnabled ?? false,
+    ...(body.planningEnabled !== undefined ? { planning_enabled: body.planningEnabled } : {}),
     max_artifact_queries: body.maxArtifactQueries ?? null,
     allow_cloud_tool_results: body.allowCloudToolResults ?? false,
     harness_mode: body.harnessMode,
@@ -3662,7 +3667,9 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     isSideChat: value.metadata?.side_chat === true,
     isControlAssistant: value.metadata?.control_assistant === true,
+    isButlerInitiated: value.metadata?.butler_initiated === true,
     assistantConfig,
+    planningEnabled: assistantConfig?.planningEnabled ?? value.metadata?.planning_enabled === true,
     inheritedMessageCount: typeof value.metadata?.inherited_message_count === "number"
       ? value.metadata.inherited_message_count : undefined,
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
@@ -3698,6 +3705,7 @@ function mapChatAssistantConfig(value: JsonObject): ChatAssistantConfig | undefi
     includeKnowledge: value.include_knowledge !== false,
     allowCloudKnowledge: value.allow_cloud_knowledge === true,
     toolsEnabled: value.tools_enabled === true,
+    planningEnabled: value.planning_enabled === true,
     allowSubagents: value.allow_subagents === true,
     allowAgentMessaging: value.allow_agent_messaging === true,
     maxActiveSubagents: typeof value.max_active_subagents === "number" ? value.max_active_subagents : undefined,
@@ -3739,6 +3747,9 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     completionEvidence: Array.isArray(value.completion_evidence) ? value.completion_evidence : [],
     parentGoalId: typeof value.parent_goal_id === "string" ? value.parent_goal_id : undefined,
     childSessionIds: Array.isArray(value.child_session_ids) ? value.child_session_ids.map(String) : [],
+    handoffSourceSessionId: typeof value.metadata?.handoff_source_session_id === "string" ? value.metadata.handoff_source_session_id : undefined,
+    handoffTargetSessionId: typeof value.metadata?.handoff_target_session_id === "string" ? value.metadata.handoff_target_session_id : undefined,
+    handoffReason: typeof value.metadata?.handoff_reason === "string" ? value.metadata.handoff_reason : undefined,
     skillSnapshots: Array.isArray(value.skill_snapshots) ? value.skill_snapshots.flatMap((item: unknown) => {
       if (!item || typeof item !== "object") return [];
       const snapshot = item as Record<string, unknown>;
@@ -6363,7 +6374,7 @@ export class ApiClient {
     return this.listAll<WireHarnessProfile>("harnesses", signal).then((items) =>
       items
         .map(mapHarnessProfile)
-        .filter((profile) => profile.kind === "codex_app_server" || profile.kind === "grok_acp"),
+        .filter((profile) => profile.kind === "codex_app_server" || profile.kind === "grok_acp" || profile.kind === "claude_agent_sdk"),
     );
   }
 
@@ -6612,9 +6623,10 @@ export class ApiClient {
     id: string,
     after = 0,
     signal?: AbortSignal,
+    limit = 10_000,
   ): Promise<HarnessActivityEventPage> {
     return this.request<WireHarnessActivityEventPage>(
-      `harness-turns/${encodeURIComponent(id)}/events?after=${after}&limit=10000`,
+      `harness-turns/${encodeURIComponent(id)}/events?after=${after}&limit=${limit}`,
       { signal },
     ).then((value) => ({
       events: value.events.map(mapHarnessActivityEvent),
@@ -6634,6 +6646,7 @@ export class ApiClient {
       chatSessionId: value.chat_session_id ?? undefined,
       runId: value.run_id ?? undefined,
       error: value.error ?? undefined,
+      response: value.response ?? undefined,
       retryOfTurnId:
         typeof value.metadata?.retry_of_turn_id === "string"
           ? value.metadata.retry_of_turn_id
@@ -9400,6 +9413,12 @@ export class ApiClient {
     ).then(value => ({sessionId: value.session_id, revision: value.revision, settings: mapChatAssistantConfig(value.settings)!}));
   }
 
+  getChatTaskPlans(sessionId: string, signal?: AbortSignal): Promise<{plans: ChatTaskPlan[]; directives: ChatPlanDirective[]}> {
+    return this.request<{plans: ChatTaskPlan[]; directives: ChatPlanDirective[]}>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/task-plans`, {signal},
+    );
+  }
+
   updateChatAssistantConfig(sessionId: string, expectedRevision: number, settings: Record<string, unknown>): Promise<{sessionId: string; revision: number; settings: ChatAssistantConfig}> {
     const wire: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(settings)) wire[key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)] = value;
@@ -9951,6 +9970,7 @@ export class ApiClient {
     harnessProfileId?: string;
     model: string;
     toolsEnabled: boolean;
+    planningEnabled?: boolean;
     mcpServerIds: string[];
     hookIds: string[];
     /** The composer's other choices, saved on the new conversation. */
@@ -9983,6 +10003,7 @@ export class ApiClient {
           ...(body.harnessProfileId ? { harness_profile_id: body.harnessProfileId } : {}),
           model: body.model,
           tools_enabled: body.toolsEnabled,
+          planning_enabled: body.planningEnabled ?? false,
           mcp_server_ids: body.mcpServerIds,
           hook_ids: body.hookIds,
           ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
@@ -10195,6 +10216,12 @@ export class ApiClient {
           sessionId: wire.session_id ?? undefined,
           turnId: wire.turn_id ?? undefined,
         });
+        return;
+      }
+      const taskPlan = wire.plan as unknown as ChatTaskPlan | undefined;
+      if (wire.type === "task_plan" && taskPlan && !Array.isArray(taskPlan)
+          && typeof taskPlan.id === "string" && typeof taskPlan.turn_id === "string") {
+        onEvent({type: "task_plan", plan: taskPlan});
         return;
       }
       if (wire.type === "delta" || wire.type === "message_delta") {

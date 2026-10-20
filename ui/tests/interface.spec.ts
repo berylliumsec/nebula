@@ -181,6 +181,8 @@ async function installTruthfulCore(page: Page) {
     let responseStatus = 200;
     if (path.includes("/chat/sessions/") && path.endsWith("/queue")) {
       body = {revision: 0, paused: false, items: []};
+    } else if (path.includes("/chat/sessions/") && path.endsWith("/task-plans")) {
+      body = {plans: [], directives: []};
     } else if (path.includes("/chat/sessions/") && path.endsWith("/goal")) {
       responseStatus = 404;
       body = { detail: "Goal not found" };
@@ -827,6 +829,43 @@ reloadTest("assistant upgrade links open workspace files and websites in the mat
   await expect(code.getByRole("tab", { name: "Code 1" })).toHaveAttribute("aria-selected", "true");
   await expect(code.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
   await expect(code.locator(".code-editor-panel")).toContainText("second line");
+  const splitBounds = await code.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return [bounds.left, bounds.top, bounds.width, bounds.height].map(Math.round);
+  });
+  const expandCode = code.getByRole("button", { name: "Expand Code 1 to full screen" });
+  expectTouchTarget((await expandCode.boundingBox())?.width, "Expand Code 1");
+  expectTouchTarget((await expandCode.boundingBox())?.height, "Expand Code 1");
+  await expandCode.click();
+  const expandedCode = page.getByRole("dialog", { name: "Code 1 full screen" });
+  await expect(expandedCode).toBeVisible();
+  await expect(expandedCode.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+  const fillsViewport = () => expandedCode.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return Math.abs(bounds.left) <= 1 && Math.abs(bounds.top) <= 1
+      && Math.abs(bounds.width - window.innerWidth) <= 1 && Math.abs(bounds.height - window.innerHeight) <= 1;
+  });
+  await expect.poll(fillsViewport).toBe(true);
+  expect((await new AxeBuilder({ page }).include("#side-tool-panel > .side-chat-header").analyze()).violations).toEqual([]);
+  await expandedCode.getByRole("button", { name: "Restore Code 1 to split view" }).click();
+  await expect(code).toBeVisible();
+  await expect.poll(() => code.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return [bounds.left, bounds.top, bounds.width, bounds.height].map(Math.round);
+  })).toEqual(splitBounds);
+  const portraitViewport = page.viewportSize();
+  if (portraitViewport && portraitViewport.width <= 430) {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await code.getByRole("button", { name: "Expand Code 1 to full screen" }).click();
+    await expect.poll(fillsViewport).toBe(true);
+    await expandedCode.getByRole("button", { name: "Restore Code 1 to split view" }).click();
+    await expect(code).toBeVisible();
+    await page.setViewportSize(portraitViewport);
+  }
+  await code.getByRole("button", { name: "Expand Code 1 to full screen" }).click();
+  await page.keyboard.press("Escape");
+  await expect(code).toBeVisible();
+  await expect(code.getByRole("button", { name: "Expand Code 1 to full screen" })).toBeFocused();
   await page.reload();
   await expect(code.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
   await code.getByRole("button", { name: "Close Code 1 tab" }).click();
@@ -2441,6 +2480,92 @@ reloadTest("stabilization Butler opens from every screen and changes this device
   await expect(page.getByRole("dialog", { name: "Butler" })).toContainText("Scratch Project is now in Host mode for new sessions");
 });
 
+reloadTest("assistant popup Butler live status follows saved work without losing the composer", async ({ page }) => {
+  await installTruthfulCore(page);
+  const sessionId = "butler-live-status";
+  const provider = {
+    ...entity, id: "butler-status-provider", name: "Butler status model", provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true,
+    model_allowlist: ["status-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "status-model" },
+  };
+  const session = { ...entity, id: sessionId, engagement_id: "scratch-project", title: "Butler",
+    backend: "provider", provider_profile_id: provider.id, model: "status-model", metadata: { control_assistant: true } };
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["status-model"] } });
+    if (path.endsWith("/chat/control-assistant/session")) return route.fulfill({ json: session });
+    if (path.endsWith(`/chat-sessions/${sessionId}/assistant-config`)) return route.fulfill({ json: {
+      session_id: sessionId, revision: 1, settings: { backend: "provider", profile_id: provider.id, model: "status-model", tools_enabled: true },
+    } });
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) return route.fulfill({ json: [] });
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) return route.fulfill({ json: null });
+    return route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    const frame = (event: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const browser = globalThis as typeof globalThis & { __butlerStatusEmit?: (event: unknown, done?: boolean) => void };
+          browser.__butlerStatusEmit = (event, done = false) => { controller.enqueue(frame(event)); if (done) controller.close(); };
+          controller.enqueue(frame({ type: "started", provider_id: "butler-status-provider", model: "status-model",
+            session_id: "butler-live-status", turn_id: "butler-status-turn" }));
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  const butler = page.getByRole("dialog", { name: "Butler" });
+  const composer = butler.getByRole("textbox", { name: "Ask Butler a question" });
+  await composer.fill("Check the agents");
+  await composer.press("Enter");
+  const activity = butler.getByRole("region", { name: "Butler activity" });
+  await expect(activity).toContainText("Butler is working");
+  await expect(composer).toBeDisabled();
+  await page.evaluate(() => (globalThis as typeof globalThis & { __butlerStatusEmit: (event: unknown) => void }).__butlerStatusEmit({
+    type: "tool_started", turn_id: "butler-status-turn", tool_call_id: "report-call",
+    capability: "nebula.work.overview", display_name: "Inspect current agent reports", arguments: {}, step: 1,
+  }));
+  await expect(activity).toContainText("Using Inspect current agent reports");
+  if (await butler.getByRole("button", { name: "Hide Butler" }).isVisible()) {
+    await butler.getByRole("button", { name: "Hide Butler" }).click();
+    await page.getByRole("button", { name: "Show Butler" }).click();
+  } else {
+    await butler.getByRole("button", { name: "Close Butler" }).click();
+    await page.getByRole("button", { name: "Open Butler" }).click();
+  }
+  await expect(activity).toContainText("Using Inspect current agent reports");
+  await page.evaluate(() => (globalThis as typeof globalThis & { __butlerStatusEmit: (event: unknown) => void }).__butlerStatusEmit({
+    type: "tool_completed", turn_id: "butler-status-turn", tool_call_id: "report-call",
+    capability: "nebula.work.overview", display_name: "Inspect current agent reports", status: "complete",
+    summary: "Read reports", evidence_ids: [], artifacts: [], step: 1,
+  }));
+  await expect(activity).toContainText("Finished Inspect current agent reports");
+  const disclosure = activity.locator("summary", { hasText: "Recent steps" });
+  expectTouchTarget((await disclosure.boundingBox())?.height, "Butler activity disclosure height");
+  await disclosure.click();
+  await expect(activity).toContainText("Using Inspect current agent reports");
+  const geometry = await activity.evaluate(element => ({right: element.getBoundingClientRect().right, scroll: element.scrollWidth, client: element.clientWidth}));
+  expect(geometry.right).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  expect(geometry.scroll - geometry.client).toBeLessThanOrEqual(1);
+  expect((await new AxeBuilder({ page }).include('[aria-label="Butler activity"]').analyze()).violations).toEqual([]);
+  await page.evaluate(() => (globalThis as typeof globalThis & { __butlerStatusEmit: (event: unknown, done?: boolean) => void }).__butlerStatusEmit({
+    type: "done", provider_id: "butler-status-provider", model: "status-model", session_id: "butler-live-status",
+    turn_id: "butler-status-turn", message: { id: "answer", role: "assistant", content: "The agents are working." },
+    usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 }, finish_reason: "stop", citations: [],
+  }, true));
+  await expect(butler.getByText("The agents are working.")).toBeVisible();
+  await expect(activity).toHaveCount(0);
+  await expect(composer).toBeEnabled();
+});
+
 reloadTest("stabilization Butler applies a model-selected device-theme tool receipt", async ({ page }) => {
   const provider = {
     ...entity, id: "provider-theme-action", name: "Theme action provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
@@ -3746,6 +3871,7 @@ reloadTest("conversation switching loads recent history before older conversatio
   const recentOffsets: number[] = [];
   let fullReads = 0;
   let terminalBootstrapReads = 0;
+  let olderPageFailed = false;
   await page.route("**/api/v1/**", async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -3753,6 +3879,11 @@ reloadTest("conversation switching loads recent history before older conversatio
       if (url.searchParams.get("recent_first") === "true") {
         const offset = Number(url.searchParams.get("offset") ?? 0);
         recentOffsets.push(offset);
+        if (offset === 100 && !olderPageFailed) {
+          olderPageFailed = true;
+          await route.fulfill({ status: 503, json: { detail: "Older conversations are temporarily unavailable." } });
+          return;
+        }
         await route.fulfill({ json: rows.slice(offset, offset + 100) });
       } else {
         fullReads += 1;
@@ -3775,7 +3906,15 @@ reloadTest("conversation switching loads recent history before older conversatio
   const show = (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations";
   await page.getByRole("button", { name: show, exact: true }).click();
   const sidebar = page.getByRole("complementary", { name: "Conversations" });
-  await expect(sidebar.getByRole("button", { name: "Load older conversations" })).toBeVisible();
+  const loadMore = sidebar.getByRole("button", { name: "Load older conversations" });
+  await expect(loadMore).toBeVisible();
+  await expect(loadMore).toHaveCSS("display", "flex");
+  await expect(loadMore).toHaveCSS("white-space", "nowrap");
+  const loadMoreBox = await loadMore.boundingBox();
+  expectTouchTarget(loadMoreBox?.height);
+  const labelBox = await loadMore.locator("span").boundingBox();
+  expect(labelBox?.height).toBeLessThan(24);
+  expect(Math.abs((loadMoreBox?.x ?? 0) + (loadMoreBox?.width ?? 0) / 2 - ((labelBox?.x ?? 0) + (labelBox?.width ?? 0) / 2))).toBeLessThan(18);
   const oldest = sidebar.locator('.session-select[data-session-id="history-104"]');
   await expect(oldest).toHaveCount(0);
   await sidebar.getByRole("searchbox", { name: "Search conversations" }).fill("History 104");
@@ -3786,8 +3925,11 @@ reloadTest("conversation switching loads recent history before older conversatio
   await expect.poll(async () => await sidebar.isVisible() || await page.getByRole("button", { name: show, exact: true }).isVisible()).toBe(true);
   if (!await sidebar.isVisible()) await page.getByRole("button", { name: show, exact: true }).click();
   await sidebar.getByRole("button", { name: "Load older conversations" }).click();
+  await expect(sidebar.getByRole("button", { name: "Load older conversations" })).toBeEnabled();
+  await expect(oldest).toHaveCount(0);
+  await sidebar.getByRole("button", { name: "Load older conversations" }).click();
   await expect(oldest).toBeAttached();
-  expect(recentOffsets).toContain(100);
+  expect(recentOffsets.filter(offset => offset === 100)).toHaveLength(2);
   expect(terminalBootstrapReads).toBe(0);
 });
 
@@ -3902,6 +4044,77 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   await expect(sidebar.locator('[data-session-id="sidebar-child-a"]')).toBeVisible();
   await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "Collapse 2 subagents for Main investigation" })).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include(".session-list").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane", async ({ page }) => {
+  const butler = { ...entity, id: "group-butler", engagement_id: "scratch-project", title: "Butler", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { control_assistant: true } };
+  const recovery = { ...entity, id: "group-recovery", engagement_id: "scratch-project", title: "Recover paused Apple Music goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
+  const other = { ...entity, id: "group-other", engagement_id: "scratch-project", title: "Recover blocked Siri AI goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
+  const subagent = { ...entity, id: "group-subagent", engagement_id: "scratch-project", title: "Subagent · Inspect stream path", backend: "provider", provider_profile_id: "provider-a", parent_session_id: recovery.id, model: "model-a", metadata: { subagent_id: "group-sub" } };
+  const ordinary = { ...entity, id: "group-ordinary", engagement_id: "scratch-project", title: "Operator research", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  // Butler falls beyond the bounded first page. Its dedicated GET supplies
+  // the parent without changing the list's pagination offset.
+  const filler = Array.from({ length: 96 }, (_, index) => ({ ...ordinary, id: `group-filler-${index}`, title: `Saved ${index}` }));
+  const firstPage = [recovery, other, subagent, ordinary, ...filler];
+  const items = [butler, ...firstPage];
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") {
+      const params = new URL(route.request().url()).searchParams;
+      const offset = Number(params.get("offset") ?? 0);
+      const limit = Number(params.get("limit") ?? 100);
+      return route.fulfill({ json: limit >= 1000 ? items : offset >= 100 ? [butler] : firstPage });
+    }
+    if (path.endsWith("/chat/control-assistant/session") && route.request().method() === "GET") return route.fulfill({ json: butler });
+    const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
+    if (/\/chat\/sessions\/group-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/chat\/sessions\/group-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=group-ordinary", "Workbench");
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+  if (await show.isVisible()) await show.click();
+  await expect(sidebar.locator('[data-session-id="group-butler"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toHaveCount(0);
+  await expect(sidebar.locator('[data-session-id="group-ordinary"]')).toBeVisible();
+  const butlerToggle = sidebar.getByRole("button", { name: "Expand 2 chats for Butler" });
+  if (mobile) {
+    const bounds = await butlerToggle.boundingBox();
+    expectTouchTarget(bounds?.width, "Butler disclosure width");
+    expectTouchTarget(bounds?.height, "Butler disclosure height");
+  }
+  await butlerToggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="group-other"]')).toBeVisible();
+  await sidebar.getByRole("button", { name: "Expand 1 subagent for Recover paused Apple Music goal" }).click();
+  await expect(sidebar.locator('[data-session-id="group-subagent"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="group-subagent"]').locator("..")).toHaveClass(/nested-subagent-deep/);
+  await sidebar.getByRole("button", { name: "More actions for Recover paused Apple Music goal" }).click();
+  await expect(page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Copy link" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await sidebar.locator('[data-session-id="group-recovery"]').click();
+  await expect(page).toHaveURL(/session=group-recovery/);
+  await page.reload();
+  const reopened = page.getByRole("complementary", { name: "Conversations" });
+  const reopen = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+  if (mobile) {
+    await expect(reopen).toBeVisible();
+    await reopen.click();
+  } else if (await reopen.isVisible()) await reopen.click();
+  await expect(reopened).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await reopened.getByRole("searchbox", { name: "Search conversations" }).fill("Inspect stream path");
+  await expect(reopened.locator('[data-session-id="group-butler"]')).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-subagent"]')).toBeVisible();
+  await expect(reopened.locator('[data-session-id="group-other"]')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const accessibility = await new AxeBuilder({ page }).include(".session-list").analyze();
   expect(accessibility.violations).toEqual([]);
@@ -5044,6 +5257,22 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   await expect(queue.locator("li")).toHaveCount(2, {timeout: 10_000});
   await expect(queue).toContainText("First queued follow-up.");
   await expect(queue).toContainText("Needs attention");
+  const disclosure = queue.locator("details");
+  const summary = queue.locator("summary");
+  await expect(disclosure).toHaveAttribute("open", "");
+  const openHeight = await disclosure.evaluate(element => element.getBoundingClientRect().height);
+  if (testInfo.project.name.startsWith("mobile-")) await summary.tap();
+  else await summary.click();
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  const collapsedHeight = await disclosure.evaluate(element => element.getBoundingClientRect().height);
+  expect(collapsedHeight).toBeLessThan(openHeight);
+  expect(collapsedHeight).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
+  await expect(summary).toContainText("Needs attention");
+  await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeHidden();
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeVisible();
 });
 
 test("assistant live guidance steers an active Codex turn with advertised steering capabilities", async ({ page }, testInfo) => {
@@ -5968,9 +6197,9 @@ reloadTest("assistant upgrade side chat toolbar inherits saved history and resto
   const toolbarOrder = async (selector: string) => page.locator(`${selector} .chat-composer-toolbar`).evaluate(toolbar =>
     Array.from(toolbar.querySelectorAll<HTMLButtonElement>(".chat-composer-tools > button, .chat-composer-turn-actions > button"))
       .map(button => button.getAttribute("aria-label") ?? "")
-      .filter(label => label.startsWith("Open context details") || ["Results", "Project Snapshot", "Attach files", "Send message"].includes(label))
+      .filter(label => label.startsWith("Open context details") || ["Results", "Project Snapshot", "Attach image or file", "Send message"].includes(label))
       .map(label => label.startsWith("Open context details") ? "Open context details" : label));
-  const expectedToolbarOrder = ["Open context details", "Results", "Project Snapshot", "Attach files", "Send message"];
+  const expectedToolbarOrder = ["Open context details", "Results", "Project Snapshot", "Attach image or file", "Send message"];
   await expect.poll(() => toolbarOrder(".session-workspace > .chat-studio > .chat-panel")).toEqual(expectedToolbarOrder);
   const parentLoadsBeforeFork = parentMessageLoads;
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
@@ -6000,7 +6229,7 @@ reloadTest("assistant upgrade side chat toolbar inherits saved history and resto
   const toolbarGeometry = async () => sideToolbar.evaluate(toolbar => {
     const toolbarBox = toolbar.getBoundingClientRect();
     const buttons = Array.from(toolbar.querySelectorAll<HTMLButtonElement>(".chat-composer-tools > button, .chat-composer-turn-actions > button"))
-      .filter(button => ["Results", "Project Snapshot", "Attach files", "Send message"].includes(button.getAttribute("aria-label") ?? "") || button.getAttribute("aria-label")?.startsWith("Open context details"))
+      .filter(button => ["Results", "Project Snapshot", "Attach image or file", "Send message"].includes(button.getAttribute("aria-label") ?? "") || button.getAttribute("aria-label")?.startsWith("Open context details"))
       .map(button => ({ label: button.getAttribute("aria-label"), box: button.getBoundingClientRect() }));
     return { toolbar: { left: toolbarBox.left, right: toolbarBox.right }, buttons: buttons.map(({ label, box }) => ({ label, left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height })) };
   });
@@ -11307,9 +11536,11 @@ test("provider and harness usage separates vendor balances from recorded turns",
         { kind: "harness", profile_id: "codex", name: "Codex Studio", provider_type: "codex_app_server", enabled: true,
           recorded: recorded(385000, 21100, 69), vendor: vendor("Codex account", "Account rate-limit windows and credits reported by Codex. Resets do not guarantee access.", [
             { label: "Codex credits", remaining: 7.25, note: "Vendor credit units" },
-          ], [{ label: "Included usage · Short window", used_percent: 62, duration_minutes: 300, resets_at: "2026-10-12T17:00:00Z" }]) },
+          ], [{ label: "Included usage · Short window", used_percent: 100, duration_minutes: 300, resets_at: "2026-10-12T17:00:00Z" }]) },
         { kind: "harness", profile_id: "grok", name: "Grok Build", provider_type: "grok_acp", enabled: true,
-          recorded: recorded(14800, 2300, 8), vendor: { state: "unavailable", source: "Vendor account", detail: "This harness does not expose an account balance to Nebula.", checked_at: null, balances: [], windows: [], ordinary_usage_allowed: null } },
+          recorded: recorded(14800, 2300, 8), vendor: vendor("Grok account", "Prepaid credits are separate from included usage.", [
+            { label: "Grok prepaid credits", remaining: 3.75, note: "Vendor credit units" },
+          ], [{ label: "Shared Grok credits · Weekly", used_percent: 100 }]) },
       ],
     } });
   });
@@ -11319,8 +11550,10 @@ test("provider and harness usage separates vendor balances from recorded turns",
   const router = usage.getByRole("article", { name: "OpenRouter Research usage" });
   await expect(router).toContainText("$74.50");
   await expect(router).toContainText("not the account's total credits");
-  await expect(usage.getByRole("article", { name: "Grok Build usage" })).toContainText("Unavailable");
-  await expect(usage.getByRole("article", { name: "Codex Studio usage" })).toContainText("38% left");
+  await expect(usage.getByRole("article", { name: "Grok Build usage" })).toContainText("3.75");
+  await expect(usage.getByRole("article", { name: "Grok Build usage" })).toContainText("0% left");
+  await expect(usage.getByRole("article", { name: "Codex Studio usage" })).toContainText("7.25");
+  await expect(usage.getByRole("article", { name: "Codex Studio usage" })).toContainText("0% left");
   const refresh = usage.getByRole("button", { name: "Refresh provider and harness usage" });
   const box = await refresh.boundingBox();
   expectTouchTarget(box?.width, "Usage refresh width");
@@ -11782,7 +12015,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeHidden();
-  for (const name of ["Results", "Attach files"]) {
+  for (const name of ["Results", "Attach image or file"]) {
     const action = panel.getByRole("button", { name, exact: true });
     await expect(action.locator("svg")).toBeVisible();
     await expect(action).toHaveText("");
@@ -11823,6 +12056,12 @@ for (const imageInput of [true, false]) {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/harnesses") && route.request().method() === "GET") {
         await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at, authentication_state: "verified" } }] });
+      } else if (path.endsWith("/chat/control-assistant/session") && route.request().method() === "GET") {
+        await route.fulfill({json: {...entity, id: "butler-image", engagement_id: "scratch-project", title: "Butler", backend: "harness", harness_profile_id: "image-harness", model: "image-model", metadata: {control_assistant: true}}});
+      } else if (path.endsWith("/chat/sessions/butler-image/messages")) {
+        await route.fulfill({json: []});
+      } else if (path.endsWith("/chat/images/image-preview/preview")) {
+        await route.fulfill({contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64")});
       } else if (path.endsWith("/harness-sessions/image-harness-session/activity")) {
         await route.fulfill({ json: { session_id: "image-harness-session", session_status: "idle", busy: false, live: true, last_activity_at: entity.updated_at, detail: "Ready for the next message.", plan: [] } });
       } else if (path.endsWith("/chat/sessions/image-chat/messages")) {
@@ -11853,17 +12092,46 @@ for (const imageInput of [true, false]) {
       } else await route.fallback();
     });
     await openWorkspace(page, "/?view=browser", "Workbench");
+    await page.getByRole("button", {name: "Open Butler"}).click();
+    const butler = page.getByRole("dialog", {name: "Butler"});
+    const butlerAttach = butler.getByRole("button", {name: "Attach image to Butler"});
+    await expect(butlerAttach).toBeVisible();
+    const butlerTarget = await butlerAttach.boundingBox();
+    expect(butlerTarget!.width).toBeGreaterThanOrEqual(44);
+    expect(butlerTarget!.height).toBeGreaterThanOrEqual(44);
+    await butlerAttach.focus();
+    await expect(butlerAttach).toBeFocused();
+    await butlerAttach.click();
+    if (imageInput) {
+      await butler.getByLabel("Choose images for Butler").setInputFiles({name: "mac-settings.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64")});
+      await expect(butler.getByRole("list", {name: "Butler image attachments"})).toBeVisible();
+      await butler.getByRole("button", {name: "Remove mac-settings.png"}).click();
+      await expect(butler.getByRole("list", {name: "Butler image attachments"})).toHaveCount(0);
+    } else {
+      await expect(butler.getByText(/This Butler model cannot receive images/)).toBeVisible();
+    }
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      const composerBottom = await butler.getByRole("textbox", {name: "Ask Butler a question"}).evaluate(element => element.getBoundingClientRect().bottom);
+      const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
+      expect(composerBottom).toBeLessThanOrEqual(visualBottom + 1);
+    }
+    expect((await new AxeBuilder({page}).include("#nebula-assistant-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await butler.getByRole("button", {name: "Close Butler"}).click();
     const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
     if (!await panel.isVisible()) await page.getByRole("button", { name: "Assistant", exact: true }).click();
     await panel.getByRole("button", { name: "Assistant settings", exact: true }).click();
     await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
     await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("image-harness");
     await page.getByRole("button", { name: "Close assistant settings" }).click();
-    await panel.getByRole("button", { name: "Attach files", exact: true }).click();
+    await panel.getByRole("button", { name: "Attach image or file", exact: true }).click();
     const attachmentDialog = page.getByRole("dialog", { name: "Attach to next message" });
     const attach = attachmentDialog.getByRole("button", { name: "Images from this device", exact: true });
     if (!imageInput) {
-      await expect(attach).toHaveCount(0);
+      await expect(attach).toBeDisabled();
+      await expect(attachmentDialog.getByText(/This model cannot receive images/)).toBeVisible();
+      await attachmentDialog.getByRole("button", { name: "Choose an image-capable runtime" }).click();
+      await expect(page.getByRole("dialog", { name: "Assistant settings", exact: true })).toBeVisible();
       return;
     }
     await expect(attach).toBeEnabled();

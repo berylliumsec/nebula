@@ -1510,10 +1510,6 @@ class Osc633CommandParser:
     def pending_bytes(self) -> int:
         return len(self._pending)
 
-    @property
-    def capture_active(self) -> bool:
-        return self._active is not None
-
     def feed(self, chunk: bytes) -> TerminalCommandParseResult:
         if not isinstance(chunk, bytes):
             raise TypeError("terminal chunks must be bytes")

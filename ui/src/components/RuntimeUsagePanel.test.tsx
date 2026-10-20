@@ -16,7 +16,7 @@ const snapshot: RuntimeUsageResponse = {
     {
       kind: "harness", profileId: "grok", name: "Grok Build", providerType: "grok_acp", enabled: false,
       recorded: { inputTokens: 20, outputTokens: 5, totalTokens: 25, cachedInputTokens: 0, turns: 1, scope: "Nebula harness turns" },
-      vendor: { state: "unavailable", source: "Vendor account", detail: "This harness does not expose an account balance to Nebula.", balances: [], windows: [] },
+      vendor: { state: "available", source: "Grok account", detail: "Grok reported included-credit use for this period. A shared pool may include other Grok products.", balances: [], windows: [{ label: "Shared Grok credits · Weekly", usedPercent: 68 }] },
     },
   ],
 };
@@ -33,7 +33,8 @@ it("shows measured activity and honest vendor scope, then recovers a failed refr
   expect(router).toHaveTextContent("not the account's total credits");
   expect(router).toHaveTextContent("1,500");
   const grok = screen.getByRole("article", { name: "Grok Build usage" });
-  expect(grok).toHaveTextContent("Unavailable");
+  expect(grok).toHaveTextContent("Shared Grok credits");
+  expect(grok).toHaveTextContent("32% left");
   expect(grok).toHaveTextContent("25");
   expect(grok).not.toHaveTextContent("$0.00");
   await user.click(within(router).getByText("Usage details"));
@@ -45,4 +46,22 @@ it("shows measured activity and honest vendor scope, then recovers a failed refr
   await user.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(router).toHaveTextContent("$60.00"));
   expect(getRuntimeUsage).toHaveBeenNthCalledWith(2, true, expect.any(AbortSignal));
+});
+
+it("shows Codex and Grok credits when included windows have no remaining usage", async () => {
+  const base = snapshot.items[1];
+  const items: RuntimeUsageResponse["items"] = [
+    { ...base, profileId: "codex", name: "Codex", providerType: "codex_app_server", enabled: true,
+      vendor: { state: "available", source: "Codex account", detail: "Credits are separate from included usage.",
+        balances: [{ label: "Codex credits", remaining: 7.25, note: "Vendor credit units" }],
+        windows: [{ label: "Included usage", usedPercent: 100 }] } },
+    { ...base, vendor: { state: "available", source: "Grok account", detail: "Prepaid credits are separate from included usage.",
+      balances: [{ label: "Grok prepaid credits", remaining: 3.75, note: "Vendor credit units" }],
+      windows: [{ label: "Shared Grok credits · Weekly", usedPercent: 100 }] } },
+  ];
+  const api = { getRuntimeUsage: vi.fn().mockResolvedValue({ ...snapshot, items }) } as unknown as ApiClient;
+  render(<RuntimeUsagePanel api={api} active />);
+  expect(await screen.findByRole("article", { name: "Codex usage" })).toHaveTextContent("7.25");
+  expect(screen.getByRole("article", { name: "Grok Build usage" })).toHaveTextContent("3.75");
+  expect(screen.getAllByText("0% left")).toHaveLength(2);
 });

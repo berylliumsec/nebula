@@ -27,8 +27,12 @@ from .domain import (
     ProviderProfile,
     RunBackend,
 )
-from .harnesses import CodexAppServerAdapter
-from .harness_quota import HarnessQuotaSnapshot, codex_quota_snapshots
+from .harnesses import CodexAppServerAdapter, GrokAcpAdapter
+from .harness_quota import (
+    HarnessQuotaSnapshot,
+    codex_quota_snapshots,
+    grok_quota_snapshots,
+)
 from .storage import NebulaStore
 
 
@@ -70,13 +74,15 @@ class VendorUsage(BaseModel):
 
 
 class HarnessQuotaRead(BaseModel):
-    """A profile-scoped numeric read; unavailable never means zero remaining."""
+    """Profile-scoped vendor usage; an unreadable balance is never zero."""
 
     profile_id: str
     state: Literal["available", "unavailable", "error"]
     detail: str
     checked_at: datetime | None = None
     snapshots: list[HarnessQuotaSnapshot] = Field(default_factory=list)
+    balances: list[UsageBalance] = Field(default_factory=list)
+    ordinary_usage_allowed: bool | None = None
 
 
 class RuntimeUsageItem(BaseModel):
@@ -268,6 +274,51 @@ def parse_codex_usage(payload: Any) -> VendorUsage:
     )
 
 
+def parse_grok_usage(payload: Any) -> VendorUsage:
+    """Expose Grok's prepaid balance even when no included window is reported."""
+
+    checked_at = datetime.now(timezone.utc)
+    snapshots = grok_quota_snapshots(payload, observed_at=checked_at)
+    config = payload.get("config") if isinstance(payload, dict) else None
+    config = config if isinstance(config, dict) else {}
+    prepaid = config.get("prepaidBalance")
+    amount = _number(prepaid.get("val")) if isinstance(prepaid, dict) else None
+    balances = (
+        [
+            UsageBalance(
+                label="Grok prepaid credits",
+                remaining=amount,
+                note="Vendor credit units; separate from included usage. Spending limits may still apply.",
+            )
+        ]
+        if amount is not None
+        else []
+    )
+    if not snapshots and not balances:
+        return VendorUsage(
+            state="unavailable",
+            source="Grok account",
+            detail="Grok did not report a readable prepaid balance or numeric included-credit window for this account.",
+            checked_at=checked_at,
+        )
+    return VendorUsage(
+        state="available",
+        source="Grok account",
+        detail="Grok prepaid credits and included usage are separate. The included pool may be shared with other Grok products.",
+        checked_at=checked_at,
+        balances=balances,
+        windows=[
+            UsageWindow(
+                label=snapshot.window_label,
+                used_percent=round(snapshot.used_percent),
+                resets_at=snapshot.resets_at,
+            )
+            for snapshot in snapshots[:1]
+        ],
+        quota_snapshots=snapshots,
+    )
+
+
 def parse_openrouter_usage(payload: Any) -> VendorUsage:
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
@@ -351,10 +402,10 @@ class RuntimeUsageService:
         cached = self._cache.get(key)
         if not refresh and cached and time.monotonic() - cached[0] < 120:
             return cached[1]
-        if (
-            isinstance(profile, HarnessProfile)
-            and profile.kind.value != "codex_app_server"
-        ):
+        if isinstance(profile, HarnessProfile) and profile.kind.value not in {
+            "codex_app_server",
+            "grok_acp",
+        }:
             return _unsupported(profile)
         if isinstance(profile, ProviderProfile) and profile.provider_type not in {
             "openrouter",
@@ -384,10 +435,16 @@ class RuntimeUsageService:
                 )
         try:
             if isinstance(profile, HarnessProfile):
-                payload = await CodexAppServerAdapter().read_account_usage(
-                    profile, self.credentials
-                )
-                value = parse_codex_usage(payload)
+                if profile.kind.value == "grok_acp":
+                    payload = await GrokAcpAdapter().read_account_usage(
+                        profile, self.credentials
+                    )
+                    value = parse_grok_usage(payload)
+                else:
+                    payload = await CodexAppServerAdapter().read_account_usage(
+                        profile, self.credentials
+                    )
+                    value = parse_codex_usage(payload)
             else:
                 secret_ref = profile.secret_ref
                 if secret_ref is None:
@@ -447,11 +504,13 @@ class RuntimeUsageService:
         vendor = await self._vendor(profile, refresh=refresh)
         state = (
             "unavailable"
-            if vendor.state == "available" and not vendor.quota_snapshots
+            if vendor.state == "available"
+            and not vendor.quota_snapshots
+            and not vendor.balances
             else vendor.state
         )
         detail = (
-            "The harness did not report a numeric quota window."
+            "The harness did not report a numeric quota window or readable credit balance."
             if state == "unavailable" and vendor.state == "available"
             else vendor.detail
         )
@@ -461,6 +520,8 @@ class RuntimeUsageService:
             detail=detail,
             checked_at=vendor.checked_at,
             snapshots=vendor.quota_snapshots,
+            balances=vendor.balances,
+            ordinary_usage_allowed=vendor.ordinary_usage_allowed,
         )
 
     async def read(self, *, refresh: bool = False) -> RuntimeUsageResponse:

@@ -44,7 +44,7 @@ from nebula.v3.settings_assistant_tools import (
 
 def test_catalog_covers_settings_destinations_without_secrets():
     result = catalog()
-    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 20
+    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 21
     assert {item["id"] for item in result["destinations"]} == {
         item["id"] for item in APP_DESTINATIONS
     }
@@ -54,10 +54,16 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 20
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 23
     assert (
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"
+    )
+    assert (
+        "Butler conversations"
+        in next(item for item in result["destinations"] if item["id"] == "chat")[
+            "aliases"
+        ]
     )
     assert (
         next(item for item in result["settings"] if item["id"] == "storage")["url"]
@@ -86,8 +92,20 @@ def test_catalog_covers_settings_destinations_without_secrets():
         "assistant_ui_actions"
     ] == ["device_theme"]
     assert (
+        next(item for item in result["settings"] if item["id"] == "butler-effort")[
+            "url"
+        ]
+        == "/settings#butler-settings"
+    )
+    assert (
         next(item for item in result["settings"] if item["id"] == "butler-voice")["url"]
         == "/settings#butler-settings"
+    )
+    assert (
+        next(
+            item for item in result["settings"] if item["id"] == "butler-instructions"
+        )["url"]
+        == "/settings#butler-instructions-settings"
     )
     assert project_policy["direct_changes"] == []
     assert {item["name"] for item in result["actions"]} == {
@@ -107,6 +125,10 @@ def test_catalog_covers_settings_destinations_without_secrets():
 
 
 def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them():
+    assert open_setting({"setting_id": "butler-effort"}) == {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "open_setting", "setting_id": "butler-effort"},
+    }
     assert open_setting({"setting_id": "butler-voice"}) == {
         "state": "pending_browser_apply",
         "client_action": {"kind": "open_setting", "setting_id": "butler-voice"},

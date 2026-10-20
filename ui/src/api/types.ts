@@ -1931,11 +1931,12 @@ export interface HarnessTurnDetail {
     | "failed"
     | "cancelled"
     | "interrupted";
-  origin: "chat" | "mission";
+  origin: "chat" | "mission" | "analysis";
   harnessSessionId: Identifier;
   chatSessionId?: Identifier;
   runId?: Identifier;
   error?: string;
+  response?: string;
   retryOfTurnId?: Identifier;
 }
 
@@ -1961,6 +1962,8 @@ export interface ChatCompletionRequest {
   includeKnowledge?: boolean;
   allowCloudKnowledge?: boolean;
   toolsEnabled?: boolean;
+  /** Require a saved Core plan before this turn can use tools. */
+  planningEnabled?: boolean;
   maxArtifactQueries?: number | null;
   allowCloudToolResults?: boolean;
   harnessMode?: string;
@@ -2057,6 +2060,9 @@ export interface ChatGoal {
   skillSnapshots: Array<HarnessSkillSummary & { sha256: string }>;
   parentGoalId?: Identifier;
   childSessionIds?: Identifier[];
+  handoffSourceSessionId?: Identifier;
+  handoffTargetSessionId?: Identifier;
+  handoffReason?: string;
   revision: number;
 }
 
@@ -2216,6 +2222,7 @@ export interface ProviderRequestInput {
 
 export type ChatStreamEvent =
   | { type: "connection"; state: "connected" | "reconnecting" }
+  | { type: "task_plan"; plan: ChatTaskPlan }
   | {
       type: "queued";
       turnId: Identifier;
@@ -2437,7 +2444,10 @@ export interface ChatSessionSummary {
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
   isControlAssistant?: boolean;
+  /** Core records chats created by Butler separately from ordinary conversations. */
+  isButlerInitiated?: boolean;
   assistantConfig?: ChatAssistantConfig;
+  planningEnabled?: boolean;
   inheritedMessageCount?: number;
   forkedFromMessageId?: Identifier;
   model?: string;
@@ -2478,6 +2488,7 @@ export interface ChatAssistantConfig {
   includeKnowledge: boolean;
   allowCloudKnowledge: boolean;
   toolsEnabled: boolean;
+  planningEnabled: boolean;
   allowSubagents: boolean;
   allowAgentMessaging: boolean;
   maxActiveSubagents?: number;
@@ -2485,6 +2496,37 @@ export interface ChatAssistantConfig {
   subagentHarnessProfileId?: Identifier;
   subagentModel?: string;
   subagentReasoningEffort?: ReasoningEffort;
+}
+
+export interface ChatTaskPlan {
+  id: Identifier;
+  session_id: Identifier;
+  turn_id: Identifier;
+  harness_turn_id?: Identifier | null;
+  goal_id?: Identifier | null;
+  subagent_id?: Identifier | null;
+  schema_version: number;
+  plan_version: number;
+  phase: "discovery" | "execution" | "replanning" | "blocked" | "answered_without_tools";
+  steps: Array<{ action: string; expected_outcome: string }>;
+  tool_names: string[];
+  native_categories: string[];
+  files: string[];
+  no_file_work: boolean;
+  unresolved_dependencies: string[];
+  reason?: string | null;
+  directive_id?: Identifier | null;
+  revision: number;
+}
+
+export interface ChatPlanDirective {
+  id: Identifier;
+  session_id: Identifier;
+  target_kind: "agent" | "goal" | "child" | "turn";
+  target_id: Identifier;
+  status: "pending" | "applied" | "completed";
+  reason: string;
+  turn_id?: Identifier | null;
 }
 
 export interface ChatSessionActivity {
@@ -2506,7 +2548,7 @@ export interface ChatAttentionItem {
 export interface HarnessProfile {
   id: Identifier;
   name: string;
-  // Claude remains a wire-compatible legacy value but is not a provided harness.
+  // Existing configured Claude profiles remain selectable for managed execution.
   kind: "codex_app_server" | "claude_agent_sdk" | "grok_acp";
   connectionMode: "spawn" | "endpoint";
   transport: "stdio" | "unix" | "websocket";

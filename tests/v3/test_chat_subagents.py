@@ -12,6 +12,7 @@ from nebula.v3.chat import (
     ChatToolResultConsentRequired,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+from nebula.v3.chat_planning import PlanSubmission
 from nebula.v3.chat_subagents import _capability_selection, subagent_specs
 from nebula.v3.chat_turn_ledger import turn_history
 from nebula.v3.mission_delegation import DelegatedMissionService
@@ -290,6 +291,91 @@ async def _until(predicate, timeout: float = 5.0) -> None:
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("condition was not reached in time")
         await asyncio.sleep(0.01)
+
+
+def test_main_agent_plan_is_handed_to_child_without_child_planning_gate(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "start",
+                    "start_subagent",
+                    task="Inspect auth routes.",
+                    name="Auth",
+                    context=None,
+                ),
+                _finish("finish"),
+                _response(text="Delegated."),
+            ],
+            child=[_response(text="Auth routes checked.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(
+                project,
+                content="Inspect the auth routes with a subagent.",
+                planning_enabled=True,
+                allow_subagents=True,
+            )
+        )
+        assert prepared.turn is not None
+        parent_session = prepared.session or prepared.pending_session
+        assert parent_session is not None
+        plan = chat.plans.ensure(prepared.turn, parent_session)
+        assert plan is not None
+        chat.plans.submit(
+            plan,
+            PlanSubmission(
+                steps=[
+                    {
+                        "action": "Inspect auth routes",
+                        "expected_outcome": "List reachable auth paths",
+                    }
+                ],
+                tool_names=["start_subagent", "finish_response"],
+                native_categories=["isolated_workspace_read"],
+                no_file_work=True,
+                unresolved_dependencies=["Confirm the route owner"],
+            ),
+            available_tools={"start_subagent", "finish_response"},
+            native_categories={"isolated_workspace_read"},
+            workspace=tmp_path,
+        )
+        await _drain(chat, chat.start_provider_turn(prepared))
+        await _until(lambda: bool(provider.child_requests))
+        (record,) = store.list_entities(ChatSubagent)
+        child_session = store.get(ChatSession, record.child_session_id)
+        assert record.parent_request["planning_enabled"] is True
+        assert child_session.metadata["planning_enabled"] is True
+        child_prompt = provider.child_requests[0].messages[-1].content
+        assert "Main agent's shared task plan:" in child_prompt
+        assert '"action": "Inspect auth routes"' in child_prompt
+        assert '"expected_outcome": "List reachable auth paths"' in child_prompt
+        assert '"tool_names": ["start_subagent", "finish_response"]' in child_prompt
+        assert '"native_categories": ["isolated_workspace_read"]' in child_prompt
+        assert '"unresolved_dependencies": ["Confirm the route owner"]' in child_prompt
+        child_turn = store.get(ChatTurn, record.child_turn_id)
+        assert child_turn.request_snapshot["planning_enabled"] is True
+        assert chat.plans.required(child_turn, child_session) is False
+        assert chat.plans.for_turn(child_turn.id).phase == "discovery"
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
+        direct_child = await chat.prepare_async(
+            _request(
+                project,
+                content="Check one more route.",
+                session_id=child_session.id,
+                planning_enabled=True,
+            )
+        )
+        assert direct_child.source_request is not None
+        assert direct_child.source_request.planning_enabled is True
+        await chat.shutdown()
+
+    asyncio.run(scenario())
 
 
 def _messages(store: NebulaStore, session_id: str) -> list[ChatMessage]:
@@ -926,6 +1012,7 @@ def test_stopping_delegated_mission_stops_supervisor_turn(tmp_path: Path) -> Non
 
 def test_root_goal_sees_running_grandchild_below_completed_child(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
     root = store.create(
@@ -1002,7 +1089,17 @@ def test_root_goal_sees_running_grandchild_below_completed_child(
         )
     )
     goals = ChatGoalService(store)
+    original_find_entities = store.find_entities
+    subagent_scans = []
+
+    def count_subagent_scans(model, filters, **kwargs):
+        if model is ChatSubagent:
+            subagent_scans.append(1)
+        return original_find_entities(model, filters, **kwargs)
+
+    monkeypatch.setattr(store, "find_entities", count_subagent_scans)
     assert goals.has_working_subagents(root.id)
+    assert len(subagent_scans) == 1
     assert [item.id for item in chat.subagents.descendants_for_session(root.id)] == [
         "first-record",
         "second-record",
@@ -1013,7 +1110,22 @@ def test_root_goal_sees_running_grandchild_below_completed_child(
         {"status": ChatSubagentStatus.COMPLETED, "finished_at": utc_now()},
         expected_revision=grandchild.revision,
     )
+    for index in range(64):
+        store.create(
+            ChatSubagent(
+                engagement_id=project.id,
+                parent_session_id=root.id,
+                parent_turn_id=root_turn.id,
+                child_session_id=f"settled-sibling-{index}",
+                name=f"Settled {index}",
+                task="Previously finished.",
+                status=ChatSubagentStatus.COMPLETED,
+                finished_at=utc_now(),
+            )
+        )
+    subagent_scans.clear()
     assert not goals.has_working_subagents(root.id)
+    assert len(subagent_scans) == 1
 
 
 def test_supervisor_can_enable_ready_command_runtime_for_one_child(
@@ -2321,6 +2433,11 @@ def test_restart_replays_only_subagents_with_unfinished_delivery(tmp_path, monke
                 content="A question not yet delivered.",
             )
         )
+        for index in range(32):
+            unfinished(
+                69 + index,
+                parent_session_id=pending_message.parent_session_id,
+            )
 
         repaired = []
 
@@ -2636,6 +2753,15 @@ def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> 
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
         first_post = store.get(ChatSubagent, record.id).result_message_id
+        # Older child records inherited a planning flag. A later message must
+        # execute the delegated task without starting a second planner.
+        record = store.get(ChatSubagent, record.id)
+        store.update(
+            ChatSubagent,
+            record.id,
+            {"parent_request": {**record.parent_request, "planning_enabled": True}},
+            expected_revision=record.revision,
+        )
 
         provider.parent.extend(
             [
@@ -2680,6 +2806,12 @@ def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> 
 
         record = store.get(ChatSubagent, record.id)
         assert record.rounds == 2
+        assert (
+            store.get(ChatTurn, record.child_turn_id).request_snapshot[
+                "planning_enabled"
+            ]
+            is False
+        )
         # The new round follows the parent's current turn.
         assert record.parent_turn_id == second_turn_id
         child_messages = _messages(store, record.child_session_id)

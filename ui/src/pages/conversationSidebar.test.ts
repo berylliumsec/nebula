@@ -74,4 +74,58 @@ describe("groupSidebarConversations", () => {
     expect(before.groups[0].rows[0].childCount).toBe(1);
     expect(after.groups[0].rows[0].childCount).toBe(0);
   });
+
+  it("groups Butler-created chats under Butler while preserving their subagents and ordinary branches", () => {
+    const butler = session("butler", { title: "Butler", isControlAssistant: true });
+    const recovery = session("recovery", { title: "Recover paused goal", isButlerInitiated: true });
+    const subagent = session("subagent", { title: "Proof", parentSessionId: recovery.id, isSubagent: true });
+    const ordinary = session("ordinary", { title: "Operator chat" });
+    const branch = session("branch", { title: "Ordinary branch", parentSessionId: recovery.id });
+    const collapsed = groupSidebarConversations([recovery, subagent, ordinary, branch, butler], {}, "", new Set(), now);
+    expect(collapsed.groups[0].rows.map(row => row.session.id)).toEqual(["ordinary", "branch", "butler"]);
+    expect(collapsed.groups[0].rows.at(-1)).toMatchObject({ childCount: 1, childKind: "chats", expanded: false });
+
+    const expanded = groupSidebarConversations([recovery, subagent, ordinary, branch, butler], {}, "", new Set([butler.id, recovery.id]), now);
+    expect(expanded.groups[0].rows.slice(-3).map(row => [row.session.id, row.depth])).toEqual([
+      ["butler", 0], ["recovery", 1], ["subagent", 2],
+    ]);
+  });
+
+  it("reveals only the matching Butler chat and subagent through search", () => {
+    const butler = session("butler", { title: "Butler", isControlAssistant: true });
+    const recovery = session("recovery", { title: "Recover paused goal", isButlerInitiated: true });
+    const subagent = session("subagent", { title: "Inspect libwebrtc", parentSessionId: recovery.id, isSubagent: true });
+    const other = session("other", { title: "Recover Apple Music", isButlerInitiated: true });
+    const result = groupSidebarConversations([butler, recovery, subagent, other], {}, "libwebrtc", new Set(), now);
+    expect(result.matchCount).toBe(1);
+    expect(result.groups[0].rows.map(row => row.session.id)).toEqual(["butler", "recovery", "subagent"]);
+    expect(result.groups[0].rows.slice(0, 2).every(row => row.expanded && row.searchRevealed)).toBe(true);
+  });
+
+  it("keeps Butler-created chats visible if Butler is absent from the loaded page", () => {
+    const recovery = session("recovery", { isButlerInitiated: true });
+    const result = groupSidebarConversations([recovery], {}, "", new Set(), now);
+    expect(result.groups[0].rows.map(row => [row.session.id, row.depth])).toEqual([["recovery", 0]]);
+  });
+
+  it("keeps Butler's own subagents beside its initiated chats", () => {
+    const butler = session("butler", { isControlAssistant: true });
+    const chat = session("chat", { isButlerInitiated: true });
+    const agent = session("agent", { parentSessionId: butler.id, isSubagent: true });
+    const result = groupSidebarConversations([butler, chat, agent], {}, "", new Set([butler.id]), now);
+    expect(result.groups[0].rows.map(row => [row.session.id, row.depth])).toEqual([
+      ["butler", 0], ["chat", 1], ["agent", 1],
+    ]);
+    expect(result.groups[0].rows[0].childCount).toBe(2);
+  });
+
+  it("surfaces recent and waiting Butler work at the parent row", () => {
+    const butler = session("butler", { isControlAssistant: true, updatedAt: "2026-09-01T10:00:00Z" });
+    const chat = session("chat", { isButlerInitiated: true, updatedAt: "2026-09-22T14:00:00Z" });
+    const recent = groupSidebarConversations([butler, chat], {}, "", new Set(), now);
+    expect(recent.groups[0].label).toBe("Today");
+    const waiting = groupSidebarConversations([butler, chat], { chat: "waiting" }, "", new Set(), now);
+    expect(waiting.groups[0].label).toBe("Needs you");
+    expect(waiting.groups[0].rows[0].waitingChildren).toBe(1);
+  });
 });

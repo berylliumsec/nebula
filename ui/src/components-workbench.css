@@ -609,6 +609,8 @@ kbd { font-size: 11px; }
 .chat-archived-notice > span { flex: 1; min-width: 0; }
 .chat-archived-notice > svg { flex: none; }
 .session-list nav > button { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 46px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+.session-list nav > .session-list-load-more { display: flex; width: 100%; justify-content: center; gap: 6px; white-space: nowrap; }
+.session-list-load-more > svg { flex: none; }
 .session-list nav > button:hover { background: var(--surface-hover); }
 .session-list nav > button.active { color: var(--text); background: var(--blue-muted); }
 .session-list nav > button > span { display: flex; min-width: 0; flex-direction: column; }
@@ -616,6 +618,7 @@ kbd { font-size: 11px; }
 .session-list-item.has-subagents { grid-template-columns: minmax(0, 1fr) 34px 36px; }
 .session-list-item.nested-subagent { margin-left: 16px; }
 .session-list-item.nested-subagent::before { position: absolute; top: 0; bottom: 0; left: -8px; width: 1px; background: var(--border); content: ""; }
+.session-list-item.nested-subagent-deep { margin-left: 32px; }
 .session-list-item.waiting .session-select small { color: var(--status-warning); }
 .session-subagents-toggle { width: 34px; min-height: 34px; color: var(--muted); }
 .session-subagents-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }

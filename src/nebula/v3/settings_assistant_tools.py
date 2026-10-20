@@ -22,6 +22,13 @@ from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 # These are settings destinations, not grants to mutate the underlying records.
 # A new direct mutation must be implemented through the owning service below.
 SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
+    (
+        "butler-instructions",
+        "Nebula-wide Butler instructions",
+        "butler-instructions-settings",
+    ),
+    ("butler-effort", "Butler model and effort", "butler-settings"),
+    ("butler-activity", "Butler scheduled activity", "butler-oversight"),
     ("butler-voice", "Butler Voice timeout", "butler-settings"),
     ("usage", "Usage and credits", "usage-settings"),
     ("appearance", "Appearance and theme", "appearance-settings"),

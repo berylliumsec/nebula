@@ -41,6 +41,7 @@ class ChatAssistantConfigPatch(NebulaModel):
     include_knowledge: bool | None = None
     allow_cloud_knowledge: bool | None = None
     tools_enabled: bool | None = None
+    planning_enabled: bool | None = None
     allow_subagents: bool | None = None
     allow_agent_messaging: bool | None = None
     max_active_subagents: int | None = Field(default=None, ge=1, le=100)
@@ -89,6 +90,7 @@ def chat_assistant_config(store: NebulaStore, session: ChatSession) -> dict[str,
         "include_knowledge": metadata.get("include_knowledge", True),
         "allow_cloud_knowledge": metadata.get("allow_cloud_knowledge", False),
         "tools_enabled": metadata.get("tools_enabled", False),
+        "planning_enabled": bool(metadata.get("planning_enabled", False)),
         "allow_subagents": bool(
             subagent_options
             if session.backend == ChatBackend.HARNESS
@@ -251,6 +253,7 @@ def update_chat_assistant_config(
         "include_knowledge",
         "allow_cloud_knowledge",
         "tools_enabled",
+        "planning_enabled",
         "harness_mode",
     ):
         metadata[key] = selected[key]

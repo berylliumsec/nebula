@@ -59,6 +59,15 @@ from .chat_snapshot_parts import (
     split_skill_snapshots,
     stage_snapshot_parts,
 )
+from .chat_planning import (
+    ChatPlanService,
+    DISCOVERY_TOOL_NAMES,
+    MAX_PLANNING_ROUNDS,
+    PlanSubmission,
+    PlanningBroker,
+    PlanningBlocked,
+    advisory_plan_components,
+)
 from .chat_turn_headers import (
     ChatTurnHeader,
     engagement_turn_headers,
@@ -596,6 +605,7 @@ class ChatCompletionRequest(NebulaModel):
     _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
     backend: ChatBackend = ChatBackend.PROVIDER
     control_assistant: bool = False
+    butler_initiated: bool = False
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -626,6 +636,7 @@ class ChatCompletionRequest(NebulaModel):
     include_knowledge: bool = True
     allow_cloud_knowledge: bool = False
     tools_enabled: bool = False
+    planning_enabled: bool | None = None
     # Advertise start/wait/list/stop subagent tools, within the depth ceiling.
     allow_subagents: bool = False
     # Let this independent main conversation discover and message project peers.
@@ -1037,6 +1048,8 @@ _FORK_PRIVATE_METADATA_KEYS = frozenset(
         "subagent_parent_turn_id",
         "temporary_assistant",
         "side_chat",
+        "butler_initiated",
+        "control_assistant",
     }
 )
 
@@ -1532,6 +1545,7 @@ def _added_usage(left: ChatTokenUsage, right: ChatTokenUsage) -> ChatTokenUsage:
         cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
         cache_creation_input_tokens=left.cache_creation_input_tokens
         + right.cache_creation_input_tokens,
+        cost_usd=combined_billed_cost(left, right),
     )
 
 
@@ -2631,6 +2645,7 @@ class ChatService:
         provider_usage_observer: Callable[[str], None] | None = None,
     ) -> None:
         self.store = store
+        self.plans = ChatPlanService(store)
         self.work = WorkService(store)
         self.tool_suggestion_client = (
             tool_suggestion_client or JevClient.from_environment
@@ -5365,6 +5380,14 @@ class ChatService:
             )
         else:
             new_messages = durable_incoming
+        if request.planning_enabled is None:
+            request = request.model_copy(
+                update={
+                    "planning_enabled": bool(
+                        session and session.metadata.get("planning_enabled", False)
+                    )
+                }
+            )
         # Only an image this request adds must reach the model as an image.
         # Images already in the transcript are named in text for a text-only
         # model (see resolve_chat_model_content), so a runtime switch to one
@@ -5623,9 +5646,18 @@ class ChatService:
                     else self._title(request.messages),
                     provider_profile_id=profile.id,
                     model=selected_model,
-                    metadata={"control_assistant": True}
-                    if request.control_assistant
-                    else {},
+                    metadata={
+                        **(
+                            {"control_assistant": True}
+                            if request.control_assistant
+                            else {}
+                        ),
+                        **(
+                            {"butler_initiated": True}
+                            if request.butler_initiated
+                            else {}
+                        ),
+                    },
                 )
 
         citations: list[ChatCitation] = []
@@ -6092,6 +6124,12 @@ class ChatService:
                 raise ChatConfigurationError(
                     "no command, automation, MCP, or browser runtime capabilities were selected"
                 )
+            tool_components = combine_tool_components(
+                tool_components,
+                advisory_plan_components(
+                    self.plans, tool_components.scope, Path(tool_components.workspace)
+                ),
+            )
             if request.allowed_tool_names is not None:
                 try:
                     tool_components = restrict_tool_components(
@@ -6108,7 +6146,8 @@ class ChatService:
                             if skill_resources_selected
                             else frozenset()
                         )
-                        | (REPORT_TOOL_NAMES if goal is not None else frozenset()),
+                        | (REPORT_TOOL_NAMES if goal is not None else frozenset())
+                        | frozenset({"plan.submit"}),
                     )
                 except InvalidToolArguments as exc:
                     raise ChatConfigurationError(str(exc)) from exc
@@ -6119,6 +6158,7 @@ class ChatService:
                     tool_components.specs,
                     always_loaded=[
                         *tool_components.scope.always_loaded_tools,
+                        "plan.submit",
                         *(REPORT_TOOL_NAMES if goal is not None else ()),
                     ],
                     always_loaded_sources=[f"mcp:{item.id}" for item in mcp_profiles],
@@ -6231,6 +6271,14 @@ class ChatService:
             # Retrieved for this message, so it rides on this message rather
             # than the instructions every turn of the conversation begins with.
             reference = _reference_material(operator_help_chunks, engagement_chunks)
+            if request.planning_enabled:
+                instructions += (
+                    "\n\nPlanning preference: Make a concise plan before substantial "
+                    "task work when useful. Share it through plan.submit if that "
+                    "tool is available, and pass relevant steps to subagents "
+                    "when delegating. Normal tool use remains available even "
+                    "without a saved plan. Revise the plan as work changes."
+                )
             base_instructions = instructions
             # What the turn's requests add beside the conversation counts
             # toward the target too, or a tool-heavy turn is assembled to the
@@ -6493,6 +6541,8 @@ class ChatService:
                     "include_oci_tools": request.tools_enabled,
                     "control_assistant": settings_only,
                     "available_tool_names": sorted(tool_components.specs),
+                    "planning_enabled": bool(request.planning_enabled),
+                    "plan_behavior": "advisory",
                     "allowed_tool_names": request.allowed_tool_names,
                     "browser_session_id": browser_session_id,
                     "application_model_context": model_context,
@@ -6562,6 +6612,8 @@ class ChatService:
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
                     "include_oci_tools": False,
+                    "planning_enabled": bool(request.planning_enabled),
+                    "plan_behavior": "advisory",
                     "knowledge_enabled": request.include_knowledge,
                     "cloud_knowledge_confirmed": request.allow_cloud_knowledge,
                 },
@@ -8035,6 +8087,27 @@ class ChatService:
         self, prepared: PreparedChat
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         self._claim_execution(prepared)
+        if prepared.turn is not None:
+            session = self.store.get(ChatSession, prepared.turn.session_id)
+            if prepared.turn.request_snapshot.get(
+                "plan_behavior"
+            ) == "advisory" and self.plans.requested(prepared.turn, session):
+                plan = self.plans.ensure(prepared.turn, session)
+                if (
+                    plan is not None
+                    and plan.directive_id
+                    and not prepared.turn.request_snapshot.get("planning_enabled")
+                ):
+                    prepared.model_request = prepared.model_request.model_copy(
+                        update={
+                            "instructions": (
+                                "Planning preference for this turn: Make and share a "
+                                "concise plan when useful; include relevant steps in "
+                                "subagent tasks. Normal tools remain available.\n\n"
+                                + (prepared.model_request.instructions or "")
+                            )
+                        }
+                    )
         yield (
             "started",
             {
@@ -8045,6 +8118,19 @@ class ChatService:
                 "session_id": self._session_id(prepared),
             },
         )
+        if (
+            prepared.tools_enabled
+            and prepared.turn is not None
+            and self.plans.required(
+                prepared.turn,
+                self.store.get(ChatSession, prepared.turn.session_id),
+            )
+        ):
+            async for item in self._stream_tool_turn(
+                prepared, start_hooks_after_plan=True
+            ):
+                yield item
+            return
         # The client needs the persisted session ID to recover a failed turn
         # even when its start hook blocks before provider or tool work begins.
         await self._run_start_native_hooks(prepared)
@@ -8165,17 +8251,253 @@ class ChatService:
         if not completed:
             raise ChatError("provider stream ended before completion")
 
+    async def _plan_provider_turn(
+        self,
+        prepared: PreparedChat,
+        turn: ChatTurn,
+        components: RuntimeToolComponents | AutomationToolComponents,
+    ) -> ModelResponse | None:
+        """Route a bounded discovery exchange, then save a validated plan."""
+
+        from .tool_results import WorkspaceOutputService
+
+        session = self.store.get(ChatSession, turn.session_id)
+        plan = self.plans.ensure(turn, session)
+        if plan is None or plan.phase == "execution":
+            return None
+        if plan.phase == "blocked":
+            raise PlanningBlocked(plan.reason or "planning is blocked")
+        safe_names = (
+            DISCOVERY_TOOL_NAMES | {"tool_catalog.search", "tool_catalog.load"}
+        ) & components.specs.keys()
+        safe_specs = [components.specs[name] for name in sorted(safe_names)]
+        submit = ToolDefinition(
+            name="plan.submit",
+            description=(
+                "Save the task plan before using any execution capability. "
+                "List exact available tool names and verified workspace-relative files; "
+                "set no_file_work when no files are involved."
+            ),
+            input_schema=PlanSubmission.model_json_schema(),
+            strict=False,
+        )
+        instructions = (
+            "You are in Core's restricted discovery phase. Plan this task before "
+            "acting. Only the offered read and catalog tools can run. Commands, "
+            "writes, browser actions, arbitrary MCP calls, and subagent starts "
+            "cannot run. Discover relevant file locations, then call plan.submit "
+            "with steps and expected outcomes. List every execution tool you "
+            "expect to use, using exact names from: "
+            + ", ".join(sorted(components.specs))
+            + ". A plan does not authorize effects or approvals. If the task "
+            "needs no tools, you may answer directly without a plan."
+        )
+        if plan.phase == "replanning":
+            instructions += " Your prior plan needs revision: " + (
+                plan.reason or "undeclared tool"
+            )
+        results: list[ModelToolResult] = []
+        workspace_service = WorkspaceOutputService(Path(components.workspace))
+        for round_number in range(MAX_PLANNING_ROUNDS):
+            request = prepared.model_request.model_copy(
+                update={
+                    "instructions": instructions
+                    + "\n\n"
+                    + (prepared.model_request.instructions or ""),
+                    "tools": [*self._routing_tools(safe_specs), submit],
+                    "tool_results": results,
+                    "tool_choice": ToolChoice.AUTO,
+                    "parallel_tool_calls": False,
+                    "max_output_tokens": min(
+                        prepared.model_request.max_output_tokens or 4096, 4096
+                    ),
+                }
+            )
+            response = await self._complete_routing_step(prepared, request)
+            turn = self._add_usage(self._assert_execution_owner(prepared), response)
+            prepared.turn = turn
+            if not response.tool_calls:
+                if response.text.strip() and not results:
+                    self.plans.answer_without_tools(turn.id)
+                    return response
+                break
+            for index, call in enumerate(response.tool_calls):
+                output: dict[str, Any]
+                is_error = False
+                if call.name == "plan.submit":
+                    try:
+                        submission = PlanSubmission.model_validate(call.arguments)
+                        self.plans.submit(
+                            plan,
+                            submission,
+                            available_tools=set(components.specs),
+                            native_categories=set(),
+                            workspace=Path(components.workspace),
+                        )
+                        return None
+                    except (ValueError, PlanningBlocked) as exc:
+                        # diagnostic-expected: invalid plans return a bounded error for revision.
+                        output = {"error": str(exc)}
+                        is_error = True
+                elif call.name in DISCOVERY_TOOL_NAMES and call.name in safe_names:
+                    try:
+                        method = getattr(workspace_service, call.name.split(".")[1])
+                        output = await asyncio.wait_for(
+                            asyncio.to_thread(method, **call.arguments), timeout=5
+                        )
+                        plan = self.plans.record_discovery(plan, call.name, output)
+                    except Exception as exc:
+                        record_caught_exception(
+                            "chat",
+                            "chat.planning.workspace_discovery_failed",
+                            "Workspace discovery failed during planning; the error was returned to the planner.",
+                            exc,
+                            stage="planning-discovery",
+                            metadata={"turn_id": turn.id, "tool_name": call.name},
+                        )
+                        output = {"error": str(exc)}
+                        is_error = True
+                elif (
+                    call.name in {"tool_catalog.search", "tool_catalog.load"}
+                    and call.name in safe_names
+                ):
+                    try:
+                        broker = components.broker
+                        if isinstance(broker, PlanningBroker):
+                            broker = broker.broker
+                        invocation = ToolInvocation(
+                            engagement_id=turn.engagement_id,
+                            run_id=turn.id,
+                            chat_session_id=turn.session_id,
+                            chat_turn_id=turn.id,
+                            tool_name=call.name,
+                            arguments=call.arguments,
+                            workspace=Path(components.workspace),
+                            requested_by="chat-planner",
+                        )
+                        result = await broker.execute(invocation, components.scope)
+                        output = result.model_result()
+                    except Exception as exc:
+                        record_caught_exception(
+                            "chat",
+                            "chat.planning.catalog_discovery_failed",
+                            "Tool catalog discovery failed during planning; the error was returned to the planner.",
+                            exc,
+                            stage="planning-discovery",
+                            metadata={"turn_id": turn.id, "tool_name": call.name},
+                        )
+                        output = {"error": str(exc)}
+                        is_error = True
+                else:
+                    output = {"error": "tool is unavailable during discovery"}
+                    is_error = True
+                results.append(
+                    ModelToolResult(
+                        call_id=call.id,
+                        name=call.name,
+                        arguments=call.arguments,
+                        output=output,
+                        is_error=is_error,
+                        response_group=f"plan:{turn.id}:{round_number}",
+                        response_text=response.text if index == 0 else None,
+                        reasoning_state=response.reasoning_state
+                        if index == 0
+                        else None,
+                        provider_metadata=call.provider_metadata,
+                    )
+                )
+        self.plans.block(
+            turn.id,
+            "The planner did not submit a valid plan within its bounded discovery phase.",
+        )
+        raise PlanningBlocked(
+            "The planner did not submit a valid plan within its bounded discovery phase."
+        )
+
+    def _plan_execution_instructions(self, turn_id: str) -> str:
+        plan = self.plans.for_turn(turn_id)
+        if plan is None or plan.phase != "execution":
+            return ""
+        turn = self.store.get(ChatTurn, turn_id)
+        detail = {
+            "version": plan.plan_version,
+            "steps": plan.steps,
+            "tool_names": plan.tool_names,
+            "native_categories": plan.native_categories,
+            "files": plan.files,
+            "no_file_work": plan.no_file_work,
+            "unresolved_dependencies": plan.unresolved_dependencies,
+        }
+        if turn.request_snapshot.get("plan_behavior") == "advisory":
+            return (
+                "\n\nAgent-shared task plan (advisory). Use or revise these steps "
+                "as useful and pass relevant context to subagents. Normal tools "
+                "remain available.\n" + json.dumps(detail, ensure_ascii=False)
+            )
+        return (
+            "\n\nCore-validated task plan. Follow these steps and use only the listed "
+            "capabilities. Existing scope and approval rules still apply.\n"
+            + json.dumps(detail, ensure_ascii=False)
+        )
+
     async def _stream_tool_turn(
-        self, prepared: PreparedChat
+        self, prepared: PreparedChat, *, start_hooks_after_plan: bool = False
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         turn = prepared.turn
         components = prepared.tool_components
         if turn is None or components is None or prepared.engagement_id is None:
             raise ChatError("command response is missing its durable runtime lock")
+        if not isinstance(components.broker, PlanningBroker):
+            from .runtime_platform import RuntimeToolComponents
+
+            components = RuntimeToolComponents(
+                broker=PlanningBroker(components.broker, self.plans),
+                scope=components.scope,
+                workspace=Path(components.workspace),
+                specs=components.specs,
+                runtime_digest=components.runtime_digest,
+            )
+            prepared.tool_components = components
         # Set when the final synthesis asks for a tool the turn can still run.
         route_again = False
         try:
             turn = self._refresh_turn(turn)
+            session = self.store.get(ChatSession, turn.session_id)
+            if self.plans.required(turn, session):
+                plan = self.plans.ensure(turn, session)
+                if plan is not None and plan.phase != "execution":
+                    yield (
+                        "task_plan",
+                        {"type": "task_plan", "plan": plan.model_dump(mode="json")},
+                    )
+                    direct = await self._plan_provider_turn(prepared, turn, components)
+                    turn = self._refresh_turn(turn)
+                    if direct is not None:
+                        answered_plan = self.plans.for_turn(turn.id)
+                        if answered_plan is not None:
+                            yield (
+                                "task_plan",
+                                {
+                                    "type": "task_plan",
+                                    "plan": answered_plan.model_dump(mode="json"),
+                                },
+                            )
+                        async for item in self._answer_from_routing(
+                            prepared, turn, direct
+                        ):
+                            yield item
+                        return
+                    latest_plan = self.plans.for_turn(turn.id)
+                    if latest_plan is not None:
+                        yield (
+                            "task_plan",
+                            {
+                                "type": "task_plan",
+                                "plan": latest_plan.model_dump(mode="json"),
+                            },
+                        )
+            if start_hooks_after_plan:
+                await self._run_start_native_hooks(prepared)
             if turn.status == ChatTurnStatus.WAITING_APPROVAL:
                 async for item in self._resume_pending_call(prepared, turn, components):
                     if item[0] == "_continued":
@@ -8212,6 +8534,43 @@ class ChatService:
             deviations = 0
             route_deviated = False
             while turn.status != ChatTurnStatus.FINALIZING:
+                session = self.store.get(ChatSession, turn.session_id)
+                if self.plans.required(turn, session):
+                    plan = self.plans.ensure(turn, session)
+                    if plan is not None and plan.phase != "execution":
+                        batched_calls = []
+                        yield (
+                            "task_plan",
+                            {"type": "task_plan", "plan": plan.model_dump(mode="json")},
+                        )
+                        direct = await self._plan_provider_turn(
+                            prepared, turn, components
+                        )
+                        turn = self._refresh_turn(turn)
+                        if direct is not None:
+                            answered_plan = self.plans.for_turn(turn.id)
+                            if answered_plan is not None:
+                                yield (
+                                    "task_plan",
+                                    {
+                                        "type": "task_plan",
+                                        "plan": answered_plan.model_dump(mode="json"),
+                                    },
+                                )
+                            async for item in self._answer_from_routing(
+                                prepared, turn, direct
+                            ):
+                                yield item
+                            return
+                        latest_plan = self.plans.for_turn(turn.id)
+                        if latest_plan is not None:
+                            yield (
+                                "task_plan",
+                                {
+                                    "type": "task_plan",
+                                    "plan": latest_plan.model_dump(mode="json"),
+                                },
+                            )
                 budgeted_specs = [
                     spec
                     for spec in components.specs.values()
@@ -8294,7 +8653,8 @@ class ChatService:
                             )
                             + "\n\n"
                             + (prepared.model_request.instructions or "")
-                            + catalog_instructions(catalog_receipt, components.specs),
+                            + catalog_instructions(catalog_receipt, components.specs)
+                            + self._plan_execution_instructions(turn.id),
                             "tools": self._routing_tools(available_specs),
                             "tool_choice": ToolChoice.AUTO,
                             # A model may batch independent calls into one
@@ -8581,6 +8941,23 @@ class ChatService:
                         requested_at=requested_at,
                         responded_at=responded_at,
                     )
+                # Validate the whole batch before any parallel member starts.
+                # This also catches a Butler directive that arrived after the
+                # model request but before dispatch.
+                session = self.store.get(ChatSession, turn.session_id)
+                if self.plans.required(turn, session):
+                    self.plans.ensure(turn, session)
+                    try:
+                        for pending in batched_calls:
+                            if (
+                                pending.refusal is None
+                                and pending.call.name != "finish_response"
+                            ):
+                                self.plans.guard(turn.id, pending.call.name)
+                    except PlanningBlocked:
+                        # diagnostic-expected: the saved plan moved to replanning before dispatch.
+                        batched_calls = []
+                        continue
                 parallel_wave = self._parallel_safe_wave(
                     batched_calls,
                     components,
@@ -8953,6 +9330,7 @@ class ChatService:
                             + _reference_instructions(
                                 help_chunks, trusted_operator_help=True
                             )
+                            + self._plan_execution_instructions(current.id)
                         ),
                         "tools": synthesis_tools,
                         "tool_choice": ToolChoice.NONE,
@@ -11216,11 +11594,7 @@ class ChatService:
 
         write = transaction.update if transaction is not None else self.store.update
         goal = self.store.get(ChatGoal, goal_id)
-        combined = ChatTokenUsage(
-            input_tokens=goal.usage.input_tokens + usage.input_tokens,
-            output_tokens=goal.usage.output_tokens + usage.output_tokens,
-            total_tokens=goal.usage.total_tokens + usage.total_tokens,
-        )
+        combined = _added_usage(goal.usage, usage)
         # Usage is always recorded, but only a running goal pauses on the
         # budget: a goal the operator cancelled, completed, paused or blocked
         # while the response was in flight keeps that state and its timestamps.
@@ -11383,40 +11757,6 @@ class ChatService:
             changes,
             expected_revision=turn.revision,
         )
-
-    @staticmethod
-    def _bounded_tool_result(output: dict[str, Any]) -> str:
-        rendered = serialize_model_result(output)
-        decoded = json.loads(rendered)
-        if decoded.get("schema") != "nebula.bounded-result/v1":
-            return rendered
-        # Compatibility for trusted non-action capabilities. Executable action
-        # results reach this method only as compact v2 receipts.
-        normalized = json.loads(json.dumps(output, ensure_ascii=False, default=str))
-
-        def redact_value(value: Any) -> Any:
-            if isinstance(value, str):
-                return redact_text(value)
-            if isinstance(value, list):
-                return [redact_value(item) for item in value]
-            if isinstance(value, dict):
-                return {key: redact_value(item) for key, item in value.items()}
-            return value
-
-        raw = json.dumps(redact_value(normalized), ensure_ascii=False, sort_keys=True)
-        envelope: dict[str, Any] = {
-            "status": "complete",
-            "truncated": True,
-            "original_characters": len(raw),
-            "preview": "",
-        }
-        empty = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
-        envelope["preview"] = raw[: max(0, 8_000 - len(empty))]
-        bounded = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
-        while len(bounded) > 8_000 and envelope["preview"]:
-            envelope["preview"] = envelope["preview"][: -(len(bounded) - 8_000)]
-            bounded = json.dumps(envelope, ensure_ascii=False, sort_keys=True)
-        return bounded
 
     @staticmethod
     def _bounded_tool_error(status: str, detail: str) -> str:
@@ -12485,6 +12825,13 @@ class ChatService:
                 )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
+            if turn.request_snapshot.get("plan_behavior") == "advisory":
+                components = combine_tool_components(
+                    components,
+                    advisory_plan_components(
+                        self.plans, components.scope, Path(components.workspace)
+                    ),
+                )
             allowed_names = turn.request_snapshot.get("allowed_tool_names")
             if isinstance(allowed_names, list):
                 components = restrict_tool_components(
@@ -12504,6 +12851,11 @@ class ChatService:
                         frozenset({"skill.read_resource"})
                         if skill_snapshots
                         and any(item.resources for item in skill_snapshots)
+                        else frozenset()
+                    )
+                    | (
+                        frozenset({"plan.submit"})
+                        if turn.request_snapshot.get("plan_behavior") == "advisory"
                         else frozenset()
                     ),
                 )
@@ -13766,6 +14118,7 @@ class ChatService:
         through_latest: bool = False,
         title: str | None = None,
         side_chat: bool = False,
+        butler_initiated: bool = False,
         harness_session_id: str | None = None,
     ) -> ChatSession:
         """Create an independent transcript branch with explicit provenance."""
@@ -13829,6 +14182,7 @@ class ChatService:
                 "forked_from_message_id": boundary.id,
                 "workspace_is_shared": not side_chat,
                 "side_chat": side_chat,
+                **({"butler_initiated": True} if butler_initiated else {}),
                 **(
                     {"inherited_message_count": len(copied_messages)}
                     if side_chat
@@ -15655,6 +16009,7 @@ class ChatService:
             "max_active_subagents": prepared.source_request.max_active_subagents,
             "subagent_reasoning_effort": prepared.source_request.subagent_reasoning_effort,
             "allow_agent_messaging": prepared.source_request.allow_agent_messaging,
+            "planning_enabled": bool(prepared.source_request.planning_enabled),
         }
 
     @staticmethod

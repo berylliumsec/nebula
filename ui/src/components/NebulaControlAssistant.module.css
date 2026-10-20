@@ -43,6 +43,31 @@
 .settingList button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-width: 0; text-align: left; }
 .settingList small { font-size: .72rem; color: var(--muted); }
 .themes { border-top: 1px solid var(--border); padding-top: 8px; }
+.contextPack { min-height: 0; max-height: 180px; overflow: auto; padding: 8px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
+.contextHeading, .contextItem { display: flex; align-items: center; gap: 8px; }
+.contextHeading { justify-content: space-between; color: var(--muted); }
+.contextItems { display: grid; gap: 2px; }
+.contextItem details { flex: 1; min-width: 0; }
+.contextItem summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.contextItem p { max-height: 100px; margin: 4px 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.contextNotice { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 4px 12px; color: var(--muted); font-size: .82rem; }
+.imageTray { display: flex; gap: 8px; max-height: 148px; overflow: auto; padding: 8px 12px; border-top: 1px solid var(--border); }
+.imageItem { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; max-width: 176px; min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 4px; }
+.imageItem span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
+.imageItem button { flex: 0 0 auto; }
+.attachedImage { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; }
+.transcriptImage { display: block; max-width: min(100%, 360px); max-height: 300px; object-fit: contain; border-radius: 8px; }
+.imageStatus { margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
+.turnStatus { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); }
+.turnStatusDot { flex: 0 0 7px; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; background: var(--blue); }
+.turnStatus[data-state="attention"] .turnStatusDot, .turnStatus[data-state="error"] .turnStatusDot { background: var(--danger, var(--text)); }
+.turnStatusText { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.turnStatusText strong { display: block; font-size: .82rem; font-weight: 600; line-height: 1.4; }
+.turnStatusText small { display: block; color: var(--muted-strong, var(--muted)); font-size: .72rem; line-height: 1.4; }
+.turnSteps { margin-top: 2px; color: var(--muted-strong, var(--muted)); font-size: .72rem; }
+.turnSteps summary { display: flex; align-items: center; min-height: 44px; width: fit-content; cursor: pointer; }
+.turnSteps ol { max-height: 120px; overflow: auto; margin: 0 0 4px; padding-left: 18px; }
+.turnSteps li + li { margin-top: 3px; }
 .composer { display: flex; align-items: end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
@@ -59,5 +84,7 @@
   .voiceLabel { display: inline; }
   .body { flex: 1; min-height: 0; }
   .transcript { max-height: none; overflow: visible; }
+  .turnStatus { flex-wrap: wrap; }
+  .turnStatus > button { margin-left: 15px; }
 }
 @media (max-width: 430px) { .catalog .settingList { grid-template-columns: 1fr; } }

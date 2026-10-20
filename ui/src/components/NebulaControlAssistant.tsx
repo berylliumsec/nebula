@@ -1,17 +1,20 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { GripHorizontal, Minimize2, Send, Settings2, Square, X } from "lucide-react";
+import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode } from "react";
+import { GripHorizontal, Image, Minimize2, Send, Settings2, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
+import { startVisiblePoll } from "../api/visiblePoll";
 import { logDiagnostic } from "../diagnostics";
 import type { ToolSharingRuntime } from "../api/toolSharingConsent";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useOptionalWorkbenchDrafts } from "../state/WorkbenchDraftContext";
+import { createHashedSelectionAttachment } from "./selection/selectionActions";
 import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeContext";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
-import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatMessage, type VoicePauseSeconds } from "../api/types";
+import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type VoicePauseSeconds } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
@@ -19,7 +22,9 @@ import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import { MicrophoneIcon, NebulaVoice } from "./NebulaVoice";
 import { ButlerMemory } from "./ButlerMemory";
 import { ButlerOversight } from "./ButlerOversight";
+import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
 import { useButlerOverview } from "./useButlerOverview";
+import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
 import styles from "./NebulaControlAssistant.module.css";
 
 function readActionOutcomes(key: string): Record<string, string> {
@@ -41,6 +46,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
   const { api, coreState, engagement, providers, harnesses } = useWorkspace();
+  const context = useOptionalWorkbenchDrafts();
+  const butlerDrafts = context?.butlerDrafts ?? [];
   const { preference, setPreference } = useTheme();
   const confirm = useConfirmation();
   const [open, setOpen] = useState(false);
@@ -48,6 +55,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [query, setQuery] = useState("");
   const [destinationQuery, setDestinationQuery] = useState("");
   const [draft, setDraft] = useState("");
+  const [pendingImages, setPendingImages] = useState<ChatContentBlock[]>([]);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [memoryRefreshRevision, setMemoryRefreshRevision] = useState(0);
   const [suggestions, setSuggestions] = useState<SettingCatalogEntry[]>([]);
@@ -55,6 +65,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [sessionRuntime, setSessionRuntime] = useState<{ kind: "provider" | "harness"; id: string; model: string }>();
   const [sessionConfig, setSessionConfig] = useState<ChatAssistantConfig>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [oversightOpenRevision, setOversightOpenRevision] = useState(0);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [settingsStatus, setSettingsStatus] = useState("");
@@ -67,13 +78,26 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [cyberDraft, setCyberDraft] = useState<ChatAssistantConfig["harnessCyberAccessProgram"]>("automatic");
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [pendingTurn, setPendingTurn] = useState<ChatTurn>();
+  const [pendingCheckedSessionId, setPendingCheckedSessionId] = useState<string>();
+  const [pendingStatusError, setPendingStatusError] = useState("");
+  const [awaitingTurnResolution, setAwaitingTurnResolution] = useState(false);
+  const [turnFeedback, setTurnFeedback] = useState<ButlerTurnFeedback>();
+  const [clock, setClock] = useState(() => Date.now());
   const [error, setError] = useState("");
   const [voiceStart, setVoiceStart] = useState<{ microphone?: Promise<MediaStream> }>();
   const [position, setPosition] = useState(() => ({ x: Math.max(12, window.innerWidth - 580), y: 72 }));
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const abort = useRef<AbortController | undefined>(undefined);
   const activeTurn = useRef<{ turnId?: string; harnessTurnId?: string }>({});
+  const settledTurnId = useRef<string | undefined>(undefined);
+  const needsSavedTurnReload = useRef(false);
+  const pendingPoll = useRef<() => void>(() => {});
+  const historyRead = useRef(0);
   const input = useRef<HTMLTextAreaElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
+  const activeImageProject = useRef(engagement?.id);
+  activeImageProject.current = engagement?.id;
   const panel = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
@@ -83,10 +107,22 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const settingsProjectId = useRef(engagement?.id);
   const destinationCatalogRef = useRef<HTMLDetailsElement>(null);
   const runtime = sessionRuntime ?? defaultModelRuntime(providers, harnesses);
+  const imageInputSupported = runtime?.kind === "provider"
+    ? Boolean(providers.find((item) => item.id === runtime.id)?.capabilities?.includes("vision"))
+    : Boolean(harnesses.find((item) => item.id === runtime?.id)?.modelOptions?.find((item) => item.model === runtime?.model)?.imageInput);
   const storageKey = engagement ? `nebula.control-assistant.session.${engagement.id}` : undefined;
   const actionOutcomesKey = storageKey ? `${storageKey}.action-outcomes` : undefined;
   const { overview: attentionOverview, refresh: refreshAttention } = useButlerOverview(engagement ? api : undefined, engagement?.id ?? "", coreState);
   const attentionCount = attentionOverview?.summary.openIncidents ?? 0;
+  const activePendingTurn = pendingTurn?.id === settledTurnId.current ? undefined : pendingTurn;
+  const activeBusy = busy || Boolean(activePendingTurn) || awaitingTurnResolution;
+  const pendingReady = !sessionId || !api?.getPendingChatTurn || (pendingCheckedSessionId === sessionId && !pendingStatusError);
+
+  useEffect(() => {
+    if (!activeBusy) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [activeBusy]);
 
   const getSavedSessionForTurn = async () => {
     if (!api || !engagement || !runtime) throw new Error("Choose a project and a healthy model runtime to direct work.");
@@ -132,12 +168,25 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSettingsError("");
     setSettingsStatus("");
     setMessages([]);
+    setPendingImages([]);
+    setUploadingImage(false);
+    setImageHelp(false);
+    setPendingTurn(undefined);
+    setPendingCheckedSessionId(undefined);
+    setPendingStatusError("");
+    setAwaitingTurnResolution(false);
+    setTurnFeedback(undefined);
+    activeTurn.current = {};
+    settledTurnId.current = undefined;
+    needsSavedTurnReload.current = false;
+    historyRead.current += 1;
     setSuggestions([]);
     setError("");
     setLoadingHistory(false);
     if (!storageKey || !api) return;
     setLoadingHistory(true);
     let current = true;
+    const request = historyRead.current;
     void api.getControlAssistantSession(engagement!.id).then((session) => {
       if (!current || !session || session.engagementId !== engagement?.id) return;
       localStorage.setItem(storageKey, session.id);
@@ -154,7 +203,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       if (runtimeId && session.model) setSessionRuntime({ kind: session.backend, id: runtimeId, model: session.model });
       return api.listChatMessages(session.id);
     }).then((history) => {
-      if (!current || !history) return;
+      if (!current || request !== historyRead.current || !history) return;
       const outcomes = actionOutcomesKey ? readActionOutcomes(actionOutcomesKey) : {};
       setMessages(history.filter((item) => item.role === "user" || item.role === "assistant")
         .flatMap((item) => item.id && outcomes[item.id]
@@ -169,6 +218,75 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       .finally(() => { if (current) setLoadingHistory(false); });
     return () => { current = false; };
   }, [api, engagement?.id, storageKey, actionOutcomesKey]);
+
+  useEffect(() => {
+    if (!api || !sessionId || !open || coreState !== "online" || typeof api.getPendingChatTurn !== "function") return;
+    const controller = new AbortController();
+    let observedTurnId: string | undefined;
+    let lastSignature: string | undefined;
+    const poll = startVisiblePoll({
+      intervalMs: 2_500,
+      maxIntervalMs: 8_000,
+      signal: controller.signal,
+      read: async (signal) => {
+        try {
+          const turn = await api.getPendingChatTurn(sessionId, signal);
+          if (signal.aborted) return "stop";
+          setPendingCheckedSessionId(sessionId);
+          setPendingStatusError("");
+          if (turn) {
+            setAwaitingTurnResolution(false);
+            if (!observedTurnId || observedTurnId !== turn.id) {
+              observedTurnId = turn.id;
+              if (!abort.current) needsSavedTurnReload.current = true;
+            }
+            if (turn.id === settledTurnId.current) return "active";
+            const signature = JSON.stringify([turn.id, turn.revision, turn.status, turn.queuePosition,
+              turn.waitSummary, turn.toolCalls?.map((item) => [item.toolCallId, item.status, item.summary])]);
+            if (signature !== lastSignature) {
+              lastSignature = signature;
+              setPendingTurn(turn);
+              setTurnFeedback((current) => feedbackFromPendingTurn(current, turn));
+            }
+            return "active";
+          }
+          observedTurnId = undefined;
+          lastSignature = undefined;
+          settledTurnId.current = undefined;
+          setPendingTurn(undefined);
+          setAwaitingTurnResolution(false);
+          if (needsSavedTurnReload.current && typeof api.listChatMessages === "function") {
+            const request = ++historyRead.current;
+            const history = await api.listChatMessages(sessionId, signal);
+            if (signal.aborted) return "stop";
+            if (request === historyRead.current) {
+              const outcomes = actionOutcomesKey ? readActionOutcomes(actionOutcomesKey) : {};
+              setMessages(history.filter((item) => item.role === "user" || item.role === "assistant")
+                .flatMap((item) => item.id && outcomes[item.id]
+                  ? [item, { role: "assistant" as const, content: outcomes[item.id] }]
+                  : [item]));
+              const savedImageIds = new Set(history.flatMap((item) => item.role === "user"
+                ? item.contentBlocks?.flatMap((block) => block.type === "image" && block.artifactId ? [block.artifactId] : []) ?? []
+                : []));
+              setPendingImages((current) => current.filter((image) => !image.artifactId || !savedImageIds.has(image.artifactId)));
+              setTurnFeedback(undefined);
+              needsSavedTurnReload.current = false;
+            }
+          }
+          return "idle";
+        } catch (caught) {
+          if (!signal.aborted) {
+            void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.status_load_failed", message: "Butler turn status could not be refreshed.", outcome: "failure", stage: "turn-status", retryable: true, exception: caught });
+            setPendingStatusError("Could not verify Butler’s current response. Retry status before sending another message.");
+          }
+          return "active";
+        }
+      },
+    });
+    pendingPoll.current = poll.poke;
+    window.addEventListener("online", poll.poke);
+    return () => { controller.abort(); pendingPoll.current = () => {}; window.removeEventListener("online", poll.poke); };
+  }, [api, sessionId, open, coreState, actionOutcomesKey]);
 
   useEffect(() => {
     const visible = open && !hidden;
@@ -257,52 +375,68 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
   };
 
-  const openSettings = async () => {
+  const openSettings = () => {
     if (settingsOpen) { setSettingsOpen(false); return; }
     setSettingsOpen(true);
+    setSettingsBusy(true);
     setVoiceSettingsStatus("");
-    void loadVoiceSettings();
     setSettingsError("");
     setSettingsStatus("");
-    let config = sessionConfig;
-    if (api && engagement) {
-      setSettingsBusy(true);
+  };
+
+  useEffect(() => {
+    if (!settingsOpen) { setSettingsBusy(false); return; }
+    if (!api || !engagement?.id) return;
+    let current = true;
+    setSettingsBusy(true);
+    void (async () => {
       try {
-        // The panel can open before the background conversation restore finishes.
-        // Read Core directly so saved settings never appear as first-turn defaults.
-        let savedSessionId = sessionId;
-        if (!savedSessionId) {
-          const restored = await api.getControlAssistantSession(engagement.id);
-          if (restored?.engagementId === engagement.id) {
-            savedSessionId = restored.id;
-            setSessionId(restored.id);
-          }
-        }
-        if (savedSessionId) {
-          const saved = await api.getChatAssistantConfig(savedSessionId);
-          config = saved.settings;
-          setSessionConfig(config);
-          setSettingsRevision(saved.revision);
-        }
+        // A settings deep link may open before the selected project loads.
+        // Read Core when it becomes available, rather than capturing an empty draft.
+        const restored = await api.getControlAssistantSession(engagement.id);
+        if (!current) return;
+        if (restored && restored.engagementId !== engagement.id) throw new Error("Core returned a conversation outside this project's Butler. Retry after reconnecting.");
+        const saved = restored ? await api.getChatAssistantConfig(restored.id) : undefined;
+        if (!current) return;
+        const config = saved?.settings;
+        if (restored) setSessionId(restored.id);
+        setSessionConfig(config);
+        setSettingsRevision(saved?.revision);
+        setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
+        setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
       } catch (caught) {
+        if (!current) return;
         void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.settings_open_failed", message: "Butler settings could not be loaded.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
         setSettingsError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry by reopening settings.");
-      } finally { setSettingsBusy(false); }
-    }
-    setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
-    setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
-  };
+      } finally { if (current) setSettingsBusy(false); }
+    })();
+    return () => { current = false; };
+  }, [settingsOpen, api, engagement?.id]);
+
+  useEffect(() => {
+    if (settingsOpen) void loadVoiceSettings();
+  }, [settingsOpen, api]);
 
   useEffect(() => {
     const openVoiceSettings = () => {
       setOpen(true);
       setHidden(false);
-      if (!settingsOpen) void openSettings();
+      if (!settingsOpen) openSettings();
       else void loadVoiceSettings();
     };
     window.addEventListener("nebula:open-butler-settings", openVoiceSettings);
     return () => window.removeEventListener("nebula:open-butler-settings", openVoiceSettings);
   });
+
+  useEffect(() => {
+    const openOversight = () => {
+      setOpen(true);
+      setHidden(false);
+      setOversightOpenRevision((revision) => revision + 1);
+    };
+    window.addEventListener("nebula:open-butler-oversight", openOversight);
+    return () => window.removeEventListener("nebula:open-butler-oversight", openOversight);
+  }, []);
 
   const saveSettings = async () => {
     if (!api || !selectedSettingsRuntime || settingsBusy || busy) return;
@@ -323,7 +457,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setSettingsRevision(saved.revision);
       setEffortDraft(saved.settings.backend === "provider" ? saved.settings.reasoningEffort ?? "" : saved.settings.harnessReasoningEffort ?? "");
       setCyberDraft(saved.settings.harnessCyberAccessProgram ?? "automatic");
-      setSettingsStatus(sessionId ? "Saved. Applies to Butler’s next message." : "Saved for Butler’s first message.");
+      setSettingsStatus(selectedSettingsRuntime.kind === "harness"
+        ? sessionId
+          ? "Saved. Applies to Butler’s next message and scheduled check."
+          : "Saved for Butler’s first message and scheduled check."
+        : sessionId
+          ? "Saved. Applies to Butler’s next message."
+          : "Saved for Butler’s first message.");
     } catch (caught) {
       void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_save_failed", message: "Butler settings could not be saved.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
       setSettingsError(caught instanceof Error ? caught.message : "Could not save Butler settings. Reload and retry.");
@@ -362,16 +502,24 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const stop = async () => {
     if (!api) return;
     try {
-      const { turnId, harnessTurnId } = activeTurn.current;
+      const { turnId, harnessTurnId } = abort.current ? activeTurn.current : { turnId: undefined, harnessTurnId: undefined };
       if (harnessTurnId) await api.stopHarnessTurn(harnessTurnId);
       else if (turnId) await api.cancelChatTurn(turnId);
-      else if (sessionId) {
+      else if (activePendingTurn?.harnessTurnId) await api.stopHarnessTurn(activePendingTurn.harnessTurnId);
+      else if (activePendingTurn) await api.cancelChatTurn(activePendingTurn.id);
+      else if (sessionId && typeof api.getPendingChatTurn === "function") {
         const pending = await api.getPendingChatTurn(sessionId);
         if (pending?.harnessTurnId) await api.stopHarnessTurn(pending.harnessTurnId);
         else if (pending) await api.cancelChatTurn(pending.id);
       }
+      settledTurnId.current = turnId ?? activePendingTurn?.id;
       abort.current?.abort();
+      abort.current = undefined;
+      setPendingTurn(undefined);
+      setAwaitingTurnResolution(false);
+      setTurnFeedback(undefined);
       setBusy(false);
+      pendingPoll.current();
     } catch (caught) {
       void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.stop_failed", message: "The assistant response could not be stopped.", outcome: "failure", stage: "stop", retryable: true, exception: caught });
       setError(caught instanceof Error ? caught.message : "Could not stop the response. Try again.");
@@ -515,14 +663,18 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `${engagement.name} headless security browser: ${observed.state}${observed.session_id ? ` · session ${observed.session_id}` : ""}.`;
   };
 
+  const openSelectedSetting = (entry: SettingCatalogEntry) => {
+    onOpenSetting(entry);
+    setHidden(entry.target !== "butler-oversight");
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
     if (action.kind === "project_execution_mode") return applyProjectMode(action);
     if (action.kind === "project_scope") return applyProjectScope(action.changes);
     if (action.kind === "headless_session") return applyHeadlessSession(action.action);
     if (action.kind === "navigate") return openDestination(action.destination);
-    onOpenSetting(action.setting);
-    setHidden(true);
+    openSelectedSetting(action.setting);
     return `Opened ${action.setting.label}.`;
   };
 
@@ -535,15 +687,78 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       : `Choose a project in All projects to open ${destination.label}.`;
   };
 
+  const attachImageFiles = async (files: File[]) => {
+    if (!files.length || uploadingImage || busy || loadingHistory) return;
+    if (!api || !engagement) { setError("Choose a project before attaching an image."); return; }
+    if (!imageInputSupported) { setImageHelp(true); return; }
+    const projectId = engagement.id;
+    const remaining = 4 - pendingImages.length;
+    if (remaining <= 0) { setError("Butler can receive up to four images in one message. Remove one to add another."); return; }
+    setUploadingImage(true);
+    setError("");
+    try {
+      for (const file of files.slice(0, remaining)) {
+        if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error(`${file.name} must be a PNG, JPEG, or WebP image.`);
+        if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} exceeds 20 MiB.`);
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.onload = () => resolve(String(reader.result));
+          reader.readAsDataURL(file);
+        });
+        if (activeImageProject.current !== projectId) return;
+        const saved = await api.uploadChatImage({
+          engagementId: projectId,
+          filename: file.name,
+          mediaType: file.type as "image/png" | "image/jpeg" | "image/webp",
+          contentBase64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+        });
+        if (activeImageProject.current !== projectId) return;
+        setPendingImages((current) => [...current, {
+          type: "image", artifactId: saved.artifactId, mediaType: saved.mediaType,
+          alt: file.name, metadata: {preview_artifact_id: saved.previewArtifactId, width: saved.width, height: saved.height},
+        }]);
+      }
+      if (activeImageProject.current === projectId && files.length > remaining) setError(`Attached ${remaining} images. Butler can receive up to four in one message.`);
+    } catch (caught) {
+      if (activeImageProject.current === projectId) {
+        void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.image_upload_failed", message: "A Butler image could not be attached.", outcome: "failure", stage: "chat-media", retryable: true, exception: caught});
+        setError(caught instanceof Error ? caught.message : "The image could not be attached. Choose it again to retry.");
+      }
+    } finally { if (activeImageProject.current === projectId) setUploadingImage(false); }
+  };
+
+  const pasteImages = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    void attachImageFiles(files);
+  };
+
+  const openImageRuntimeChoice = async () => {
+    if (!api || !engagement) return;
+    try {
+      const saved = await getSavedSessionForTurn();
+      setHidden(true);
+      onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(saved.session.id)}`);
+    } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.image_runtime_navigation_failed", message: "Butler could not open the image model selector.", outcome: "failure", stage: "chat-media", retryable: true, exception: caught });
+      setError(caught instanceof Error ? caught.message : "Could not open Butler's model selector. Retry after reconnecting.");
+    }
+  };
+
   const send = async (currentText = draft) => {
-    const prompt = currentText.trim();
-    if (!prompt || busy || loadingHistory) return;
+    const prompt = currentText.trim() || (pendingImages.length ? "Attached image" : "");
+    if (!prompt || activeBusy || loadingHistory || uploadingImage || !pendingReady) return;
+    const hasImages = pendingImages.length > 0;
+    if (hasImages && !imageInputSupported) { setImageHelp(true); return; }
     setSuggestions([]);
     const requestedTheme = themeChange(prompt);
-    if (requestedTheme) {
+    if (!hasImages && requestedTheme) {
       setDraft("");
       setError("");
       setBusy(true);
+      setTurnFeedback(beginButlerFeedback("Changing this device’s appearance"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         const confirmation = await applyDeviceTheme(requestedTheme);
@@ -554,19 +769,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setDraft(prompt);
       } finally {
         setBusy(false);
+        setTurnFeedback(undefined);
       }
       return;
     }
-    if (isThemeChangeCommand(prompt)) {
+    if (!hasImages && isThemeChangeCommand(prompt)) {
       setError("I couldn't identify that theme. Choose one in Settings → Appearance.");
       return;
     }
     const modeChange = projectModeChange(prompt);
-    if (modeChange) {
+    if (!hasImages && modeChange) {
       if (!api || !engagement) { setError("Choose a project to change its execution mode."); return; }
       setDraft("");
       setError("");
       setBusy(true);
+      setTurnFeedback(beginButlerFeedback("Checking the project’s execution policy"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         const confirmation = await applyProjectMode(modeChange);
@@ -577,16 +794,18 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setDraft(prompt);
       } finally {
         setBusy(false);
+        setTurnFeedback(undefined);
       }
       return;
     }
     const scopeChange = projectScopeChange(prompt);
     const headlessChange = headlessSessionChange(prompt);
-    if (scopeChange || headlessChange) {
+    if (!hasImages && (scopeChange || headlessChange)) {
       if (!api || !engagement) { setError("Choose a project before changing its policy or browser session."); return; }
       setDraft("");
       setError("");
       setBusy(true);
+      setTurnFeedback(beginButlerFeedback("Updating the project setting"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         if (scopeChange) {
@@ -603,24 +822,24 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setDraft(prompt);
       } finally {
         setBusy(false);
+        setTurnFeedback(undefined);
       }
       return;
     }
     const destination = destinationToOpen(prompt);
-    if (destination) {
+    if (!hasImages && destination) {
       setDraft("");
       const confirmation = openDestination(destination);
       setMessages((current) => [...current, { role: "user", content: prompt }, { role: "assistant", content: confirmation }]);
       return;
     }
     const setting = settingToOpen(prompt);
-    if (setting) {
+    if (!hasImages && setting) {
       setDraft("");
-      onOpenSetting(setting);
-      setHidden(true);
+      openSelectedSetting(setting);
       return;
     }
-    if (isSettingNavigationRequest(prompt) && (!api || !engagement || !runtime || settingNavigationCandidates(prompt).length > 0)) {
+    if (!hasImages && isSettingNavigationRequest(prompt) && (!api || !engagement || !runtime || settingNavigationCandidates(prompt).length > 0)) {
       const candidates = settingNavigationCandidates(prompt);
       setDraft("");
       setError("");
@@ -638,20 +857,46 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       return;
     }
     if (!api || !engagement || !runtime) return;
+    const controller = new AbortController();
+    abort.current = controller;
+    setBusy(true);
+    setClock(Date.now());
+    setTurnFeedback(beginButlerFeedback("Preparing Butler’s conversation"));
+    settledTurnId.current = undefined;
     let effectiveSessionId: string;
     let effectiveConfig: ChatAssistantConfig | undefined;
     try {
       const saved = await getSavedSessionForTurn();
+      if (controller.signal.aborted) {
+        setBusy(false);
+        setTurnFeedback(undefined);
+        if (abort.current === controller) abort.current = undefined;
+        return;
+      }
       effectiveSessionId = saved.session.id;
       effectiveConfig = saved.config;
     } catch (caught) {
       void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_refresh_failed", message: "The assistant's next-turn settings could not be refreshed.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
       setError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry after reconnecting.");
+      setBusy(false);
+      setTurnFeedback(undefined);
+      if (abort.current === controller) abort.current = undefined;
       return;
     }
     const selectedRuntime = effectiveConfig
       ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
       : runtime;
+    const selectedRuntimeAcceptsImages = selectedRuntime.kind === "provider"
+      ? Boolean(providers.find((item) => item.id === selectedRuntime.id)?.capabilities?.includes("vision"))
+      : Boolean(harnesses.find((item) => item.id === selectedRuntime.id)?.modelOptions?.find((item) => item.model === selectedRuntime.model)?.imageInput);
+    if (hasImages && !selectedRuntimeAcceptsImages) {
+      setImageHelp(true);
+      setError("Butler's saved model changed and cannot receive images. Your attachments are still ready.");
+      setBusy(false);
+      setTurnFeedback(undefined);
+      if (abort.current === controller) abort.current = undefined;
+      return;
+    }
     const turnOptions = assistantTurnOptions(selectedRuntime, harnesses);
     const selectedToolRuntime: ToolSharingRuntime | undefined = selectedRuntime.kind === "provider"
       ? (() => { const profile = providers.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "provider", profile } : undefined; })()
@@ -660,18 +905,33 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (selectedToolRuntime && !(selectedToolRuntime.kind === "provider" ? selectedToolRuntime.profile.local : selectedToolRuntime.profile.localOnly)) {
       if (!selectedToolRuntime.profile.permitsSensitiveData) {
         setError(`${selectedToolRuntime.profile.name} is configured for text only. Permit project data in Settings to use settings tools.`);
+        setBusy(false);
+        setTurnFeedback(undefined);
+        if (abort.current === controller) abort.current = undefined;
         return;
       }
       // The profile's saved sensitive-data permission is the standing consent
       // for this dedicated assistant; a settings instruction needs no second dialog.
       allowCloudToolResults = true;
     }
-    const controller = new AbortController();
-    abort.current = controller;
+    let contextAttachments;
+    try {
+      contextAttachments = await Promise.all(butlerDrafts.map(createHashedSelectionAttachment));
+    } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.context_attachment_failed", message: "Could not prepare selected Butler context.", outcome: "failure", stage: "context", retryable: true, exception: caught });
+      setError(caught instanceof Error ? caught.message : "Could not prepare Butler context. Remove the selection and try again.");
+      setBusy(false);
+      setTurnFeedback(undefined);
+      if (abort.current === controller) abort.current = undefined;
+      return;
+    }
     activeTurn.current = {};
-    setBusy(true);
     setError("");
-    setMessages((current) => [...current, { role: "user", content: prompt }]);
+    setTurnFeedback((current) => current ? { ...current, label: "Starting Butler’s response" } : beginButlerFeedback("Starting Butler’s response"));
+    const outgoingUser: ChatMessage = { role: "user", content: prompt,
+      ...(hasImages ? {contentBlocks: [{type: "text" as const, text: prompt}, ...pendingImages]} : {}),
+    };
+    setMessages((current) => [...current, outgoingUser]);
     setDraft("");
     const appliedCallIds = new Set<string>();
     const confirmations: string[] = [];
@@ -702,12 +962,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         subagentHarnessId: effectiveConfig?.subagentHarnessProfileId,
         subagentModel: effectiveConfig?.subagentModel,
         subagentReasoningEffort: effectiveConfig?.subagentReasoningEffort,
-        messages: [{ role: "user", content: prompt }],
+        messages: [outgoingUser],
+        contextAttachments: contextAttachments.length ? contextAttachments : undefined,
         toolsEnabled: effectiveConfig?.toolsEnabled ?? false,
         allowCloudToolResults,
       }, (event) => {
         if (event.type === "started" && event.turnId) activeTurn.current.turnId = event.turnId;
         if ("harnessTurnId" in event && event.harnessTurnId) activeTurn.current.harnessTurnId = event.harnessTurnId;
+        setTurnFeedback((current) => feedbackFromButlerEvent(current, event));
+        if (event.type === "started" || event.type === "queued") pendingPoll.current();
         const action = settingClientAction(event, engagement.id);
         if (action && event.type === "tool_completed" && !appliedCallIds.has(event.toolCallId)) {
           appliedCallIds.add(event.toolCallId);
@@ -737,23 +1000,63 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         });
       }
       if (result?.message) {
+        setPendingImages([]);
+        if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
+        settledTurnId.current = activeTurn.current.turnId;
+        setPendingTurn(undefined);
+        setAwaitingTurnResolution(false);
+        setTurnFeedback(undefined);
         confirmations.push(...workReceipts.filter(({ url }) => !result.message.content.includes(url)).map(({ content }) => content));
         if (result.message.id && confirmations.length && actionOutcomesKey) {
           const outcomes = readActionOutcomes(actionOutcomesKey);
           outcomes[result.message.id] = confirmations.join("\n\n");
           writeStorage(actionOutcomesKey, JSON.stringify(Object.fromEntries(Object.entries(outcomes).slice(-50))));
         }
-        setMessages((current) => [...current, result.message, ...confirmations.map((content) => ({ role: "assistant" as const, content }))]);
+        setMessages((current) => current.some((item) => item.id && item.id === result.message!.id)
+          ? current : [...current, result.message!, ...confirmations.map((content) => ({ role: "assistant" as const, content }))]);
         setMemoryRefreshRevision((current) => current + 1);
       }
-      else if (!controller.signal.aborted) setError("The response is still running. Reopen this assistant to check its saved conversation.");
+      else if (!controller.signal.aborted) {
+        needsSavedTurnReload.current = true;
+        setAwaitingTurnResolution(typeof api.getPendingChatTurn === "function");
+        pendingPoll.current();
+      }
     } catch (caught) {
       if (!controller.signal.aborted) {
+        needsSavedTurnReload.current = true;
+        setAwaitingTurnResolution(typeof api.getPendingChatTurn === "function");
+        pendingPoll.current();
         void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.turn_failed", message: "The assistant could not answer.", outcome: "failure", stage: "turn", retryable: true, exception: caught });
-        setDraft(prompt);
-        setError(caught instanceof Error ? caught.message : "The assistant could not answer. Try again.");
+        if (hasImages) {
+          try {
+            const history = await api.listChatMessages(effectiveSessionId);
+            const saved = history.some((message) => message.role === "user" && message.contentBlocks?.some((block) =>
+              block.type === "image" && pendingImages.some((image) => image.artifactId === block.artifactId)));
+            if (saved) {
+              setMessages(history.filter((message) => message.role === "user" || message.role === "assistant"));
+              setPendingImages([]);
+              setError("Butler saved your image, but the response failed. Reopen this conversation to check its status.");
+            } else {
+              setMessages((current) => current.filter((message) => message !== outgoingUser));
+              setDraft(prompt);
+              const detail = caught instanceof Error ? caught.message : "Butler could not send the image.";
+              setError(`${detail} The image remains attached. Check Butler's saved conversation before retrying.`);
+            }
+          } catch (historyError) {
+            void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.image_send_history_check_failed", message: "Butler could not verify whether the image was saved after the send failed.", outcome: "failure", stage: "chat-media", retryable: true, exception: historyError });
+            setDraft(prompt);
+            setError("Butler's send failed, and its saved state could not be checked. Reopen this conversation before retrying.");
+          }
+        } else {
+          setDraft(prompt);
+          setError(caught instanceof Error ? caught.message : "The assistant could not answer. Try again.");
+        }
       }
-    } finally { setBusy(false); }
+    } finally {
+      if (abort.current === controller) abort.current = undefined;
+      activeTurn.current = {};
+      setBusy(false);
+    }
   };
 
   const startVoice = () => {
@@ -837,30 +1140,41 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return [result.message.content, ...confirmations].filter(Boolean).join("\n\n");
   };
 
+  const showTurnStatus = activeBusy || Boolean(pendingStatusError) || Boolean(sessionId && !pendingReady);
+  const turnStatusLabel = pendingStatusError ? "Butler status unavailable"
+    : coreState !== "online" ? "Connection lost; Butler may still be working"
+    : activePendingTurn?.status === "waiting_approval" ? "Approval needed to continue"
+    : turnFeedback?.label ?? (pendingReady ? "Butler is working" : "Checking Butler’s saved work");
+  const turnStartedAt = turnFeedback?.startedAt ?? Date.parse(activePendingTurn?.queuedAt ?? activePendingTurn?.startedAt ?? "");
+  const lastSignalAt = turnFeedback?.lastSignalAt;
+  const needsReview = activePendingTurn?.status === "waiting_approval"
+    || activePendingTurn?.status === "failed" || activePendingTurn?.status === "interrupted";
+  const canStopActive = Boolean(abort.current || awaitingTurnResolution
+    || activePendingTurn && activePendingTurn.status !== "failed" && activePendingTurn.status !== "interrupted");
   const matches = query.trim() ? settingCatalog.filter((entry) =>
     [entry.label, entry.description, ...entry.keywords].join(" ").toLowerCase().includes(query.toLowerCase())) : settingCatalog;
   const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
     [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up", "settings.network-scope", "settings.automation-runtime"]);
-  const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
+  const panelContent = open ? <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Butler" data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
     <div className={styles.header}>
       <button className={`icon-button subtle ${styles.dragButton}`} type="button" aria-label="Move Butler" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
       <div className={styles.identity}><strong>Butler</strong><small>{engagement?.name ?? "Choose a project"}</small></div>
       <button className={`icon-button subtle ${styles.voiceButton}`} type="button" aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} /><span className={styles.voiceLabel}>Start Voice</span></button>
       <button className={`icon-button subtle ${styles.hideButton}`} type="button" aria-label="Hide Butler" title="Hide Butler" onClick={() => setHidden(true)}><Minimize2 size={18} /></button>
       <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen} aria-controls="butler-settings" title="Butler settings" disabled={!api || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
-      <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setSettingsOpen(false); }}><X size={18} /></button>
+      <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setSettingsOpen(false); setPendingCheckedSessionId(undefined); }}><X size={18} /></button>
     </div>
     <div ref={body} className={styles.body}>
       {settingsOpen && <section id="butler-settings" className={styles.ownSettings} aria-label="Butler settings">
         <div className={styles.settingsHeading}><strong>Butler settings</strong><span>{selectedSettingsRuntime?.model ?? ""}</span></div>
         <form onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
-          {selectedSettingsRuntime?.kind === "provider" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option key={item} value={item}>{item === "none" ? "None" : item}</option>)}</select></label>}
-          {selectedSettingsRuntime?.kind === "harness" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || !selectedModelOptions?.reasoningEfforts.length} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Harness default</option>{effortDraft && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === effortDraft) && <option value={effortDraft}>{effortDraft} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option key={item.id} value={item.id} title={item.description || undefined}>{item.label}</option>)}</select></label>}
-          {cyberChoices.length > 0 && <label>Cyber access<select aria-label="Butler cyber access" value={cyberDraft} disabled={settingsBusy} onChange={(event) => setCyberDraft(event.target.value as ChatAssistantConfig["harnessCyberAccessProgram"])}><option value="automatic">Codex automatic</option>{cyberChoices.map((choice) => <option key={choice} value={choice}>{choice === "standard" ? "Standard" : choice === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label>}
+          {selectedSettingsRuntime?.kind === "provider" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option key={item} value={item}>{item === "none" ? "None" : item}</option>)}</select></label>}
+          {selectedSettingsRuntime?.kind === "harness" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError) || !selectedModelOptions?.reasoningEfforts.length} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Harness default</option>{effortDraft && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === effortDraft) && <option value={effortDraft}>{effortDraft} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option key={item.id} value={item.id} title={item.description || undefined}>{item.label}</option>)}</select></label>}
+          {cyberChoices.length > 0 && <label>Cyber access<select aria-label="Butler cyber access" value={cyberDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setCyberDraft(event.target.value as ChatAssistantConfig["harnessCyberAccessProgram"])}><option value="automatic">Codex automatic</option>{cyberChoices.map((choice) => <option key={choice} value={choice}>{choice === "standard" ? "Standard" : choice === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label>}
           {selectedSettingsRuntime?.kind === "harness" && !selectedModelOptions?.reasoningEfforts.length && <small>This harness does not advertise effort choices.</small>}
-          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || busy}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}>Full Assistant settings</button>}</div>
-          {settingsBusy && <p role="status">Loading Butler settings…</p>}
+          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || Boolean(settingsError) || busy}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}>Full Assistant settings</button>}</div>
+          {settingsBusy && <p role="status">{!api ? "Connect to Core to load Butler settings." : !engagement ? "Choose a project to load Butler settings." : "Loading Butler settings…"}</p>}
           {settingsStatus && <p role="status">{settingsStatus}</p>}
           {settingsError && <p role="alert">{settingsError}</p>}
         </form>
@@ -876,20 +1190,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         </div>
       </section>}
       {!hidden && engagement && <div className={styles.butlerWorkspace}>
-        <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
+        <ButlerOversight key={engagement.id} api={api} projectId={engagement.id} coreState={coreState} compact openRevision={oversightOpenRevision} onIncidentChanged={() => void refreshAttention()} onNavigate={(path) => { onNavigate(path); setHidden(true); }} />
         <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />
       </div>}
-      <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
+      <div ref={transcript} className={styles.transcript} role="log" aria-label="Butler conversation" data-selection-source-kind="conversation" data-selection-source-id={sessionId} data-selection-source-label="Butler conversation">{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
         const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
         const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, engagement?.id));
         const workLink = engagement && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
           && href.startsWith(`/projects/${encodeURIComponent(engagement.id)}/workbench?`) ? href : undefined;
         return setting
-          ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); setHidden(true); }}>{children}</a>
+          ? <a href={href} onClick={(event) => { event.preventDefault(); openSelectedSetting(setting); }}>{children}</a>
           : destination ? <a href={href} onClick={(event) => { event.preventDefault(); openDestination(destination); }}>{children}</a>
           : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); setHidden(true); }}>{children}</a>
           : <a href={href} {...props}>{children}</a>;
-      } }}>{message.content}</ReactMarkdown></div>)}</div>
+      } }}>{message.content}</ReactMarkdown>{api && message.contentBlocks?.filter((block) => block.type === "image").map((block, imageIndex) => <AuthenticatedChatImage key={`${block.artifactId ?? "image"}-${imageIndex}`} api={api} block={block} className={styles.transcriptImage} />)}</div>)}</div>
       {engagement && runtime && !loadingHistory && <details className={styles.catalog} open={messages.length === 0}>
         <summary>Work I can help with</summary>
         <div className={styles.quickActions} role="group" aria-label="Assistant work requests">
@@ -898,12 +1212,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           <button className="button quiet" type="button" onClick={() => { setDraft("Start a mission to "); input.current?.focus(); }}>Start mission</button>
         </div>
       </details>}
-      {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setSuggestions([]); setHidden(true); }}>{entry.label}</button>)}</div>}
+      {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { openSelectedSetting(entry); setSuggestions([]); }}>{entry.label}</button>)}</div>}
       <details ref={destinationCatalogRef} className={styles.catalog}><summary>Places I can open</summary><input aria-label="Find a place" placeholder="Find a place" value={destinationQuery} onChange={(event) => setDestinationQuery(event.target.value)} />
         <div className={styles.settingList}>{destinationMatches.length ? destinationMatches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { const confirmation = openDestination(entry); setMessages((current) => [...current, { role: "assistant", content: confirmation }]); }}><span>{entry.label}</span><small>{entry.path.includes("{project_id}") ? "Selected project" : "Open page"}</small></button>) : <p>No place found.</p>}</div>
       </details>
       <details ref={catalogRef} className={styles.catalog}><summary>Settings I can help with</summary><input aria-label="Find a setting" placeholder="Find a setting" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { onOpenSetting(entry); setHidden(true); }}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
+        <div className={styles.settingList}>{matches.length ? matches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => openSelectedSetting(entry)}><span>{entry.label}</span><small>{directSettingIds.has(entry.id) ? "Direct actions available · open controls" : "Open controls"}</small></button>) : <p>No setting found.</p>}</div>
         <div className={styles.themes}>{THEME_OPTIONS.map((theme) => <button key={theme.value} className="button quiet" type="button" aria-pressed={preference === theme.value} onClick={() => setPreference(theme.value)}>{theme.label}</button>)}</div>
       </details>
       {error && <p role="alert">{error}</p>}
@@ -911,7 +1225,35 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       {!engagement && <p role="status">Choose a project to start a conversation. Device appearance can still be changed above.</p>}
       {engagement && !runtime && <p role="status">Connect a model provider or harness to ask Nebula.</p>}
     </div>
-    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}><textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about work, start an assistant or mission, or change a setting…" disabled={busy || loadingHistory} />{busy ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" onClick={() => void stop()}><Square size={18} /></button> : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={!draft.trim() || (!isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory}><Send size={18} /></button>}</form>
+    {butlerDrafts.length > 0 && <section className={styles.contextPack} aria-label="Butler context pack">
+      <div className={styles.contextHeading}><span>{butlerDrafts.length} selected context {butlerDrafts.length === 1 ? "item" : "items"} for Butler</span><button type="button" className="icon-button subtle" aria-label="Clear Butler context" title="Clear Butler context" disabled={busy} onClick={() => context?.clearButlerDrafts()}><X size={16} /></button></div>
+      <div className={styles.contextItems}>{butlerDrafts.map((item, index) => <div className={styles.contextItem} key={`${item.source.kind}:${item.source.id ?? ""}:${index}`}><details><summary>{item.source.label}{item.truncated ? " · shortened" : ""}</summary><p>{item.text}</p></details><button type="button" className="icon-button subtle" aria-label={`Remove ${item.source.label} from Butler context`} title={`Remove ${item.source.label}`} disabled={busy} onClick={() => context?.removeButlerDraft(index)}><X size={16} /></button></div>)}</div>
+    </section>}
+    {context?.butlerDraftNotice && <div className={styles.contextNotice} role="status"><span>{context.butlerDraftNotice}</span><button type="button" className="icon-button subtle" aria-label="Dismiss Butler context notice" title="Dismiss Butler context notice" onClick={() => context.clearButlerDraftNotice()}><X size={16} /></button></div>}
+    {showTurnStatus && <section className={styles.turnStatus} data-state={pendingStatusError ? "error" : needsReview ? "attention" : "working"} aria-label="Butler activity">
+      <span className={styles.turnStatusDot} aria-hidden="true" />
+      <div className={styles.turnStatusText}>
+        <strong role="status" aria-live="polite">{turnStatusLabel}</strong>
+        <small>{Number.isFinite(turnStartedAt) && activeBusy ? `Working for ${formatButlerDuration(clock - turnStartedAt)}` : ""}
+          {activeBusy && <>{Number.isFinite(turnStartedAt) ? " · " : ""}{lastSignalAt
+            ? `Last signal ${formatButlerDuration(clock - lastSignalAt)} ago`
+            : "Waiting for a Core update"}</>}
+          {pendingStatusError && <span> Conversation remains available. Retry status to check it.</span>}
+        </small>
+        {turnFeedback && turnFeedback.recent.length > 1 && <details className={styles.turnSteps}><summary>Recent steps</summary><ol>{turnFeedback.recent.map((step, index) => <li key={`${step.at}-${index}`}>{step.label}</li>)}</ol></details>}
+      </div>
+      {needsReview && engagement && sessionId && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}>Review</button>}
+      {pendingStatusError && <button className="button quiet" type="button" onClick={() => pendingPoll.current()}>Retry status</button>}
+    </section>}
+    {pendingImages.length > 0 && <div className={styles.imageTray} role="list" aria-label="Butler image attachments">{pendingImages.map((block, index) => <div className={styles.imageItem} role="listitem" key={`${block.artifactId}-${index}`}>{api && <AuthenticatedChatImage api={api} block={block} className={styles.attachedImage} />}<span title={block.alt}>{block.alt}</span><button className="icon-button subtle" type="button" aria-label={`Remove ${block.alt ?? "image"}`} disabled={activeBusy} onClick={() => setPendingImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}><X size={16} /></button></div>)}</div>}
+    {uploadingImage && <p className={styles.imageStatus} role="status">Attaching image…</p>}
+    {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}
+    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>
+      <input ref={imageInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp" aria-label="Choose images for Butler" onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; void attachImageFiles(files); }} />
+      <button className="icon-button subtle" type="button" aria-label="Attach image to Butler" title="Attach image to Butler" aria-describedby={imageHelp && !imageInputSupported ? "butler-image-help" : undefined} disabled={!api || !engagement || activeBusy || loadingHistory || uploadingImage || !pendingReady} onClick={() => imageInputSupported ? imageInput.current?.click() : setImageHelp(true)}><Image size={18} /></button>
+      <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about work, start an assistant or mission, or change a setting…" disabled={activeBusy || loadingHistory || !pendingReady} />
+      {activeBusy && canStopActive ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" title="Stop Butler’s response" onClick={() => void stop()}><Square size={18} /></button> : activeBusy ? null : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={(!draft.trim() && !pendingImages.length) || (pendingImages.length > 0 && (!api || !engagement || !runtime || !imageInputSupported)) || (!pendingImages.length && !isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory || uploadingImage || !pendingReady}><Send size={18} /></button>}
+    </form>
   </div> : null;
 
   const attentionLabel = `${attentionCount} open incident${attentionCount === 1 ? "" : "s"} ${attentionCount === 1 ? "needs" : "need"} attention in the selected project`;

@@ -29,6 +29,7 @@ from .chat_goals import (
     ChatGoalService,
     GoalConversationCreate,
     GoalCreate,
+    GoalHandoffRequest,
     GoalUpdate,
     GoalWrite,
 )
@@ -43,9 +44,12 @@ from .domain import (
     ChatBackend,
     ChatGoal,
     ChatMessage,
+    ChatPlanDirective,
+    ChatTaskPlan,
     ChatRole,
     ChatSession,
     ChatSubagent,
+    ChatTurn,
     Engagement,
     HarnessProfile,
     HarnessKind,
@@ -76,6 +80,15 @@ EMPTY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {},
+}
+HARNESS_QUOTA_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "refresh": {"type": "boolean"},
+    },
+    "required": ["profile_id"],
 }
 TIMELINE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -138,6 +151,10 @@ CHAT_SETTINGS_FIELDS: dict[str, Any] = {
         "type": "boolean",
         "description": "Enable built-in chat tools. This does not select MCP servers; browser-security-testing-tools must be selected with mcp_server_ids when available.",
     },
+    "planning_enabled": {
+        "type": "boolean",
+        "description": "Ask the agent to share a task plan and pass it to subagents. Normal tool use remains available. The saved next-turn switch defaults off.",
+    },
     "allow_subagents": {"type": "boolean"},
     "allow_agent_messaging": {"type": "boolean"},
     "max_active_subagents": {"type": ["integer", "null"], "minimum": 1, "maximum": 100},
@@ -163,6 +180,24 @@ SET_CHAT_SETTINGS_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["session_id", "expected_revision", "settings"],
+}
+REQUIRE_PLAN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "target_kind": {"type": "string", "enum": ["agent", "goal", "turn"]},
+        "target_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "reason": {"type": "string", "minLength": 20, "maxLength": 2000},
+    },
+    "required": [
+        "session_id",
+        "target_kind",
+        "target_id",
+        "expected_revision",
+        "reason",
+    ],
 }
 MISSION_TARGET_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -199,7 +234,7 @@ MESSAGE_CHAT_SCHEMA: dict[str, Any] = {
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "text": {"type": "string", "minLength": 1, "maxLength": 20000},
-        "delivery": {"type": "string", "enum": ["next", "steer"]},
+        "delivery": {"type": "string", "enum": ["next", "steer", "immediate"]},
     },
     "required": ["session_id", "text"],
 }
@@ -349,6 +384,17 @@ START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
         "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "model": {"type": "string", "minLength": 1, "maxLength": 500},
         "tools_enabled": {"type": "boolean"},
+        "planning_enabled": {"type": "boolean"},
+        "mcp_server_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 64,
+        },
+        "reasoning_effort": {"type": "string"},
+        "allow_subagents": {"type": "boolean"},
+        "allow_agent_messaging": {"type": "boolean"},
+        "max_active_subagents": {"type": "integer", "minimum": 1, "maximum": 100},
+        "subagent_reasoning_effort": {"type": "string"},
     },
     "required": ["objective", "completion_criteria"],
 }
@@ -380,6 +426,19 @@ GOAL_ACTION_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["session_id", "expected_revision", "action"],
+}
+HANDOFF_GOAL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "checkpoint": {"type": "string", "maxLength": 4000},
+        "max_steps": {"type": "integer", "minimum": 1, "maximum": 100},
+        "max_time_seconds": {"type": "integer", "minimum": 1800, "maximum": 86400},
+    },
+    "required": ["session_id", "expected_revision", "reason"],
 }
 SUBAGENT_TARGET_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -488,6 +547,7 @@ class ControlAssistantWork:
         harness: HarnessRuntimeService,
         app: FastAPI,
         token: str,
+        quota_observer: Any | None = None,
     ) -> None:
         self.store = store
         self.chat = chat
@@ -495,6 +555,7 @@ class ControlAssistantWork:
         self.harness = harness
         self.app = app
         self.token = token
+        self.quota_observer = quota_observer
         self.goals = ChatGoalService(store, harness)
         self.schedules = ChatScheduleService(store)
         self.timeline = ButlerTimeline(store)
@@ -667,6 +728,18 @@ class ControlAssistantWork:
             "title": session.title,
             "url": _chat_url(project_id, session.id),
             "revision": session.revision,
+            "task_plans": [
+                item.model_dump(mode="json")
+                for item in self.store.list_session_entities(
+                    ChatTaskPlan, session.id, newest_first=True, limit=10
+                )
+            ],
+            "plan_directives": [
+                item.model_dump(mode="json")
+                for item in self.store.list_session_entities(
+                    ChatPlanDirective, session.id, newest_first=True, limit=10
+                )
+            ],
             "settings": current,
             "bound_runtime": {
                 "backend": session.backend.value,
@@ -740,6 +813,131 @@ class ControlAssistantWork:
             "revision": saved.revision,
             "settings": chat_assistant_config(self.store, saved),
             "applies_to": "next message; queued and running turns keep their submitted settings",
+        }
+
+    def require_plan(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Request planning for one exact target using fresh Core revisions."""
+
+        session = self._chat(project_id, arguments.get("session_id"))
+        kind = arguments.get("target_kind")
+        target_id = _text(arguments.get("target_id"), "target_id", 200)
+        expected = arguments.get("expected_revision")
+        reason = _text(arguments.get("reason"), "reason", 2000)
+        if len(reason) < 20:
+            raise ValueError("record a concrete reason of at least 20 characters")
+        target: ChatSession | ChatGoal | ChatSubagent | ChatTurn
+        if kind == "agent":
+            target = session
+            if target_id != session.id:
+                raise ValueError("agent target must be the exact session_id")
+        elif kind == "goal":
+            target = self.store.get(ChatGoal, target_id)
+            if target.session_id != session.id:
+                raise ValueError("goal does not belong to this chat")
+        elif kind == "child":
+            target = self._subagent(project_id, target_id)
+            if target.child_session_id != session.id:
+                raise ValueError("child target must name its child chat")
+        elif kind == "turn":
+            target = self.store.get(ChatTurn, target_id)
+            if target.session_id != session.id:
+                raise ValueError("turn does not belong to this chat")
+        else:
+            raise ValueError("choose an exact agent, goal, child, or turn")
+        if type(expected) is not int or target.revision != expected:
+            raise ValueError(
+                "target changed; read its current revision before requesting a plan"
+            )
+        active = self.chat.pending_turn(session.id)
+        active_harness_in_flight = False
+        if (
+            active is not None
+            and active.backend == ChatBackend.HARNESS
+            and active.harness_turn_id
+        ):
+            harness_turn = self.store.get(HarnessTurn, active.harness_turn_id)
+            active_harness_in_flight = harness_turn.status in {
+                HarnessTurnStatus.RUNNING,
+                HarnessTurnStatus.WAITING_APPROVAL,
+            }
+        if (
+            kind == "turn"
+            and active is not None
+            and active.id == target_id
+            and active_harness_in_flight
+        ):
+            raise ValueError(
+                "an active harness turn cannot accept a new plan request; "
+                "target its agent or goal for the next turn"
+            )
+        existing = [
+            item
+            for item in self.store.list_session_entities(ChatPlanDirective, session.id)
+            if item.status == "pending"
+            and item.target_kind == kind
+            and item.target_id == target_id
+        ]
+        internal_id = arguments.get("_directive_id")
+        if internal_id is not None:
+            internal_id = _text(internal_id, "directive id", 200)
+            try:
+                saved_internal = self.store.get(ChatPlanDirective, internal_id)
+            except NotFoundError:
+                # diagnostic-expected: no prior directive allows one to be created.
+                saved_internal = None
+            if saved_internal is not None:
+                if (
+                    saved_internal.engagement_id != project_id
+                    or saved_internal.session_id != session.id
+                    or saved_internal.target_kind != kind
+                    or saved_internal.target_id != target_id
+                ):
+                    raise ValueError("directive id is already bound to another target")
+                existing = [saved_internal]
+        if existing:
+            directive = existing[-1]
+        else:
+            deferred_after_turn_id = (
+                active.id if active is not None and active_harness_in_flight else None
+            )
+            if internal_id is None:
+                pending_directive = ChatPlanDirective(
+                    engagement_id=project_id,
+                    session_id=session.id,
+                    target_kind=kind,
+                    target_id=target_id,
+                    reason=reason,
+                    deferred_after_turn_id=deferred_after_turn_id,
+                )
+            else:
+                pending_directive = ChatPlanDirective(
+                    id=internal_id,
+                    engagement_id=project_id,
+                    session_id=session.id,
+                    target_kind=kind,
+                    target_id=target_id,
+                    reason=reason,
+                    deferred_after_turn_id=deferred_after_turn_id,
+                )
+            directive = self.store.create(pending_directive)
+        timing = (
+            "next_turn"
+            if active is not None and active_harness_in_flight
+            else "before_turn"
+            if active is not None and active.backend == ChatBackend.HARNESS
+            else "before_next_tool"
+            if active is not None
+            else "next_turn"
+        )
+        return {
+            "directive": self.store.get(ChatPlanDirective, directive.id).model_dump(
+                mode="json"
+            ),
+            "timing": timing,
+            "session_id": session.id,
+            "target_revision": target.revision,
         }
 
     def _run(self, project_id: str, run_id: Any) -> AgentRun:
@@ -839,6 +1037,36 @@ class ControlAssistantWork:
             "more_attention": len(attention) > 5,
         }
 
+    async def harness_quota(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Read a configured harness's measured account window for agents."""
+
+        self._project(project_id)
+        profile = self.store.get(
+            HarnessProfile, _text(arguments.get("profile_id"), "profile_id", 200)
+        )
+        if not profile.enabled:
+            raise ValueError(
+                "choose an enabled harness profile from the runtime catalog"
+            )
+        if self.quota_observer is None:
+            return {
+                "profile_id": profile.id,
+                "state": "unavailable",
+                "detail": "Quota reads are unavailable in this Core.",
+                "snapshots": [],
+            }
+        read = await self.quota_observer.refresh(
+            profile.id, force=arguments.get("refresh") is True
+        )
+        return {
+            "profile_id": profile.id,
+            "profile_name": profile.name,
+            "harness_kind": profile.kind.value,
+            **read.model_dump(mode="json"),
+        }
+
     def chat_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
         session = self._chat(project_id, session_id)
         messages = self.chat.session_messages(session.id)
@@ -871,6 +1099,18 @@ class ControlAssistantWork:
             "native_harness_goal": self._native_goal(session),
             "revision": session.revision,
             "archived": isinstance(session.metadata.get("archived_at"), str),
+            "task_plans": [
+                item.model_dump(mode="json")
+                for item in self.store.list_session_entities(
+                    ChatTaskPlan, session.id, newest_first=True, limit=10
+                )
+            ],
+            "plan_directives": [
+                item.model_dump(mode="json")
+                for item in self.store.list_session_entities(
+                    ChatPlanDirective, session.id, newest_first=True, limit=10
+                )
+            ],
             "pending_turn": {
                 "id": pending.id,
                 "status": pending.status.value,
@@ -1077,6 +1317,26 @@ class ControlAssistantWork:
             harness_profile_id=profile_id if backend == "harness" else None,
             model=model,
             tools_enabled=enabled,
+            butler_initiated=True,
+            **{
+                key: value
+                for key, value in arguments.items()
+                if key
+                in {
+                    "planning_enabled",
+                    "mcp_server_ids",
+                    "reasoning_effort",
+                    "allow_subagents",
+                    "allow_agent_messaging",
+                    "max_active_subagents",
+                    "subagent_reasoning_effort",
+                    "harness_reasoning_effort",
+                    "harness_service_tier",
+                    "harness_cyber_access_program",
+                    "butler_recovery_case_id",
+                    "butler_recovery_source_goal_id",
+                }
+            },
             **goal.model_dump(),
         )
         result = await self._request(
@@ -1126,6 +1386,33 @@ class ControlAssistantWork:
             body.model_dump(mode="json"),
         )
         return self.goal_detail(project_id, session.id)
+
+    async def handoff_goal(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        source = self._chat(project_id, arguments.get("session_id"))
+        body = GoalHandoffRequest.model_validate(
+            {
+                **{
+                    key: value
+                    for key, value in arguments.items()
+                    if key != "session_id"
+                },
+                "butler_initiated": True,
+            }
+        )
+        result = await self._request(
+            "POST",
+            f"/api/v1/chat/sessions/{quote(source.id, safe='')}/goal/handoff",
+            body.model_dump(mode="json"),
+        )
+        target = self.goal_detail(project_id, result["session"]["id"])
+        return {
+            **target,
+            "source_goal_id": result["source_goal"]["id"],
+            "source_session_id": source.id,
+            "already_exists": result["already_exists"],
+        }
 
     async def create_goal_child(
         self, project_id: str, arguments: dict[str, Any]
@@ -1807,6 +2094,7 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(source.id, safe='')}/fork",
             {
                 "through_message_id": message_id,
+                "butler_initiated": True,
                 **({"title": _text(title, "title", 300)} if title is not None else {}),
             },
         )
@@ -2023,11 +2311,13 @@ class ControlAssistantWork:
         if backend == "provider":
             request = ChatCompletionRequest(
                 backend=ChatBackend.PROVIDER,
+                butler_initiated=True,
                 engagement_id=project_id,
                 provider_id=profile_id,
                 model=model,
                 messages=[ChatRequestMessage(role=ChatRole.USER, content=prompt)],
                 tools_enabled=tools_enabled,
+                planning_enabled=chosen.get("planning_enabled", False),
                 mcp_server_ids=chosen.get("mcp_server_ids", []),
                 hook_ids=chosen.get("hook_ids", []),
                 include_knowledge=chosen.get("include_knowledge", True),
@@ -2050,6 +2340,7 @@ class ControlAssistantWork:
         else:
             session, turn, harness_turn = self.harness.prepare_chat(
                 engagement_id=project_id,
+                butler_initiated=True,
                 profile_id=profile_id,
                 model=model,
                 prompt=prompt,
@@ -2061,6 +2352,7 @@ class ControlAssistantWork:
                 allow_remote_mcp=False,
                 allow_agent_messaging=chosen.get("allow_agent_messaging", False),
                 harness_mode=chosen.get("harness_mode"),
+                planning_enabled=chosen.get("planning_enabled", False),
                 harness_reasoning_effort=chosen.get("harness_reasoning_effort"),
                 harness_service_tier=chosen.get("harness_service_tier"),
                 harness_cyber_access_program=chosen.get("harness_cyber_access_program"),
@@ -2112,27 +2404,58 @@ class ControlAssistantWork:
         session = self._messageable_chat(project_id, arguments.get("session_id"))
         text = _text(arguments.get("text"), "text", 20000)
         delivery = arguments.get("delivery", "next")
-        if delivery == "steer":
+        if delivery in {"steer", "immediate"}:
             pending = self.chat.pending_turn(session.id)
             if (
-                session.backend != ChatBackend.HARNESS
-                or pending is None
-                or not pending.harness_turn_id
+                pending is not None
+                and session.backend == ChatBackend.HARNESS
+                and pending.harness_turn_id
             ):
+                active_turn = self.store.get(HarnessTurn, pending.harness_turn_id)
+                active_session = self.store.get(
+                    HarnessSession, active_turn.harness_session_id
+                )
+                active_profile = self.store.get(
+                    HarnessProfile, active_session.harness_profile_id
+                )
+                if active_profile.kind == HarnessKind.GROK_ACP:
+                    # Grok ACP cannot steer, including while its turn is still
+                    # routing. Keep immediate guidance out of the follow-up
+                    # queue so it cannot arrive after the research state changes.
+                    return {
+                        "session_id": session.id,
+                        "delivery": "held",
+                        "reason": "active_turn_cannot_steer",
+                        "turn_id": pending.id,
+                    }
+                if delivery == "immediate":
+                    await self.harness.steer_turn(
+                        pending.harness_turn_id,
+                        text,
+                        actor_id="control-assistant",
+                        title="Butler guidance",
+                    )
+                else:
+                    await self.harness.steer_turn(
+                        pending.harness_turn_id, text, actor_id="control-assistant"
+                    )
+                return {
+                    "session_id": session.id,
+                    "delivery": "steered",
+                    "turn_id": pending.id,
+                }
+            if delivery == "steer":
                 raise ValueError(
                     "live steering requires an active harness chat; use delivery=next to queue a follow-up"
                 )
-            await self.harness.steer_turn(
-                pending.harness_turn_id, text, actor_id="control-assistant"
-            )
-            observed = self.chat.pending_turn(session.id)
-            return {
-                "session_id": session.id,
-                "delivery": "steered",
-                "turn_id": observed.id if observed else pending.id,
-            }
-        if delivery != "next":
-            raise ValueError("choose next or steer delivery")
+            if pending is not None:
+                return {
+                    "session_id": session.id,
+                    "delivery": "held",
+                    "reason": "active_turn_cannot_steer",
+                }
+        if delivery not in {"next", "immediate"}:
+            raise ValueError("choose next, steer, or immediate delivery")
         next_settings = chat_assistant_config(self.store, session)
         next_backend = ChatBackend(next_settings["backend"])
         next_profile = next_settings["profile_id"]
@@ -2156,6 +2479,7 @@ class ControlAssistantWork:
             model=next_settings["model"],
             messages=[ChatRequestMessage(role=ChatRole.USER, content=text)],
             tools_enabled=bool(next_settings["tools_enabled"]),
+            planning_enabled=bool(next_settings["planning_enabled"]),
             mcp_server_ids=next_settings["mcp_server_ids"],
             hook_ids=next_settings["hook_ids"]
             if next_backend == ChatBackend.PROVIDER
@@ -2193,6 +2517,41 @@ class ControlAssistantWork:
             subagent_reasoning_effort=next_settings["subagent_reasoning_effort"],
             stream=True,
         )
+        if delivery == "immediate":
+            # This path deliberately bypasses the follow-up queue. Paused legacy
+            # queue entries stay visible for the operator to review.
+            if next_backend == ChatBackend.PROVIDER:
+                prepared = await self.chat.prepare_async(request)
+                if prepared.turn is None:
+                    raise RuntimeError("Core did not prepare a durable chat turn")
+                self.chat.start_provider_turn(prepared)
+                return {
+                    "session_id": session.id,
+                    "delivery": "started",
+                    "turn_id": prepared.turn.id,
+                }
+            _, turn, harness_turn = self.harness.prepare_chat(
+                engagement_id=project_id,
+                profile_id=next_profile,
+                model=next_settings["model"],
+                prompt=text,
+                chat_session_id=session.id,
+                harness_session_id=session.harness_session_id,
+                mcp_server_ids=request.mcp_server_ids,
+                include_knowledge=request.include_knowledge,
+                allow_cloud_knowledge=request.allow_cloud_knowledge,
+                allow_remote_mcp=request.allow_cloud_tool_results,
+                allow_agent_messaging=request.allow_agent_messaging,
+                harness_mode=request.harness_mode,
+                planning_enabled=request.planning_enabled,
+                harness_reasoning_effort=request.harness_reasoning_effort,
+                harness_service_tier=request.harness_service_tier,
+                harness_cyber_access_program=request.harness_cyber_access_program,
+                provider_subagent=request.harness_provider_subagent(),
+                pending_provider_subagent=request.harness_pending_provider_subagent(),
+            )
+            self.harness.start_chat_turn(harness_turn.id)
+            return {"session_id": session.id, "delivery": "started", "turn_id": turn.id}
         queue = self.queue.get(session.id)
         # Proactive Butler actions reuse a stable private key on recovery. The
         # ordinary operator-facing capability still gets a fresh key per call.
@@ -2430,6 +2789,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.harness_quota",
+        "Read one enabled harness's vendor-reported included quota windows and separate credit balances by profile ID from the runtime catalog. Grok and Codex credits may remain usable after included usage is exhausted; unavailable is unknown, not zero. Set refresh true for a new vendor read.",
+        HARNESS_QUOTA_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.chat",
         "Read recent messages and pending activity for one listed assistant chat. After a follow-up, inspect this and the queue before reporting what the agent achieved.",
         CHAT_TARGET_SCHEMA,
@@ -2475,6 +2840,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         "nebula.work.goal_action",
         "Start, pause, resume, cancel, block, or complete one exact goal after explicit operator instruction. Read goal first and pass its revision. Completion requires actual summary and evidence; a started goal is not finished.",
         GOAL_ACTION_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.handoff_goal",
+        "Recover a paused harness goal after a pre-admission Plan before acting failure. Core checks zero tool effects, pending approvals, queue state, provider tools and privacy, then creates one linked provider draft. Read the source goal first and start the returned draft separately. Never use this to bypass a safety hold.",
+        HANDOFF_GOAL_SCHEMA,
         False,
     ),
     (
@@ -2557,8 +2928,14 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.set_chat_settings",
-        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To give an agent a missing MCP capability, add the listed server ID to mcp_server_ids while preserving existing IDs, read back the setting, then send a new message. Running and queued turns keep their submitted settings.",
+        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To switch the main harness, save its profile, model, advisory planning preference, MCP servers, and subagent together, then send a new message in the same chat. The saved choice is not the bound runtime until that message starts; read back the chat and turn result before resuming a goal. Running and queued turns keep their submitted settings.",
         SET_CHAT_SETTINGS_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.require_plan",
+        "Ask one exact agent, goal, child round, or turn to share a task plan. The request does not restrict tools or block work. Read current Core evidence and revision first, and record a concrete reason. An active harness turn receives this on its next turn.",
+        REQUIRE_PLAN_SCHEMA,
         False,
     ),
     (
@@ -2575,7 +2952,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.message_chat",
-        "Send a durable next message to a main assistant chat, or steer its active harness turn. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
+        "Send a durable next message to a main assistant chat, or steer its active harness turn when supported. Immediate guidance to a busy Grok chat is held and not delivered; read fresh state and send again when idle. A new idle turn applies saved next-turn settings and may rebind the same chat to another harness. For delegated subagents and goal children, message the parent main agent instead. A queued message is not a completed answer; use await_chat_result with its item_id to inspect the saved reply.",
         MESSAGE_CHAT_SCHEMA,
         False,
     ),
@@ -2711,6 +3088,8 @@ async def dispatch_work_tool(
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
         return work.overview(project_id)
+    if name == "nebula.work.harness_quota":
+        return await work.harness_quota(project_id, arguments)
     if name == "nebula.work.chat":
         return work.chat_detail(project_id, arguments.get("session_id"))
     if name == "nebula.work.timeline":
@@ -2727,6 +3106,8 @@ async def dispatch_work_tool(
         return await work.update_goal(project_id, arguments)
     if name == "nebula.work.goal_action":
         return await work.goal_action(project_id, arguments)
+    if name == "nebula.work.handoff_goal":
+        return await work.handoff_goal(project_id, arguments)
     if name == "nebula.work.create_goal_child":
         return await work.create_goal_child(project_id, arguments)
     if name == "nebula.work.subagents":
@@ -2755,6 +3136,8 @@ async def dispatch_work_tool(
         return work.chat_settings(project_id, arguments.get("session_id"))
     if name == "nebula.work.set_chat_settings":
         return work.set_chat_settings(project_id, arguments)
+    if name == "nebula.work.require_plan":
+        return work.require_plan(project_id, arguments)
     if name == "nebula.work.mission":
         return work.mission_detail(project_id, arguments.get("run_id"))
     if name == "nebula.work.start_chat":

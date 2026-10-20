@@ -82,6 +82,12 @@ from .chat import (
     HarnessKnowledgeSearchResult,
     resolve_chat_model_content,
 )
+from .chat_planning import (
+    ChatPlanService,
+    DISCOVERY_TOOL_NAMES,
+    PlanSubmission,
+    PlanningBlocked,
+)
 from .chat_turn_headers import session_turn_headers
 from .chat_subagents import (
     HARNESS_WAIT_DEFAULT_SECONDS,
@@ -265,6 +271,12 @@ JSONRPC_INVALID_REQUEST = -32600
 # previous one completes. A goal that stays active without one is left alone.
 CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS = 15.0
 GROK_SESSION_LIST_TIMEOUT_SECONDS = 30.0
+_HARNESS_GOAL_CONTINUE_INSTRUCTION = (
+    "Review the active Nebula goal and its completion criteria. Continue concrete work now. "
+    "If all criteria are met, give an evidence-backed completion summary. "
+    "Do not stop merely to report status."
+)
+_GOAL_NO_TOOL_TURN_LIMIT = 3
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 # A gateway call answers this long before the harness's own tool timeout, so
@@ -368,6 +380,17 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["artifact_id"],
+        "additionalProperties": False,
+    },
+    "workspace.find": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "minLength": 1, "maxLength": 200},
+            "path": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "after": {"type": ["string", "null"]},
+        },
+        "required": ["query"],
         "additionalProperties": False,
     },
     "workspace.search": {
@@ -543,6 +566,20 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
             "additionalProperties": False,
         },
     ),
+}
+
+_GATEWAY_GOAL_BLOCK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2_000,
+            "pattern": r"\S",
+        },
+    },
+    "required": ["reason"],
+    "additionalProperties": False,
 }
 
 
@@ -810,6 +847,10 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
+    if _gateway_only_core_planned_session(session, profile.kind):
+        # Codex and Grok have no fail-closed callback for every native tool.
+        # Planned turns use the Core gateway instead, where every call is guarded.
+        return HarnessNativeCapabilities()
     raw = session.metadata.get("native_capabilities")
     capabilities = (
         HarnessNativeCapabilities.model_validate(raw)
@@ -823,6 +864,26 @@ def _session_native_capabilities(
     # inconsistent metadata.  Clamp (never grant) so vendor tool config and
     # native permission decisions match the workspace the session actually got.
     return _container_only_native_capabilities(capabilities)
+
+
+def _codex_core_planned_session(session: HarnessSession, kind: HarnessKind) -> bool:
+    return kind == HarnessKind.CODEX_APP_SERVER and (
+        isinstance(session.metadata.get("planning_target_turn_id"), str)
+        or session.metadata.get("planning_enforced") is True
+    )
+
+
+def _gateway_only_core_planned_session(
+    session: HarnessSession, kind: HarnessKind
+) -> bool:
+    return kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP} and (
+        (
+            kind == HarnessKind.GROK_ACP
+            and session.metadata.get("core_plan_isolated") is True
+        )
+        or isinstance(session.metadata.get("planning_target_turn_id"), str)
+        or session.metadata.get("planning_enforced") is True
+    )
 
 
 def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[str]:
@@ -868,6 +929,25 @@ def _native_tool_risk(tool_name: str) -> RiskClass:
     return RiskClass.ACTIVE_SCAN
 
 
+def _native_plan_category(tool_name: str) -> str | None:
+    name = tool_name.casefold()
+    if name in {"read", "glob", "grep"}:
+        return "isolated_workspace_read"
+    if name in {"write", "edit", "multiedit", "notebookedit"}:
+        return "isolated_workspace_write"
+    if name in {"bash", "command", "run_command"}:
+        return "shell"
+    if "websearch" in name or "web_search" in name:
+        return "web_search"
+    if "webfetch" in name or "web_fetch" in name:
+        return "web_fetch"
+    if name == "skill":
+        return "skills"
+    if name in {"agent", "task", "collabagenttoolcall"}:
+        return "subagents"
+    return None
+
+
 def _portable_gateway_tool_name(name: str) -> str:
     """Keep the qualified Grok name (``nebula__`` + alias) within 64 chars."""
     max_length = 64 - len("nebula__")
@@ -875,6 +955,21 @@ def _portable_gateway_tool_name(name: str) -> str:
         return name
     readable = re.sub(r"[^A-Za-z0-9_-]", "_", name)[: max_length - 17]
     return readable + "_" + hashlib.sha256(name.encode()).hexdigest()[:16]
+
+
+def _planned_grok_gateway_permission(
+    request: HarnessPermissionRequest, offered_names: set[str]
+) -> bool:
+    """Allow only the exact Core MCP tools advertised to this Grok turn."""
+
+    if (
+        request.category != "permission"
+        or request.vendor_name != "session/request_permission"
+    ):
+        return False
+    raw_input = request.arguments.get("rawInput")
+    target = raw_input.get("tool_name") if isinstance(raw_input, dict) else None
+    return isinstance(target, str) and target in offered_names
 
 
 def _harness_developer_instructions(
@@ -919,6 +1014,11 @@ def _harness_developer_instructions(
                 }
                 for item in gateway_tools
             )
+            else ""
+        )
+        + (
+            "This turn belongs to a Core-owned goal. If concrete work cannot continue because of a real blocker, call goal.block with the reason. A blocked Work item or a native harness goal does not change the Core goal. "
+            if any(item.get("name") == "goal.block" for item in gateway_tools)
             else ""
         )
         + (
@@ -1796,6 +1896,7 @@ def _minimal_environment(extra: Mapping[str, str] | None = None) -> dict[str, st
             "PATH",
             "SSL_CERT_FILE",
             "SSL_CERT_DIR",
+            "GIT_SSL_CAINFO",
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "NO_PROXY",
@@ -4400,19 +4501,28 @@ class CodexAppServerAdapter(HarnessAdapter):
 
     async def _open(self, request: AdapterOpenRequest) -> HarnessConnection:
         managed_gateway = bool(request.gateway_config)
+        core_planned = _codex_core_planned_session(
+            request.session, request.profile.kind
+        )
+        if core_planned and not managed_gateway:
+            raise HarnessConfigurationError(
+                "Core-planned Codex turns require the guarded Nebula gateway"
+            )
         native_capabilities = _session_native_capabilities(
             request.session, request.profile
         )
-        approval_policy: Literal["untrusted", "never"] = (
-            "never"
-            if _unrestricted_harness_session(request.session)
+        approval_policy: Literal["untrusted", "never"]
+        if core_planned:
+            approval_policy = "untrusted"
+        elif (
+            _unrestricted_harness_session(request.session)
             or request.session.metadata.get("approval_policy") == "never"
-            else (
-                "untrusted"
-                if managed_gateway or _native_capability_names(native_capabilities)
-                else "never"
-            )
-        )
+        ):
+            approval_policy = "never"
+        elif managed_gateway or _native_capability_names(native_capabilities):
+            approval_policy = "untrusted"
+        else:
+            approval_policy = "never"
         effective_mcp, _ = _mcp_runtime_config(
             request.mcp_profiles,
             request.credential_store,
@@ -4427,6 +4537,7 @@ class CodexAppServerAdapter(HarnessAdapter):
             request.workspace,
             mcp_config=effective_mcp,
             native_capabilities=native_capabilities,
+            core_planned=core_planned,
         )
         try:
             verified_activity_protocol = bool(
@@ -4447,13 +4558,14 @@ class CodexAppServerAdapter(HarnessAdapter):
                 managed_gateway
                 and request.session.metadata.get("control_assistant") is True
             )
-            sandbox = (
-                "danger-full-access"
-                if _unrestricted_harness_session(request.session)
-                else "workspace-write"
-                if native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE
-                else "read-only"
-            )
+            if core_planned:
+                sandbox = "read-only"
+            elif _unrestricted_harness_session(request.session):
+                sandbox = "danger-full-access"
+            elif native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE:
+                sandbox = "workspace-write"
+            else:
+                sandbox = "read-only"
             raw_runtime_options = request.session.metadata.get("runtime_options")
             runtime_options = (
                 raw_runtime_options if isinstance(raw_runtime_options, dict) else {}
@@ -4488,6 +4600,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                                 effective_mcp,
                                 native_capabilities=native_capabilities,
                                 trusted_butler_gateway=trusted_butler_gateway,
+                                core_planned=core_planned,
                             ),
                             "developerInstructions": developer_instructions,
                             # Nebula never reads thread.turns, and a long history
@@ -4522,6 +4635,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                             effective_mcp,
                             native_capabilities=native_capabilities,
                             trusted_butler_gateway=trusted_butler_gateway,
+                            core_planned=core_planned,
                         ),
                         "developerInstructions": developer_instructions,
                         **(
@@ -4597,6 +4711,7 @@ class CodexAppServerAdapter(HarnessAdapter):
         *,
         mcp_config: dict[str, dict[str, Any]] | None = None,
         native_capabilities: HarnessNativeCapabilities | None = None,
+        core_planned: bool = False,
     ) -> _CodexRpc:
         if profile.connection_mode == HarnessConnectionMode.SPAWN:
             if not profile.executable:
@@ -4615,7 +4730,9 @@ class CodexAppServerAdapter(HarnessAdapter):
                 native_capabilities or HarnessNativeCapabilities()
             )
             argv = [str(executable), "app-server", "-c", "mcp_servers={}"]
-            for override in _codex_process_overrides(effective_native_capabilities):
+            for override in _codex_process_overrides(
+                effective_native_capabilities, core_planned=core_planned
+            ):
                 argv.extend(["-c", override])
             child_env: dict[str, str] = {}
             if profile.auth_mode == HarnessAuthMode.SECRET_REF and profile.secret_ref:
@@ -4744,6 +4861,8 @@ def _codex_mcp_overrides(
 
 def _codex_feature_policy(
     capabilities: HarnessNativeCapabilities,
+    *,
+    core_planned: bool = False,
 ) -> dict[str, bool]:
     shell = capabilities.shell or (
         capabilities.workspace_access != HarnessWorkspaceAccess.NONE
@@ -4751,8 +4870,8 @@ def _codex_feature_policy(
     enabled = {
         # The stable host dispatches MCP calls even when code mode is disabled.
         "code_mode_host": True,
-        # /goal is always offered; Codex rejects thread/goal/* without it.
-        "goals": True,
+        # Vendor goals can start later turns outside Core's task-plan gate.
+        "goals": not core_planned,
         "shell_tool": shell,
         "unified_exec": shell,
         "browser_use": capabilities.browser,
@@ -4783,8 +4902,10 @@ def _codex_shell_environment(
 
 def _codex_process_overrides(
     capabilities: HarnessNativeCapabilities,
+    *,
+    core_planned: bool = False,
 ) -> tuple[str, ...]:
-    features = _codex_feature_policy(capabilities)
+    features = _codex_feature_policy(capabilities, core_planned=core_planned)
     shell_environment = _codex_shell_environment(capabilities)
     return (
         *(
@@ -4802,6 +4923,7 @@ def _codex_thread_config(
     *,
     native_capabilities: HarnessNativeCapabilities | None = None,
     trusted_butler_gateway: bool = False,
+    core_planned: bool = False,
 ) -> dict[str, Any]:
     """Convert the gateway config to the app-server per-thread config shape."""
 
@@ -4835,7 +4957,7 @@ def _codex_thread_config(
     capabilities = native_capabilities or HarnessNativeCapabilities()
     result: dict[str, Any] = {
         "mcp_servers": servers,
-        "features": _codex_feature_policy(capabilities),
+        "features": _codex_feature_policy(capabilities, core_planned=core_planned),
         "web_search": "live" if capabilities.web_search else "disabled",
         "shell_environment_policy": _codex_shell_environment(capabilities),
     }
@@ -6684,7 +6806,6 @@ async def _run_harness_command(
             # authoritative for the longer-lived workflow, so keep executing in
             # the same session until Grok reports a terminal or paused state.
             native_command = "/goal resume"
-        return
     yield HarnessEvent(
         type="started",
         vendor=vendor,
@@ -7523,6 +7644,34 @@ async def _grok_model_catalog(
 class GrokAcpAdapter(HarnessAdapter):
     kind = HarnessKind.GROK_ACP
 
+    _CORE_PLAN_CONFIG = (
+        "[compat.claude]\n"
+        "skills = false\nrules = false\nagents = false\n"
+        "mcps = false\nhooks = false\nsessions = false\n"
+        "[compat.cursor]\n"
+        "skills = false\nrules = false\nagents = false\n"
+        "mcps = false\nhooks = false\nsessions = false\n"
+        "[compat.codex]\nsessions = false\n"
+    )
+
+    async def read_account_usage(
+        self, profile: HarnessProfile, credential_store: CredentialStore
+    ) -> dict[str, Any]:
+        """Read Grok's billing extension without opening a model turn."""
+
+        del credential_store
+        rpc = await asyncio.wait_for(self._connect(profile, Path.cwd()), timeout=12)
+        try:
+            await asyncio.wait_for(self._initialize(rpc), timeout=30)
+            result = await asyncio.wait_for(
+                rpc.request("_x.ai/billing", {}), timeout=12
+            )
+            if not isinstance(result, dict):
+                raise HarnessTransportError("Grok returned invalid billing data")
+            return result
+        finally:
+            await rpc.close()
+
     # ACP's terminal capability flag describes client-provided terminals. Grok also
     # ships its own host-backed workspace tools, so remove those at process launch;
     # project I/O and commands must cross the audited Nebula MCP gateway instead.
@@ -7539,17 +7688,36 @@ class GrokAcpAdapter(HarnessAdapter):
     )
 
     @staticmethod
-    def _settings_home(profile: HarnessProfile, workspace: Path) -> Path:
-        """Keep ambient Grok MCP servers and plugins out of settings sessions."""
+    def _settings_home(
+        profile: HarnessProfile, workspace: Path, *, core_planned: bool = False
+    ) -> Path:
+        """Keep ambient integrations out of settings and Core-planned sessions."""
 
         source = _harness_home(profile) / "auth.json"
         if not source.is_file():
             raise HarnessConfigurationError(
-                "The Grok account is not signed in for the settings assistant. Check the harness account and retry."
+                "The Grok account is not signed in on this Core host. Check the harness account and retry."
             )
         home = workspace.parent / f"{workspace.name}.settings-home"
+        if home.is_symlink():
+            raise HarnessConfigurationError(
+                "The isolated Grok account folder is a link"
+            )
         home.mkdir(mode=0o700, parents=True, exist_ok=True)
         home.chmod(0o700)
+        if core_planned:
+            config = home / "config.toml"
+            if config.is_symlink() or (
+                config.exists()
+                and config.read_text(encoding="utf-8")
+                != GrokAcpAdapter._CORE_PLAN_CONFIG
+            ):
+                raise HarnessConfigurationError(
+                    "The isolated Grok plan configuration changed. Retry in a new session."
+                )
+            if not config.exists():
+                config.write_text(GrokAcpAdapter._CORE_PLAN_CONFIG, encoding="utf-8")
+                config.chmod(0o600)
         account = home / "auth.json"
         if account.is_symlink():
             if account.resolve() != source.resolve():
@@ -7563,6 +7731,82 @@ class GrokAcpAdapter(HarnessAdapter):
         else:
             account.symlink_to(source.resolve())
         return home
+
+    @staticmethod
+    async def _verify_plan_isolation(
+        executable: Path, workspace: Path, environment: dict[str, str]
+    ) -> None:
+        """Fail closed if Grok discovers a tool source outside Core's ACP MCP."""
+
+        process = await asyncio.create_subprocess_exec(
+            str(executable),
+            "inspect",
+            "--json",
+            cwd=str(workspace),
+            env=environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+        except TimeoutError as exc:
+            process.kill()
+            await process.communicate()
+            raise HarnessConfigurationError(
+                "Grok plan isolation check timed out"
+            ) from exc
+        try:
+            observed = json.loads(output) if process.returncode == 0 else None
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HarnessConfigurationError(
+                "Grok could not verify its isolated plan configuration"
+            ) from exc
+        if not isinstance(observed, dict):
+            raise HarnessConfigurationError(
+                "Grok could not verify its isolated plan configuration"
+            )
+        compat = observed.get("externalCompat")
+        cells = compat.get("cells") if isinstance(compat, dict) else None
+        sources = observed.get("configSources")
+        layers = sources.get("layers") if isinstance(sources, dict) else None
+        permissions = observed.get("permissions")
+        expected_config = str(Path(environment["GROK_HOME"]) / "config.toml")
+        if (
+            observed.get("projectRoot") is not None
+            or any(
+                observed.get(key) != []
+                for key in (
+                    "hooks",
+                    "plugins",
+                    "mcpServers",
+                    "marketplaces",
+                    "lspServers",
+                    "projectInstructions",
+                    "skills",
+                )
+            )
+            or not isinstance(observed.get("agents"), list)
+            or any(
+                not isinstance(agent, dict)
+                or not isinstance(agent.get("source"), dict)
+                or agent["source"].get("type") != "builtin"
+                for agent in observed["agents"]
+            )
+            or not isinstance(cells, list)
+            or not cells
+            or any(not isinstance(cell, dict) or cell.get("enabled") for cell in cells)
+            or not isinstance(layers, list)
+            or len(layers) != 1
+            or not isinstance(layers[0], dict)
+            or layers[0].get("path") != expected_config
+            or not isinstance(permissions, dict)
+            or permissions.get("sources") != []
+            or permissions.get("loaded") != 0
+            or permissions.get("managedSettingsActive") is not False
+        ):
+            raise HarnessConfigurationError(
+                "Grok plan isolation found ambient tools or project configuration"
+            )
 
     async def _connect(
         self,
@@ -7582,13 +7826,41 @@ class GrokAcpAdapter(HarnessAdapter):
             if session is not None
             else _container_only_native_capabilities(profile.native_capabilities)
         )
+        core_planned = bool(
+            session is not None
+            and _gateway_only_core_planned_session(session, profile.kind)
+        )
         command = [str(executable)]
-        if session is not None and _unrestricted_harness_session(session):
+        if (
+            session is not None
+            and _unrestricted_harness_session(session)
+            and not core_planned
+        ):
             command.extend(["--always-approve", "--sandbox", "off"])
         settings_only = bool(
             session and session.metadata.get("control_assistant") is True
         )
-        if (
+        if core_planned:
+            # Grok can still offer a built-in Write with the tool allowlist set.
+            # dontAsk denies any tool without an explicit allow rule; only the
+            # session-scoped, Core-guarded MCP gateway is allowed here.
+            command.extend(
+                [
+                    "--permission-mode",
+                    "dontAsk",
+                    "--allow",
+                    "MCPTool(nebula__*)",
+                    "--tools",
+                    "__nebula_no_builtin_tools__",
+                    "--disallowed-tools",
+                    ",".join(self._DISALLOWED_HOST_TOOLS),
+                    "--disable-web-search",
+                    "--no-subagents",
+                    "--no-plan",
+                    "--no-memory",
+                ]
+            )
+        elif (
             native_capabilities.workspace_access == HarnessWorkspaceAccess.NONE
             and not native_capabilities.shell
         ):
@@ -7596,6 +7868,8 @@ class GrokAcpAdapter(HarnessAdapter):
                 ["--disallowed-tools", ",".join(self._DISALLOWED_HOST_TOOLS)]
             )
         command.append("agent")
+        if core_planned:
+            command.append("--no-leader")
         if session is not None:
             command.extend(["--model", session.model])
             raw_options = session.metadata.get("runtime_options")
@@ -7607,8 +7881,16 @@ class GrokAcpAdapter(HarnessAdapter):
         environment = _harness_environment(
             profile, host_session=bool(native_capabilities.shell)
         )
-        if settings_only:
-            environment["GROK_HOME"] = str(self._settings_home(profile, workspace))
+        if settings_only or core_planned:
+            isolated_home = self._settings_home(
+                profile, workspace, core_planned=core_planned
+            )
+            environment["GROK_HOME"] = str(isolated_home)
+            if core_planned:
+                # Grok also discovers user skills through HOME/.claude.
+                environment["HOME"] = str(isolated_home)
+        if core_planned:
+            await self._verify_plan_isolation(executable, workspace, environment)
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
@@ -8170,11 +8452,9 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 decision = "ask"
                 reason = "Nebula approval is required for this configured MCP tool"
             elif _claude_native_tool_enabled(native_capabilities, tool_name):
-                decision = "allow" if tool_name == "Skill" else "ask"
+                decision = "ask"
                 reason = (
-                    "Installed skills are explicitly enabled on this harness profile"
-                    if tool_name == "Skill"
-                    else "Nebula approval is required for this vendor-native capability"
+                    "Nebula validates the saved task plan and native capability policy"
                 )
             else:
                 decision = "deny"
@@ -8188,6 +8468,14 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             }
 
         hook_matcher = getattr(sdk, "HookMatcher", None)
+        if (
+            request.session.metadata.get("planning_enforced") is True
+            or isinstance(request.session.metadata.get("planning_target_turn_id"), str)
+        ) and hook_matcher is None:
+            raise HarnessConfigurationError(
+                "This Claude SDK cannot enforce the planning pre-use hook. "
+                "Update the managed SDK before resuming this task."
+            )
         hooks = (
             {"PreToolUse": [hook_matcher(matcher=None, hooks=[enforce_native_tool])]}
             if hook_matcher is not None
@@ -8457,6 +8745,7 @@ class HarnessRuntimeService:
         shutdown_timeout_seconds: float = 5.0,
     ) -> None:
         self.store = store
+        self.plans = ChatPlanService(store)
         self.work = WorkService(store)
         self.credential_store = credential_store
         self.workspace_resolver = workspace_resolver
@@ -8475,6 +8764,7 @@ class HarnessRuntimeService:
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
         self.butler_memory: Any = None
+        self.butler_instructions_root: Path | None = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
             raise ValueError("tool platform must use the harness runtime store")
@@ -8509,6 +8799,9 @@ class HarnessRuntimeService:
         self._mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._scheduled_mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._chat_turn_tasks: dict[str, asyncio.Task[None]] = {}
+        # Require two identical idle observations before recovering a running
+        # goal, so a turn still being prepared can take its durable claim.
+        self._idle_goal_observations: dict[str, tuple[int, str | None, int | None]] = {}
         # Followers of a turn wait on its signal instead of polling the ledger;
         # an entry lives only while some follower holds it.
         self._activity_signals: weakref.WeakValueDictionary[str, asyncio.Event] = (
@@ -9576,6 +9869,7 @@ class HarnessRuntimeService:
         cyber_access_program: str | None = None,
         tools_enabled: bool = True,
         control_assistant: bool = False,
+        core_plan_isolated: bool = False,
         transaction: StoreTransaction | None = None,
     ) -> HarnessSession:
         if self._closed:
@@ -9583,6 +9877,10 @@ class HarnessRuntimeService:
         profile = self.store.get(HarnessProfile, profile_id)
         if not profile.enabled:
             raise HarnessConfigurationError(f"harness {profile.id!r} is disabled")
+        if core_plan_isolated and profile.kind != HarnessKind.GROK_ACP:
+            raise HarnessConfigurationError(
+                "Core plan isolation is available only for Grok chat sessions"
+            )
         self.store.get_by_kind("engagements", engagement_id)
         selected_model = (model or profile.default_model or "").strip()
         if not selected_model:
@@ -9688,6 +9986,7 @@ class HarnessRuntimeService:
         )
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
+            **({"core_plan_isolated": True} if core_plan_isolated else {}),
             "execution_mode": execution_mode,
             "harness_permission_mode": profile.permission_mode,
             "approval_policy": self._project_approval_policy(engagement_id),
@@ -9738,9 +10037,14 @@ class HarnessRuntimeService:
         profile_id: str,
         model: str | None,
         prompt: str,
+        reasoning_effort: str | None = None,
         files: dict[str, str] | None = None,
         nebula_tools: bool = True,
         butler_recovery_case_id: str | None = None,
+        on_turn_created: Callable[[HarnessTurn], None] | None = None,
+        planning_target_turn_id: str | None = None,
+        planning_tool_names: list[str] | None = None,
+        planning_native_categories: list[str] | None = None,
     ) -> HarnessTurn:
         """Run a tool-disabled, durable harness turn for bounded analysis.
 
@@ -9762,8 +10066,9 @@ class HarnessRuntimeService:
             engagement_id=engagement_id,
             profile_id=profile.id,
             model=selected_model,
+            reasoning_effort=reasoning_effort,
             mcp_server_ids=[],
-            tools_enabled=nebula_tools,
+            tools_enabled=nebula_tools and planning_target_turn_id is None,
             control_assistant=butler_recovery_case_id is not None,
         )
         native = (
@@ -9779,6 +10084,16 @@ class HarnessRuntimeService:
                     **session.metadata,
                     "context_management": "isolated_analysis",
                     "analysis_only": True,
+                    **(
+                        {
+                            "planning_target_turn_id": planning_target_turn_id,
+                            "planning_tool_names": planning_tool_names or [],
+                            "planning_native_categories": planning_native_categories
+                            or [],
+                        }
+                        if planning_target_turn_id
+                        else {}
+                    ),
                     "analysis_files": files or {},
                     **(
                         {"butler_recovery_case_id": butler_recovery_case_id}
@@ -9794,7 +10109,13 @@ class HarnessRuntimeService:
                         else {}
                     ),
                     "native_capabilities": native.model_dump(mode="json"),
-                    **({} if nebula_tools else {"nebula_gateway": False}),
+                    **(
+                        {"nebula_gateway": True}
+                        if planning_target_turn_id
+                        else {}
+                        if nebula_tools
+                        else {"nebula_gateway": False}
+                    ),
                 }
             },
             expected_revision=session.revision,
@@ -9817,6 +10138,8 @@ class HarnessRuntimeService:
             )
         )
         try:
+            if on_turn_created is not None:
+                on_turn_created(turn)
             async for _event in self.stream_turn(turn.id):
                 pass
             completed = self.store.get(HarnessTurn, turn.id)
@@ -10444,6 +10767,7 @@ class HarnessRuntimeService:
         allow_cloud_knowledge: bool = False,
         max_artifact_queries: int | None = None,
         harness_mode: str | None = None,
+        planning_enabled: bool | None = None,
         harness_skill: HarnessSkillInvocation | None = None,
         harness_reasoning_effort: str | None = None,
         harness_service_tier: str | None = None,
@@ -10453,6 +10777,7 @@ class HarnessRuntimeService:
         pending_provider_subagent: dict[str, Any] | None = None,
         allow_agent_messaging: bool | None = None,
         control_assistant: bool = False,
+        butler_initiated: bool = False,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
@@ -10462,6 +10787,11 @@ class HarnessRuntimeService:
 
         saved_chat = (
             self.store.get(ChatSession, chat_session_id) if chat_session_id else None
+        )
+        planning_enabled = bool(
+            planning_enabled
+            if planning_enabled is not None
+            else saved_chat and saved_chat.metadata.get("planning_enabled", False)
         )
         messaging_choice = resolve_agent_messaging_choice(
             self.store,
@@ -10643,6 +10973,8 @@ class HarnessRuntimeService:
                 )
                 or session.harness_profile_id != profile_id
                 or session.model != selected_model
+                or session.metadata.get("core_plan_isolated") is True
+                or session.metadata.get("planning_enforced") is True
                 or set(session.mcp_server_ids) != set(selected_mcp)
                 or effort != frozen_options.get("reasoning_effort")
                 or tier != frozen_options.get("service_tier")
@@ -10670,6 +11002,7 @@ class HarnessRuntimeService:
                     cyber_access_program=cyber_program,
                     tools_enabled=True,
                     control_assistant=control_assistant,
+                    core_plan_isolated=False,
                 )
                 chat = self._rebind_chat_session(
                     chat,
@@ -10772,6 +11105,7 @@ class HarnessRuntimeService:
                     ),
                     tools_enabled=True,
                     control_assistant=control_assistant,
+                    core_plan_isolated=False,
                 )
             chat = self.store.create(
                 ChatSession(
@@ -10789,7 +11123,9 @@ class HarnessRuntimeService:
                         if control_assistant
                         else "pending",
                         **({"control_assistant": True} if control_assistant else {}),
+                        **({"butler_initiated": True} if butler_initiated else {}),
                         "allow_agent_messaging": messaging_choice,
+                        "planning_enabled": planning_enabled,
                         "harness_runtime_options": session.metadata.get(
                             "runtime_options", {}
                         ),
@@ -10809,6 +11145,13 @@ class HarnessRuntimeService:
                 and isinstance(saved_subagent, dict)
             ):
                 pending_provider_subagent = saved_subagent
+        if chat.metadata.get("planning_enabled", False) != planning_enabled:
+            chat = self.store.update(
+                ChatSession,
+                chat.id,
+                {"metadata": {**chat.metadata, "planning_enabled": planning_enabled}},
+                expected_revision=chat.revision,
+            )
         # Core checks the subagent model itself: the composer may still be
         # loading the verification a saved or newly chosen model already has.
         if subagent_setting is None and pending_provider_subagent is not None:
@@ -11020,7 +11363,7 @@ class HarnessRuntimeService:
                 "\n\nCore-owned Nebula goal (separate from any native harness goal):\n"
                 + json.dumps(goal_context, ensure_ascii=False)
                 + "\nContinue concrete work until the criteria are met or the goal is paused, blocked, or completed in Core. "
-                "A status-only reply does not end this goal. Give the operator a concise evidence-backed handoff when finished."
+                "A status-only reply does not end this goal. If a real blocker prevents further work, call the goal.block Nebula tool with a specific reason and verify its saved result. Blocking a Work item or a native harness goal does not block this Core goal. Give the operator a concise evidence-backed handoff when finished."
                 + _goal_time_instruction(goal, utc_now())
                 + skill_instructions(
                     SkillSnapshot.model_validate(snapshot)
@@ -11098,6 +11441,8 @@ class HarnessRuntimeService:
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
                 "provider_subagent": subagent_setting,
                 "allow_agent_messaging": allow_agent_messaging,
+                "planning_enabled": planning_enabled,
+                "plan_behavior": "advisory",
             },
         )
         harness_turn = HarnessTurn(
@@ -11110,6 +11455,15 @@ class HarnessRuntimeService:
             prompt=clean_prompt
             + handoff_context
             + (runtime_context or "")
+            + (
+                "\n\nPlanning is requested for this turn. Make a concise plan before "
+                "substantial task work when useful, and share it through the "
+                "Core plan.submit tool. You may use your normal tools at any "
+                "time. Pass relevant steps to subagents when delegating. A "
+                "missing plan never blocks the task."
+                if planning_enabled
+                else ""
+            )
             + assistant_scope,
             metadata={
                 "user_prompt": clean_prompt,
@@ -11456,6 +11810,47 @@ class HarnessRuntimeService:
             ):  # diagnostic-expected: retry a concurrent goal revision
                 continue
 
+    def _goal_has_repeated_tool_free_continuations(self, goal: ChatGoal) -> bool:
+        """Bound repeated automatic replies without mistaking a native tool for prose."""
+
+        if len(goal.linked_turn_ids) < _GOAL_NO_TOOL_TURN_LIMIT:
+            return False
+        activity_kinds = (
+            "command",
+            "file_change",
+            "tool",
+            "web_search",
+            "browser",
+            "image",
+            "skill",
+            "subagent",
+        )
+        for turn_id in goal.linked_turn_ids[-_GOAL_NO_TOOL_TURN_LIMIT:]:
+            try:
+                chat_turn = self.store.get(ChatTurn, turn_id)
+                if (
+                    chat_turn.goal_id != goal.id
+                    or chat_turn.status != ChatTurnStatus.COMPLETE
+                    or not chat_turn.harness_turn_id
+                    or chat_turn.tool_call_ids
+                ):
+                    return False
+                harness_turn = self.store.get(HarnessTurn, chat_turn.harness_turn_id)
+                if (
+                    harness_turn.metadata.get("user_prompt")
+                    != _HARNESS_GOAL_CONTINUE_INSTRUCTION
+                    or harness_turn.tool_call_ids
+                    or self.store.replay_operation_events(
+                        harness_turn.id,
+                        limit=1,
+                        payload_values={"item_kind": activity_kinds},
+                    )
+                ):
+                    return False
+            except NotFoundError:  # diagnostic-expected: an incomplete turn chain is not evidence of a stall
+                return False
+        return True
+
     async def _settle_goal_turn(self, harness_turn_id: str) -> None:
         from .chat_goals import ChatGoalService
 
@@ -11489,15 +11884,107 @@ class HarnessRuntimeService:
             return
         await self.dispatch_running_goal(
             turn.session_id,
-            "Review the active Nebula goal and its completion criteria. Continue concrete work now. "
-            "If all criteria are met, give an evidence-backed completion summary. "
-            "Do not stop merely to report status.",
+            _HARNESS_GOAL_CONTINUE_INSTRUCTION,
         )
+
+    async def reconcile_idle_running_goals(self) -> list[str]:
+        """Recover harness goals whose turn handoff no longer has an owner.
+
+        A queued follow-up may have owned the next turn when the prior turn
+        settled, then become paused for review. Its request must not be sent,
+        but the still-running goal must continue. This pass also repairs that
+        state after Core restarts.
+        """
+
+        candidates = await asyncio.to_thread(self._idle_running_goal_candidates)
+        observed: dict[str, tuple[int, str | None, int | None]] = {}
+        acted: list[str] = []
+        for goal, latest in candidates:
+            key = (
+                goal.revision,
+                latest.id if latest is not None else None,
+                latest.revision if latest is not None else None,
+            )
+            if self._idle_goal_observations.get(goal.id) != key:
+                observed[goal.id] = key
+                continue
+            if latest is None or latest.status == ChatTurnStatus.COMPLETE:
+                if await self.dispatch_running_goal(
+                    goal.session_id, _HARNESS_GOAL_CONTINUE_INSTRUCTION
+                ):
+                    acted.append(goal.id)
+                continue
+            self._pause_goal(
+                goal.session_id,
+                f"The goal's latest response ended {latest.status.value} and "
+                "nothing is running for it. Review that response, then resume the goal.",
+            )
+            acted.append(goal.id)
+        self._idle_goal_observations = observed
+        return acted
+
+    def _idle_running_goal_candidates(self) -> list[tuple[ChatGoal, ChatTurn | None]]:
+        """Find harness goals with no turn, child, or queued follow-up to await."""
+
+        from .chat_goals import ChatGoalService
+
+        goals = ChatGoalService(self.store)
+        found: list[tuple[ChatGoal, ChatTurn | None]] = []
+        for goal in self.store.iter_readable_entities(
+            ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
+        ):
+            if goal.execution_claim_id is not None:
+                continue
+            try:
+                session = self.store.get(ChatSession, goal.session_id)
+                if (
+                    session.backend != ChatBackend.HARNESS
+                    or "archived_at" in session.metadata
+                ):
+                    continue
+                self._assert_chat_turn_available(goal.session_id)
+                if goals.has_working_subagents(goal.session_id):
+                    continue
+                try:
+                    queue = self.store.get(ChatQueue, "chat-queue-" + goal.session_id)
+                except (
+                    NotFoundError
+                ):  # diagnostic-expected: most chats have no follow-up queue
+                    queue = None
+                if queue and any(
+                    item["status"] in {"claiming", "sending"}
+                    or (item["status"] == "queued" and not queue.paused)
+                    for item in queue.items
+                ):
+                    continue
+                latest = self.store.list_session_entities(
+                    ChatTurn, goal.session_id, newest_first=True, limit=1
+                )
+                if latest and latest[0].harness_turn_id:
+                    harness_turn_id = latest[0].harness_turn_id
+                    task = self._chat_turn_tasks.get(harness_turn_id)
+                    if task is not None and not task.done():
+                        continue
+                    harness_turn = self.store.get(HarnessTurn, harness_turn_id)
+                    if harness_turn.status in {
+                        HarnessTurnStatus.QUEUED,
+                        HarnessTurnStatus.RUNNING,
+                        HarnessTurnStatus.WAITING_APPROVAL,
+                    }:
+                        continue
+            except (NotFoundError, ChatHistoryConflict, ConflictError):
+                # diagnostic-expected: a concurrent writer or missing record is not evidence of an idle goal.
+                # A concurrent send, removed record, or inconsistent child
+                # graph needs its own recovery path; never infer an idle goal.
+                continue
+            found.append((goal, latest[0] if latest else None))
+        return found
 
     async def dispatch_running_goal(
         self, session_id: str, instruction: str
     ) -> str | None:
         """Start one harness turn for an idle Core-owned goal."""
+        from .chat_assistant_config import chat_assistant_config
         from .chat_goals import ChatGoalService
 
         goals = ChatGoalService(self.store)
@@ -11541,6 +12028,24 @@ class HarnessRuntimeService:
                 # Its turn will carry this running goal and settle it normally.
                 return None
             self._assert_chat_turn_available(session_id)
+            if (
+                instruction == _HARNESS_GOAL_CONTINUE_INSTRUCTION
+                and self._goal_has_repeated_tool_free_continuations(goal)
+            ):
+                self._pause_goal(
+                    session_id,
+                    "Three automatic goal responses had no recorded tool activity. "
+                    "Review their saved replies, then resume when concrete work can continue.",
+                )
+                return None
+            next_settings = chat_assistant_config(self.store, chat)
+            saved_effort = (
+                next_settings["harness_reasoning_effort"]
+                if next_settings["backend"] == ChatBackend.HARNESS.value
+                and next_settings["profile_id"] == chat.harness_profile_id
+                and next_settings["model"] == chat.model
+                else None
+            )
             _, turn, harness_turn = self.prepare_chat(
                 engagement_id=chat.engagement_id,
                 profile_id=chat.harness_profile_id or "",
@@ -11551,6 +12056,7 @@ class HarnessRuntimeService:
                 harness_session_id=None,
                 mcp_server_ids=None,
                 include_knowledge=False,
+                harness_reasoning_effort=saved_effort,
             )
             try:
                 self.start_chat_turn(harness_turn.id)
@@ -11660,6 +12166,177 @@ class HarnessRuntimeService:
             except TimeoutError:
                 # diagnostic-expected: an idle wait re-reads the durable status.
                 continue
+
+    async def _ensure_harness_plan(
+        self, turn: HarnessTurn, session: HarnessSession
+    ) -> HarnessTurn:
+        if turn.chat_turn_id is None or turn.chat_session_id is None:
+            return turn
+        chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+        chat = self.store.get(ChatSession, turn.chat_session_id)
+        if chat_turn.request_snapshot.get(
+            "plan_behavior"
+        ) == "advisory" and self.plans.requested(chat_turn, chat):
+            advisory_plan = self.plans.ensure(chat_turn, chat)
+            if (
+                advisory_plan is not None
+                and advisory_plan.directive_id
+                and not chat_turn.request_snapshot.get("planning_enabled")
+                and "\n\nPlanning preference (advisory):" not in turn.prompt
+            ):
+                turn = self.store.update(
+                    HarnessTurn,
+                    turn.id,
+                    {
+                        "prompt": turn.prompt
+                        + "\n\nPlanning preference (advisory): Make a concise plan "
+                        "and share it through Core plan.submit when useful. "
+                        "Normal tool use remains available; pass relevant steps "
+                        "to subagents when delegating."
+                    },
+                    expected_revision=turn.revision,
+                )
+        if not chat_turn.tools_enabled or not self.plans.required(chat_turn, chat):
+            current_session = self.store.get(HarnessSession, session.id)
+            if current_session.metadata.get("planning_enforced") is True:
+                self.store.update(
+                    HarnessSession,
+                    current_session.id,
+                    {
+                        "metadata": {
+                            **current_session.metadata,
+                            "planning_enforced": False,
+                        }
+                    },
+                    expected_revision=current_session.revision,
+                )
+                existing_connection = self._connections.get(session.id)
+                if existing_connection is not None:
+                    await self._discard_connection(
+                        session.id,
+                        existing_connection,
+                        reason="planning_requirement_changed",
+                    )
+            return turn
+        plan = self.plans.ensure(chat_turn, chat)
+        if plan is None:
+            return turn
+        if plan.phase == "blocked":
+            raise PlanningBlocked(plan.reason or "task planning is blocked")
+        if plan.phase != "execution":
+            profile = self.store.get(HarnessProfile, session.harness_profile_id)
+            managed_claude = (
+                profile.kind == HarnessKind.CLAUDE_AGENT_SDK
+                and profile.permission_mode == "managed"
+                and session.metadata.get("harness_permission_mode") != "unrestricted"
+            )
+            contained_codex = (
+                profile.kind == HarnessKind.CODEX_APP_SERVER
+                and profile.capabilities.mcp
+            )
+            contained_grok = (
+                profile.kind == HarnessKind.GROK_ACP
+                and profile.capabilities.mcp
+                and session.metadata.get("core_plan_isolated") is True
+            )
+            if not (managed_claude or contained_codex or contained_grok):
+                reason = (
+                    "This harness configuration cannot enforce restricted discovery "
+                    "and native pre-use checks. Choose a managed Claude Agent SDK, "
+                    "MCP-capable Codex App Server, or contained Grok ACP profile "
+                    "and retry this task as a linked turn."
+                )
+                self.plans.block(chat_turn.id, reason)
+                raise PlanningBlocked(reason)
+            names: list[str] = []
+            cursor: str | None = None
+            for _ in range(64):
+                catalog = self._gateway_catalog(
+                    session, {"cursor": cursor} if cursor else None, turn=turn
+                )
+                names.extend(str(item["name"]) for item in catalog["tools"])
+                cursor = catalog.get("nextCursor")
+                if not cursor:
+                    break
+            native = HarnessNativeCapabilities.model_validate(
+                chat_turn.request_snapshot.get("native_capabilities") or {}
+            )
+            native_names = (
+                []
+                if profile.kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
+                else _native_capability_names(native)
+            )
+            prompt = (
+                "Plan this exact task before execution. You are in a restricted "
+                "session with only Core workspace.find, workspace.search, "
+                "workspace.read, and plan.submit. Discover file paths as needed. "
+                "Call plan.submit with steps, expected outcomes, exact available "
+                "tool names, native capability categories, workspace-relative "
+                "files (or no_file_work), and unresolved dependencies. "
+                "No task action may be taken in this session.\n\n"
+                f"Available execution tools: {json.dumps(sorted(set(names)))}\n"
+                f"Available native categories: {json.dumps(native_names)}\n"
+                f"Task:\n{turn.prompt[:30_000]}"
+            )
+            try:
+                await asyncio.wait_for(
+                    self.analyze_structured(
+                        engagement_id=turn.engagement_id,
+                        profile_id=session.harness_profile_id,
+                        model=session.model,
+                        prompt=prompt,
+                        nebula_tools=False,
+                        planning_target_turn_id=chat_turn.id,
+                        planning_tool_names=names,
+                        planning_native_categories=native_names,
+                    ),
+                    timeout=120,
+                )
+            except Exception as exc:
+                reason = f"Restricted planner failed: {_safe_error(exc)}"
+                self.plans.block(chat_turn.id, reason)
+                raise PlanningBlocked(reason) from exc
+            plan = self.plans.for_turn(chat_turn.id)
+            if plan is None or plan.phase != "execution":
+                reason = "Restricted planner ended without a validated plan."
+                self.plans.block(chat_turn.id, reason)
+                raise PlanningBlocked(reason)
+        plan_block = json.dumps(
+            {
+                "version": plan.plan_version,
+                "steps": plan.steps,
+                "tool_names": plan.tool_names,
+                "native_categories": plan.native_categories,
+                "files": plan.files,
+                "no_file_work": plan.no_file_work,
+                "unresolved_dependencies": plan.unresolved_dependencies,
+            },
+            ensure_ascii=False,
+        )
+        marker = "\n\nCore-validated task plan (follow it; replan if a capability is missing):\n"
+        if marker not in turn.prompt:
+            if len(turn.prompt) + len(marker) + len(plan_block) > 250_000:
+                raise PlanningBlocked("validated plan does not fit the harness prompt")
+            turn = self.store.update(
+                HarnessTurn,
+                turn.id,
+                {"prompt": turn.prompt + marker + plan_block},
+                expected_revision=turn.revision,
+            )
+        current_session = self.store.get(HarnessSession, session.id)
+        if current_session.metadata.get("planning_enforced") is not True:
+            self.store.update(
+                HarnessSession,
+                current_session.id,
+                {"metadata": {**current_session.metadata, "planning_enforced": True}},
+                expected_revision=current_session.revision,
+            )
+        existing_connection = self._connections.get(session.id)
+        if existing_connection is not None:
+            await self._discard_connection(
+                session.id, existing_connection, reason="planning_requirement_changed"
+            )
+        return turn
 
     async def stream_turn(self, turn_id: str) -> AsyncIterator[HarnessEvent]:
         turn = self.store.get(HarnessTurn, turn_id)
@@ -11773,6 +12450,25 @@ class HarnessRuntimeService:
             )
         async with AsyncExitStack() as held_locks:
             await held_locks.enter_async_context(lock)
+            try:
+                turn = await self._ensure_harness_plan(turn, session)
+            except PlanningBlocked as exc:
+                # diagnostic-expected: the interrupted turn and blocked event are persisted.
+                self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, str(exc))
+                yield self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="status",
+                        origin=turn.origin,
+                        harness_profile_id=session.harness_profile_id,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        model=session.model,
+                        payload={"phase": "blocked", "detail": str(exc)},
+                    ),
+                )
+                return
             yield self._persist_activity(
                 turn,
                 session,
@@ -12947,12 +13643,22 @@ class HarnessRuntimeService:
         session = self.store.get(HarnessSession, original.harness_session_id)
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         if original.origin == HarnessTurnOrigin.CHAT:
+            from .chat_assistant_config import chat_assistant_config
+
             chat = self.store.get(ChatSession, original.chat_session_id or "")
             original_chat_turn = self.store.get(ChatTurn, original.chat_turn_id or "")
+            blocked_plan = self.plans.for_turn(original_chat_turn.id)
+            retry_profile_id = profile.id
+            retry_model = session.model
+            if blocked_plan is not None and blocked_plan.phase == "blocked":
+                saved = chat_assistant_config(self.store, chat)
+                if saved["backend"] == ChatBackend.HARNESS.value:
+                    retry_profile_id = saved["profile_id"]
+                    retry_model = saved["model"]
             _, _, replacement = self.prepare_chat(
                 engagement_id=original.engagement_id,
-                profile_id=profile.id,
-                model=session.model,
+                profile_id=retry_profile_id,
+                model=retry_model,
                 prompt=str(original.metadata.get("user_prompt") or original.prompt),
                 content_blocks=[
                     ChatContentBlock.model_validate(block)
@@ -12991,6 +13697,7 @@ class HarnessRuntimeService:
                     original_chat_turn.request_snapshot.get("allow_agent_messaging")
                     is True
                 ),
+                planning_enabled=True if blocked_plan is not None else None,
             )
             replacement = self.store.update(
                 HarnessTurn,
@@ -14014,6 +14721,17 @@ class HarnessRuntimeService:
                     else None
                 )
             ),
+            instructions_root=getattr(self, "butler_instructions_root", None),
+            background_runtime_local=(
+                self.store.get(
+                    HarnessProfile,
+                    self.store.get(
+                        HarnessSession, turn.harness_session_id
+                    ).harness_profile_id,
+                ).privacy.local_only
+                if turn is not None
+                else False
+            ),
             notebooks=(
                 self.mcp_service.notebook_tools.notebooks
                 if self.mcp_service is not None
@@ -14030,6 +14748,25 @@ class HarnessRuntimeService:
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
         current = self.store.get(HarnessSession, session.id)
+        planning_target = current.metadata.get("planning_target_turn_id")
+        if isinstance(planning_target, str):
+            planning_tools = [
+                {
+                    "name": name,
+                    "description": "Bounded read of the linked project workspace for task planning.",
+                    "inputSchema": _GATEWAY_RETRIEVAL_SCHEMAS[name],
+                    "annotations": {"readOnlyHint": True},
+                }
+                for name in sorted(DISCOVERY_TOOL_NAMES)
+            ]
+            planning_tools.append(
+                {
+                    "name": "plan.submit",
+                    "description": "Submit the structured task plan to Core before execution.",
+                    "inputSchema": PlanSubmission.model_json_schema(),
+                }
+            )
+            return {"tools": planning_tools}
         settings_only = current.metadata.get("control_assistant") is True
         tools: list[dict[str, Any]] = []
         if turn is None:
@@ -14139,6 +14876,48 @@ class HarnessRuntimeService:
                     }
                 )
         if not current.metadata.get("analysis_only"):
+            if turn is not None and turn.chat_turn_id and not settings_only:
+                chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+                if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
+                    tools.append(
+                        {
+                            "name": "plan.submit",
+                            "description": (
+                                "Share an optional task plan with Core so subagents "
+                                "receive its steps. Tools remain available even "
+                                "when no plan is shared."
+                            ),
+                            "inputSchema": PlanSubmission.model_json_schema(),
+                            "annotations": {
+                                "readOnlyHint": False,
+                                "destructiveHint": False,
+                                "idempotentHint": False,
+                                "openWorldHint": False,
+                            },
+                        }
+                    )
+                if (
+                    chat_turn.goal_id
+                    and chat_turn.session_id == turn.chat_session_id
+                    and chat_turn.engagement_id == turn.engagement_id
+                ):
+                    tools.append(
+                        {
+                            "name": "goal.block",
+                            "description": (
+                                "Block this turn's Core-owned Nebula goal when a concrete "
+                                "blocker prevents further work. Saves the reason and stops "
+                                "automatic continuation. The operator can resume it later."
+                            ),
+                            "inputSchema": _GATEWAY_GOAL_BLOCK_SCHEMA,
+                            "annotations": {
+                                "readOnlyHint": False,
+                                "destructiveHint": False,
+                                "idempotentHint": False,
+                                "openWorldHint": False,
+                            },
+                        }
+                    )
             work_enabled = self.work.enabled(current.engagement_id)
             for name, (description, schema) in _GATEWAY_WORK_SCHEMAS.items():
                 if name != "work.agents" and not work_enabled:
@@ -14496,6 +15275,79 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
+        planner_target = self.store.get(HarnessSession, session.id).metadata.get(
+            "planning_target_turn_id"
+        )
+        if isinstance(planner_target, str):
+            plan = self.plans.for_turn(planner_target)
+            if plan is None:
+                raise PlanningBlocked("planning target is unavailable")
+            if name == "plan.submit":
+                selected = self.store.get(HarnessSession, session.id).metadata
+                saved = self.plans.submit(
+                    plan,
+                    PlanSubmission.model_validate(arguments),
+                    available_tools=set(selected.get("planning_tool_names") or []),
+                    native_categories=set(
+                        selected.get("planning_native_categories") or []
+                    ),
+                    workspace=self.workspace_resolver(plan.engagement_id),
+                )
+                value = {
+                    "plan_id": saved.id,
+                    "version": saved.plan_version,
+                    "phase": saved.phase,
+                }
+            elif name in DISCOVERY_TOOL_NAMES:
+                workspace = WorkspaceOutputService(
+                    self.workspace_resolver(plan.engagement_id)
+                )
+                value = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        getattr(workspace, name.split(".")[1]), **arguments
+                    ),
+                    timeout=5,
+                )
+                self.plans.record_discovery(plan, name, value)
+            else:
+                raise PlanningBlocked(
+                    "only Core workspace reads and plan.submit are available during discovery"
+                )
+            return {
+                "content": [{"type": "text", "text": json.dumps(value)}],
+                "structuredContent": value,
+                "isError": False,
+            }
+        if name == "plan.submit" and turn.chat_turn_id is not None:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
+                chat = self.store.get(ChatSession, chat_turn.session_id)
+                plan = self.plans.ensure(chat_turn, chat, voluntary=True)
+                assert plan is not None
+                saved = self.plans.submit(
+                    plan,
+                    PlanSubmission.model_validate(arguments),
+                    available_tools=set(),
+                    native_categories=set(),
+                    workspace=self.workspace_resolver(chat_turn.engagement_id),
+                    strict=False,
+                )
+                value = {
+                    "plan_id": saved.id,
+                    "version": saved.plan_version,
+                    "phase": saved.phase,
+                }
+                return {
+                    "content": [{"type": "text", "text": json.dumps(value)}],
+                    "structuredContent": value,
+                    "isError": False,
+                }
+        if turn.chat_turn_id is not None:
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat = self.store.get(ChatSession, chat_turn.session_id)
+            if self.plans.required(chat_turn, chat):
+                self.plans.ensure(chat_turn, chat)
+                self.plans.guard(chat_turn.id, name)
         settings_only = (
             self.store.get(HarnessSession, session.id).metadata.get("control_assistant")
             is True
@@ -14720,6 +15572,8 @@ class HarnessRuntimeService:
             return await self._gateway_subagent(session, turn, name, arguments)
         if name in _GATEWAY_AGENT_MESSAGE_NAMES:
             return await self._gateway_agent_message(session, turn, name, arguments)
+        if name == "goal.block":
+            return self._gateway_goal_block_call(turn, arguments)
         if name in _GATEWAY_WORK_SCHEMAS:
             return self._gateway_work_call(turn, name, arguments)
 
@@ -15140,6 +15994,76 @@ class HarnessRuntimeService:
                     allow_parent_source_session=True,
                 )
                 result = {"update": update.model_dump(mode="json")}
+        except Exception as exc:
+            self._finish_gateway_call(call.id, error=exc)
+            raise
+        self._finish_gateway_call(call.id, result=result)
+        serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return {
+            "content": [{"type": "text", "text": serialized}],
+            "structuredContent": result,
+            "isError": False,
+        }
+
+    def _gateway_goal_block_call(
+        self, turn: HarnessTurn, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Block only the Core goal that owns this active harness chat turn."""
+
+        from .chat_goals import ChatGoalService, GoalWrite
+
+        if not turn.chat_turn_id or not turn.chat_session_id:
+            raise HarnessConfigurationError("Only a goal chat turn can block its goal")
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.metadata.get("control_assistant") or turn.metadata.get(
+            "analysis_only"
+        ):
+            raise HarnessConfigurationError("This turn cannot block a Core goal")
+        chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+        goals = ChatGoalService(self.store)
+        goal = goals.get(turn.chat_session_id)
+        if (
+            chat_turn.goal_id != goal.id
+            or chat_turn.session_id != turn.chat_session_id
+            or chat_turn.engagement_id != turn.engagement_id
+            or goal.status != ChatGoalStatus.RUNNING
+            or goal.execution_claim_id != chat_turn.id
+        ):
+            raise ConflictError("This turn no longer owns a running Core goal")
+        reason = str(arguments["reason"]).strip()
+        if not reason:
+            raise InvalidToolArguments("A concrete blocker reason is required")
+        call = ToolCall(
+            engagement_id=turn.engagement_id,
+            run_id=chat_turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=turn.chat_session_id,
+            chat_turn_id=chat_turn.id,
+            tool_name="goal.block",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            arguments=arguments,
+            started_at=utc_now(),
+            metadata={"harness_turn_id": turn.id, "budget_class": "goal"},
+        )
+        call = self.store.reserve_tool_call(call)
+        self._attach_gateway_tool_call(turn, call.id)
+        try:
+            goals.write(
+                turn.chat_session_id,
+                GoalWrite(
+                    expected_revision=goal.revision,
+                    action="block",
+                    reason=reason,
+                ),
+            )
+            saved = goals.get(turn.chat_session_id)
+            result = {
+                "goal_id": saved.id,
+                "status": saved.status.value,
+                "blocked_reason": saved.blocked_reason,
+                "revision": saved.revision,
+            }
         except Exception as exc:
             self._finish_gateway_call(call.id, error=exc)
             raise
@@ -15648,6 +16572,11 @@ class HarnessRuntimeService:
                     owner_id=owner_id,
                     **arguments,
                 )
+            elif name == "workspace.find":
+                workspace_service = WorkspaceOutputService(
+                    self.workspace_resolver(turn.engagement_id)
+                )
+                result = await asyncio.to_thread(workspace_service.find, **arguments)
             elif name == "workspace.search":
                 workspace_service = WorkspaceOutputService(
                     self.workspace_resolver(turn.engagement_id)
@@ -16217,21 +17146,52 @@ class HarnessRuntimeService:
                     )
                 }
             )
+        core_planned_gateway = _gateway_only_core_planned_session(session, profile.kind)
+        core_planned_grok = (
+            core_planned_gateway and profile.kind == HarnessKind.GROK_ACP
+        )
         self._ensure_oci_components(session)
 
         async def permission_handler(
             request: HarnessPermissionRequest,
         ) -> PermissionTicket:
-            if analysis_only:
+            if core_planned_grok and request.category == "permission":
+                offered_names = {
+                    f"nebula__{item['name']}" for item in gateway_catalog({})["tools"]
+                }
+                grok_future: asyncio.Future[HarnessPermissionDecision] = (
+                    asyncio.get_running_loop().create_future()
+                )
+                grok_future.set_result(
+                    HarnessPermissionDecision(
+                        allowed=_planned_grok_gateway_permission(
+                            request, offered_names
+                        ),
+                        reason="Core permits only this turn's guarded Nebula gateway",
+                    )
+                )
+                return PermissionTicket(None, None, grok_future)
+            if analysis_only or core_planned_gateway:
                 future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
                 )
+                planner = isinstance(
+                    session.metadata.get("planning_target_turn_id"), str
+                )
                 future.set_result(
                     HarnessPermissionDecision(
-                        allowed=True,
+                        allowed=(
+                            request.category == "mcp"
+                            and request.server_name == "nebula"
+                            if planner or core_planned_gateway
+                            else True
+                        ),
                         reason=(
-                            "Approved within the isolated post-tool analysis session; "
-                            "no execution capabilities are attached"
+                            "Core's restricted planner allows only its discovery gateway"
+                            if planner
+                            else "Core-planned turns use only the guarded Nebula gateway"
+                            if core_planned_gateway
+                            else "Approved within the isolated post-tool analysis session; no execution capabilities are attached"
                         ),
                     )
                 )
@@ -16292,13 +17252,15 @@ class HarnessRuntimeService:
         execution_mode = _session_execution_mode(session)
         isolated_workspace = (
             self.workspace_resolver(session.engagement_id)
-            if execution_mode == "host" and not analysis_only
+            if execution_mode == "host"
+            and not analysis_only
+            and not core_planned_gateway
             else gateway.root / "vendor-workspace"
         )
         if portable_names and not analysis_only:
             # Grok indexes native sessions by cwd. Keep this private directory
             # stable across Core restarts, separately from the ephemeral socket.
-            if execution_mode != "host":
+            if execution_mode != "host" or core_planned_grok:
                 isolated_workspace = (
                     self.artifact_store.root
                     / "harness-workspaces"
@@ -16393,6 +17355,42 @@ class HarnessRuntimeService:
         *,
         adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None,
     ) -> PermissionTicket:
+        turn = self.store.get(HarnessTurn, turn_id)
+        chat_turn_id = turn.chat_turn_id
+        if chat_turn_id is not None:
+            chat_turn = self.store.get(ChatTurn, chat_turn_id)
+            chat = self.store.get(ChatSession, chat_turn.session_id)
+            requires_plan = self.plans.required(chat_turn, chat)
+        else:
+            requires_plan = False
+        if requires_plan:
+            if chat_turn_id is None:
+                raise PlanningBlocked(
+                    "a chat turn is required for the native plan gate"
+                )
+            self.plans.ensure(chat_turn, chat)
+            if request.category == "mcp" and request.server_name == "nebula":
+                pass  # The gateway checks the exact offered name before dispatch.
+            elif request.category == "mcp":
+                raise PlanningBlocked(
+                    "direct harness MCP calls are unavailable under Plan before acting"
+                )
+            else:
+                category = _native_plan_category(
+                    request.tool_name or request.vendor_name
+                )
+                if category is None:
+                    raise PlanningBlocked(
+                        "unmapped native capability is unavailable under Plan before acting"
+                    )
+                plan = self.plans.for_turn(chat_turn_id)
+                if (
+                    category == "isolated_workspace_read"
+                    and plan is not None
+                    and "isolated_workspace_write" in plan.native_categories
+                ):
+                    category = "isolated_workspace_write"
+                self.plans.guard_native(chat_turn_id, category)
         if request.category == "mcp" and request.server_name == "nebula":
             gateway_future: asyncio.Future[HarnessPermissionDecision] = (
                 asyncio.get_running_loop().create_future()
@@ -17578,7 +18576,7 @@ class HarnessRuntimeService:
                     event.type == "usage" and event.reason_code != "rate_limited",
                 )
             if (
-                event.vendor == HarnessKind.CODEX_APP_SERVER
+                event.vendor in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
                 and event.type in {"usage", "completed"}
                 and self._quota_read_observer
             ):

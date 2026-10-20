@@ -5,6 +5,8 @@ import type { ButlerAction, ButlerAuthority, ButlerAuthorityPolicy, ButlerDecisi
 import { acknowledgeButlerIncident, butlerResourceKey, getButlerAuthority, updateButlerAuthority } from "../api/butlerOverview";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useButlerOverview } from "./useButlerOverview";
+import { ButlerIssues } from "./ButlerIssues";
+import { ButlerScheduledTranscript } from "./ButlerScheduledTranscript";
 import styles from "./ButlerOversight.module.css";
 
 function timeLabel(value?: string): string | undefined {
@@ -107,17 +109,20 @@ function ActionRow({ action, projectId, onNavigate }: {
 }) {
   const kind = action.actionType === "request_parent_status" ? "Parent status request" : "Urgent main-goal pause";
   const when = timeLabel(action.finishedAt ?? action.startedAt ?? action.createdAt);
-  return <li className={`${styles.row} ${action.status === "uncertain" ? styles.actionUncertain : ""}`}>
+  return <li className={`${styles.row} ${action.status === "uncertain" || action.status === "held" ? styles.actionUncertain : ""}`}>
     <div className={styles.rowHead}><strong>{action.summary}</strong><span>{action.status.replaceAll("_", " ")}</span></div>
     <small>{kind}{action.verificationState ? ` · ${action.verificationState.replaceAll("_", " ")}` : ""}{when ? ` · ${when}` : ""}</small>
     {action.status === "uncertain" && <p className={styles.actionWarning}>Core cannot confirm whether this action was delivered. Check the parent chat or goal before taking another action.</p>}
+    {action.status === "held" && <p className={styles.actionWarning}>Parent guidance was held because immediate delivery was unavailable. Review the parent chat before sending it manually.</p>}
     <WorkLink projectId={projectId} sessionId={action.targetSessionId ?? action.sourceSessionId} onNavigate={onNavigate} label="Open parent chat" />
   </li>;
 }
 
-function RecoveryRow({ item, projectId, onNavigate }: {
+function RecoveryRow({ item, projectId, onNavigate, api, coreState }: {
   item: ButlerRecoveryCase;
   projectId: string;
+  api?: ApiClient;
+  coreState: "checking" | "online" | "offline";
   onNavigate?(path: string): void;
 }) {
   const status = item.status.replaceAll("_", " ");
@@ -130,6 +135,7 @@ function RecoveryRow({ item, projectId, onNavigate }: {
     {item.steps.length > 0 && <details className={styles.evidence}><summary>Investigation steps · {item.steps.length}</summary>
       <ul>{item.steps.map((step) => <li key={step.id}>{step.operation.replace("nebula.work.", "").replaceAll("_", " ")} · {step.status}</li>)}</ul>
     </details>}
+    {item.trigger === "periodic" && <ButlerScheduledTranscript item={item} api={api} coreState={coreState} onNavigate={onNavigate} />}
     <WorkLink projectId={projectId} sessionId={item.targetSessionId ?? item.sourceSessionId} onNavigate={onNavigate} label="Open parent chat" />
   </li>;
 }
@@ -170,6 +176,7 @@ type AuthorityEditorState = {
   policy?: ButlerAuthorityPolicy;
   draftAuthority: ButlerAuthority;
   pauseUrgentMachineBlocker: boolean;
+  forceOneTaskPlan: boolean;
   loading: boolean;
   saving: boolean;
   error?: string;
@@ -186,6 +193,7 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
 }) {
   const selectId = useId();
   const grantId = useId();
+  const planGrantId = useId();
   const [open, setOpen] = useState(false);
   const [reload, setReload] = useState(0);
   const [editor, setEditor] = useState<AuthorityEditorState>();
@@ -198,14 +206,14 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
   useEffect(() => {
     if (!open || !editable || !api || coreState !== "online") return;
     const controller = new AbortController();
-    setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false, loading: true, saving: false });
+    setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false, forceOneTaskPlan: false, loading: true, saving: false });
     void getButlerAuthority(api, projectId, controller.signal).then((policy) => {
       if (!controller.signal.aborted) setEditor({ projectId, policy, draftAuthority: policy.authority,
-        pauseUrgentMachineBlocker: policy.delegateActions.includes("pause_urgent_machine_blocker"), loading: false, saving: false });
+        pauseUrgentMachineBlocker: policy.delegateActions.includes("pause_urgent_machine_blocker"), forceOneTaskPlan: policy.delegateActions.includes("force_one_task_plan"), loading: false, saving: false });
     }).catch((caught) => {
       if (controller.signal.aborted) return;
       void logCaughtDiagnostic("interface.butler_oversight.authority_load_failed", "Butler authority could not be loaded.", caught, "butler_oversight");
-      setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false,
+      setEditor({ projectId, draftAuthority: "watch", pauseUrgentMachineBlocker: false, forceOneTaskPlan: false,
         loading: false, saving: false, error: caught instanceof Error ? caught.message : "Could not load saved authority." });
     });
     return () => controller.abort();
@@ -215,14 +223,16 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
     if (!api || coreState !== "online" || !current?.policy || current.saving || current.conflict) return;
     const policy = current.policy;
     const authority = current.draftAuthority;
-    const grants = (authority === "delegate" || authority === "act") && current.pauseUrgentMachineBlocker && policy.supportedActions.includes("pause_urgent_machine_blocker")
-      ? ["pause_urgent_machine_blocker" as const] : [];
+    const grants = authority === "delegate" || authority === "act" ? [
+      ...(current.pauseUrgentMachineBlocker && policy.supportedActions.includes("pause_urgent_machine_blocker") ? ["pause_urgent_machine_blocker" as const] : []),
+      ...(current.forceOneTaskPlan && policy.supportedActions.includes("force_one_task_plan") ? ["force_one_task_plan" as const] : []),
+    ] : [];
     setEditor((previous) => previous?.projectId === projectId ? { ...previous, saving: true, error: undefined, saved: false } : previous);
     try {
       const updated = await updateButlerAuthority(api, policy, authority, grants);
       if (!alive.current || updated.projectId !== projectId) return;
       setEditor({ projectId, policy: updated, draftAuthority: updated.authority,
-        pauseUrgentMachineBlocker: updated.delegateActions.includes("pause_urgent_machine_blocker"), loading: false, saving: false, saved: true });
+        pauseUrgentMachineBlocker: updated.delegateActions.includes("pause_urgent_machine_blocker"), forceOneTaskPlan: updated.delegateActions.includes("force_one_task_plan"), loading: false, saving: false, saved: true });
       await onSaved();
     } catch (caught) {
       if (!alive.current) return;
@@ -236,6 +246,7 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
 
   const supportedStatus = current?.policy?.supportedActions.includes("request_parent_status") ?? false;
   const supportedPause = current?.policy?.supportedActions.includes("pause_urgent_machine_blocker") ?? false;
+  const supportedPlanForce = current?.policy?.supportedActions.includes("force_one_task_plan") ?? false;
   const description = current?.draftAuthority === "watch" ? "Watch tracks goal state and reports incidents."
     : current?.draftAuthority === "act" ? "Act investigates project agent problems, uses available controls to repair them, and checks the result. Actions appear in Oversight."
     : current?.draftAuthority === "steer" ? supportedStatus
@@ -246,8 +257,9 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
         : supportedStatus ? "Delegate can request parent status. An urgent pause requires the separate grant below."
           : "No automatic Delegate actions are available in this build.";
   const savedGrant = current?.policy?.delegateActions.includes("pause_urgent_machine_blocker") ?? false;
+  const savedPlanGrant = current?.policy?.delegateActions.includes("force_one_task_plan") ?? false;
   const dirty = current?.policy && (current.draftAuthority !== current.policy.authority
-    || ((current.draftAuthority === "delegate" || current.draftAuthority === "act") && current.pauseUrgentMachineBlocker !== savedGrant));
+    || ((current.draftAuthority === "delegate" || current.draftAuthority === "act") && (current.pauseUrgentMachineBlocker !== savedGrant || current.forceOneTaskPlan !== savedPlanGrant)));
 
   return <details className={styles.disclosure} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>Oversight settings</summary>
@@ -261,12 +273,17 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
             const authority = event.target.value as ButlerAuthority;
             setEditor((previous) => previous?.projectId === projectId ? { ...previous, draftAuthority: authority,
               pauseUrgentMachineBlocker: (authority === "delegate" || authority === "act") && previous.pauseUrgentMachineBlocker, error: undefined, saved: false } : previous);
+            setEditor((previous) => previous?.projectId === projectId ? { ...previous, forceOneTaskPlan: (authority === "delegate" || authority === "act") && previous.forceOneTaskPlan } : previous);
           }}>{levels.map((level) => <option key={level} value={level}>{level[0].toUpperCase() + level.slice(1)}</option>)}</select>
           {!levels.includes(current.policy.authority) && <p className={styles.note}>The saved authority is unavailable in this build. Ask an administrator to review it.</p>}
           <p className={styles.note}>{description}</p>
           {(current.draftAuthority === "delegate" || current.draftAuthority === "act") && supportedPause && <label className={styles.grantLabel} htmlFor={grantId}>
             <input id={grantId} type="checkbox" checked={current.pauseUrgentMachineBlocker} disabled={coreState !== "online" || current.saving || current.conflict} onChange={(event) => setEditor((previous) => previous?.projectId === projectId ? { ...previous, pauseUrgentMachineBlocker: event.target.checked, saved: false } : previous)} />
             <span>Allow urgent pause of a running main goal after a reviewed, agent-reported machine blocker.</span>
+          </label>}
+          {(current.draftAuthority === "delegate" || current.draftAuthority === "act") && supportedPlanForce && <label className={styles.grantLabel} htmlFor={planGrantId}>
+            <input id={planGrantId} type="checkbox" checked={current.forceOneTaskPlan} disabled={coreState !== "online" || current.saving || current.conflict} onChange={(event) => setEditor((previous) => previous?.projectId === projectId ? { ...previous, forceOneTaskPlan: event.target.checked, saved: false } : previous)} />
+            <span>Allow Butler to require one Core plan after a reviewed goal plan change.</span>
           </label>}
           {current.draftAuthority === "delegate" && supportedPause && <p className={styles.note}>The pause is reversible and audited. Butler cannot approve pending requests in Delegate mode.</p>}
           {dirty && <button className="button quiet" type="button" disabled={coreState !== "online" || current.saving || current.conflict || !levels.includes(current.draftAuthority)} onClick={() => void save()}>{current.saving ? "Saving…" : "Save authority"}</button>}
@@ -283,23 +300,29 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
 }
 
 /** Standalone project oversight surface. Core's overview is the sole state authority. */
-export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncidentChanged, compact = false }: {
+export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncidentChanged, compact = false, openRevision = 0 }: {
   api?: ApiClient;
   projectId: string;
   coreState: "checking" | "online" | "offline";
   onNavigate?(path: string): void;
   onIncidentChanged?(): void;
   compact?: boolean;
+  openRevision?: number;
 }) {
   const { overview, loading, loadingMore, error, refresh, loadMore } = useButlerOverview(api, projectId, coreState);
-  const [expanded, setExpanded] = useState(!compact);
+  const [expanded, setExpanded] = useState(!compact || openRevision > 0);
+  useEffect(() => { if (openRevision > 0) setExpanded(true); }, [openRevision]);
   const incidentsAvailable = overview?.capabilities.incidents ?? false;
   const decisionsAvailable = overview?.capabilities.decisions ?? false;
-  const uncertainActions = overview?.actions.filter((action) => action.status === "uncertain") ?? [];
+  const uncertainActions = overview?.actions.filter((action) => action.status === "uncertain" || action.status === "held") ?? [];
   const recoveryAttention = overview?.recoveryCases.filter((item) => item.status === "needs_attention" || item.status === "uncertain") ?? [];
   const recoveryActive = overview?.recoveryCases.filter((item) => ["observed", "investigating", "verifying"].includes(item.status)) ?? [];
   const recoverySettled = overview?.recoveryCases.filter((item) => !recoveryAttention.includes(item) && !recoveryActive.includes(item)) ?? [];
-  const otherActions = overview?.actions.filter((action) => action.status !== "uncertain") ?? [];
+  const scheduled = overview?.recoveryCases.filter((item) => item.trigger === "periodic") ?? [];
+  const immediateAttention = recoveryAttention.filter((item) => item.trigger === "immediate");
+  const immediateActive = recoveryActive.filter((item) => item.trigger === "immediate");
+  const immediateSettled = recoverySettled.filter((item) => item.trigger === "immediate");
+  const otherActions = overview?.actions.filter((action) => action.status !== "uncertain" && action.status !== "held") ?? [];
   const shownActions = [...uncertainActions, ...otherActions.slice(0, 3)];
   const olderActions = otherActions.slice(3);
   const canAcknowledge = !!api && coreState === "online";
@@ -345,7 +368,7 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
       {ackError?.projectId === projectId && <p role="alert" className={styles.error}>Could not acknowledge incident. {ackError.message}</p>}
       {openIncident && <ul className={styles.list} aria-label="Open Butler incidents"><IncidentRow incident={openIncident} goals={overview?.watchedGoals ?? []} projectId={projectId} onNavigate={onNavigate} onAcknowledge={(incident) => void acknowledge(incident)} acknowledging={acknowledging?.projectId === projectId && acknowledging.incidentId === openIncident.id} canAcknowledge={canAcknowledge} compact /></ul>}
       {uncertainActions.length > 0 && <ul className={styles.list} aria-label="Uncertain Butler actions"><ActionRow action={uncertainActions[0]} projectId={projectId} onNavigate={onNavigate} /></ul>}
-      {recoveryAttention.length > 0 && <ul className={styles.list} aria-label="Butler recovery needing attention"><RecoveryRow item={recoveryAttention[0]} projectId={projectId} onNavigate={onNavigate} /></ul>}
+      {recoveryAttention.length > 0 && <ul className={styles.list} aria-label="Butler recovery needing attention"><RecoveryRow item={recoveryAttention[0]} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} /></ul>}
       {openCount > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {openCount} open incidents</button>}
       {uncertainActions.length > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {uncertainActions.length} uncertain actions</button>}
       {recoveryAttention.length > 1 && <button className={styles.moreIncidents} type="button" onClick={() => setExpanded(true)}>View all {recoveryAttention.length} recovery cases needing attention</button>}
@@ -365,15 +388,32 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
     {coreState !== "online" && <p role="status" className={styles.note}>Core is offline. {overview ? "Showing the last overview from this project." : "Reconnect to see watched work."}</p>}
     {error && <div className={styles.error} role="alert"><span>Oversight could not be refreshed. {error}</span><button className="button quiet" type="button" disabled={coreState !== "online"} onClick={() => void refresh()}>Retry</button></div>}
     {overview && <>
-      {overview.capabilities.recovery && (overview.authority === "act" || overview.summary.recoveryCases > 0) && <div className={styles.section} role="region" aria-label="Butler recovery">
-        <h3>Autonomous recovery <span>{overview.summary.recoveryActive} active · {overview.summary.recoveryAttention} need attention</span></h3>
-        {recoveryAttention.length + recoveryActive.length > 0 ? <ul className={styles.list}>
-          {[...recoveryAttention, ...recoveryActive].map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} />)}
-        </ul> : <p className={styles.note}>No recovery cases need attention.</p>}
-        {recoverySettled.length > 0 && <details className={styles.disclosure}><summary>Past checks <span>{recoverySettled.length}</span></summary>
-          <ul className={styles.list}>{recoverySettled.map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} />)}</ul>
+      {overview.globalInstructions && <details className={styles.disclosure}>
+        <summary>Nebula-wide Butler <span>{overview.globalInstructions.status === "ready" ? "Ready" : overview.globalInstructions.status === "missing" ? "No file" : overview.globalInstructions.status === "needs_act_host" ? "Needs Act" : overview.globalInstructions.status === "invalid" ? "Invalid file" : "Unavailable"}</span></summary>
+        <p className={styles.note}>Butler checks once every 15 minutes, including idle projects, and chooses where to work. Changes require Act authority in the target project.</p>
+        {overview.globalInstructions.path && <p className={styles.note}>Add your own instructions at <code>{overview.globalInstructions.path}</code>. Nebula does not create this file.</p>}
+        {overview.globalInstructions.status === "needs_act_host" && <p className={styles.note}>Set one project to Act and configure its Butler chat to host the scheduled run.</p>}
+        {overview.globalInstructions.detail && <p role="alert" className={styles.error}>{overview.globalInstructions.detail}</p>}
+        {overview.globalInstructions.lastCheckAt && <p className={styles.note}>Last check: <time dateTime={overview.globalInstructions.lastCheckAt}>{new Date(overview.globalInstructions.lastCheckAt).toLocaleString()}</time></p>}
+        {overview.globalInstructions.nextCheckAt && <p className={styles.note}>Next due: <time dateTime={overview.globalInstructions.nextCheckAt}>{new Date(overview.globalInstructions.nextCheckAt).toLocaleString()}</time></p>}
+      </details>}
+      {overview.capabilities.recovery && (overview.globalInstructions || scheduled.length > 0) && <div className={styles.section} role="region" aria-label="Butler scheduled activity">
+        <h3>Scheduled activity <span>{scheduled.length} saved check{scheduled.length === 1 ? "" : "s"}</span></h3>
+        {scheduled.length > 0 ? <ul className={styles.list}><RecoveryRow item={scheduled[0]} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} /></ul>
+          : <p className={styles.note}>No scheduled checks saved in this project yet.</p>}
+        {scheduled.length > 1 && <details className={styles.disclosure}><summary>Earlier checks <span>{scheduled.length - 1}</span></summary>
+          <ul className={styles.list}>{scheduled.slice(1).map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} />)}</ul>
         </details>}
         {overview.nextRecoveryOffset !== undefined && <button className="button quiet" type="button" disabled={loadingMore !== undefined || coreState !== "online"} onClick={() => void loadMore("recovery")}>{loadingMore === "recovery" ? "Loading…" : "Show more checks"}</button>}
+      </div>}
+      {overview.capabilities.recovery && (overview.authority === "act" || immediateAttention.length + immediateActive.length + immediateSettled.length > 0) && <div className={styles.section} role="region" aria-label="Butler recovery">
+        <h3>Autonomous recovery <span>{immediateActive.length} active · {immediateAttention.length} need attention</span></h3>
+        {immediateAttention.length + immediateActive.length > 0 ? <ul className={styles.list}>
+          {[...immediateAttention, ...immediateActive].map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} />)}
+        </ul> : <p className={styles.note}>No recovery cases need attention.</p>}
+        {immediateSettled.length > 0 && <details className={styles.disclosure}><summary>Past checks <span>{immediateSettled.length}</span></summary>
+          <ul className={styles.list}>{immediateSettled.map((item) => <RecoveryRow key={item.id} item={item} projectId={projectId} onNavigate={onNavigate} api={api} coreState={coreState} />)}</ul>
+        </details>}
       </div>}
       {incidentsAvailable ? <div className={styles.section} aria-label="Butler incidents">
         <h3>Needs attention <span>{overview.summary.openIncidents} open · {overview.summary.acknowledgedIncidents} acknowledged</span></h3>
@@ -415,6 +455,7 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
       </div>}
 
       <AuthorityEditor api={api} projectId={projectId} coreState={coreState} overview={overview} onSaved={refresh} />
+      <ButlerIssues api={api} projectId={projectId} online={coreState === "online"} />
     </>}
   </section>;
 }

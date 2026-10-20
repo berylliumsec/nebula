@@ -180,11 +180,6 @@ class ExecutionPreflightResponse(NebulaModel):
     expires_at: datetime | None = None
 
 
-class ExecutionEventList(NebulaModel):
-    events: list[Any]
-    next_sequence: int
-
-
 class ExecutionService:
     def __init__(
         self,

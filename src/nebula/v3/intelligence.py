@@ -35,10 +35,6 @@ from .domain import (
 from .storage import NebulaStore
 
 
-class IntelligenceError(RuntimeError):
-    pass
-
-
 class VersionRange(BaseModel):
     scheme: str | None = None
     introduced: str | None = None

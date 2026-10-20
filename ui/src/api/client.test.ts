@@ -2509,7 +2509,7 @@ describe("ApiClient", () => {
     expect(missionBody).not.toHaveProperty("provider_id");
   });
 
-  it("includes Grok ACP while omitting legacy Claude profiles from the provided harnesses", async () => {
+  it("includes configured Claude and Grok harness profiles", async () => {
     const entity = { created_at: "2026-07-14T10:00:00Z", updated_at: "2026-07-14T10:00:00Z", revision: 1 };
     const profile = {
       ...entity,
@@ -2526,7 +2526,10 @@ describe("ApiClient", () => {
     ]), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
-    await expect(client.listHarnesses()).resolves.toMatchObject([{ id: "grok-1", kind: "grok_acp", models: ["grok-build"] }]);
+    await expect(client.listHarnesses()).resolves.toMatchObject([
+      { id: "legacy-claude", kind: "claude_agent_sdk", models: ["sonnet"] },
+      { id: "grok-1", kind: "grok_acp", models: ["grok-build"] },
+    ]);
   });
 
   it("assembles every paginated terminal result byte and acknowledges raw access", async () => {

@@ -34,14 +34,19 @@ Settings assistant and the complete destination catalog.
 | Start the headless security browser | An explicit start request asks Core to establish the selected project's session and reports the observed status or startup error | Core agent-security session | API, browser, real Core and LAN |
 | Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
 | Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
+| Manage Nebula-wide Butler instructions | The catalog opens Automation → Butler instructions. The file row opens Nebula's Markdown editor with edit and rendered preview; upload opens a draft there. The API checks the loaded digest before saving and the UI reads Core back before confirming | Core data directory and durable Butler global clock | Tool unit, component and real Core browser |
+| Set Butler model and effort | The catalog opens Butler settings. Core saves the selected effort on Butler's chat; the next direct turn and each new scheduled harness check use that saved choice. An unset effort uses the model's advertised default | Core Assistant settings and harness session | Core unit, component and real Core |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
-| Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets | Core sessions, turns, queues and runs | Tool unit and real Core |
+| Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets. In Workbench conversations, chats Butler creates appear below Butler; older recovery chats use their linked Core goal as ownership evidence. Search reveals matching children, and a selected child remains open after reload | Core sessions, goal metadata, turns, queues and runs; URL for selection | Tool unit, component, browser and real Core |
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
+| Ask for a task plan | The chat's Assistant settings asks any provider or harness agent to share a plan on future turns, or Butler records one exact one-task request with the target revision and reason. Normal tools remain available, and the activity view shows whether a plan was shared | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
+| Hand off a previously planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source; the new planning preference is advisory | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
 
-The setting catalog lists every Settings section and Butler's Voice control. Dedicated actions handle
+The setting catalog lists every Settings section, Butler's Voice control, and
+the Nebula-wide Butler instruction editor. Dedicated actions handle
 device appearance, provider and harness default models, post-tool preferences,
 project execution mode, target scope and headless browser sessions. For other
 Core-backed settings, `nebula.settings.api_schema` lists only the current build's
@@ -97,6 +102,35 @@ The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
 `nebula.work.stop_mission`. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
+`nebula.work.chat_settings` and `nebula.work.set_chat_settings` expose the saved
+`planning_enabled` switch with revision checks and read-back. The switch lives
+in each conversation's Assistant settings. Provider, Codex, and Grok agents
+receive an advisory planning request and can share structured steps with
+`plan.submit` while their normal tools remain available. A missing plan never
+blocks the turn. When a plan is shared, Core includes it in a delegated
+subagent's task context; a harness-reported native plan is a fallback. Child
+agents inherit the planning preference and may share their own plan.
+Butler can save a different main harness and provider subagent on the same chat.
+The saved choice becomes the bound runtime when a new message starts; Butler
+checks the resulting turn before reporting a goal resumed. Immediate messages
+carry the same saved MCP servers and Plan choice as queued next messages.
+`nebula.work.require_plan` records a one-task request against an exact
+agent, goal, child, or turn, using a fresh target revision and concrete reason.
+An active harness turn reports that the directive takes effect next turn. The
+saved plan and Butler reason remain visible in the chat activity after refresh.
+Butler's automatic one-task force requires the project's delegated action grant,
+current Core evidence, and a recorded reason.
+`nebula.work.handoff_goal` creates one provider draft only for a paused harness
+goal whose latest planning attempt stopped before admission with no tool calls.
+The source retains its queue and remains paused. Core checks pending approvals,
+selected provider model/tool verification, MCP selection, privacy scope, and
+remaining budgets before linking the goals atomically. A repeated request reads
+back the same continuation. Butler starts it through a separate goal action;
+the source and target link and reason appear in both goal panels after refresh.
+The handoff carries neither approval nor queue authority. For a scheduled check,
+`nebula.global.handoff_goal` performs the same checked create and can start the
+new draft under an Act grant. When handoff is unavailable, Butler reports the
+hold and can select another eligible project.
 `nebula.work.timeline` accepts a listed conversation ID or an Assistant title and
 a bounded number of hours. Ambiguous titles return selectable conversations. The
 read-only result pages saved messages, provider tool steps, selected harness
@@ -140,6 +174,81 @@ help scope does not grant filesystem commands, arbitrary MCP servers, web
 search, or permission to use settings tools from general chat. General chat
 still does not receive Nebula settings tools. When its answer cites a known
 Settings destination, the UI opens that destination as a lens on click.
+
+## Core goal troubleshooting
+
+For a Core-owned goal in a harness chat, the active agent can call `goal.block`
+with a concrete reason. Core saves the blocked goal and stops automatic
+continuations; the goal panel shows the reason and lets the operator resume.
+Blocking a Project Work item or a native harness goal does not block the Core
+goal. Core pauses a goal for review after three automatic responses with no
+recorded tool activity, so a status-only loop cannot continue indefinitely.
+The agent's block action is scoped to the goal on its active turn and cannot
+choose another conversation's goal.
+
+## Nebula-wide Butler instructions
+
+An operator may create one `.butler/BUTLER.md` under Core's data directory
+(`--data-dir` or `NEBULA_V3_DATA_DIR`) through Settings → Automation → Butler
+instructions, or by placing a file on the Core host. Nebula does not bundle a
+default file. The authenticated `GET` and `PUT /api/v1/butler/instructions`
+endpoints expose the saved text and support digest-checked updates. Settings
+accepts a UTF-8 Markdown upload or direct edits and confirms the saved version
+through a fresh Core read. Its path and read state also appear in Butler
+Oversight. Core reads a regular,
+UTF-8 file without following symlinks, limits it to 32 KiB, and reads it again
+for every scheduled run. An edit or removal during a run stops later writes
+from that run; a new file version is considered at the next check.
+
+When the file exists, Core records one Nebula-wide periodic check at least
+15 minutes after the preceding check. It can run with no running goals. A
+configured Butler chat in an Act project hosts the run. Butler reads the live
+Act-project roster and chooses where to work. Core still enforces each target
+project's Act revision and privacy boundary for reads and writes. The bounded
+scheduled harness run uses the model and reasoning effort saved in that Butler
+chat's settings. Changing the effort applies to new runs and the next direct
+message; an already running turn keeps its selected effort. Global actions
+can resume a paused project or main goal, create and start a
+main goal, create one linked recovery goal for a paused or blocked main goal,
+hand off a planning-blocked harness goal to one linked provider goal,
+or create a managed child project under an Act parent. A child may
+receive an initial goal as part of its creation; it otherwise starts with the
+normal Watch authority. Goal and child-project creation check existing work
+before writing. The model cannot grant Act to another project, expand scope,
+or treat a pending approval or uncertain write as permission to retry.
+
+Butler Oversight displays the durable scheduled-check transcript as a compact
+section. Expanding a check reads every saved harness attempt and its paged event stream
+from Core; it survives refresh and reconnect. A Codex `serverOverloaded` failure
+can retry the same case once after Core confirms no change was attempted; the failed
+attempt remains visible beside the retry. Quota exhaustion does not trigger this retry.
+The check's linked recovery goals
+show their current Core status and report in that same section. For recovery
+work Butler records the main agent's plan, then creates a linked Codex goal
+using an advertised `gpt-6-sol` route with `max` effort and Daybreak Blue.
+The main agent passes its shared plan to subagents; subagents can also share
+their own plan without a tool gate. Butler can query Codex or Grok's reported
+included quota and credit balance through the profile-scoped `nebula.work.harness_quota`
+and `nebula.global.harness_quota` read tools. The Usage view shows both balances
+even when the included window is exhausted. Codex credits and Grok prepaid credits
+are vendor units; a positive balance is separate from included usage and does not
+guarantee admission if a vendor denial or spending limit applies. Grok's included-credit period may be
+shared with other Grok products; missing vendor values remain unknown.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover | Butler Oversight shows the path, file state, and last scheduled check | Core data directory and global clock | Component, real Core and browser |
+| Schedule | Exactly one global check is recorded after 15 minutes even if all goals are idle | Core global state and event stream | Core unit and real Core |
+| Choose | Butler can inspect all eligible Act projects before selecting work | Core project and authority records | Tool unit and real Core |
+| Set effort | Saving an advertised effort in Butler settings is reflected in the next direct turn and scheduled harness session | Core chat settings and harness runtime options | Core unit, component and real Core |
+| Review transcript | Opening a saved check shows every attempt, paged activity, and linked recovery-goal reports after refresh or reconnect | Core case, harness turns, event streams, and goal records | Core unit, component and real Core browser |
+| Read quota | An agent can query a configured Codex or Grok profile for vendor-reported remaining percentage and separate credits; missing values stay unknown | Harness vendor read and Core quota observation | Core unit and real Core |
+| Retry server load | One failed scheduled analysis retries in the same case only after the exact vendor load code and absence of write attempts are verified | Core case and harness event ledger | Core unit, component and real Core browser |
+| Act | A stale Act revision, removed file, local-only boundary, or stale goal revision prevents a write | Core policy, instruction digest and goal records | Core unit and real Core |
+| Reconnect | The clock and action receipts survive Core restart without duplicating a project or goal | Core database and recovery cases | Core unit and real Core |
+
+## Bundled product guidance
+
 The product knowledge index is generated from current top-level product
 documentation, the Settings catalog, and this contract, chunked by headings with source paths and
 content hashes, embedded locally, and packaged as a compressed text resource
@@ -152,6 +261,12 @@ startup, Core mirrors the bundled passages and their precomputed vectors into
 the local Chroma product-help collection. The source digest and passage count
 determine whether the mirror needs replacement; product help remains searchable
 from the bundled index if Chroma is unavailable.
+For MCP cost questions, the assistant explains that unticked, on-demand servers
+contribute a compact name-and-purpose directory to each provider routing request,
+while checked servers and tools pinned under Project policy contribute full
+function schemas each time. It points to Assistant settings for checked servers
+and Project policy for Always loaded tools; unchecking a global server keeps it
+available through the on-demand catalog.
 Provider turns request low effort; Core's provider adapter maps or omits that
 control for the selected model. Harness model options determine low effort and
 fast selection. An existing harness conversation may rebind to its advertised

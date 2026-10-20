@@ -2,7 +2,7 @@ import type { ApiClient } from "./client";
 
 export type ButlerAuthority = "watch" | "steer" | "delegate" | "act";
 export type ButlerActorRole = "main_agent" | "subagent";
-export type ButlerDelegateAction = "pause_urgent_machine_blocker";
+export type ButlerDelegateAction = "pause_urgent_machine_blocker" | "force_one_task_plan";
 
 export interface ButlerAuthorityPolicy {
   projectId: string;
@@ -69,7 +69,7 @@ export interface ButlerDecision {
 export interface ButlerAction {
   id: string;
   actionType: "request_parent_status" | "pause_urgent_machine_blocker";
-  status: "planned" | "dispatching" | "dispatched" | "applied" | "uncertain" | "cancelled";
+  status: "planned" | "dispatching" | "dispatched" | "applied" | "held" | "uncertain" | "cancelled";
   summary: string;
   goalId?: string;
   sourceSessionId?: string;
@@ -89,9 +89,25 @@ export interface ButlerRecoveryCase {
   outcome: string;
   sourceSessionId?: string;
   targetSessionId?: string;
+  modelBackend?: "provider" | "harness";
+  modelTurnId?: string;
+  modelTurnIds?: string[];
+  recoveryGoals: ButlerRecoveryGoal[];
   createdAt?: string;
   finishedAt?: string;
   steps: Array<{ id: string; operation: string; status: string; started_at?: string; finished_at?: string }>;
+}
+
+export interface ButlerRecoveryGoal {
+  id: string;
+  projectId: string;
+  sessionId: string;
+  sourceGoalId?: string;
+  objective: string;
+  status: string;
+  currentStep: number;
+  updatedAt: string;
+  report: string;
 }
 
 export interface ButlerOpenRouterResource {
@@ -126,6 +142,14 @@ export function butlerResourceKey(resource: ButlerResource): string {
 
 export interface ButlerOverview {
   projectId: string;
+  globalInstructions?: {
+    status: "ready" | "missing" | "invalid" | "needs_act_host" | "unavailable";
+    path?: string;
+    detail?: string;
+    hostProjectId?: string;
+    lastCheckAt?: string;
+    nextCheckAt?: string;
+  };
   authority: ButlerAuthority;
   authorityRevision?: number;
   delegateActions: ButlerDelegateAction[];
@@ -159,6 +183,14 @@ export interface ButlerOverview {
 
 interface WireButlerOverview {
   project_id: string;
+  global_instructions?: {
+    status: "ready" | "missing" | "invalid" | "needs_act_host" | "unavailable";
+    path?: string | null;
+    detail?: string | null;
+    host_project_id?: string | null;
+    last_check_at?: string | null;
+    next_check_at?: string | null;
+  };
   authority: ButlerAuthority;
   authority_revision?: number | null;
   delegate_actions?: ButlerDelegateAction[];
@@ -230,6 +262,20 @@ interface WireButlerOverview {
     outcome: string;
     source_session_id?: string | null;
     target_session_id?: string | null;
+    model_backend?: "provider" | "harness" | null;
+    model_turn_id?: string | null;
+    model_turn_ids?: string[];
+    recovery_goals?: Array<{
+      id: string;
+      project_id: string;
+      session_id: string;
+      source_goal_id?: string | null;
+      objective: string;
+      status: string;
+      current_step: number;
+      updated_at: string;
+      report: string;
+    }>;
     created_at?: string | null;
     finished_at?: string | null;
     steps?: ButlerRecoveryCase["steps"];
@@ -294,6 +340,14 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
   }
   return {
     projectId,
+    globalInstructions: wire.global_instructions ? {
+      status: wire.global_instructions.status,
+      path: wire.global_instructions.path ?? undefined,
+      detail: wire.global_instructions.detail ?? undefined,
+      hostProjectId: wire.global_instructions.host_project_id ?? undefined,
+      lastCheckAt: wire.global_instructions.last_check_at ?? undefined,
+      nextCheckAt: wire.global_instructions.next_check_at ?? undefined,
+    } : undefined,
     authority: wire.authority,
     authorityRevision: wire.authority_revision ?? undefined,
     delegateActions: wire.delegate_actions ?? [],
@@ -368,6 +422,20 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       outcome: item.outcome,
       sourceSessionId: item.source_session_id ?? undefined,
       targetSessionId: item.target_session_id ?? undefined,
+      modelBackend: item.model_backend ?? undefined,
+      modelTurnId: item.model_turn_id ?? undefined,
+      modelTurnIds: item.model_turn_ids?.length ? item.model_turn_ids : item.model_turn_id ? [item.model_turn_id] : [],
+      recoveryGoals: (item.recovery_goals ?? []).map((goal) => ({
+        id: goal.id,
+        projectId: goal.project_id,
+        sessionId: goal.session_id,
+        sourceGoalId: goal.source_goal_id ?? undefined,
+        objective: goal.objective,
+        status: goal.status,
+        currentStep: goal.current_step,
+        updatedAt: goal.updated_at,
+        report: goal.report,
+      })),
       createdAt: item.created_at ?? undefined,
       finishedAt: item.finished_at ?? undefined,
       steps: item.steps ?? [],

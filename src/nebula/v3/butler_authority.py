@@ -27,6 +27,7 @@ from .domain import (
     ButlerDecision,
     ButlerProjectState,
     ChatGoal,
+    ChatPlanDirective,
     ChatGoalStatus,
     ChatSession,
     ChatTurn,
@@ -49,11 +50,12 @@ if TYPE_CHECKING:
 
 
 Authority = Literal["watch", "steer", "delegate", "act"]
-DelegateAction = Literal["pause_urgent_machine_blocker"]
+DelegateAction = Literal["pause_urgent_machine_blocker", "force_one_task_plan"]
 SUPPORTED_ACTIONS = (
     "request_parent_status",
     "request_parent_plan_reassessment",
     "pause_urgent_machine_blocker",
+    "force_one_task_plan",
     "investigate_and_repair",
 )
 
@@ -68,9 +70,13 @@ def action_id(decision_id: str, kind: str) -> str:
     )
 
 
+def plan_directive_id(action_key: str) -> str:
+    return "butler-plan-directive:" + action_key.removeprefix("butler-action:")
+
+
 class AuthorityWrite(NebulaModel):
     authority: Authority
-    delegate_actions: list[DelegateAction] = Field(default_factory=list, max_length=1)
+    delegate_actions: list[DelegateAction] = Field(default_factory=list, max_length=2)
     expected_revision: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -308,6 +314,7 @@ class ButlerAuthorityService:
                 "request_parent_status",
                 "request_parent_plan_reassessment",
                 "pause_urgent_machine_blocker",
+                "force_one_task_plan",
             ]
             | None
         ) = None
@@ -332,7 +339,13 @@ class ButlerAuthorityService:
                 for ref in decision.evidence_refs
             )
         ):
-            kind = "request_parent_plan_reassessment"
+            kind = (
+                "force_one_task_plan"
+                if policy is not None
+                and policy.authority in {"delegate", "act"}
+                and "force_one_task_plan" in policy.delegate_actions
+                else "request_parent_plan_reassessment"
+            )
         elif (
             event.event_type == "goal.read_only_tool_failures_repeated"
             and decision.choice == "steer"
@@ -399,6 +412,8 @@ class ButlerAuthorityService:
                     if event.event_type == "goal.read_only_tool_failures_repeated"
                     else "Ask the parent main agent to reassess the changed goal plan."
                     if kind == "request_parent_plan_reassessment"
+                    else "Ask the changed goal to share one task plan."
+                    if kind == "force_one_task_plan"
                     else "Pause the main goal after an urgent agent-reported machine blocker."
                 )
             ),
@@ -544,6 +559,30 @@ class ButlerAuthorityService:
                 now=utc_now(),
             )
 
+    def _hold(self, action: ButlerAction, reason: str) -> None:
+        with self.store.transaction(immediate=True) as transaction:
+            current = _entity(transaction, ButlerAction, action.id)
+            if current is None or current.status != "planned":
+                return
+            updated = transaction.update(
+                ButlerAction,
+                current.id,
+                {
+                    "status": "held",
+                    "outcome": {"reason": reason, "delivered": False},
+                    "finished_at": utc_now(),
+                },
+                expected_revision=current.revision,
+            )
+            _append_project_event(
+                transaction,
+                engagement_id=updated.engagement_id,
+                event_type="butler.action_held",
+                payload=self._action_event_payload(updated, "held"),
+                idempotency_key=f"action:{updated.id}:held",
+                now=utc_now(),
+            )
+
     def _defer_for_memory(self, action: ButlerAction) -> None:
         """Keep a known-undelivered action retryable while memory is unavailable."""
 
@@ -651,6 +690,24 @@ class ButlerAuthorityService:
             )
 
     def _reconcile(self, action: ButlerAction) -> None:
+        if action.action_type == "force_one_task_plan":
+            try:
+                directive = self.store.get(
+                    ChatPlanDirective, plan_directive_id(action.idempotency_key)
+                )
+            except NotFoundError:
+                # diagnostic-expected: a missing dispatch receipt is persisted as uncertain.
+                self._finish(action, "uncertain", {"reason": "dispatch_interrupted"})
+            else:
+                if directive.engagement_id == action.engagement_id:
+                    self._finish(
+                        action,
+                        "applied",
+                        {"directive_id": directive.id, "status": directive.status},
+                    )
+                else:
+                    self._finish(action, "uncertain", {"reason": "directive_mismatch"})
+            return
         if action.action_type in {
             "request_parent_status",
             "request_parent_plan_reassessment",
@@ -723,12 +780,14 @@ class ButlerAuthorityService:
             "request_parent_plan_reassessment",
         }:
             if not target:
-                self._cancel(action, "main_agent_unavailable")
+                self._hold(action, "main_agent_unavailable")
                 return
             target_detail = self.work.chat_detail(action.engagement_id, target)
             if target_detail.get("kind") != "main":
-                self._cancel(action, "main_agent_unavailable")
+                self._hold(action, "main_agent_unavailable")
                 return
+        elif action.action_type == "force_one_task_plan":
+            target = goal.session_id
         else:
             if detail.get("kind") != "main" or goal.parent_goal_id:
                 self._cancel(action, "main_goal_required")
@@ -766,7 +825,27 @@ class ButlerAuthorityService:
                 expected_revision=current.revision,
             )
         try:
-            if action.action_type in {
+            if action.action_type == "force_one_task_plan":
+                receipt = self.work.require_plan(
+                    action.engagement_id,
+                    {
+                        "session_id": goal.session_id,
+                        "target_kind": "goal",
+                        "target_id": goal.id,
+                        "expected_revision": goal.revision,
+                        "reason": decision.why_now,
+                        "_directive_id": plan_directive_id(action.idempotency_key),
+                    },
+                )
+                directive = self.store.get(
+                    ChatPlanDirective, receipt["directive"]["id"]
+                )
+                self._finish(
+                    action,
+                    "applied",
+                    {"directive_id": directive.id, "status": directive.status},
+                )
+            elif action.action_type in {
                 "request_parent_status",
                 "request_parent_plan_reassessment",
             }:
@@ -803,15 +882,26 @@ class ButlerAuthorityService:
                             "next step and checkpoint to Core. Route any child guidance through "
                             "the parent main agent and keep existing approval boundaries."
                         )
-                await self.work.message_chat(
+                receipt = await self.work.message_chat(
                     action.engagement_id,
-                    {"session_id": target, "text": text, "delivery": "next"},
+                    {"session_id": target, "text": text, "delivery": "immediate"},
                     idempotency_key=action.idempotency_key,
                 )
-                item = self._queue_item(action)
-                if item is None:
-                    raise ConflictError("queued Butler request is not visible")
-                self._finish(action, "dispatched", {"queue_item_id": item["id"]})
+                if receipt["delivery"] == "held":
+                    self._finish(
+                        action,
+                        "held",
+                        {"reason": receipt["reason"], "delivered": False},
+                    )
+                else:
+                    self._finish(
+                        action,
+                        "dispatched",
+                        {
+                            "turn_id": receipt["turn_id"],
+                            "delivery": receipt["delivery"],
+                        },
+                    )
             else:
                 await self.work.goal_action(
                     action.engagement_id,

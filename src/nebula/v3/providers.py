@@ -2620,12 +2620,6 @@ def _openai_message_reasoning(message: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _openai_message_text(message: dict[str, Any]) -> str:
-    """Reply text for OpenAI-compatible messages. Thoughts stay separate."""
-
-    return _openai_message_content(message)
-
-
 def _reasoning_state(
     provider_id: str,
     model: str,

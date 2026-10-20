@@ -9,20 +9,27 @@
     "native": 0,
     "playwright": 71
   },
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false,
   "python": [
-    "tests/v3/test_voice.py",
-    "tests/v3/test_settings_assistant_api.py::test_settings_api_discovers_existing_routes_and_rejects_other_core_workflows",
-    "tests/v3/test_settings_assistant_api.py::test_settings_api_discovers_and_reads_back_core_wide_voice_timeout",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
-    "tests/v3/test_settings_assistant_tools.py::test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them",
+    "tests/v3/test_chat_planning.py",
+    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
+    "tests/v3/test_control_assistant_work.py::test_immediate_guidance_steers_active_harness_and_holds_active_provider",
+    "tests/v3/test_control_assistant_work.py::test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue",
+    "tests/v3/test_control_assistant_work.py::test_selected_harness_chat_can_be_steered_and_stopped",
+    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
     "tests/test_playwright_impact.py"
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [
-    "ui/src/components/NebulaVoice.test.tsx",
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts"
+    "ui/src/components/AssistantSetupLinks.test.tsx",
+    "ui/src/api/chatPlanning.test.ts"
   ],
   "native": [],
   "playwright": [
@@ -49,5 +56,17 @@
   "python_node": true,
   "python_versions": [
     "3.12"
+    "chat-planning/assistant-real-desktop",
+    "chat-planning/assistant-real-compact",
+    "chat-planning/assistant-real-chromium-320",
+    "chat-planning/assistant-real-chromium-390",
+    "chat-planning/assistant-real-chromium-430",
+    "chat-planning/assistant-real-webkit-320",
+    "chat-planning/assistant-real-webkit-390",
+    "chat-planning/assistant-real-webkit-430",
+    "goal-handoff/assistant-real-desktop",
+    "control-assistant-work/assistant-real-desktop",
+    "control-assistant-work/assistant-real-chromium-390",
+    "control-assistant-work/assistant-real-webkit-390"
   ]
 }

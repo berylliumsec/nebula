@@ -90,6 +90,7 @@ from .domain import (
     utc_now,
 )
 from .providers import REASONING_EFFORTS, ReasoningEffort
+from .model_pricing import combined_billed_cost
 from .runtime_platform import RuntimeToolComponents
 from .native_hooks import discover_native_hooks
 from .mcp import catalog_mcp_profiles, mcp_tool_runtime_name, usable_mcp_tools
@@ -872,16 +873,40 @@ def _add_usage(first: ChatTokenUsage, second: ChatTokenUsage) -> ChatTokenUsage:
         input_tokens=first.input_tokens + second.input_tokens,
         output_tokens=first.output_tokens + second.output_tokens,
         total_tokens=first.total_tokens + second.total_tokens,
+        cached_input_tokens=first.cached_input_tokens + second.cached_input_tokens,
+        cache_creation_input_tokens=first.cache_creation_input_tokens
+        + second.cache_creation_input_tokens,
+        cost_usd=combined_billed_cost(first, second),
     )
 
 
 def _subtract_usage(first: ChatTokenUsage, second: ChatTokenUsage) -> ChatTokenUsage:
     """Remove one prematurely settled turn debit without going below zero."""
 
+    if first == second:
+        return ChatTokenUsage()
     return ChatTokenUsage(
         input_tokens=max(0, first.input_tokens - second.input_tokens),
         output_tokens=max(0, first.output_tokens - second.output_tokens),
         total_tokens=max(0, first.total_tokens - second.total_tokens),
+        cached_input_tokens=max(
+            0, first.cached_input_tokens - second.cached_input_tokens
+        ),
+        cache_creation_input_tokens=max(
+            0,
+            first.cache_creation_input_tokens - second.cache_creation_input_tokens,
+        ),
+        cost_usd=(
+            round(max(0.0, first.cost_usd - (second.cost_usd or 0.0)), 12)
+            if first.cost_usd is not None
+            and (
+                second.cost_usd is not None
+                or not (
+                    second.input_tokens or second.output_tokens or second.total_tokens
+                )
+            )
+            else None
+        ),
     )
 
 
@@ -1555,17 +1580,6 @@ class SubagentService:
                 details[f"{key}_total"] = len(found)
         return details
 
-    def _model_view(
-        self, record: ChatSubagent, *, include_result: bool
-    ) -> dict[str, Any]:
-        """What the parent model sees of one subagent, with its whole report."""
-
-        payload = self._header(record)
-        if include_result and record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
-            payload["report"] = record.result or None
-            payload.update(self._report_details(record))
-        return payload
-
     @staticmethod
     def _message_item(
         header: dict[str, Any], message: ChatSubagentMessage
@@ -2047,6 +2061,9 @@ class SubagentService:
         parent_request: dict[str, Any] = {
             "idempotency_key": invocation.idempotency_key,
             "tools_enabled": tools_enabled,
+            "planning_enabled": bool(
+                parent_turn.request_snapshot.get("planning_enabled", False)
+            ),
             "include_knowledge": include_knowledge,
             "allow_cloud_knowledge": allow_cloud_knowledge,
             "allow_subagents": allow_subagents,
@@ -2054,6 +2071,53 @@ class SubagentService:
             "mcp_server_ids": mcp_server_ids,
             **({"capabilities": selection} if selection is not None else {}),
         }
+        parent_plan = self.chat.plans.for_turn(parent_turn.id)
+        plan_context = parent_session.metadata.get("delegated_plan_context")
+        if parent_plan is not None and parent_plan.phase == "execution":
+            plan_context = "Main agent's shared task plan:\n" + json.dumps(
+                {
+                    "plan_version": parent_plan.plan_version,
+                    "steps": parent_plan.steps,
+                    "tool_names": parent_plan.tool_names,
+                    "native_categories": parent_plan.native_categories,
+                    "files": parent_plan.files,
+                    "no_file_work": parent_plan.no_file_work,
+                    "unresolved_dependencies": parent_plan.unresolved_dependencies,
+                },
+                ensure_ascii=False,
+            )
+        elif (
+            not plan_context
+            and parent_session.harness_session_id
+            and self.harness_runtime is not None
+        ):
+            try:
+                native_plan = self.harness_runtime.session_activity(
+                    parent_session.harness_session_id
+                ).plan
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.subagent.native_plan_unavailable",
+                    "The parent harness plan could not be read for delegation.",
+                    exc,
+                    stage="subagent-plan",
+                )
+                native_plan = []
+            if native_plan:
+                plan_context = "Main agent's reported harness plan:\n" + json.dumps(
+                    [item.model_dump(mode="json") for item in native_plan],
+                    ensure_ascii=False,
+                )
+        if not plan_context and parent_turn.goal_id:
+            goal = self.store.get(ChatGoal, parent_turn.goal_id)
+            if goal.plan:
+                plan_context = "Main goal's plan:\n" + "\n".join(
+                    f"{index}. {step}" for index, step in enumerate(goal.plan, 1)
+                )
+        if not isinstance(plan_context, str):
+            plan_context = ""
+        plan_context = _bounded(plan_context, 30_000)
         subagent_id = str(uuid4())
         harness_session = (
             self.harness_runtime.create_session(
@@ -2081,6 +2145,8 @@ class SubagentService:
                 "subagent_id": subagent_id,
                 "subagent_parent_session_id": parent_session.id,
                 "subagent_parent_turn_id": parent_turn.id,
+                "planning_enabled": parent_request["planning_enabled"],
+                **({"delegated_plan_context": plan_context} if plan_context else {}),
             },
         )
         record = ChatSubagent(
@@ -2108,6 +2174,8 @@ class SubagentService:
                 f"{task}\n\nContext from the delegating assistant:\n{context.strip()}"
             )
         )
+        if plan_context:
+            content += f"\n\n{plan_context}\nFollow the delegated task within this plan; report progress to the main agent."
         child_turn_id: str | None = None
         try:
             if harness_id:
@@ -2127,6 +2195,7 @@ class SubagentService:
                     ),
                     include_knowledge=include_knowledge,
                     allow_cloud_knowledge=allow_cloud_knowledge,
+                    planning_enabled=parent_request["planning_enabled"],
                 )
                 child_turn_id = child_turn.id
                 record = self.store.update(
@@ -2153,6 +2222,7 @@ class SubagentService:
                     allow_subagents=allow_subagents,
                     max_active_subagents=child_limit,
                     tools_enabled=tools_enabled,
+                    planning_enabled=parent_request["planning_enabled"],
                     mcp_server_ids=mcp_server_ids,
                     hook_ids=(selection or {}).get("hook_ids", []),
                     skill_selections=(selection or {}).get("skills", []),
@@ -2489,6 +2559,7 @@ class SubagentService:
                 mcp_server_ids=None,
                 include_knowledge=bool(flags.get("include_knowledge")),
                 allow_cloud_knowledge=bool(flags.get("allow_cloud_knowledge")),
+                planning_enabled=False,
             )
             prepared = None
         else:
@@ -2514,6 +2585,7 @@ class SubagentService:
                     allow_subagents=bool(flags.get("allow_subagents")),
                     max_active_subagents=flags.get("max_active_subagents"),
                     tools_enabled=bool(flags.get("tools_enabled")),
+                    planning_enabled=False,
                     mcp_server_ids=list(flags.get("mcp_server_ids") or []),
                     hook_ids=selection.get("hook_ids", []),
                     skill_selections=selection.get("skills", []),
@@ -4753,6 +4825,7 @@ class SubagentService:
                 },
             )
         }
+        delivered_pending_parents: set[str] = set()
         for record in records:
             if record.status not in CHAT_SUBAGENT_TERMINAL_STATUSES:
                 continue
@@ -4766,11 +4839,19 @@ class SubagentService:
                 and record.result_message_id is not None
                 and record.pending_goal_charge_turn_id is None
                 and record.parent_session_id not in child_session_ids
-                and record.parent_session_id not in pending_parent_ids
+                and (
+                    record.parent_session_id not in pending_parent_ids
+                    or record.parent_session_id in delivered_pending_parents
+                )
             ):
                 continue
             try:
-                await self._repair_settled_after_restart(record)
+                delivered = await self._repair_settled_after_restart(record)
+                # One successful delivery pass handles every pending message
+                # for the parent. Keep trying another terminal child only if
+                # this one was restored without reaching delivery or failed.
+                if delivered is not False:
+                    delivered_pending_parents.add(record.parent_session_id)
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -4796,7 +4877,7 @@ class SubagentService:
                     stage="startup-recovery",
                 )
 
-    async def _repair_settled_after_restart(self, record: ChatSubagent) -> None:
+    async def _repair_settled_after_restart(self, record: ChatSubagent) -> bool:
         """Re-run one finished child's settlement, delivery and goal charge."""
 
         turn = self._child_turn(record)
@@ -4811,11 +4892,12 @@ class SubagentService:
                 ConflictError
             ):  # diagnostic-expected: recovery rereads a concurrent old-worker write
                 pass
-            return
+            return False
         if turn is not None and turn.id == record.pending_goal_charge_turn_id:
             self._charge_parent_goal(record, turn)
         await self._deliver(record)
         await self._propagate_descendant_report(record)
+        return True
 
     async def _reconcile_running_after_restart(
         self, record: ChatSubagent, *, preserve_graceful: bool

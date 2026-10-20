@@ -19,6 +19,7 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -45,6 +46,10 @@ from .tool_results import WORKSPACE_SEARCH_EXCLUDES
 MAX_PREVIEW_BYTES = 256 * 1024
 MAX_SEARCH_FILE_BYTES = 1024 * 1024
 MAX_SEARCH_SCANNED_FILES = 5_000
+RIPGREP_SEARCH_BATCH_FILES = 64
+RIPGREP_SEARCH_MIN_FILE_BYTES = 16 * 1024
+RIPGREP_SEARCH_TIMEOUT_SECONDS = 5.0
+_RIPGREP_EXCEPTIONAL_BYTES = r"(?-u:[\x80-\xff\r\x0b\x0c\x1c-\x1e])"
 MAX_SOURCE_CONTROL_FILES = 500
 MAX_SOURCE_CONTROL_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_CONTROL_DIFF_BYTES = 512 * 1024
@@ -1028,6 +1033,59 @@ class WorkspaceService:
         scanned_files = 0
         skipped_directories = 0
         truncated = False
+        ripgrep = (
+            shutil.which("rg")
+            if mode == "text" and os.path.isdir("/proc/self/fd")
+            else None
+        )
+        text_batch: list[tuple[str, int, int, int, int]] = []
+
+        def flush_text_batch() -> None:
+            nonlocal ripgrep, scanned_files, skipped_directories, truncated
+            if not text_batch:
+                return
+            large_descriptors = tuple(
+                item[1]
+                for item in text_batch
+                if item[4] >= RIPGREP_SEARCH_MIN_FILE_BYTES
+            )
+            candidates = (
+                _ripgrep_candidates(ripgrep, large_descriptors, normalized_query)
+                if ripgrep is not None and large_descriptors
+                else None
+            )
+            if large_descriptors and candidates is None:
+                # Keep the original search semantics when rg is absent, times out,
+                # or cannot safely prefilter this query.
+                ripgrep = None
+            try:
+                for (
+                    entry_path,
+                    file_descriptor,
+                    file_count,
+                    skipped_count,
+                    size,
+                ) in text_batch:
+                    if (
+                        size >= RIPGREP_SEARCH_MIN_FILE_BYTES
+                        and candidates is not None
+                        and file_descriptor not in candidates
+                    ):
+                        continue
+                    for match in _matching_text_lines(
+                        file_descriptor, entry_path, needle
+                    ):
+                        matches.append(match)
+                        if len(matches) >= limit:
+                            truncated = True
+                            scanned_files = file_count
+                            skipped_directories = skipped_count
+                            return
+            finally:
+                for _, file_descriptor, _, _, _ in text_batch:
+                    os.close(file_descriptor)
+                text_batch.clear()
+
         # Directories wait as relative paths and are opened one at a time when
         # popped, so the walk never holds one descriptor per pending folder.
         directory_parts = relative
@@ -1103,39 +1161,33 @@ class WorkspaceService:
                                     os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
                                     dir_fd=descriptor,
                                 )
-                                if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
-                                    continue
-                                with os.fdopen(file_descriptor, "rb") as stream:
-                                    file_descriptor = None
-                                    payload = stream.read(MAX_SEARCH_FILE_BYTES + 1)
+                                opened = os.fstat(file_descriptor)
                                 if (
-                                    len(payload) > MAX_SEARCH_FILE_BYTES
-                                    or b"\x00" in payload
+                                    not stat.S_ISREG(opened.st_mode)
+                                    or opened.st_size > MAX_SEARCH_FILE_BYTES
                                 ):
                                     continue
-                                content = payload.decode("utf-8", errors="strict")
-                            except (OSError, UnicodeDecodeError):
-                                # diagnostic-expected: binary, invalid UTF-8, or raced
-                                # files are omitted from bounded text search.
+                                text_batch.append(
+                                    (
+                                        entry_path,
+                                        file_descriptor,
+                                        scanned_files,
+                                        skipped_directories,
+                                        opened.st_size,
+                                    )
+                                )
+                                file_descriptor = None
+                            except OSError:
+                                # diagnostic-expected: raced or unreadable files are
+                                # omitted from bounded text search.
                                 continue
                             finally:
                                 if file_descriptor is not None:
                                     os.close(file_descriptor)
-                            for line_number, line in enumerate(content.splitlines(), 1):
-                                column = line.casefold().find(needle)
-                                if column < 0:
-                                    continue
-                                matches.append(
-                                    WorkspaceSearchMatch(
-                                        path=entry_path,
-                                        kind="content",
-                                        line=line_number,
-                                        column=column + 1,
-                                        preview=line.strip()[:500],
-                                    )
-                                )
-                                if len(matches) >= limit:
-                                    break
+                            if len(text_batch) >= RIPGREP_SEARCH_BATCH_FILES:
+                                flush_text_batch()
+                        if truncated:
+                            break
                         if len(matches) >= limit:
                             truncated = True
                             break
@@ -1147,9 +1199,12 @@ class WorkspaceService:
                 finally:
                     os.close(descriptor)
                     descriptor = None
+            flush_text_batch()
         finally:
             if descriptor is not None:
                 os.close(descriptor)
+            for _, file_descriptor, _, _, _ in text_batch:
+                os.close(file_descriptor)
 
         return WorkspaceSearchResult(
             engagement_id=engagement_id,
@@ -1997,6 +2052,88 @@ def _open_directory_chain(root: Path, parts: tuple[str, ...]) -> int:
         os.close(descriptor)
         raise
     return descriptor
+
+
+def _ripgrep_candidates(
+    executable: str, descriptors: tuple[int, ...], query: str
+) -> set[int] | None:
+    """Prefilter pinned files; exceptional bytes retain Python's exact semantics."""
+
+    if not query.isascii() or any(not 32 <= ord(char) <= 126 for char in query):
+        return None
+    literal = "".join(
+        f"\\{char}" if char in r"\.+*?()|[]{}^$" else char for char in query
+    )
+    paths = {
+        f"/proc/self/fd/{descriptor}".encode(): descriptor for descriptor in descriptors
+    }
+    command = [
+        executable,
+        "--no-config",
+        "--text",
+        "--files-with-matches",
+        "--null",
+        f"--max-filesize={MAX_SEARCH_FILE_BYTES}",
+        "--ignore-case",
+        "-e",
+        literal,
+        "-e",
+        _RIPGREP_EXCEPTIONAL_BYTES,
+        "--",
+        *(path.decode("ascii") for path in paths),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            pass_fds=descriptors,
+            check=False,
+            timeout=RIPGREP_SEARCH_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        # diagnostic-expected: a failed optional prefilter falls back to Python scanning.
+        return None
+    if result.returncode not in {0, 1} or result.stderr:
+        return None
+    if len(result.stdout) > len(paths) * 32 or (
+        result.stdout and not result.stdout.endswith(b"\x00")
+    ):
+        return None
+    found = set(result.stdout.split(b"\x00")) - {b""}
+    if not found <= paths.keys():
+        return None
+    return {paths[path] for path in found}
+
+
+def _matching_text_lines(
+    descriptor: int, entry_path: str, needle: str
+) -> Iterator[WorkspaceSearchMatch]:
+    """Verify an rg candidate using the original bounded UTF-8 line rules."""
+
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return
+        with os.fdopen(os.dup(descriptor), "rb") as stream:
+            stream.seek(0)
+            payload = stream.read(MAX_SEARCH_FILE_BYTES + 1)
+        if len(payload) > MAX_SEARCH_FILE_BYTES or b"\x00" in payload:
+            return
+        content = payload.decode("utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        # diagnostic-expected: binary, invalid UTF-8, and raced files are skipped.
+        return
+    for line_number, line in enumerate(content.splitlines(), 1):
+        column = line.casefold().find(needle)
+        if column >= 0:
+            yield WorkspaceSearchMatch(
+                path=entry_path,
+                kind="content",
+                line=line_number,
+                column=column + 1,
+                preview=line.strip()[:500],
+            )
 
 
 def _relative_parts(path: str, *, require_value: bool = False) -> tuple[str, ...]:

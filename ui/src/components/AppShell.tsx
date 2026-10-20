@@ -90,8 +90,12 @@ export function AppShell() {
   }, [quietLens]);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
-    if (entry.id === "settings.butler-voice") {
+    if (entry.target === "butler-settings") {
       window.dispatchEvent(new Event("nebula:open-butler-settings"));
+      return;
+    }
+    if (entry.target === "butler-oversight") {
+      window.dispatchEvent(new Event("nebula:open-butler-oversight"));
       return;
     }
     setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });

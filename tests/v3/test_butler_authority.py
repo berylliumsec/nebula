@@ -25,6 +25,7 @@ from nebula.v3.domain import (
     ButlerProjectState,
     ChatGoal,
     ChatGoalStatus,
+    ChatPlanDirective,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -161,6 +162,18 @@ def _attention(store, goal):
     )
 
 
+def _capture_immediate_guidance(app):
+    delivered = []
+
+    async def message(project_id, arguments, *, idempotency_key):
+        assert arguments["delivery"] == "immediate"
+        delivered.append((project_id, arguments, idempotency_key))
+        return {"delivery": "started", "turn_id": "accepted-parent-turn"}
+
+    app.state.control_assistant_work.message_chat = message
+    return delivered
+
+
 def test_authority_api_is_authenticated_revisioned_project_scoped_and_durable(tmp_path):
     store, app, project, *_ = _setup(tmp_path)
     client = TestClient(app)
@@ -226,8 +239,9 @@ def test_authority_api_is_authenticated_revisioned_project_scoped_and_durable(tm
     assert store.count_entities(ButlerAuthorityPolicy, engagement_id=project.id) == 1
 
 
-def test_watch_cannot_act_and_steer_queues_once_to_parent_main_agent(tmp_path):
+def test_watch_cannot_act_and_steer_delivers_once_to_parent_main_agent(tmp_path):
     store, app, project, main, _, child, worker = _setup(tmp_path, child=True)
+    delivered = _capture_immediate_guidance(app)
     _overdue(store, project, child, worker)
     _review(store, project, worker, "ask")
     authority = app.state.butler_authority
@@ -263,18 +277,20 @@ def test_watch_cannot_act_and_steer_queues_once_to_parent_main_agent(tmp_path):
     assert len(actions) == 1
     assert actions[0].status == "dispatched"
     assert actions[0].target_session_id == main.id
-    main_items = app.state.control_assistant_work.queue.get(main.id).items
-    assert len(main_items) == 1
-    assert "progress checkpoint" in main_items[0]["request"]["messages"][0]["content"]
+    assert len(delivered) == 1
+    assert delivered[0][1]["session_id"] == main.id
+    assert "progress checkpoint" in delivered[0][1]["text"]
+    assert app.state.control_assistant_work.queue.get(main.id).items == []
     assert app.state.control_assistant_work.queue.get(child.session_id).items == []
     asyncio.run(authority.process_project(project.id, worker.worker_id))
-    assert len(app.state.control_assistant_work.queue.get(main.id).items) == 1
+    assert len(delivered) == 1
 
 
 def test_plan_change_steer_needs_explicit_reviewed_reason_before_parent_message(
     tmp_path,
 ):
     store, app, project, main, _, child, worker = _setup(tmp_path, child=True)
+    delivered = _capture_immediate_guidance(app)
     authority = app.state.butler_authority
     authority.write(
         project.id,
@@ -324,18 +340,63 @@ def test_plan_change_steer_needs_explicit_reviewed_reason_before_parent_message(
     assert actions[0].action_type == "request_parent_plan_reassessment"
     assert actions[0].status == "dispatched"
     assert actions[0].target_session_id == main.id
-    main_items = app.state.control_assistant_work.queue.get(main.id).items
-    assert len(main_items) == 1
-    text = main_items[0]["request"]["messages"][0]["content"]
+    assert len(delivered) == 1
+    text = delivered[0][1]["text"]
     assert "compare the current plan" in text
     assert "repeats a probe" not in text
     assert app.state.control_assistant_work.queue.get(child.session_id).items == []
     asyncio.run(authority.process_project(project.id, worker.worker_id))
-    assert len(app.state.control_assistant_work.queue.get(main.id).items) == 1
+    assert len(delivered) == 1
+
+
+def test_delegate_plan_force_requires_grant_and_current_reviewed_goal_evidence(
+    tmp_path,
+):
+    store, app, project, main, goal, _, worker = _setup(tmp_path)
+    authority = app.state.butler_authority
+    authority.write(
+        project.id,
+        AuthorityWrite(
+            authority="delegate",
+            delegate_actions=["force_one_task_plan"],
+            expected_revision=0,
+        ),
+    )
+    changed = ChatGoalService(store).update(
+        main.id,
+        GoalUpdate(
+            expected_revision=goal.revision,
+            objective=goal.objective,
+            completion_criteria=goal.completion_criteria,
+            plan=["Inspect current state", "Recheck the changed condition"],
+        ),
+    )
+    decision = _review(
+        store,
+        project,
+        worker,
+        "steer",
+        why_now="The changed goal plan needs a fresh tool and file inventory.",
+    )
+    assert any(
+        ref.get("kind") == "goal" and ref.get("id") == changed.id
+        for ref in decision.evidence_refs
+    )
+    asyncio.run(authority.process_project(project.id, worker.worker_id))
+    actions = store.find_entities(ButlerAction, {}, engagement_id=project.id)
+    assert len(actions) == 1
+    assert actions[0].action_type == "force_one_task_plan"
+    assert actions[0].status == "applied", actions[0].outcome
+    directives = store.list_session_entities(ChatPlanDirective, main.id)
+    assert len(directives) == 1
+    assert directives[0].target_kind == "goal"
+    assert directives[0].target_id == changed.id
+    assert directives[0].reason == decision.why_now
 
 
 def test_plan_reassessment_re_reviews_when_precedent_changes(tmp_path):
     store, app, project, main, goal, _, worker = _setup(tmp_path)
+    delivered = _capture_immediate_guidance(app)
     authority = app.state.butler_authority
     authority.write(
         project.id,
@@ -384,7 +445,7 @@ def test_plan_reassessment_re_reviews_when_precedent_changes(tmp_path):
         why_now="The new plan repeats the same probe without a control.",
     )
     asyncio.run(authority.process_project(project.id, worker.worker_id))
-    assert len(app.state.control_assistant_work.queue.get(main.id).items) == 1
+    assert len(delivered) == 1
 
 
 def test_delegate_requires_explicit_pause_grant_and_pauses_main_goal(tmp_path):
@@ -540,6 +601,7 @@ def test_changed_precedent_cancels_undelivered_action_and_requests_fresh_review(
     tmp_path,
 ):
     store, app, project, main, goal, _, worker = _setup(tmp_path)
+    delivered = _capture_immediate_guidance(app)
     authority = app.state.butler_authority
     authority.write(
         project.id,
@@ -576,13 +638,15 @@ def test_changed_precedent_cancels_undelivered_action_and_requests_fresh_review(
     assert reconsidered.id != original.id
     assert reconsidered.precedent_digest != original.precedent_digest
     asyncio.run(authority.process_project(project.id, worker.worker_id))
-    assert len(app.state.control_assistant_work.queue.get(main.id).items) == 1
+    assert len(delivered) == 1
+    assert app.state.control_assistant_work.queue.get(main.id).items == []
 
 
 def test_memory_lookup_failure_keeps_action_planned_and_retryable(
     tmp_path, monkeypatch
 ):
     store, app, project, main, goal, _, worker = _setup(tmp_path)
+    delivered = _capture_immediate_guidance(app)
     authority = app.state.butler_authority
     authority.write(
         project.id,
@@ -607,7 +671,8 @@ def test_memory_lookup_failure_keeps_action_planned_and_retryable(
     monkeypatch.setattr(authority.memory_service, "search", original_search)
     asyncio.run(authority.dispatch(waiting, worker.worker_id))
     assert store.get(ButlerAction, action.id).status == "dispatched"
-    assert len(app.state.control_assistant_work.queue.get(main.id).items) == 1
+    assert len(delivered) == 1
+    assert app.state.control_assistant_work.queue.get(main.id).items == []
 
 
 def test_attention_re_review_keeps_agent_claim_unverified_and_parent_only(tmp_path):
