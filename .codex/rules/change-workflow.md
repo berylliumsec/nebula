@@ -45,3 +45,17 @@ and all applicable acceptance gates have evidence. If a required gate cannot be
 run, keep the PR unmerged, report the precise missing evidence, and continue when
 the gate becomes available. Do not present PR creation or merge as proof that an
 untested feature works.
+
+## Core rollback snapshot retention
+
+The simulation deployer in `scripts/simulation/nebula_deployer.py` creates a
+coherent rollback snapshot before it switches Core releases. After the new Core
+passes authenticated health and serves the accepted build, retain that exact
+snapshot and delete older completed snapshots under its `rollback-backups`
+directory. Verify that exactly one completed snapshot remains and that the
+deployer state points to it. Record its path, removed names, and any cleanup
+failure in the deployment receipt. Do not delete backups from other directories.
+
+Keep all state needed for a failed cutover or rollback until recovery is verified.
+A cleanup failure must be reported separately; it must not roll back a healthy
+Core or be described as successful retention.
