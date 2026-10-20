@@ -1,29 +1,18 @@
 {
-  "change_digest": "f3848d60dfc3caf4de0ee6bbb7133f3961fe7d9a299f29ebafb5d33160b6cf81",
+  "change_digest": "97474e4ffefddb9dc16c6463fa29f87df5083f7fd610324fbf5bb9219628954c",
   "reviewed_by": "Codex agent, 2026-10-20",
-  "reason": "The Butler-only transcript render fix and jump control need component coverage for saved-history parsing and desktop/mobile scroll behavior, the focused long-history browser journey across permanent desktop and mobile Chromium/WebKit widths, and a real-Core Butler saved-work restore plus seeded long-history scroll journey across representative desktop and mobile engines.",
-  "exclusions": "No Python or native code changed. Other assistant, provider, settings, and repository-wide tests do not exercise the changed Butler composer and transcript controls. The eight mocked browser profiles prove layout and navigation; the three selected real-Core profiles verify saved Butler work and long-history scrolling through the production LAN path.",
+  "reason": "The simulation acceptance test must use the Python interpreter supplied with its packaged Core fixture. Repeat the exact saved Butler work and long-history scroll test in its three permanent real-Core desktop and mobile browser profiles.",
+  "exclusions": "Only the real-Core Butler test fixture changed. Product code, component behavior, mocked browser layout, Python code, and native code are unchanged, so their earlier PR checks remain the relevant evidence. No unrelated suites are selected.",
   "expected_tests": {
     "python": 0,
-    "frontend": 42,
+    "frontend": 0,
     "native": 0,
-    "playwright": 11
+    "playwright": 3
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/NebulaControlAssistant.typing.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "butler-composer-scroll/desktop",
-    "butler-composer-scroll/compact",
-    "butler-composer-scroll/mobile-chromium-small",
-    "butler-composer-scroll/mobile-chromium-ledger-390",
-    "butler-composer-scroll/mobile-chromium-wide",
-    "butler-composer-scroll/mobile-webkit-small",
-    "butler-composer-scroll/mobile-webkit",
-    "butler-composer-scroll/mobile-webkit-wide",
     "butler-live-feedback/assistant-real-desktop",
     "butler-live-feedback/assistant-real-chromium-390",
     "butler-live-feedback/assistant-real-webkit-390"

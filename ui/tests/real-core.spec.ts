@@ -6672,7 +6672,9 @@ test("assistant upgrade Butler shows live work and restores it after reload on p
     const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
     const coreBinary = [process.env.NEBULA_TEST_CORE_BIN, process.env.NEBULA_CORE_BINARY, path.join(repository, ".venv/bin/nebula-core"), commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined].find(candidate => candidate && existsSync(candidate));
     expect(coreBinary, "A Python environment matching the real Core binary is required").toBeTruthy();
-    const seed = spawnSync(path.join(path.dirname(coreBinary!), "python"), ["-c", `
+    const python = process.env.NEBULA_TEST_PYTHON || path.join(path.dirname(coreBinary!), "python");
+    expect(existsSync(python), "The real-Core test interpreter must be available").toBe(true);
+    const seed = spawnSync(python, ["-c", `
 import sys
 from nebula.v3.domain import ChatMessage
 from nebula.v3.storage import NebulaStore
