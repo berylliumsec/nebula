@@ -6502,8 +6502,11 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await page.goto(workbenchUrl);
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
+    await expect(assistant.getByRole("button", {name: "Chat"})).toHaveAttribute("aria-current", "page");
+    await assistant.getByRole("button", {name: "Work"}).click();
     const oversight = assistant.getByRole("region", {name: "Butler oversight"});
     await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("0 watched");
+    await assistant.getByRole("button", {name: "More"}).click();
     const memory = assistant.getByRole("region", {name: "Butler memory"});
     const memoryToggle = memory.getByRole("button", {name: "Memory", exact: true});
     expect((await memoryToggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
@@ -6512,6 +6515,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
     expect(await memory.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     expect((await new AxeBuilder({page}).include('[aria-label="Butler memory"]').analyze()).violations).toEqual([]);
     await memoryToggle.click();
+    await assistant.getByRole("button", {name: "Work"}).click();
     await expect(assistant.getByRole("button", {name: "Start mission"})).toBeVisible();
     const bounds = await assistant.boundingBox();
     const viewport = page.viewportSize()!;
@@ -6552,6 +6556,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Send to Butler"}).click();
     await expect(statusRequest.then(request => request.postDataJSON() as {reasoning_effort?: string})).resolves.toMatchObject({reasoning_effort: "high"});
     await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The mission was started in this project. Open Missions to follow its progress.").last()).toBeVisible({timeout: 45_000});
+    await assistant.getByRole("button", {name: "More"}).click();
     await memoryToggle.click();
     stub.responseContent = "I saved your preference for Eastern Time.";
     await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(preference);
@@ -6570,6 +6575,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
         return {user: messages[lastUser]?.content, rolesAfterUser: messages.slice(lastUser + 1).map(message => message.role), toolNames: Array.isArray(body.tools) ? (body.tools as Array<{function?: {name?: string}}>).map(tool => tool.function?.name) : []};
       })), contentType: "application/json",
     });
+    await assistant.getByRole("button", {name: "More"}).click();
     const preferenceRow = memory.getByRole("listitem").filter({hasText: savedPreference});
     await expect(preferenceRow).toBeVisible({timeout: 30_000});
     await preferenceRow.locator("summary").click();
@@ -6579,6 +6585,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await preferenceRow.getByRole("button", {name: "Delete memory"}).click();
     await expect(preferenceRow).toHaveCount(0);
     await memory.getByRole("button", {name: "Memory", exact: true}).click();
+    await assistant.getByRole("button", {name: "Chat"}).click();
     const missionLink = assistant.getByRole("link", {name: "Open mission"});
     await expect(missionLink).toBeVisible();
     await expect(missionLink).toHaveAttribute("href", new RegExp(`^/projects/${projectId}/workbench\\?view=missions&mission=[a-f0-9-]+$`));
@@ -7474,6 +7481,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     expect(stub.requests.some(request => JSON.stringify(request).includes("Inspect Act projects and report only due work"))).toBe(true);
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Work"}).click();
     const oversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await oversight.getByRole("button", {name: /Oversight/}).click();
     const scheduledActivity = oversight.getByRole("region", {name: "Butler scheduled activity"});
@@ -7526,6 +7534,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     expect(editorAccess.violations).toEqual([]);
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Work"}).click();
     const finalOversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await finalOversight.getByRole("button", {name: /Oversight/}).click();
     await finalOversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
@@ -7583,6 +7592,7 @@ test("assistant upgrade Butler scheduled retry shows both saved attempts after r
     const show = async () => {
       await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
       await openNebulaAssistantFromShell(page);
+      await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Work"}).click();
       const oversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
       await oversight.getByRole("button", {name: /Oversight/}).click();
       const scheduled = oversight.getByRole("region", {name: "Butler scheduled activity"});
@@ -7680,6 +7690,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     }, {timeout: 45_000}).toMatchObject({watched_goals: 1, open_incidents: 1});
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
+    await assistant.getByRole("button", {name: /Work/}).click();
     const oversight = assistant.getByRole("region", {name: "Butler oversight"});
     await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("1 watched · 1 need attention");
     await oversight.getByRole("button", {name: /Oversight/}).click();
@@ -7772,6 +7783,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     expect(await actResponse.json()).toMatchObject({authority: "act", delegate_actions: ["pause_urgent_machine_blocker"]});
     await page.reload();
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: /Work/}).click();
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await restored.getByRole("button", {name: /Oversight/}).click();
     await expect(restored.getByText("fixture/private · MCP")).toBeVisible();
@@ -7806,6 +7818,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     await expect(restored.getByText("An agent request needs approval.")).toBeVisible();
     await page.reload();
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: /Work/}).click();
     const pendingAfterReload = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await pendingAfterReload.getByRole("button", {name: /Oversight/}).click();
     await expect(pendingAfterReload.getByText("An agent request needs approval.")).toBeVisible();
@@ -10862,6 +10875,7 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await expect(page.getByRole("button", {name: "New chat", exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Open Butler"}).click();
     const controlAssistant = page.getByRole("dialog", {name: "Butler"});
+    await controlAssistant.getByRole("button", {name: "More"}).click();
     await expect(controlAssistant.getByRole("button", {name: "Start Butler Voice"})).toBeVisible();
     await controlAssistant.getByRole("button", {name: "Start Butler Voice"}).click();
     await expect(page.getByRole("dialog", {name: "Butler Voice"}).getByRole("alert")).toContainText("trusted HTTPS address");
