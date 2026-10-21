@@ -7386,6 +7386,46 @@ test("assistant upgrade Butler max effort persists through settings on productio
   ]);
 });
 
+test("assistant upgrade Butler check interval persists and resolves conflicts on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await pairRealCoreBrowser(page, core, "Butler interval LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/settings#butler-check-interval-settings`);
+    const section = page.getByRole("region", {name: "Butler check interval"});
+    const input = section.getByRole("spinbutton", {name: "Check every"});
+    await expect(input).toHaveValue("5");
+    expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await input.fill("2");
+    await section.getByRole("button", {name: "Save interval"}).click();
+    await expect(section.getByText("Saved. Butler checks every 2 minutes.")).toBeVisible();
+    const saved = await (await api.get("butler/check-interval")).json() as {check_interval_minutes: number; revision: number};
+    expect(saved.check_interval_minutes).toBe(2);
+    await page.reload();
+    await expect(input).toHaveValue("2");
+    await input.fill("3");
+    const changed = await api.put("butler/check-interval", {data: {check_interval_minutes: 4, expected_revision: saved.revision}});
+    expect(changed.ok(), await changed.text()).toBe(true);
+    await section.getByRole("button", {name: "Save interval"}).click();
+    await expect(section.getByRole("alert")).toContainText("changed elsewhere");
+    await section.getByRole("button", {name: "Reload"}).click();
+    await expect(input).toHaveValue("4");
+    expect((await new AxeBuilder({page}).include("#butler-check-interval-settings").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-interval-lan", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, asset: entry, assetSha256: build.assets[entry!], project: testInfo.project.name, viewport: page.viewportSize(), savedMinutes: saved.check_interval_minutes, conflictResolvedMinutes: 4}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const replaceButlerText = async (text: string) => {
@@ -7490,7 +7530,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     await expect(scheduledActivity.getByText(/provider check saved its actions and outcome/)).toBeVisible();
     await oversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
     await expect(oversight.getByText(path.join(core.dataDir, ".butler", "BUTLER.md"))).toBeVisible();
-    await expect(oversight.getByText(/Butler checks once every 15 minutes/)).toBeVisible();
+    await expect(oversight.getByText(/Butler checks once every 5 minutes/)).toBeVisible();
     await page.goto(`${core.origin}/settings#butler-oversight`);
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await expect(restored.getByRole("region", {name: "Butler scheduled activity"})).toBeVisible();
@@ -10521,6 +10561,7 @@ test("assistant upgrade harness goal works on production LAN Core across new and
   const core = await startApprovalCore(localNetworkIpv4(), "goal");
   await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    expect((await core.api.post("harnesses/inert-codex/health")).ok()).toBe(true);
     const manifest = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>; builtAt: string};
     const entry = Object.keys(manifest.assets).find(name => name.startsWith("assets/index-") && name.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -10546,7 +10587,12 @@ test("assistant upgrade harness goal works on production LAN Core across new and
         if (await reveal.isVisible()) await reveal.click({timeout: 10_000});
       }
       if (!await goalPanel.isVisible()) await clickAssistantSettings(page);
-      await expect(goalPanel).toBeVisible();
+      if (!await goalPanel.isVisible() && await rail.isVisible()) {
+        if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+        if (pointerFine) await page.locator(".chat-studio-rail").hover();
+        await rail.getByRole("button", {name: /Create goal|View full goal and evidence gates/}).click({timeout: 10_000});
+      }
+      await expect(goalPanel).toBeVisible({timeout: 15_000});
       const expand = goalPanel.getByRole("button", {name: "Expand goal controls"});
       if (await expand.isVisible()) await expand.click();
     };
@@ -10596,6 +10642,22 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY");
     const existingSessionId = new URL(page.url()).searchParams.get("session")!;
+    await clickAssistantSettings(page);
+    await settingsDialog.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption("inert-codex");
+    await expect.poll(async () => {
+      const config = await (await core.api.get(`chat-sessions/${existingSessionId}/assistant-config`)).json() as {settings: {profile_id: string}};
+      return config.settings.profile_id;
+    }).toBe("inert-codex");
+    await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+    const beforeMessageSwitch = await (await core.api.get(`chat-sessions/${existingSessionId}`)).json() as {harness_profile_id: string; harness_session_id: string};
+    expect(beforeMessageSwitch.harness_profile_id).toBe("inert-fixture");
+    await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Continue on the Codex fixture");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY", {timeout: 20_000});
+    expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
+    const afterMessageSwitch = await (await core.api.get(`chat-sessions/${existingSessionId}`)).json() as {harness_profile_id: string; harness_session_id: string};
+    expect(afterMessageSwitch.harness_profile_id).toBe("inert-codex");
+    expect(afterMessageSwitch.harness_session_id).not.toBe(beforeMessageSwitch.harness_session_id);
     await addGoal("FAIL_ONCE then recover with an explicit Resume", 2);
     expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
     await goalPanel.getByRole("button", {name: "Start"}).click({timeout: 10_000});
@@ -10626,11 +10688,12 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     const blockedHarnessBefore = await (await core.api.get(`harness-sessions/${blockedChatBefore.harness_session_id}`)).json() as {metadata: {runtime_options: {reasoning_effort: string}}};
     expect(blockedHarnessBefore.metadata.runtime_options.reasoning_effort).toBe("low");
     if (!await settingsDialog.isVisible()) await clickAssistantSettings(page);
+    await settingsDialog.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption("inert-codex");
     await settingsDialog.getByRole("combobox", {name: "Harness reasoning effort"}).selectOption("max");
     await expect.poll(async () => {
-      const config = await (await core.api.get(`chat-sessions/${blockedSessionId}/assistant-config`)).json() as {settings: {harness_reasoning_effort: string}};
-      return config.settings.harness_reasoning_effort;
-    }).toBe("max");
+      const config = await (await core.api.get(`chat-sessions/${blockedSessionId}/assistant-config`)).json() as {settings: {profile_id: string; harness_reasoning_effort: string}};
+      return [config.settings.profile_id, config.settings.harness_reasoning_effort];
+    }).toEqual(["inert-codex", "max"]);
     await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
     await page.reload();
     await revealGoal();
@@ -10641,8 +10704,9 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     await goalPanel.getByRole("button", {name: "Resume"}).click();
     await expect.poll(async () => (await (await core.api.get(`chat/sessions/${blockedSessionId}/goal`)).json()).status).toBe("paused");
     await expect(goalPanel).toContainText("Goal step budget is exhausted.");
-    const blockedChatAfter = await (await core.api.get(`chat-sessions/${blockedSessionId}`)).json() as {harness_session_id: string};
+    const blockedChatAfter = await (await core.api.get(`chat-sessions/${blockedSessionId}`)).json() as {harness_profile_id: string; harness_session_id: string};
     expect(blockedChatAfter.harness_session_id).not.toBe(blockedChatBefore.harness_session_id);
+    expect(blockedChatAfter.harness_profile_id).toBe("inert-codex");
     const blockedHarnessAfter = await (await core.api.get(`harness-sessions/${blockedChatAfter.harness_session_id}`)).json() as {metadata: {runtime_options: {reasoning_effort: string}}};
     expect(blockedHarnessAfter.metadata.runtime_options.reasoning_effort).toBe("max");
 

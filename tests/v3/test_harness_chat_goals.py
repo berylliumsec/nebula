@@ -858,6 +858,91 @@ def test_operator_interruption_pauses_harness_goal(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("initial_kind", "next_kind"),
+    [
+        (HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP),
+        (HarnessKind.GROK_ACP, HarnessKind.CODEX_APP_SERVER),
+    ],
+)
+def test_goal_resume_uses_saved_next_harness_in_same_chat(
+    tmp_path, initial_kind, next_kind
+):
+    async def scenario() -> None:
+        store, _engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
+        if profile.kind != initial_kind:
+            profile = store.update(
+                HarnessProfile,
+                profile.id,
+                {"kind": initial_kind},
+                expected_revision=profile.revision,
+            )
+        next_profile = store.create(
+            HarnessProfile(
+                id="harness-next",
+                name="Next harness fixture",
+                kind=next_kind,
+                executable="/bin/true",
+                default_model="next-model",
+                capabilities=profile.capabilities.model_copy(
+                    update={"models": ["next-model"]}
+                ),
+                privacy=profile.privacy,
+            )
+        )
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=1)
+        session_id = created.session.id
+        old_harness_id = created.session.harness_session_id
+        started = goals.write(
+            session_id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        blocked = goals.write(
+            session_id,
+            GoalWrite(
+                expected_revision=started.revision,
+                action="block",
+                reason="Switch to an available harness",
+            ),
+        )
+        chat = store.get(ChatSession, session_id)
+        saved = update_chat_assistant_config(
+            store,
+            chat,
+            ChatAssistantConfigPatch(
+                backend=ChatBackend.HARNESS,
+                profile_id=next_profile.id,
+                model="next-model",
+            ),
+            expected_revision=chat.revision,
+        )
+        assert saved.harness_session_id == old_harness_id
+        assert saved.harness_profile_id == profile.id
+
+        goals.write(
+            session_id,
+            GoalWrite(expected_revision=blocked.revision, action="resume"),
+        )
+        turn_id = await runtime.dispatch_running_goal(session_id, "Resume this goal")
+        assert turn_id
+        await _wait_for_goal(goals, session_id, ChatGoalStatus.PAUSED)
+        chat = store.get(ChatSession, session_id)
+        turn = store.get(ChatTurn, turn_id)
+        harness_session = store.get(HarnessSession, chat.harness_session_id)
+        assert chat.id == session_id
+        assert chat.harness_session_id != old_harness_id
+        assert chat.harness_profile_id == next_profile.id
+        assert chat.model == "next-model"
+        assert harness_session.harness_profile_id == next_profile.id
+        assert turn.goal_id == created.goal.id
+        assert turn.harness_turn_id
+        assert adapter.connections[0].request.profile.id == next_profile.id
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_goal_survives_harness_session_rollover_with_one_transcript(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)

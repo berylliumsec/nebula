@@ -12039,24 +12039,31 @@ class HarnessRuntimeService:
                 )
                 return None
             next_settings = chat_assistant_config(self.store, chat)
-            saved_effort = (
-                next_settings["harness_reasoning_effort"]
-                if next_settings["backend"] == ChatBackend.HARNESS.value
-                and next_settings["profile_id"] == chat.harness_profile_id
-                and next_settings["model"] == chat.model
-                else None
-            )
+            if next_settings["backend"] != ChatBackend.HARNESS.value:
+                raise HarnessConfigurationError(
+                    "This goal is bound to an agent harness, but its saved next-turn "
+                    "runtime is a provider. Choose a harness or send a new message "
+                    "in this chat before resuming the goal."
+                )
             _, turn, harness_turn = self.prepare_chat(
                 engagement_id=chat.engagement_id,
-                profile_id=chat.harness_profile_id or "",
-                model=chat.model,
+                profile_id=next_settings["profile_id"],
+                model=next_settings["model"],
                 prompt=instruction,
                 chat_session_id=chat.id,
                 goal_id=goal.id,
                 harness_session_id=None,
-                mcp_server_ids=None,
-                include_knowledge=False,
-                harness_reasoning_effort=saved_effort,
+                mcp_server_ids=next_settings["mcp_server_ids"],
+                include_knowledge=next_settings["include_knowledge"],
+                allow_cloud_knowledge=next_settings["allow_cloud_knowledge"],
+                allow_agent_messaging=next_settings["allow_agent_messaging"],
+                harness_mode=next_settings["harness_mode"],
+                planning_enabled=next_settings["planning_enabled"],
+                harness_reasoning_effort=next_settings["harness_reasoning_effort"],
+                harness_service_tier=next_settings["harness_service_tier"],
+                harness_cyber_access_program=next_settings[
+                    "harness_cyber_access_program"
+                ],
             )
             try:
                 self.start_chat_turn(harness_turn.id)

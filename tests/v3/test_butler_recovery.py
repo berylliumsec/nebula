@@ -12,10 +12,12 @@ from nebula.v3.butler_oversight import project_state_id, project_stream_id
 from nebula.v3.butler_recovery import (
     ButlerRecoveryAgent,
     ButlerRecoveryService,
+    GLOBAL_STATE_ID,
     record_subagent_start_failure,
 )
 from nebula.v3.domain import (
     ButlerAuthorityPolicy,
+    ButlerGlobalState,
     ButlerGoalWatch,
     ButlerProjectState,
     ButlerRecoveryCase,
@@ -381,6 +383,36 @@ def test_periodic_check_is_coalesced_and_act_revocation_stops_new_cases(tmp_path
     )
     assert not recovery.fire_periodic_check(project.id, worker_id)
     assert recovery._claim_case(project.id, worker_id) is None
+
+
+def test_project_fallback_check_uses_nebula_wide_saved_interval(tmp_path):
+    store, project, parent, _, _, worker_id = _setup(tmp_path)
+    store.create(
+        ButlerGoalWatch(
+            engagement_id=project.id,
+            goal_id="goal-1",
+            session_id=parent.id,
+            status=ChatGoalStatus.RUNNING,
+            coverage_reason="Goal lifecycle",
+        )
+    )
+    state = store.get(ButlerProjectState, project_state_id(project.id))
+    store.update(
+        ButlerProjectState,
+        state.id,
+        {"last_periodic_recovery_at": utc_now() - timedelta(minutes=3)},
+        expected_revision=state.revision,
+    )
+    recovery = ButlerRecoveryService(store)
+    assert not recovery.fire_periodic_check(project.id, worker_id)
+    store.create(
+        ButlerGlobalState(
+            id=GLOBAL_STATE_ID,
+            check_interval_minutes=2,
+        )
+    )
+    assert recovery.fire_periodic_check(project.id, worker_id)
+    assert not recovery.fire_periodic_check(project.id, worker_id)
 
 
 def test_parent_follow_up_requires_same_child_task_completion_before_resolved(tmp_path):

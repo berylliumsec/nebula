@@ -126,12 +126,21 @@ def test_one_global_check_wakes_idle_projects_and_persists_across_restart(tmp_pa
     assert "Check idle work." in agent._global_instructions(case)
     state = store.get(ButlerGlobalState, GLOBAL_STATE_ID)
     assert recovery.global_status()["last_check_at"] == state.last_periodic_at
+    assert recovery.global_status()["check_interval_minutes"] == 5
     restarted = ButlerRecoveryService(store, instructions_root=tmp_path)
     assert not restarted.fire_global_periodic_check(anchor, worker_id)
     store.update(
         ButlerGlobalState,
         GLOBAL_STATE_ID,
-        {"last_periodic_at": utc_now() - timedelta(minutes=16)},
+        {"last_periodic_at": utc_now() - timedelta(minutes=4)},
+        expected_revision=state.revision,
+    )
+    assert not restarted.fire_global_periodic_check(anchor, worker_id)
+    state = store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    store.update(
+        ButlerGlobalState,
+        GLOBAL_STATE_ID,
+        {"last_periodic_at": utc_now() - timedelta(minutes=6)},
         expected_revision=state.revision,
     )
     _write(tmp_path, "New operator instructions.")
@@ -326,3 +335,46 @@ def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):
             route, headers={"Authorization": "Bearer test-token"}
         ).json()["global_instructions"]
         assert present["status"] == "needs_act_host"
+
+
+def test_check_interval_is_authenticated_revision_guarded_and_durable(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    app = create_app(store, auth_token="test-token", execution_data_root=tmp_path)
+    route = "/api/v1/butler/check-interval"
+    auth = {"Authorization": "Bearer test-token"}
+    with TestClient(app) as client:
+        assert client.get(route).status_code == 401
+        default = client.get(route, headers=auth).json()
+        assert default == {
+            "check_interval_minutes": 5,
+            "revision": 0,
+            "last_check_at": None,
+            "next_check_at": None,
+        }
+        assert (
+            client.put(
+                route,
+                headers=auth,
+                json={"check_interval_minutes": 0, "expected_revision": 0},
+            ).status_code
+            == 422
+        )
+        saved = client.put(
+            route,
+            headers=auth,
+            json={"check_interval_minutes": 2, "expected_revision": 0},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["check_interval_minutes"] == 2
+        assert saved.json()["revision"] == 1
+        assert (
+            client.put(
+                route,
+                headers=auth,
+                json={"check_interval_minutes": 10, "expected_revision": 0},
+            ).status_code
+            == 409
+        )
+        assert client.get(route, headers=auth).json() == saved.json()
+    reloaded = NebulaStore(tmp_path / "core.db")
+    assert reloaded.get(ButlerGlobalState, GLOBAL_STATE_ID).check_interval_minutes == 2

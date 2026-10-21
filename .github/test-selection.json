@@ -1,34 +1,52 @@
 {
-  "change_digest": "7b4096d0143545f39d3cb2f257e7f2912040623092af5932398707c04ee7a6f1",
+  "change_digest": "86b36dcdfae7fb72ad86a9ed0369cd6a715880a5b27f31bfeeb128afd59b773c",
   "reviewed_by": "Codex agent, 2026-10-20",
-  "reason": "The Butler panel now opens on Chat, exposes actionable oversight through Work, and moves voice, memory, destinations, and settings to More. The selected component cases cover state transitions, attention, draft, settings, voice, and mobile scroll; the browser matrix covers the visible entry point, three views, draft retention, focus, touch, accessibility, and responsive layout; the disposable production LAN Core case covers saved work, memory, settings, reload, and model interaction.",
-  "exclusions": "No Python or native source changed. Other chat, mission, and settings workflows are excluded; their APIs and persisted state are unchanged. The browser matrix uses the selected Butler interface journey, not the full interface suite.",
+  "reason": "Goal continuation must bind the saved next-turn Codex or Grok harness in the original chat. Butler's Nebula-wide scheduled check interval is now revision-guarded and configurable with a five-minute default. The selected Python cases cover same-chat switching, the scheduler, API persistence, and product-help sync. Component cases cover the setting and discovery. The two production-bundle LAN Core journeys cover message and goal switching plus interval save, conflict, and refresh in the relevant browser matrix.",
+  "exclusions": "Other chat, mission, Butler oversight, and settings journeys are outside this diff's behavior. No Rust source changed. No browser-backed Python cases or Node-dependent Python cases are selected. This is a focused selection, not a full suite.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 44,
+    "python": 11,
+    "frontend": 39,
     "native": 0,
-    "playwright": 9
+    "playwright": 16
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_harness_chat_goals.py::test_saved_harness_effort_applies_to_goal_resume_and_continuation",
+    "tests/v3/test_harness_chat_goals.py::test_goal_resume_uses_saved_next_harness_in_same_chat",
+    "tests/v3/test_control_assistant_work.py::test_saved_harness_switch_binds_on_next_message_in_disposable_core",
+    "tests/v3/test_control_assistant_work.py::test_chat_settings_api_reads_back_durable_next_turn_choice",
+    "tests/v3/test_butler_instructions.py::test_one_global_check_wakes_idle_projects_and_persists_across_restart",
+    "tests/v3/test_butler_instructions.py::test_check_interval_is_authenticated_revision_guarded_and_durable",
+    "tests/v3/test_butler_recovery.py::test_project_fallback_check_uses_nebula_wide_saved_interval",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_check_interval_setting",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+  ],
   "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/NebulaControlAssistant.typing.test.tsx"
+    "ui/src/components/ButlerCheckIntervalSettings.test.tsx",
+    "ui/src/components/ButlerOversight.test.tsx",
+    "ui/src/components/ButlerInstructionsSettings.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "butler-interface-refinement/desktop",
-    "butler-interface-refinement/compact",
-    "butler-interface-refinement/mobile-chromium-small",
-    "butler-interface-refinement/mobile-chromium-ledger-390",
-    "butler-interface-refinement/mobile-chromium-wide",
-    "butler-interface-refinement/mobile-webkit-small",
-    "butler-interface-refinement/mobile-webkit",
-    "butler-interface-refinement/mobile-webkit-wide",
-    "butler-interface-refinement/assistant-real-desktop"
+    "harness-goal/assistant-real-desktop",
+    "harness-goal/assistant-real-compact",
+    "harness-goal/assistant-real-chromium-320",
+    "harness-goal/assistant-real-chromium-390",
+    "harness-goal/assistant-real-chromium-430",
+    "harness-goal/assistant-real-webkit-320",
+    "harness-goal/assistant-real-webkit-390",
+    "harness-goal/assistant-real-webkit-430",
+    "butler-check-interval/assistant-real-desktop",
+    "butler-check-interval/assistant-real-compact",
+    "butler-check-interval/assistant-real-chromium-320",
+    "butler-check-interval/assistant-real-chromium-390",
+    "butler-check-interval/assistant-real-chromium-430",
+    "butler-check-interval/assistant-real-webkit-320",
+    "butler-check-interval/assistant-real-webkit-390",
+    "butler-check-interval/assistant-real-webkit-430"
   ],
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false
 }

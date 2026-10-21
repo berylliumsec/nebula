@@ -73,7 +73,17 @@ if TYPE_CHECKING:
     from .storage import StoreTransaction
 
 
-PERIODIC_INTERVAL = timedelta(minutes=15)
+DEFAULT_CHECK_INTERVAL_MINUTES = 5
+
+
+def check_interval(state: ButlerGlobalState | None) -> timedelta:
+    return timedelta(
+        minutes=state.check_interval_minutes
+        if state is not None
+        else DEFAULT_CHECK_INTERVAL_MINUTES
+    )
+
+
 MAX_DIALOGUE_TURNS = 8
 IMMEDIATE_EVENTS = frozenset(
     {
@@ -821,12 +831,14 @@ class ButlerRecoveryService:
         if root is None:
             return {"status": "unavailable", "path": None}
         state = self.store.find_entity(ButlerGlobalState, "id", GLOBAL_STATE_ID)
+        interval = check_interval(state)
         result: dict[str, Any] = {
             "path": str(root / ".butler" / "BUTLER.md"),
+            "check_interval_minutes": int(interval.total_seconds() // 60),
             "last_check_at": state.last_periodic_at if state else None,
             "last_host_project_id": state.last_project_id if state else None,
             "next_check_at": (
-                state.last_periodic_at + PERIODIC_INTERVAL
+                state.last_periodic_at + interval
                 if state and state.last_periodic_at
                 else None
             ),
@@ -906,10 +918,11 @@ class ButlerRecoveryService:
             current = _entity_in_transaction(
                 transaction, ButlerGlobalState, GLOBAL_STATE_ID
             )
+            interval = check_interval(current)
             if (
                 current is not None
                 and current.last_periodic_at is not None
-                and now - current.last_periodic_at < PERIODIC_INTERVAL
+                and now - current.last_periodic_at < interval
             ):
                 return False
             state = _entity_in_transaction(
@@ -928,7 +941,7 @@ class ButlerRecoveryService:
                 or current_policy.revision != policy.revision
             ):
                 return False
-            generation = int(now.timestamp()) // int(PERIODIC_INTERVAL.total_seconds())
+            generation = int(now.timestamp()) // int(interval.total_seconds())
             _append_project_event(
                 transaction,
                 engagement_id=project_id,
@@ -990,6 +1003,9 @@ class ButlerRecoveryService:
             state = _entity_in_transaction(
                 transaction, ButlerProjectState, project_state_id(project_id)
             )
+            interval = check_interval(
+                _entity_in_transaction(transaction, ButlerGlobalState, GLOBAL_STATE_ID)
+            )
             current_policy = _entity_in_transaction(
                 transaction, ButlerAuthorityPolicy, policy.id
             )
@@ -1002,10 +1018,10 @@ class ButlerRecoveryService:
                 or current_policy.authority != "act"
                 or current_policy.revision != policy.revision
                 or state.last_periodic_recovery_at is not None
-                and now - state.last_periodic_recovery_at < PERIODIC_INTERVAL
+                and now - state.last_periodic_recovery_at < interval
             ):
                 return False
-            generation = int(now.timestamp()) // int(PERIODIC_INTERVAL.total_seconds())
+            generation = int(now.timestamp()) // int(interval.total_seconds())
             _append_project_event(
                 transaction,
                 engagement_id=project_id,

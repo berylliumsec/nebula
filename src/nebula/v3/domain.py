@@ -4078,6 +4078,7 @@ class ButlerGlobalState(Entity):
     """One durable clock for the Nebula-wide Butler mandate."""
 
     entity_kind: ClassVar[str] = "butler_global_states"
+    check_interval_minutes: int = Field(default=5, ge=1, le=1440)
     last_periodic_at: datetime | None = None
     last_project_id: str | None = Field(default=None, max_length=200)
 
