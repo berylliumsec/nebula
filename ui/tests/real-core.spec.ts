@@ -6503,6 +6503,20 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
     await expect(assistant.getByRole("button", {name: "Chat"})).toHaveAttribute("aria-current", "page");
+    const settingsButton = assistant.getByRole("button", {name: "Butler settings"});
+    const hideButton = assistant.getByRole("button", {name: "Hide Butler"});
+    const closeButton = assistant.getByRole("button", {name: "Close Butler"});
+    const [settingsBox, hideBox, closeBox] = await Promise.all([
+      settingsButton.boundingBox(), hideButton.boundingBox(), closeButton.boundingBox(),
+    ]);
+    expect(settingsBox && hideBox && closeBox && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+    expect(hideBox?.width).toBeGreaterThanOrEqual(44);
+    expect(hideBox?.height).toBeGreaterThanOrEqual(44);
+    await expect(hideButton).toHaveText("");
+    await hideButton.click();
+    await expect(assistant).toBeHidden();
+    await openNebulaAssistantFromShell(page);
+    await expect(assistant).toBeVisible();
     await assistant.getByRole("button", {name: "Work"}).click();
     const oversight = assistant.getByRole("region", {name: "Butler oversight"});
     await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("0 watched");
