@@ -2406,12 +2406,24 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
   await expect(butler.getByRole("region", { name: "Chat" })).toBeVisible();
   await expect(butler.getByText("Ask Butler", { exact: true })).toBeVisible();
+  const settings = butler.getByRole("button", { name: "Butler settings" });
+  const hide = butler.getByRole("button", { name: "Hide Butler" });
+  const close = butler.getByRole("button", { name: "Close Butler" });
+  const settingsBox = await settings.boundingBox();
+  const hideBox = await hide.boundingBox();
+  const closeBox = await close.boundingBox();
+  expect(settingsBox && hideBox && closeBox && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+  expectTouchTarget(hideBox?.width, "Hide Butler width");
+  expectTouchTarget(hideBox?.height, "Hide Butler height");
+  await expect(hide).toHaveText("");
+  await expect(hide.locator("svg")).toHaveCount(1);
   await composer.fill("Draft stays with Butler");
   await butler.getByRole("button", { name: "Work" }).click();
   await expect(butler.getByRole("region", { name: "Butler oversight" })).toBeVisible();
   await expect(composer).toHaveValue("Draft stays with Butler");
   await butler.getByRole("button", { name: "More" }).click();
   await expect(butler.getByRole("button", { name: "Start Butler Voice" })).toBeVisible();
+  await expect(butler.getByRole("group", { name: "Butler options" }).getByRole("button", { name: "Hide Butler" })).toHaveCount(0);
   await expect(butler.getByRole("region", { name: "Butler memory" })).toBeVisible();
   await expect(butler.getByText("Settings I can help with")).toBeVisible();
   await butler.getByRole("button", { name: "Chat" }).click();
@@ -2438,6 +2450,10 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
     expect(landscapePanel && landscapeInput && landscapeInput.y + landscapeInput.height <= landscapePanel.y + landscapePanel.height).toBe(true);
     await page.setViewportSize(portrait);
   }
+  await hide.click();
+  await expect(page.getByRole("button", { name: "Show Butler" })).toBeVisible();
+  await page.getByRole("button", { name: "Show Butler" }).click();
+  await expect(composer).toHaveValue("Draft stays with Butler");
   await butler.getByRole("button", { name: "Close Butler" }).click();
   await page.getByRole("button", { name: "Open Butler" }).click();
   await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");

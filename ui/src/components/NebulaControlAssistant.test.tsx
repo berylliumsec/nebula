@@ -31,11 +31,20 @@ describe("NebulaControlAssistant", () => {
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("log", { name: "Butler conversation" })).toBeVisible();
+    const settings = screen.getByRole("button", { name: "Butler settings" });
+    const hide = screen.getByRole("button", { name: "Hide Butler" });
+    const close = screen.getByRole("button", { name: "Close Butler" });
+    expect(hide.parentElement).toBe(settings.parentElement);
+    expect(settings.nextElementSibling).toBe(hide);
+    expect(hide.nextElementSibling).toBe(close);
+    expect(hide).toHaveAttribute("title", "Hide Butler");
+    expect(hide).toHaveTextContent("");
     expect(screen.queryByRole("button", { name: "Start Butler Voice" })).not.toBeInTheDocument();
     const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
-    await user.type(composer, "Keep this draft");
+    fireEvent.change(composer, { target: { value: "Keep this draft" } });
     await user.click(screen.getByRole("button", { name: "More" }));
     expect(screen.getByRole("button", { name: "Start Butler Voice" })).toBeVisible();
+    expect(screen.getByRole("group", { name: "Butler options" })).not.toContainElement(hide);
     expect(screen.getByText("Settings I can help with")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Work" }));
     expect(screen.getByText("Choose a project to review Butler’s work.")).toBeVisible();
@@ -764,7 +773,6 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getAllByRole("button", { name: "Open Butler" })).toHaveLength(1);
     await user.click(launcher);
     await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Help me find a setting");
-    await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Hide Butler" }));
     await user.click(screen.getByRole("button", { name: "Show Butler" }));
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me find a setting");
@@ -1066,7 +1074,6 @@ describe("NebulaControlAssistant", () => {
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
     await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Help me choose a theme");
-    await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Hide Butler" }));
     await user.click(screen.getByRole("button", { name: "Show Butler" }));
     expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me choose a theme");
