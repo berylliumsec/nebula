@@ -89,13 +89,14 @@
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   .launcher { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .panel { inset: 0; width: 100%; height: min(100dvh, var(--panel-visual-height, 100dvh)); max-height: min(100dvh, var(--panel-visual-height, 100dvh)); padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border: 0; border-radius: 0; }
-  .header { display: grid; grid-template-columns: minmax(0, 1fr) 44px 44px; gap: 6px; padding: 8px 12px; }
+  .header { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 44px); gap: 6px; padding: 8px 12px; }
   .header .dragButton { display: none; }
   .identity { grid-column: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
   .identity strong { flex: none; white-space: nowrap; }
   .identity small { max-width: 100%; }
   .header .settingsButton { grid-column: 2; }
-  .header .closeButton { grid-column: 3; }
+  .header .hideButton { grid-column: 3; }
+  .header .closeButton { grid-column: 4; }
   .body { flex: 1; min-height: 0; }
   .transcript { max-height: none; overflow: visible; }
   .turnStatus { flex-wrap: wrap; }
