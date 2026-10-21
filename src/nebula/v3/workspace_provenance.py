@@ -414,11 +414,9 @@ class WorkspaceProvenanceService:
             str, list[tuple[WorkspaceProvenanceObservation, dict[str, Any]]]
         ] = {}
         for candidate in completed:
-            seen_paths: set[str] = set()
             for entry in reversed(candidate.mutations):
                 path = entry.get("path")
-                if isinstance(path, str) and path in current and path not in seen_paths:
-                    seen_paths.add(path)
+                if isinstance(path, str) and path in current:
                     prior_mutations.setdefault(path, []).append((candidate, entry))
         current_mutations = {row["path"]: row for row in mutations}
         for path, state in sorted(current.items()):

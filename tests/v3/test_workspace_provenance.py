@@ -104,6 +104,30 @@ def test_provenance_keeps_prior_actor_ownership_across_later_turns(tmp_path):
     ] == [("shared.txt", "chat:a")]
 
 
+def test_prior_actor_index_preserves_an_earlier_matching_mutation(tmp_path):
+    root = _repository(tmp_path)
+    service, _ = _service(tmp_path)
+    _begin(service, root, scope="turn-a", actor="chat:a")
+    (root / "shared.txt").write_text("from a\n", encoding="utf-8")
+    prior = service.finish(
+        root, engagement_id="eng", scope_kind="turn", scope_id="turn-a"
+    )
+    current = snapshot(root).paths
+    prior.mutations.append(
+        {
+            **prior.mutations[0],
+            "after": {**current["shared.txt"], "sha256": "0" * 64},
+        }
+    )
+    started = _begin(service, root, scope="turn-b", actor="chat:b")
+
+    attribution = service._classify(started, current, [], "exact", [prior])
+
+    assert [(row["path"], row["actor_id"]) for row in attribution["other"]] == [
+        ("shared.txt", "chat:a")
+    ]
+
+
 def test_active_observation_survives_store_reopen(tmp_path):
     root = _repository(tmp_path)
     service, _ = _service(tmp_path)

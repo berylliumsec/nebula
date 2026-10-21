@@ -1,10 +1,10 @@
 {
-  "change_digest": "501c93b24a9d0e6604b843ee7276dc9d14ce853cefc5d991ef6e12a729ffcac0",
+  "change_digest": "76835e05b48244cb9e7dcca17e6673b8c858678d9ac242132298feeb4fa58c32",
   "reviewed_by": "Codex agent, 2026-10-21",
-  "reason": "Workspace provenance for project-native hooks now fingerprints dirty Git paths without fixed path or byte caps, keeps the ten-second snapshot budget, permits more than 2,000 turn mutations, and indexes prior mutations by path. The selected provenance tests cover attribution, parallel actors, persistence, large path and byte sets, and the changed mutation schema. The selected turn-write tests cover off-event-loop capture, tool-only hook behavior, the time budget, and large-file snapshots.",
+  "reason": "Workspace provenance for project-native hooks now fingerprints dirty Git paths without fixed path or byte caps, keeps the ten-second snapshot budget, permits more than 2,000 turn mutations, and indexes prior mutations by path. The selected provenance tests cover attribution including repeated mutations of one path, parallel actors, persistence, large path and byte sets, and the changed mutation schema. The selected turn-write tests cover off-event-loop capture, tool-only hook behavior, the time budget, and large-file snapshots.",
   "exclusions": "No frontend, browser, Rust, or settings behavior changed, so those test layers are omitted. Other Core tests do not exercise workspace provenance or the native hook observation boundary. A disposable LAN Core check will cover the project-native hook journey separately.",
   "expected_tests": {
-    "python": 29,
+    "python": 30,
     "frontend": 0,
     "native": 0,
     "playwright": 0
