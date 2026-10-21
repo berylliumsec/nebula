@@ -1,6 +1,7 @@
 .launcher { position: fixed; z-index: 85; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-overlay); color: var(--text); box-shadow: 0 8px 25px rgb(0 0 0 / 18%); cursor: pointer; }
 .launcherAttention { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border: 2px solid var(--surface-overlay); border-radius: 50%; background: var(--danger, var(--text)); pointer-events: none; }
 .launcher:focus-visible, .panel :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.backdrop { display: none; }
 .panel { position: fixed; z-index: 85; left: var(--panel-left, 12px); top: var(--panel-top, 72px); box-sizing: border-box; display: flex; flex-direction: column; width: min(560px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - var(--panel-top, 72px) - 12px)); border: 1px solid var(--border); border-radius: 18px; background: var(--surface-overlay); color: var(--text); box-shadow: 0 24px 80px rgb(0 0 0 / 24%); }
 .panel[hidden] { display: none; }
 .panel button { min-width: 44px; min-height: 44px; }
@@ -22,8 +23,6 @@
 .emptyConversation { padding: 20px 4px 16px; }
 .emptyConversation strong { font-size: 1rem; }
 .emptyConversation p { max-width: 32ch; margin: 6px 0 0; color: var(--muted); font-size: .86rem; }
-.moreActions { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 12px; }
-.moreActions button { display: inline-flex; align-items: center; gap: 8px; }
 .ownSettings { border-bottom: 1px solid var(--border); padding: 2px 0 14px; margin-bottom: 12px; }
 .settingsHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .settingsHeading span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .8rem; }
@@ -88,15 +87,18 @@
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   .launcher { bottom: calc(80px + env(safe-area-inset-bottom)); }
-  .panel { inset: 0; width: 100%; height: min(100dvh, var(--panel-visual-height, 100dvh)); max-height: min(100dvh, var(--panel-visual-height, 100dvh)); padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border: 0; border-radius: 0; }
-  .header { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 44px); gap: 6px; padding: 8px 12px; }
+  .backdrop:not([hidden]) { position: fixed; z-index: 84; inset: 0; display: block; width: 100%; height: 100%; border: 0; background: rgb(0 0 0 / 28%); cursor: default; }
+  .backdrop:focus-visible { outline: 2px solid var(--focus); outline-offset: -4px; }
+  .panel { left: 50%; right: auto; top: auto; bottom: calc(var(--panel-visual-bottom, 0px) + max(12px, env(safe-area-inset-bottom))); width: min(560px, calc(100vw - 24px)); height: min(78dvh, 640px, calc(var(--panel-visual-height, 100dvh) - 24px - env(safe-area-inset-bottom))); max-height: calc(var(--panel-visual-height, 100dvh) - 24px - env(safe-area-inset-bottom)); padding: 0; transform: translateX(-50%); }
+  .header { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 44px); gap: 6px; padding: 8px 12px; }
   .header .dragButton { display: none; }
   .identity { grid-column: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
   .identity strong { flex: none; white-space: nowrap; }
   .identity small { max-width: 100%; }
-  .header .settingsButton { grid-column: 2; }
-  .header .hideButton { grid-column: 3; }
-  .header .closeButton { grid-column: 4; }
+  .header .voiceButton { grid-column: 2; }
+  .header .settingsButton { grid-column: 3; }
+  .header .hideButton { grid-column: 4; }
+  .header .closeButton { grid-column: 5; }
   .body { flex: 1; min-height: 0; }
   .transcript { max-height: none; overflow: visible; }
   .turnStatus { flex-wrap: wrap; }

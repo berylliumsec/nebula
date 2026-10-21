@@ -6503,13 +6503,17 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
     await expect(assistant.getByRole("button", {name: "Chat"})).toHaveAttribute("aria-current", "page");
+    const voiceButton = assistant.getByRole("button", {name: "Start Butler Voice"});
     const settingsButton = assistant.getByRole("button", {name: "Butler settings"});
     const hideButton = assistant.getByRole("button", {name: "Hide Butler"});
     const closeButton = assistant.getByRole("button", {name: "Close Butler"});
-    const [settingsBox, hideBox, closeBox] = await Promise.all([
-      settingsButton.boundingBox(), hideButton.boundingBox(), closeButton.boundingBox(),
+    const [voiceBox, settingsBox, hideBox, closeBox] = await Promise.all([
+      voiceButton.boundingBox(), settingsButton.boundingBox(), hideButton.boundingBox(), closeButton.boundingBox(),
     ]);
-    expect(settingsBox && hideBox && closeBox && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+    expect(voiceBox && settingsBox && hideBox && closeBox && voiceBox.x < settingsBox.x && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+    expect(voiceBox?.width).toBeGreaterThanOrEqual(44);
+    expect(voiceBox?.height).toBeGreaterThanOrEqual(44);
+    await expect(voiceButton).toHaveText("");
     expect(hideBox?.width).toBeGreaterThanOrEqual(44);
     expect(hideBox?.height).toBeGreaterThanOrEqual(44);
     await expect(hideButton).toHaveText("");
@@ -11046,7 +11050,9 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await expect(page.getByRole("button", {name: "New chat", exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Open Butler"}).click();
     const controlAssistant = page.getByRole("dialog", {name: "Butler"});
-    await controlAssistant.getByRole("button", {name: "More"}).click();
+    const sheet = await controlAssistant.boundingBox();
+    expect(sheet!.y).toBeGreaterThanOrEqual(40);
+    expect(sheet!.height).toBeLessThanOrEqual(page.viewportSize()!.height * 0.8);
     await expect(controlAssistant.getByRole("button", {name: "Start Butler Voice"})).toBeVisible();
     await controlAssistant.getByRole("button", {name: "Start Butler Voice"}).click();
     await expect(page.getByRole("dialog", {name: "Butler Voice"}).getByRole("alert")).toContainText("trusted HTTPS address");

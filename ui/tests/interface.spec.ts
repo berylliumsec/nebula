@@ -2303,7 +2303,6 @@ reloadTest("stabilization Butler Voice pauses and resumes without losing project
   });
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("button", { name: "Open Butler" }).click();
-  await page.getByRole("dialog", { name: "Butler" }).getByRole("button", { name: "More" }).click();
   await page.getByRole("button", { name: "Start Butler Voice" }).click();
   const voice = page.getByRole("dialog", { name: "Butler Voice" });
   await expect(voice).toBeVisible();
@@ -2406,13 +2405,20 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
   await expect(butler.getByRole("region", { name: "Chat" })).toBeVisible();
   await expect(butler.getByText("Ask Butler", { exact: true })).toBeVisible();
+  const voice = butler.getByRole("button", { name: "Start Butler Voice" });
   const settings = butler.getByRole("button", { name: "Butler settings" });
   const hide = butler.getByRole("button", { name: "Hide Butler" });
   const close = butler.getByRole("button", { name: "Close Butler" });
+  const voiceBox = await voice.boundingBox();
   const settingsBox = await settings.boundingBox();
   const hideBox = await hide.boundingBox();
   const closeBox = await close.boundingBox();
-  expect(settingsBox && hideBox && closeBox && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+  expect(voiceBox && settingsBox && hideBox && closeBox && voiceBox.x < settingsBox.x && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+  expectTouchTarget(voiceBox?.width, "Start Butler Voice width");
+  expectTouchTarget(voiceBox?.height, "Start Butler Voice height");
+  await expect(voice).toHaveText("");
+  await expect(voice.locator("svg")).toHaveCount(1);
+  await expect(voice).toHaveAttribute("title", "Start Butler Voice");
   expectTouchTarget(hideBox?.width, "Hide Butler width");
   expectTouchTarget(hideBox?.height, "Hide Butler height");
   await expect(hide).toHaveText("");
@@ -2422,8 +2428,8 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   await expect(butler.getByRole("region", { name: "Butler oversight" })).toBeVisible();
   await expect(composer).toHaveValue("Draft stays with Butler");
   await butler.getByRole("button", { name: "More" }).click();
-  await expect(butler.getByRole("button", { name: "Start Butler Voice" })).toBeVisible();
-  await expect(butler.getByRole("group", { name: "Butler options" }).getByRole("button", { name: "Hide Butler" })).toHaveCount(0);
+  await expect(voice).toBeVisible();
+  await expect(butler.getByRole("region", { name: "More" }).getByRole("button", { name: "Start Butler Voice" })).toHaveCount(0);
   await expect(butler.getByRole("region", { name: "Butler memory" })).toBeVisible();
   await expect(butler.getByText("Settings I can help with")).toBeVisible();
   await butler.getByRole("button", { name: "Chat" }).click();
@@ -2435,13 +2441,45 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   expect(panel && input && input.y + input.height <= panel.y + panel.height).toBe(true);
   const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
   expect(input && input.y + input.height <= visualBottom + 1).toBe(true);
+  const portrait = page.viewportSize()!;
+  if (portrait.width <= 430) {
+    expect(panel!.x).toBeGreaterThanOrEqual(8);
+    expect(panel!.x + panel!.width).toBeLessThanOrEqual(portrait.width - 8);
+    expect(panel!.y).toBeGreaterThanOrEqual(40);
+    expect(panel!.height).toBeLessThanOrEqual(portrait.height * 0.8);
+    await expect(page.getByRole("button", { name: "Dismiss Butler panel" })).toBeVisible();
+    await page.setViewportSize({ width: portrait.width, height: 430 });
+    const keyboardPanel = await butler.boundingBox();
+    const keyboardInput = await composer.boundingBox();
+    expect(keyboardPanel!.y).toBeGreaterThanOrEqual(8);
+    expect(keyboardInput!.y + keyboardInput!.height).toBeLessThanOrEqual(431);
+    await page.setViewportSize(portrait);
+    await page.evaluate(() => {
+      const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
+      const simulated = Object.assign(new EventTarget(), {
+        width: innerWidth, height: 320, offsetLeft: 0, offsetTop: 120, pageLeft: 0, pageTop: 120, scale: 1,
+      });
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: simulated });
+      (window as Window & { restoreButlerViewport?: () => void }).restoreButlerViewport = () => {
+        if (original) Object.defineProperty(window, "visualViewport", original);
+        else delete (window as Window & { visualViewport?: VisualViewport }).visualViewport;
+        window.dispatchEvent(new Event("resize"));
+      };
+      window.dispatchEvent(new Event("resize"));
+    });
+    const shiftedPanel = await butler.boundingBox();
+    const shiftedInput = await composer.boundingBox();
+    expect(shiftedPanel!.y).toBeGreaterThanOrEqual(120);
+    expect(shiftedPanel!.y + shiftedPanel!.height).toBeLessThanOrEqual(440);
+    expect(shiftedInput!.y + shiftedInput!.height).toBeLessThanOrEqual(440);
+    await page.evaluate(() => (window as Window & { restoreButlerViewport?: () => void }).restoreButlerViewport?.());
+  }
   expect(await butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
   for (const name of ["Chat", "Work", "More"]) {
     const button = await butler.getByRole("button", { name }).boundingBox();
     expectTouchTarget(button?.height, `${name} tab height`);
   }
   expect((await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
-  const portrait = page.viewportSize()!;
   if (portrait.width <= 430) {
     await page.setViewportSize({ width: 844, height: 390 });
     await expect.poll(async () => butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
@@ -2454,6 +2492,12 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   await expect(page.getByRole("button", { name: "Show Butler" })).toBeVisible();
   await page.getByRole("button", { name: "Show Butler" }).click();
   await expect(composer).toHaveValue("Draft stays with Butler");
+  if (portrait.width <= 430) {
+    await page.getByRole("button", { name: "Dismiss Butler panel" }).click({ position: { x: 8, y: 8 } });
+    await expect(butler).toBeHidden();
+    await page.getByRole("button", { name: "Show Butler" }).click();
+    await expect(composer).toHaveValue("Draft stays with Butler");
+  }
   await butler.getByRole("button", { name: "Close Butler" }).click();
   await page.getByRole("button", { name: "Open Butler" }).click();
   await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
@@ -15140,18 +15184,19 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await page.getByRole("button", {name: "Open Butler"}).click();
   const controlAssistant = page.getByRole("dialog", {name: "Butler"});
   await expect(controlAssistant).toBeVisible();
-  await controlAssistant.getByRole("button", {name: "More"}).click();
   const startVoice = controlAssistant.getByRole("button", {name: "Start Butler Voice"});
   await expect(startVoice).toBeVisible();
   if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
     const button = await startVoice.boundingBox();
-    const panel = await controlAssistant.boundingBox();
+    const settingsButton = await controlAssistant.getByRole("button", {name: "Butler settings"}).boundingBox();
     const composer = controlAssistant.getByRole("textbox", {name: "Ask Butler a question"});
     const composerBox = await composer.boundingBox();
     const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
-    expect(button!.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 48);
-    expect(button!.height).toBeGreaterThanOrEqual(48);
-    expect(button!.y).toBeGreaterThanOrEqual(panel!.y + 44);
+    expectTouchTarget(button?.width, "Start Butler Voice width");
+    expectTouchTarget(button?.height, "Start Butler Voice height");
+    expect(Math.abs(button!.y - settingsButton!.y)).toBeLessThanOrEqual(1);
+    expect(button!.x).toBeLessThan(settingsButton!.x);
+    await expect(startVoice).toHaveText("");
     expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(visualBottom + 1);
     await expect(composer).not.toBeFocused();
     await expect(controlAssistant.getByRole("button", {name: "Move Butler"})).toBeHidden();
