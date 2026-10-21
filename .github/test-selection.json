@@ -1,31 +1,50 @@
 {
-  "change_digest": "2f119f181bb61c95bd1a34e5bcb3c9afde2fb22e5526fd5fbc5e1b2497080551",
+  "change_digest": "1c7df2cce356f0ebba2572e716f8390a86fd904abd818907219cc73f9b97d1a6",
   "reviewed_by": "Codex agent, 2026-10-21",
-  "reason": "Move the transient Hide Butler action from More into the icon-only header beside Settings. The Butler component cases cover discoverability, order, and draft preservation. The popup browser journey covers geometry, touch targets, accessibility, hide/restore, and responsive desktop and mobile profiles. The selected production LAN Core journey verifies the candidate bundle and the same control against a disposable Core with synthetic project and model fixtures.",
-  "exclusions": "No Core API, durable state, provider behavior, or Rust source changed, so Python and native tests are excluded. Other Butler work, voice, memory, and settings journeys are outside this header layout change. Browser testing is limited to the existing Butler popup journey and its one real-Core integration journey, not the full interface suite.",
+  "reason": "A saved harness chat now changes its durable binding to a provider at an idle boundary, preserving the same transcript and paused goal. Selected Python cases cover API mutation, blockers, provider and harness continuation, settings assistant discovery, product index and Chroma sync. Frontend cases cover destination and null-provider API mapping. The catalogued browser journey covers refusal, retry, same-chat provider turn, refresh, accessibility and responsive production-LAN behavior.",
+  "exclusions": "Other chat, mission, provider administration, and Butler scheduling journeys are outside this diff. No Rust source changed. No browser-backed or Node-dependent Python cases are selected. The 12 browser entries target only the new runtime-switch journey, not all projects or suites.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 43,
+    "python": 13,
+    "frontend": 5,
     "native": 0,
-    "playwright": 9
+    "playwright": 12
   },
-  "python": [],
+  "python_versions": [
+    "3.11"
+  ],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_chat_api.py::test_idle_harness_chat_switches_to_provider_and_saves_provider_turn",
+    "tests/v3/test_chat_api.py::test_harness_to_provider_switch_waits_for_active_work",
+    "tests/v3/test_chat_api.py::test_model_and_effort_change_while_a_response_is_active",
+    "tests/v3/test_chat.py::test_runtime_switch_requires_revision_bound_compaction_confirmation",
+    "tests/v3/test_chat_queue.py::test_follow_up_is_reviewed_when_the_conversation_moves_provider",
+    "tests/v3/test_harness_chat_goals.py::test_goal_resume_uses_saved_next_harness_in_same_chat",
+    "tests/v3/test_control_assistant_work.py::test_saved_harness_switch_binds_on_next_message_in_disposable_core",
+    "tests/v3/test_control_assistant_work.py::test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_harness_to_provider_chat_switch",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+  ],
   "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx"
+    "ui/src/api/client.assistantConfig.test.ts",
+    "ui/src/assistantDestinations.test.ts"
   ],
   "native": [],
   "playwright": [
-    "butler-interface-refinement/desktop",
-    "butler-interface-refinement/compact",
-    "butler-interface-refinement/mobile-chromium-small",
-    "butler-interface-refinement/mobile-chromium-ledger-390",
-    "butler-interface-refinement/mobile-chromium-wide",
-    "butler-interface-refinement/mobile-webkit-small",
-    "butler-interface-refinement/mobile-webkit",
-    "butler-interface-refinement/mobile-webkit-wide",
-    "butler-interface-refinement/assistant-real-desktop"
-  ],
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false
+    "harness-provider-switch/desktop",
+    "harness-provider-switch/compact",
+    "harness-provider-switch/mobile-chromium",
+    "harness-provider-switch/mobile-webkit",
+    "harness-provider-switch/assistant-real-desktop",
+    "harness-provider-switch/assistant-real-compact",
+    "harness-provider-switch/assistant-real-chromium-320",
+    "harness-provider-switch/assistant-real-chromium-390",
+    "harness-provider-switch/assistant-real-chromium-430",
+    "harness-provider-switch/assistant-real-webkit-320",
+    "harness-provider-switch/assistant-real-webkit-390",
+    "harness-provider-switch/assistant-real-webkit-430"
+  ]
 }

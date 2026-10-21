@@ -2096,6 +2096,10 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
         "does not attach an MCP browser"
         in (work.catalog(project.id, "nebula.work.chat_settings")["description"])
     )
+    assert (
+        "does not rebind a harness chat to a provider"
+        in (work.catalog(project.id, "nebula.work.set_chat_settings")["description"])
+    )
     with pytest.raises(ValueError, match="work roster"):
         work.chat_settings(other.id, chat.id)
 

@@ -122,7 +122,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.harnesses",
     label: "Assistant harnesses",
-    description: "Configure assistant harnesses and ask providers, Codex, or Grok to share an optional task plan with subagents while keeping their normal tools available; Butler can switch the saved main harness for the next message",
+    description: "Configure assistant harnesses and optional task plans. To switch one saved harness conversation to a provider, open that conversation's Assistant settings and choose Provider when it is idle",
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",

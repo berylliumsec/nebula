@@ -66,6 +66,12 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
     )
     assert (
+        "switch from harness to provider"
+        in next(item for item in result["destinations"] if item["id"] == "chat")[
+            "aliases"
+        ]
+    )
+    assert (
         next(item for item in result["settings"] if item["id"] == "storage")["url"]
         == "/settings#storage-integration-settings"
     )
