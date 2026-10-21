@@ -1,31 +1,19 @@
 {
-  "change_digest": "241f7cb18632e59e48c0636f8921f0241f8738443f9cb70c5d5ff63755e1acf9",
+  "change_digest": "e47c4d733c4abc324af1b54f465a374470be1198ee9cb33e2a301ea26044b269",
   "reviewed_by": "Codex agent, 2026-10-21",
-  "reason": "The Butler header now places icon-only Voice and Hide directly beside Settings in every view. The selected component file checks disabled and enabled Voice entry, the existing Voice dialog, draft continuity, and header order. The mocked browser selections check the header at desktop and mobile widths, Voice entry, and the iPhone shell. The real-Core selections exercise the production LAN Butler journey and the iPhone Voice entry after pairing. One pre-existing theme-flow component case receives a 10-second timeout because its three typed requests exceed the former five-second limit on this host. The iPhone Butler panel now occupies a contained sheet with a dimmed dismissal backdrop; selected mobile browser and real-Core journeys check that the header and composer stay in the shortened visual viewport. The selected iPhone browser case simulates both a shorter viewport and a nonzero visualViewport offset to reproduce the keyboard shift shown by the operator.",
-  "exclusions": "No Core, provider, storage, settings behavior, or Rust code changed, so no Python or native tests are relevant. Other catalogued journeys sharing the Butler component do not exercise the changed header or Voice entry. Physical devices are unavailable; the selected mobile Chromium and WebKit profiles are emulated.",
+  "reason": "Workspace provenance for project-native hooks now fingerprints dirty Git paths without fixed path or byte caps, keeps the ten-second snapshot budget, permits more than 2,000 turn mutations, and indexes prior mutations by path. The selected provenance tests cover attribution, parallel actors, persistence, large path and byte sets, and the changed mutation schema. The selected turn-write tests cover off-event-loop capture, tool-only hook behavior, the time budget, and large-file snapshots.",
+  "exclusions": "No frontend, browser, Rust, or settings behavior changed, so those test layers are omitted. Other Core tests do not exercise workspace provenance or the native hook observation boundary. A disposable LAN Core check will cover the project-native hook journey separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 43,
+    "python": 29,
+    "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx"
+  "python": [
+    "tests/v3/test_workspace_provenance.py",
+    "tests/v3/test_turn_write_amplification.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-interface-refinement/desktop",
-    "butler-interface-refinement/compact",
-    "butler-interface-refinement/mobile-chromium-small",
-    "butler-interface-refinement/mobile-chromium-ledger-390",
-    "butler-interface-refinement/mobile-chromium-wide",
-    "butler-interface-refinement/mobile-webkit-small",
-    "butler-interface-refinement/mobile-webkit",
-    "butler-interface-refinement/mobile-webkit-wide",
-    "nebula-voice/mobile-webkit",
-    "ios-assistant-only/mobile-webkit",
-    "butler-interface-refinement/assistant-real-desktop",
-    "ios-assistant-only/assistant-real-webkit-390"
-  ]
+  "playwright": []
 }

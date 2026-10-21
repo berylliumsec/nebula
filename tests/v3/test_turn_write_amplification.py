@@ -913,16 +913,15 @@ def test_workspace_snapshot_past_its_time_limit_is_unsupported(tmp_path, monkeyp
     assert observed.paths == {}
 
 
-def test_workspace_snapshot_past_its_byte_limit_is_unsupported(tmp_path, monkeypatch):
+def test_workspace_snapshot_large_file_has_no_fixed_byte_limit(tmp_path):
     root = _git_repository(tmp_path)
-    (root / "capture.bin").write_bytes(b"x" * 4_096)
-    monkeypatch.setattr(workspace_provenance, "MAX_DIRTY_BYTES", 1_024)
+    with (root / "capture.bin").open("wb") as handle:
+        handle.truncate(257 * 1024 * 1024)
 
     observed = workspace_provenance.snapshot(root)
 
-    assert not observed.supported
-    assert observed.reason == "dirty_bytes_limit_exceeded:4096>1024"
-    assert observed.paths == {}
+    assert observed.supported
+    assert observed.paths["capture.bin"]["size"] == 257 * 1024 * 1024
 
 
 def test_entity_update_validates_the_changed_payload_once(tmp_path):

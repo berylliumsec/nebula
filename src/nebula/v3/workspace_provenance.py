@@ -15,7 +15,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from .domain import (
@@ -27,11 +27,8 @@ from .storage import ConflictError, NebulaStore, NotFoundError
 
 
 PROVENANCE_SCHEMA = "nebula.workspace-provenance/v1"
-MAX_DIRTY_PATHS = 2_000
-# Bytes of dirty regular files one snapshot may fingerprint, and the time the
-# whole snapshot (Git plus hashing) may take. Past either the receipt is
-# unsupported rather than partial, as for too many dirty paths.
-MAX_DIRTY_BYTES = 256 * 1024 * 1024
+# A wall-clock budget limits the cost without rejecting a checkout merely for
+# containing many paths or large files. An over-budget receipt stays unsupported.
 SNAPSHOT_TIME_LIMIT_SECONDS = 10.0
 
 
@@ -106,11 +103,13 @@ def _decode_path(raw: bytes) -> str:
     return raw.decode("utf-8", "surrogateescape")
 
 
-def _dirty_entries(output: bytes) -> dict[str, str]:
+def _dirty_entries(output: bytes, *, deadline: float) -> dict[str, str]:
     fields = output.split(b"\0")
     entries: dict[str, str] = {}
     index = 0
     while index < len(fields):
+        if index % 1024 == 0:
+            _remaining(deadline)
         item = fields[index]
         index += 1
         if not item:
@@ -128,33 +127,21 @@ def _dirty_entries(output: bytes) -> dict[str, str]:
     return entries
 
 
-def _dirty_file_bytes(root: Path, paths: Iterable[str]) -> int:
-    """Total size of the dirty regular files a snapshot would hash."""
-
-    total = 0
-    for relative in paths:
-        try:
-            state = os.lstat(root / relative)
-        except OSError:  # diagnostic-expected: an absent or unreadable path is recorded as such when fingerprinted
-            continue
-        if stat.S_ISREG(state.st_mode):
-            total += state.st_size
-    return total
-
-
 def _path_state(
     root: Path, relative: str, status: str, *, deadline: float
 ) -> dict[str, Any]:
+    _remaining(deadline)
     path = root / relative
     try:
         path.relative_to(root)
     except ValueError as exc:
         raise ValueError(f"dirty path escaped the workspace: {relative!r}") from exc
     try:
-        if path.is_symlink():
+        file_state = os.lstat(path)
+        if stat.S_ISLNK(file_state.st_mode):
             data = os.readlink(path).encode("utf-8", "surrogateescape")
             kind = "symlink"
-        elif path.is_file():
+        elif stat.S_ISREG(file_state.st_mode):
             digest = hashlib.sha256()
             size = 0
             with path.open("rb") as handle:
@@ -168,11 +155,11 @@ def _path_state(
                 "sha256": digest.hexdigest(),
                 "size": size,
             }
-        elif path.exists():
+        else:
             data = b"directory"
             kind = "directory"
-        else:
-            return {"status": status, "kind": "absent", "sha256": None, "size": 0}
+    except FileNotFoundError:
+        return {"status": status, "kind": "absent", "sha256": None, "size": 0}
     except OSError as exc:  # diagnostic-expected: unreadable path state is represented in the receipt without aborting the hook
         return {
             "status": status,
@@ -194,8 +181,8 @@ def snapshot(
 ) -> _Snapshot:
     """Fingerprint only the checkout paths Git already reports as dirty.
 
-    Bounded by ``MAX_DIRTY_PATHS``, ``MAX_DIRTY_BYTES`` and ``time_limit``;
-    a snapshot past any bound is an unsupported receipt, never a partial one.
+    Bounded by ``time_limit``; a snapshot past the budget is an unsupported
+    receipt, never a partial one.
     """
 
     deadline = time.monotonic() + time_limit
@@ -243,24 +230,9 @@ def _bounded_snapshot(workspace: Path, deadline: float) -> _Snapshot:
             False, str(root), {}, f"git_status_failed:{detail or status.returncode}"
         )
     try:
-        entries = _dirty_entries(status.stdout)
+        entries = _dirty_entries(status.stdout, deadline=deadline)
     except ValueError as exc:  # diagnostic-expected: malformed Git output becomes an explicit unsupported receipt
         return _Snapshot(False, str(root), {}, f"git_status_invalid:{exc}")
-    if len(entries) > MAX_DIRTY_PATHS:
-        return _Snapshot(
-            False,
-            str(root),
-            {},
-            f"dirty_path_limit_exceeded:{len(entries)}>{MAX_DIRTY_PATHS}",
-        )
-    dirty_bytes = _dirty_file_bytes(root, entries)
-    if dirty_bytes > MAX_DIRTY_BYTES:
-        return _Snapshot(
-            False,
-            str(root),
-            {},
-            f"dirty_bytes_limit_exceeded:{dirty_bytes}>{MAX_DIRTY_BYTES}",
-        )
     return _Snapshot(
         True,
         str(root),
@@ -437,6 +409,16 @@ class WorkspaceProvenanceService:
             key=lambda item: (item.completed_at or item.started_at, item.id),
             reverse=True,
         )
+        prior_mutations: dict[
+            str, list[tuple[WorkspaceProvenanceObservation, dict[str, Any]]]
+        ] = {}
+        for candidate in completed:
+            seen_paths: set[str] = set()
+            for entry in reversed(candidate.mutations):
+                path = entry.get("path")
+                if isinstance(path, str) and path in current and path not in seen_paths:
+                    seen_paths.add(path)
+                    prior_mutations.setdefault(path, []).append((candidate, entry))
         current_mutations = {row["path"]: row for row in mutations}
         for path, state in sorted(current.items()):
             row = current_mutations.get(path)
@@ -445,16 +427,8 @@ class WorkspaceProvenanceService:
                 result["uncertain" if confidence != "exact" else "owned"].append(item)
                 continue
             matched: tuple[WorkspaceProvenanceObservation, dict[str, Any]] | None = None
-            for candidate in completed:
-                mutation = next(
-                    (
-                        entry
-                        for entry in reversed(candidate.mutations)
-                        if entry.get("path") == path and entry.get("after") == state
-                    ),
-                    None,
-                )
-                if mutation is not None:
+            for candidate, mutation in prior_mutations.get(path, []):
+                if mutation.get("after") == state:
                     matched = candidate, mutation
                     break
             if matched is not None:
@@ -493,7 +467,6 @@ class WorkspaceProvenanceService:
 
 
 __all__ = [
-    "MAX_DIRTY_BYTES",
     "PROVENANCE_SCHEMA",
     "SNAPSHOT_TIME_LIMIT_SECONDS",
     "WorkspaceProvenanceService",

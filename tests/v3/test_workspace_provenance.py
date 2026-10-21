@@ -177,3 +177,24 @@ def test_non_git_workspace_is_explicitly_unsupported_and_subagent_id_is_stable(
     assert not started.supported
     assert completed.confidence == "unsupported"
     assert completed.unsupported_reason == "workspace_is_not_a_git_checkout"
+
+
+def test_large_dirty_checkout_has_no_path_byte_or_mutation_ceiling(tmp_path):
+    root = _repository(tmp_path)
+    large = root / "large.bin"
+    with large.open("wb") as handle:
+        handle.truncate(257 * 1024 * 1024)
+    service, _ = _service(tmp_path)
+    started = _begin(service, root, scope="large-turn", actor="chat:large")
+    for index in range(2_001):
+        (root / f"created-{index:04d}.txt").write_text("owned\n", encoding="utf-8")
+
+    completed = service.finish(
+        root, engagement_id="eng", scope_kind="turn", scope_id="large-turn"
+    )
+
+    assert started.supported
+    assert completed.supported
+    assert len(completed.mutations) == 2_001
+    assert len(completed.attribution["owned"]) == 2_001
+    assert completed.attribution["preexisting"][0]["path"] == "large.bin"
