@@ -104,6 +104,30 @@ def test_provenance_keeps_prior_actor_ownership_across_later_turns(tmp_path):
     ] == [("shared.txt", "chat:a")]
 
 
+def test_prior_actor_index_preserves_an_earlier_matching_mutation(tmp_path):
+    root = _repository(tmp_path)
+    service, _ = _service(tmp_path)
+    _begin(service, root, scope="turn-a", actor="chat:a")
+    (root / "shared.txt").write_text("from a\n", encoding="utf-8")
+    prior = service.finish(
+        root, engagement_id="eng", scope_kind="turn", scope_id="turn-a"
+    )
+    current = snapshot(root).paths
+    prior.mutations.append(
+        {
+            **prior.mutations[0],
+            "after": {**current["shared.txt"], "sha256": "0" * 64},
+        }
+    )
+    started = _begin(service, root, scope="turn-b", actor="chat:b")
+
+    attribution = service._classify(started, current, [], "exact", [prior])
+
+    assert [(row["path"], row["actor_id"]) for row in attribution["other"]] == [
+        ("shared.txt", "chat:a")
+    ]
+
+
 def test_active_observation_survives_store_reopen(tmp_path):
     root = _repository(tmp_path)
     service, _ = _service(tmp_path)
@@ -177,3 +201,24 @@ def test_non_git_workspace_is_explicitly_unsupported_and_subagent_id_is_stable(
     assert not started.supported
     assert completed.confidence == "unsupported"
     assert completed.unsupported_reason == "workspace_is_not_a_git_checkout"
+
+
+def test_large_dirty_checkout_has_no_path_byte_or_mutation_ceiling(tmp_path):
+    root = _repository(tmp_path)
+    large = root / "large.bin"
+    with large.open("wb") as handle:
+        handle.truncate(257 * 1024 * 1024)
+    service, _ = _service(tmp_path)
+    started = _begin(service, root, scope="large-turn", actor="chat:large")
+    for index in range(2_001):
+        (root / f"created-{index:04d}.txt").write_text("owned\n", encoding="utf-8")
+
+    completed = service.finish(
+        root, engagement_id="eng", scope_kind="turn", scope_id="large-turn"
+    )
+
+    assert started.supported
+    assert completed.supported
+    assert len(completed.mutations) == 2_001
+    assert len(completed.attribution["owned"]) == 2_001
+    assert completed.attribution["preexisting"][0]["path"] == "large.bin"
