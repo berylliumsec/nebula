@@ -9889,7 +9889,7 @@ export class ApiClient {
     ).then((value) => ({
       sessionId: String(value.session_id),
       sessionRevision: Number(value.session_revision),
-      currentProviderId: String(value.current_provider_id),
+      currentProviderId: typeof value.current_provider_id === "string" ? value.current_provider_id : undefined,
       currentModel: String(value.current_model),
       targetProviderId: String(value.target_provider_id),
       targetModel: String(value.target_model),

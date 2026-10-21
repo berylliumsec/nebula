@@ -30,6 +30,24 @@ it("maps saved next-turn settings and sends a revision-guarded settings change",
   });
 });
 
+it("maps an unbound harness preflight without inventing a provider ID", async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    session_id: "harness-chat", session_revision: 3,
+    current_provider_id: null, current_model: "harness-model",
+    target_provider_id: "local", target_model: "provider-model", compatible: true,
+    requires_compaction_confirmation: false, estimated_active_input_tokens: 100,
+  }), {status: 200, headers: {"content-type": "application/json"}}));
+  const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", token: "test-token", fetch: fetchMock});
+  const preflight = await client.preflightChatRuntimeSwitch("harness-chat", {
+    providerId: "local", model: "provider-model", toolsEnabled: false, expectedSessionRevision: 3,
+  });
+  expect(preflight.currentProviderId).toBeUndefined();
+  expect(preflight.compatible).toBe(true);
+  expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+    provider_id: "local", model: "provider-model", expected_session_revision: 3,
+  });
+});
+
 it("reserves one project Butler conversation before a Voice or text turn", async () => {
   const session = {
     id: "control", engagement_id: "project", title: "Nebula assistant", backend: "harness",

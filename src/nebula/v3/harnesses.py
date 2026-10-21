@@ -11517,9 +11517,16 @@ class HarnessRuntimeService:
             # Serialize competing sends on PostgreSQL and recheck in the same
             # transaction that saves the turn. SQLite writes are serialized by
             # its single-writer transaction boundary.
-            transaction.session.execute(
-                select(EntityRow.id).where(EntityRow.id == chat.id).with_for_update()
+            current_chat_row = transaction.session.execute(
+                select(EntityRow).where(EntityRow.id == chat.id).with_for_update()
             ).scalar_one()
+            if (
+                current_chat_row.payload.get("backend") != ChatBackend.HARNESS.value
+                or current_chat_row.payload.get("harness_session_id") != session.id
+            ):
+                raise ChatHistoryConflict(
+                    "This conversation changed runtime while the response was starting. Reload it before retrying."
+                )
             self._assert_chat_turn_available(chat.id, database=transaction.session)
             if goal is not None:
                 current_goal = self.store.get(ChatGoal, goal.id)

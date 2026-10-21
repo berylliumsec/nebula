@@ -10570,6 +10570,99 @@ test("notebook real Core runs bundled Python on a LAN origin and restores output
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
+test("assistant upgrade saved harness chat switches to provider in the same production LAN conversation", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const model = await startLocalModelStub({responseContent: "Provider continuation saved in the same chat.", streamDelayMs: 0});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const manifest = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>; builtAt: string};
+    const entry = Object.keys(manifest.assets).find(name => name.startsWith("assets/index-") && name.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(manifest.assets[entry!]);
+    const project = (await (await api.get("engagements")).json() as Array<{id: string}>)[0];
+    expect(project?.id).toBeTruthy();
+    const providerResponse = await api.post("providers", {data: {
+      name: "Local continuation model", provider_type: "vllm", endpoint: `${model.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seed = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ChatBackend, ChatGoal, ChatGoalStatus, ChatMessage, ChatRole, ChatSession, HarnessProfile, HarnessSession",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "project = sys.argv[2]",
+      "store.create(HarnessProfile(id='saved-harness-fixture', name='Saved harness fixture', kind='codex_app_server', executable='/bin/true', default_model='harness-model', capabilities={'models': ['harness-model']}))",
+      "store.create(HarnessSession(id='saved-vendor-fixture', engagement_id=project, harness_profile_id='saved-harness-fixture', model='harness-model'))",
+      "store.create(ChatSession(id='saved-harness-provider-chat', engagement_id=project, title='Saved harness conversation', backend=ChatBackend.HARNESS, harness_profile_id='saved-harness-fixture', harness_session_id='saved-vendor-fixture', model='harness-model', metadata={'message_count': 1, 'last_sequence': 1}))",
+      "store.create(ChatMessage(id='prior-harness-message', engagement_id=project, session_id='saved-harness-provider-chat', sequence=1, role=ChatRole.USER, content='Earlier harness context is still here.'))",
+      "store.create(ChatGoal(id='saved-harness-goal', engagement_id=project, session_id='saved-harness-provider-chat', objective='Continue the same goal', completion_criteria=['Provider reply is saved'], status=ChatGoalStatus.BLOCKED, blocked_reason='Fixture hold', step_budget=3))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), project.id], {
+      cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8",
+    });
+    expect(seed.status, seed.stderr || seed.stdout).toBe(0);
+    await pairRealCoreBrowser(page, core, "Runtime switch LAN browser");
+    await page.goto(`${core.origin}/?view=chat&session=saved-harness-provider-chat`);
+    await expect(page.getByText("Earlier harness context is still here.")).toBeVisible({timeout: 20_000});
+    await clickAssistantSettings(page);
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    const runtime = settings.getByRole("combobox", {name: "Chat runtime"});
+    await expect(runtime).toHaveValue("harness");
+    await runtime.selectOption("provider");
+    await expect(settings.getByRole("status").filter({hasText: "resolve its block"})).toBeVisible();
+    await expect(runtime).toHaveValue("harness");
+    const before = await (await api.get("chat-sessions/saved-harness-provider-chat")).json() as {backend: string};
+    expect(before.backend).toBe("harness");
+    const release = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ChatGoal, ChatGoalStatus",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "goal = store.get(ChatGoal, 'saved-harness-goal')",
+      "store.update(ChatGoal, goal.id, {'status': ChatGoalStatus.PAUSED, 'blocked_reason': None}, expected_revision=goal.revision)",
+    ].join("\n"), path.join(core.dataDir, "nebula.db")], {
+      cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8",
+    });
+    expect(release.status, release.stderr || release.stdout).toBe(0);
+    await runtime.selectOption("provider");
+    await expect(settings.getByRole("status").filter({hasText: "Provider saved on this conversation"})).toBeVisible({timeout: 20_000});
+    await expect(runtime).toHaveValue("provider");
+    await expect(settings.getByRole("combobox", {name: "Chat model"})).toHaveValue("security-model");
+    const switched = await (await api.get("chat-sessions/saved-harness-provider-chat")).json() as {id: string; backend: string; provider_profile_id: string; harness_session_id: string | null; model: string};
+    expect(switched).toMatchObject({id: "saved-harness-provider-chat", backend: "provider", provider_profile_id: provider.id, harness_session_id: null, model: "security-model"});
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Continue in this conversation.");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.getByText("Provider continuation saved in the same chat.")).toBeVisible({timeout: 20_000});
+    expect(model.requests.some(request => request.model === "security-model"
+      && Array.isArray(request.messages)
+      && request.messages.some((message: {content?: unknown}) => message.content === "Earlier harness context is still here.")
+      && request.messages.some((message: {content?: unknown}) => message.content === "Continue in this conversation."))).toBe(true);
+    const messages = await (await api.get("chat/sessions/saved-harness-provider-chat/messages")).json() as Array<{content: string}>;
+    expect(messages.map(message => message.content)).toContain("Earlier harness context is still here.");
+    expect(messages.map(message => message.content)).toContain("Provider continuation saved in the same chat.");
+    const goal = await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json() as {id: string; status: string};
+    expect(goal).toMatchObject({id: "saved-harness-goal", status: "paused"});
+    await page.reload();
+    await expect(page.getByText("Earlier harness context is still here.")).toBeVisible();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Provider continuation saved in the same chat.");
+    await clickAssistantSettings(page);
+    await expect(page.getByRole("combobox", {name: "Chat runtime"})).toHaveValue("provider");
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    await testInfo.attach("harness-provider-switch-lan", {body: JSON.stringify({origin: core.origin, build: "ui/dist production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), sessionId: switched.id, goalId: goal.id, outcome: "blocked, retry, saved provider turn, reload"}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}, {name: "model stub", dispose: () => stopLocalModelStub(model)}]);
+});
+
 test("assistant upgrade harness goal works on production LAN Core across new and existing chats", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startApprovalCore(localNetworkIpv4(), "goal");

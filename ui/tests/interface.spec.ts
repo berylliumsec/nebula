@@ -8319,6 +8319,106 @@ test("assistant settings expose provider metadata and harness model options", as
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+reloadTest("assistant upgrade saved harness chat switches to provider only after Core saves the binding", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "compact", "mobile-chromium", "mobile-webkit"].includes(testInfo.project.name), "Covered by the runtime-switch browser matrix.");
+  const provider = {
+    ...entity, id: "provider-after-harness", name: "Local provider", provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true,
+    model_allowlist: ["provider-model"], capabilities: {streaming: true},
+    privacy: {local_only: true, permits_sensitive_data: true},
+    metadata: {default_model: "provider-model"},
+  };
+  const harness = {
+    ...entity, id: "harness-before-provider", name: "Local harness", kind: "codex_app_server",
+    enabled: true, default_model: "harness-model", capabilities: {models: ["harness-model"]},
+    privacy: {local_only: true, permits_sensitive_data: true},
+  };
+  let switched = false;
+  let blocked = true;
+  let submitted: Record<string, unknown> | undefined;
+  const session = () => ({
+    ...entity, revision: switched ? 2 : 1, id: "harness-provider-chat",
+    engagement_id: "scratch-project", title: "Saved harness context",
+    backend: switched ? "provider" : "harness",
+    provider_profile_id: switched ? provider.id : null,
+    harness_profile_id: switched ? null : harness.id,
+    harness_session_id: switched ? null : "vendor-session",
+    model: switched ? "provider-model" : "harness-model",
+    metadata: {message_count: 1, assistant_config: {
+      backend: switched ? "provider" : "harness", profile_id: switched ? provider.id : harness.id,
+      model: switched ? "provider-model" : "harness-model", mcp_server_ids: [], hook_ids: [],
+      tools_enabled: false, allow_subagents: false,
+    }},
+  });
+  await page.context().route("**/api/v1/**", async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.endsWith("/providers") && request.method() === "GET") return route.fulfill({json: [provider]});
+    if (pathname.endsWith("/harnesses") && request.method() === "GET") return route.fulfill({json: [harness]});
+    if (pathname.endsWith("/harness-sessions/vendor-session/activity")) return route.fulfill({json: {
+      session_id: "vendor-session", session_status: "idle", busy: false, live: false,
+      turn_id: null, turn_status: null, last_activity_at: entity.updated_at, detail: "Saved harness is idle.",
+    }});
+    if (pathname.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({json: [session()]});
+    if (pathname.endsWith("/chat-sessions/harness-provider-chat") && request.method() === "GET") return route.fulfill({json: session()});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/messages")) return route.fulfill({json: [{
+      ...entity, id: "prior-harness-message", engagement_id: "scratch-project",
+      session_id: "harness-provider-chat", sequence: 1, role: "user",
+      content: "Earlier harness context", content_blocks: [], metadata: {},
+    }]});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/pending-turn")) return route.fulfill({json: null});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/goal")) return route.fulfill({status: 404, json: {detail: "No goal"}});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/runtime-switch/preflight")) return route.fulfill({json: {
+      session_id: "harness-provider-chat", session_revision: 1,
+      current_provider_id: null, current_model: "harness-model",
+      target_provider_id: provider.id, target_model: "provider-model",
+      compatible: !blocked, reason_code: blocked ? "harness_not_idle" : null,
+      reason: blocked ? "Wait for the active response before switching to a provider." : null,
+      requires_compaction_confirmation: false, estimated_active_input_tokens: 50,
+      target_context_window: 8000, target_input_tokens: 6000,
+    }});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/runtime-switch") && request.method() === "POST") {
+      switched = true;
+      return route.fulfill({json: session()});
+    }
+    if (pathname.endsWith("/chat/completions") && request.method() === "POST") {
+      submitted = request.postDataJSON() as Record<string, unknown>;
+      return route.fulfill({contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify({
+        type: "done", session_id: "harness-provider-chat", turn_id: "provider-turn", provider_id: provider.id,
+        model: "provider-model", message: {id: "provider-answer", role: "assistant", content: "Provider turn saved."},
+        usage: {input_tokens: 5, output_tokens: 3, total_tokens: 8}, finish_reason: "stop", citations: [],
+      })}\n\n`});
+    }
+    return route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=harness-provider-chat", "Workbench");
+  await expect(page.getByText("Earlier harness context")).toBeVisible();
+  await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+  const settings = page.getByRole("dialog", {name: "Assistant settings"});
+  const runtime = settings.getByRole("combobox", {name: "Chat runtime"});
+  await expect(runtime).toHaveValue("harness");
+  await runtime.selectOption("provider");
+  await expect(settings.getByRole("status").filter({hasText: "active response"})).toBeVisible();
+  await expect(runtime).toHaveValue("harness");
+  expect(switched).toBe(false);
+  blocked = false;
+  await runtime.selectOption("provider");
+  await expect(settings.getByRole("status").filter({hasText: "Provider saved on this conversation"})).toBeVisible();
+  await expect(runtime).toHaveValue("provider");
+  expect(switched).toBe(true);
+  expect((await new AxeBuilder({page}).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
+  await settings.getByRole("button", {name: "Close assistant settings"}).click();
+  await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Continue here");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  await expect(page.getByText("Provider turn saved.")).toBeVisible();
+  expect(submitted).toMatchObject({backend: "provider", provider_id: provider.id, session_id: "harness-provider-chat"});
+  await page.reload();
+  await expect(page.getByText("Earlier harness context")).toBeVisible();
+  await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+  await expect(page.getByRole("combobox", {name: "Chat runtime"})).toHaveValue("provider");
+  expect(await page.locator("body").evaluate(body => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 test("assistant upgrade provider model switch keeps the saved model until compaction is confirmed", async ({ page }, testInfo) => {
   test.skip(!["desktop", "mobile-chromium", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent provider-switch matrix.");
   const pageErrors: Error[] = [];

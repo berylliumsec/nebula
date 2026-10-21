@@ -45,6 +45,7 @@ Settings assistant and the complete destination catalog.
 | Ask for a task plan | The chat's Assistant settings asks any provider or harness agent to share a plan on future turns, or Butler records one exact one-task request with the target revision and reason. Normal tools remain available, and the activity view shows whether a plan was shared | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
 | Hand off a previously planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source; the new planning preference is advisory | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
 | Edit a goal's resume instruction | Chat → Goal → Edit goal shows the saved text; the current Core wording is the default. Saving it updates the goal by revision, and the next explicit Resume sends that text in the same conversation. Automatic continuation turns retain their separate Core instruction | Core goal record and resumed turn; goal editor owns the draft | Core unit, component, real Core and browser |
+| Switch a saved harness chat to a provider | Chat → Assistant settings → Runtime → Provider checks the chosen provider and model, then Core changes the same chat's durable binding at an idle boundary. The chat ID, transcript, and paused goal stay in place; the next provider turn is saved there. An active response, running or blocked goal, working subagent, or queued follow-up gives an actionable refusal | Core chat binding and goal; React owns only the unsaved picker choice | Core unit, desktop/mobile browser, real Core and LAN |
 
 The setting catalog lists every Settings section, Butler's Voice control, and
 the Nebula-wide Butler instruction editor. Dedicated actions handle
@@ -123,6 +124,13 @@ Butler can save a different main harness and provider subagent on the same chat.
 The saved choice becomes the bound runtime when a new message starts; Butler
 checks the resulting turn before reporting a goal resumed. Immediate messages
 carry the same saved MCP servers and Plan choice as queued next messages.
+For a harness-to-provider change, opening the saved chat's Assistant settings
+and choosing Provider uses Core's runtime-switch preflight and apply actions.
+The switch is saved only after Core reads it back as a provider chat. It waits
+for the harness response and subagents to finish, and for the goal to be paused
+or settled with its follow-up queue clear. Provider turns then append to the
+same transcript and retain the original goal ID. Saving only a next-turn
+Assistant configuration is not proof that the backend binding changed.
 `nebula.work.require_plan` records a one-task request against an exact
 agent, goal, child, or turn, using a fresh target revision and concrete reason.
 An active harness turn reports that the directive takes effect next turn. The
