@@ -1,5 +1,5 @@
 {
-  "change_digest": "e47c4d733c4abc324af1b54f465a374470be1198ee9cb33e2a301ea26044b269",
+  "change_digest": "501c93b24a9d0e6604b843ee7276dc9d14ce853cefc5d991ef6e12a729ffcac0",
   "reviewed_by": "Codex agent, 2026-10-21",
   "reason": "Workspace provenance for project-native hooks now fingerprints dirty Git paths without fixed path or byte caps, keeps the ten-second snapshot budget, permits more than 2,000 turn mutations, and indexes prior mutations by path. The selected provenance tests cover attribution, parallel actors, persistence, large path and byte sets, and the changed mutation schema. The selected turn-write tests cover off-event-loop capture, tool-only hook behavior, the time budget, and large-file snapshots.",
   "exclusions": "No frontend, browser, Rust, or settings behavior changed, so those test layers are omitted. Other Core tests do not exercise workspace provenance or the native hook observation boundary. A disposable LAN Core check will cover the project-native hook journey separately.",

@@ -159,6 +159,7 @@ def _path_state(
             data = b"directory"
             kind = "directory"
     except FileNotFoundError:
+        # diagnostic-expected: a deleted dirty path is recorded as absent
         return {"status": status, "kind": "absent", "sha256": None, "size": 0}
     except OSError as exc:  # diagnostic-expected: unreadable path state is represented in the receipt without aborting the hook
         return {
