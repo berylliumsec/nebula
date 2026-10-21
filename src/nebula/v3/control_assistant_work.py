@@ -3054,7 +3054,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.set_chat_settings",
-        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To switch the main harness, save its profile, model, advisory planning preference, MCP servers, and subagent together, then send a new message in the same chat. The saved choice is not the bound runtime until that message starts; read back the chat and turn result before resuming a goal. Running and queued turns keep their submitted settings.",
+        "Change one listed chat's next-turn Assistant settings. Read chat_settings first and pass its revision. To switch the main harness, save its profile, model, advisory planning preference, MCP servers, and subagent together, then send a new message in the same chat. For a harness-to-provider switch, open the saved chat's Assistant settings and choose Provider after its response and subagents finish, its goal is paused or settled, and its queue is clear. This tool saves a choice but does not rebind a harness chat to a provider; read the Core chat binding and next turn before reporting a switch. Running and queued turns keep their submitted settings.",
         SET_CHAT_SETTINGS_SCHEMA,
         False,
     ),
