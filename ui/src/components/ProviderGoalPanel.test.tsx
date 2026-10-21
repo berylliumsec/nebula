@@ -168,6 +168,7 @@ it.each(["draft", "running"] as const)("edits goal content while %s", async stat
   render(<DialogProvider><ProviderGoalPanel api={{ updateChatGoal } as unknown as ApiClient} sessionId="session" goal={current} onChange={onChange} /></DialogProvider>);
 
   fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
+  expect(screen.getByLabelText("Objective")).toHaveFocus();
   fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Revised objective" } });
   fireEvent.change(screen.getByLabelText("Completion criteria"), { target: { value: "Revised criterion\nVisible after refresh" } });
   fireEvent.change(screen.getByLabelText("Plan"), { target: { value: "Continue" } });
