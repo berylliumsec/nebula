@@ -37,6 +37,23 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
+def test_product_passages_keep_short_sentences_at_chunk_boundaries(tmp_path, monkeypatch):
+    from scripts import build_product_knowledge as builder
+
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    source = tmp_path / "guide.md"
+    sentence = "Butler can save a different main harness and provider subagent on the same chat."
+    source.write_text(
+        "# Assistant\n\n" + "Previous instruction. " * 62 + sentence,
+        encoding="utf-8",
+    )
+
+    entries = builder.passages([source])
+    assert len(entries) == 2
+    assert any(sentence in text for _, _, _, text in entries)
+    assert all(len(text) <= builder.MAX_CHARS + len("Assistant\n\n") for _, _, _, text in entries)
+
+
 def test_product_search_finds_docker_host_access_guidance(monkeypatch):
     # Search must work without a warmed embedding model or a network request.
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
