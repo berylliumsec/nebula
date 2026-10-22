@@ -3724,6 +3724,7 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     objective: String(value.objective),
     completionCriteria: Array.isArray(value.completion_criteria) ? value.completion_criteria.map(String) : [],
     plan: Array.isArray(value.plan) ? value.plan.map(String) : [],
+    resumeInstruction: typeof value.resume_instruction === "string" ? value.resume_instruction : undefined,
     currentStep: Number(value.current_step ?? 0),
     status: value.status as ChatGoal["status"],
     tokenBudget: typeof value.token_budget === "number" ? value.token_budget : undefined,
@@ -9888,7 +9889,7 @@ export class ApiClient {
     ).then((value) => ({
       sessionId: String(value.session_id),
       sessionRevision: Number(value.session_revision),
-      currentProviderId: String(value.current_provider_id),
+      currentProviderId: typeof value.current_provider_id === "string" ? value.current_provider_id : undefined,
       currentModel: String(value.current_model),
       targetProviderId: String(value.target_provider_id),
       targetModel: String(value.target_model),
@@ -9915,6 +9916,7 @@ export class ApiClient {
     objective: string;
     completionCriteria: string[];
     plan?: string[];
+    resumeInstruction?: string;
     tokenBudget?: number;
     timeBudgetSeconds?: number;
     stepBudget?: number;
@@ -9927,6 +9929,7 @@ export class ApiClient {
           objective: body.objective,
           completion_criteria: body.completionCriteria,
           plan: body.plan ?? [],
+          resume_instruction: body.resumeInstruction,
           token_budget: body.tokenBudget,
           time_budget_seconds: body.timeBudgetSeconds,
           step_budget: body.stepBudget,
@@ -9941,6 +9944,7 @@ export class ApiClient {
     objective: string;
     completionCriteria: string[];
     plan: string[];
+    resumeInstruction?: string;
     tokenBudget?: number;
     timeBudgetSeconds?: number;
     stepBudget?: number;
@@ -9954,6 +9958,7 @@ export class ApiClient {
           objective: body.objective,
           completion_criteria: body.completionCriteria,
           plan: body.plan,
+          resume_instruction: body.resumeInstruction,
           token_budget: body.tokenBudget,
           time_budget_seconds: body.timeBudgetSeconds,
           step_budget: body.stepBudget,
@@ -9988,6 +9993,7 @@ export class ApiClient {
     objective: string;
     completionCriteria: string[];
     plan?: string[];
+    resumeInstruction?: string;
     tokenBudget?: number;
     timeBudgetSeconds?: number;
     stepBudget?: number;
@@ -10020,6 +10026,7 @@ export class ApiClient {
           objective: body.objective,
           completion_criteria: body.completionCriteria,
           plan: body.plan ?? [],
+          resume_instruction: body.resumeInstruction,
           token_budget: body.tokenBudget,
           time_budget_seconds: body.timeBudgetSeconds,
           step_budget: body.stepBudget,

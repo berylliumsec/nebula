@@ -9,11 +9,6 @@
     "native": 0,
     "playwright": 71
   },
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
   "python": [
     "tests/v3/test_chat_planning.py",
     "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
@@ -25,12 +20,11 @@
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
     "tests/test_playwright_impact.py",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_turn_write_amplification.py",
+    "tests/v3/test_workspace_provenance.py",
   ],
-  "frontend": [
-    "ui/src/components/AssistantSetupLinks.test.tsx",
-    "ui/src/api/chatPlanning.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
     "entry:nebula-voice/desktop",

@@ -2396,6 +2396,114 @@ reloadTest("stabilization Butler Voice pauses and resumes without losing project
   await expect(voice).toHaveCount(0);
 });
 
+reloadTest("assistant popup Butler separates Chat, Work, and More without losing the draft", async ({ page }) => {
+  await installTruthfulCore(page);
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  const butler = page.getByRole("dialog", { name: "Butler" });
+  const composer = butler.getByRole("textbox", { name: "Ask Butler a question" });
+  await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+  await expect(butler.getByRole("region", { name: "Chat" })).toBeVisible();
+  await expect(butler.getByText("Ask Butler", { exact: true })).toBeVisible();
+  const voice = butler.getByRole("button", { name: "Start Butler Voice" });
+  const settings = butler.getByRole("button", { name: "Butler settings" });
+  const hide = butler.getByRole("button", { name: "Hide Butler" });
+  const close = butler.getByRole("button", { name: "Close Butler" });
+  const voiceBox = await voice.boundingBox();
+  const settingsBox = await settings.boundingBox();
+  const hideBox = await hide.boundingBox();
+  const closeBox = await close.boundingBox();
+  expect(voiceBox && settingsBox && hideBox && closeBox && voiceBox.x < settingsBox.x && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+  expectTouchTarget(voiceBox?.width, "Start Butler Voice width");
+  expectTouchTarget(voiceBox?.height, "Start Butler Voice height");
+  await expect(voice).toHaveText("");
+  await expect(voice.locator("svg")).toHaveCount(1);
+  await expect(voice).toHaveAttribute("title", "Start Butler Voice");
+  expectTouchTarget(hideBox?.width, "Hide Butler width");
+  expectTouchTarget(hideBox?.height, "Hide Butler height");
+  await expect(hide).toHaveText("");
+  await expect(hide.locator("svg")).toHaveCount(1);
+  await composer.fill("Draft stays with Butler");
+  await butler.getByRole("button", { name: "Work" }).click();
+  await expect(butler.getByRole("region", { name: "Butler oversight" })).toBeVisible();
+  await expect(composer).toHaveValue("Draft stays with Butler");
+  await butler.getByRole("button", { name: "More" }).click();
+  await expect(voice).toBeVisible();
+  await expect(butler.getByRole("region", { name: "More" }).getByRole("button", { name: "Start Butler Voice" })).toHaveCount(0);
+  await expect(butler.getByRole("region", { name: "Butler memory" })).toBeVisible();
+  await expect(butler.getByText("Settings I can help with")).toBeVisible();
+  await butler.getByRole("button", { name: "Chat" }).click();
+  await expect(composer).toHaveValue("Draft stays with Butler");
+  await composer.focus();
+  await expect(composer).toBeFocused();
+  const panel = await butler.boundingBox();
+  const input = await composer.boundingBox();
+  expect(panel && input && input.y + input.height <= panel.y + panel.height).toBe(true);
+  const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
+  expect(input && input.y + input.height <= visualBottom + 1).toBe(true);
+  const portrait = page.viewportSize()!;
+  if (portrait.width <= 430) {
+    expect(panel!.x).toBeGreaterThanOrEqual(8);
+    expect(panel!.x + panel!.width).toBeLessThanOrEqual(portrait.width - 8);
+    expect(panel!.y).toBeGreaterThanOrEqual(40);
+    expect(panel!.height).toBeLessThanOrEqual(portrait.height * 0.8);
+    await expect(page.getByRole("button", { name: "Dismiss Butler panel" })).toBeVisible();
+    await page.setViewportSize({ width: portrait.width, height: 430 });
+    const keyboardPanel = await butler.boundingBox();
+    const keyboardInput = await composer.boundingBox();
+    expect(keyboardPanel!.y).toBeGreaterThanOrEqual(8);
+    expect(keyboardInput!.y + keyboardInput!.height).toBeLessThanOrEqual(431);
+    await page.setViewportSize(portrait);
+    await page.evaluate(() => {
+      const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
+      const simulated = Object.assign(new EventTarget(), {
+        width: innerWidth, height: 320, offsetLeft: 0, offsetTop: 120, pageLeft: 0, pageTop: 120, scale: 1,
+      });
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: simulated });
+      (window as Window & { restoreButlerViewport?: () => void }).restoreButlerViewport = () => {
+        if (original) Object.defineProperty(window, "visualViewport", original);
+        else delete (window as Window & { visualViewport?: VisualViewport }).visualViewport;
+        window.dispatchEvent(new Event("resize"));
+      };
+      window.dispatchEvent(new Event("resize"));
+    });
+    const shiftedPanel = await butler.boundingBox();
+    const shiftedInput = await composer.boundingBox();
+    expect(shiftedPanel!.y).toBeGreaterThanOrEqual(120);
+    expect(shiftedPanel!.y + shiftedPanel!.height).toBeLessThanOrEqual(440);
+    expect(shiftedInput!.y + shiftedInput!.height).toBeLessThanOrEqual(440);
+    await page.evaluate(() => (window as Window & { restoreButlerViewport?: () => void }).restoreButlerViewport?.());
+  }
+  expect(await butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  for (const name of ["Chat", "Work", "More"]) {
+    const button = await butler.getByRole("button", { name }).boundingBox();
+    expectTouchTarget(button?.height, `${name} tab height`);
+  }
+  expect((await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+  if (portrait.width <= 430) {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect.poll(async () => butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    const landscapePanel = await butler.boundingBox();
+    const landscapeInput = await composer.boundingBox();
+    expect(landscapePanel && landscapeInput && landscapeInput.y + landscapeInput.height <= landscapePanel.y + landscapePanel.height).toBe(true);
+    await page.setViewportSize(portrait);
+  }
+  await hide.click();
+  await expect(page.getByRole("button", { name: "Show Butler" })).toBeVisible();
+  await page.getByRole("button", { name: "Show Butler" }).click();
+  await expect(composer).toHaveValue("Draft stays with Butler");
+  if (portrait.width <= 430) {
+    await page.getByRole("button", { name: "Dismiss Butler panel" }).click({ position: { x: 8, y: 8 } });
+    await expect(butler).toBeHidden();
+    await page.getByRole("button", { name: "Show Butler" }).click();
+    await expect(composer).toHaveValue("Draft stays with Butler");
+  }
+  await butler.getByRole("button", { name: "Close Butler" }).click();
+  await page.getByRole("button", { name: "Open Butler" }).click();
+  await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+  await expect(composer).toHaveValue("Draft stays with Butler");
+});
+
 reloadTest("stabilization Butler opens from every screen and changes this device theme", async ({ page }) => {
   let policyMode: "docker" | "host" = "docker";
   let savedRequest: Record<string, unknown> | undefined;
@@ -2421,6 +2529,10 @@ reloadTest("stabilization Butler opens from every screen and changes this device
   await open.click();
   const assistant = page.getByRole("dialog", { name: "Butler" });
   await expect(assistant).toBeVisible();
+  await expect(assistant.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+  await assistant.getByRole("button", { name: "Work" }).click();
+  await expect(assistant.getByRole("button", { name: "Work" })).toHaveAttribute("aria-current", "page");
+  await assistant.getByRole("button", { name: "More" }).click();
   const assistantA11y = await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler"]').analyze();
   expect(assistantA11y.violations).toEqual([]);
   await assistant.getByText("Settings I can help with").click();
@@ -2534,6 +2646,7 @@ reloadTest("assistant popup Butler live status follows saved work without losing
     capability: "nebula.work.overview", display_name: "Inspect current agent reports", arguments: {}, step: 1,
   }));
   await expect(activity).toContainText("Using Inspect current agent reports");
+  await butler.getByRole("button", { name: "More" }).click();
   if (await butler.getByRole("button", { name: "Hide Butler" }).isVisible()) {
     await butler.getByRole("button", { name: "Hide Butler" }).click();
     await page.getByRole("button", { name: "Show Butler" }).click();
@@ -2664,6 +2777,7 @@ reloadTest("stabilization Butler launcher stays in shared chrome without coverin
   await launcher.click();
   const assistant = page.getByRole("dialog", { name: "Butler" });
   await expect(assistant).toBeVisible();
+  await assistant.getByRole("button", { name: "More" }).click();
   await assistant.getByRole("button", { name: "Hide Butler" }).click();
   await expect(topBar.getByRole("button", { name: "Show Butler" })).toBeVisible();
 
@@ -8247,6 +8361,106 @@ test("assistant settings expose provider metadata and harness model options", as
   await expect(sharedSkills).toContainText("review project");
   await expect(sharedSkills).toContainText("report installed");
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+reloadTest("assistant upgrade saved harness chat switches to provider only after Core saves the binding", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "compact", "mobile-chromium", "mobile-webkit"].includes(testInfo.project.name), "Covered by the runtime-switch browser matrix.");
+  const provider = {
+    ...entity, id: "provider-after-harness", name: "Local provider", provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true,
+    model_allowlist: ["provider-model"], capabilities: {streaming: true},
+    privacy: {local_only: true, permits_sensitive_data: true},
+    metadata: {default_model: "provider-model"},
+  };
+  const harness = {
+    ...entity, id: "harness-before-provider", name: "Local harness", kind: "codex_app_server",
+    enabled: true, default_model: "harness-model", capabilities: {models: ["harness-model"]},
+    privacy: {local_only: true, permits_sensitive_data: true},
+  };
+  let switched = false;
+  let blocked = true;
+  let submitted: Record<string, unknown> | undefined;
+  const session = () => ({
+    ...entity, revision: switched ? 2 : 1, id: "harness-provider-chat",
+    engagement_id: "scratch-project", title: "Saved harness context",
+    backend: switched ? "provider" : "harness",
+    provider_profile_id: switched ? provider.id : null,
+    harness_profile_id: switched ? null : harness.id,
+    harness_session_id: switched ? null : "vendor-session",
+    model: switched ? "provider-model" : "harness-model",
+    metadata: {message_count: 1, assistant_config: {
+      backend: switched ? "provider" : "harness", profile_id: switched ? provider.id : harness.id,
+      model: switched ? "provider-model" : "harness-model", mcp_server_ids: [], hook_ids: [],
+      tools_enabled: false, allow_subagents: false,
+    }},
+  });
+  await page.context().route("**/api/v1/**", async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.endsWith("/providers") && request.method() === "GET") return route.fulfill({json: [provider]});
+    if (pathname.endsWith("/harnesses") && request.method() === "GET") return route.fulfill({json: [harness]});
+    if (pathname.endsWith("/harness-sessions/vendor-session/activity")) return route.fulfill({json: {
+      session_id: "vendor-session", session_status: "idle", busy: false, live: false,
+      turn_id: null, turn_status: null, last_activity_at: entity.updated_at, detail: "Saved harness is idle.",
+    }});
+    if (pathname.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({json: [session()]});
+    if (pathname.endsWith("/chat-sessions/harness-provider-chat") && request.method() === "GET") return route.fulfill({json: session()});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/messages")) return route.fulfill({json: [{
+      ...entity, id: "prior-harness-message", engagement_id: "scratch-project",
+      session_id: "harness-provider-chat", sequence: 1, role: "user",
+      content: "Earlier harness context", content_blocks: [], metadata: {},
+    }]});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/pending-turn")) return route.fulfill({json: null});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/goal")) return route.fulfill({status: 404, json: {detail: "No goal"}});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/runtime-switch/preflight")) return route.fulfill({json: {
+      session_id: "harness-provider-chat", session_revision: 1,
+      current_provider_id: null, current_model: "harness-model",
+      target_provider_id: provider.id, target_model: "provider-model",
+      compatible: !blocked, reason_code: blocked ? "harness_not_idle" : null,
+      reason: blocked ? "Wait for the active response before switching to a provider." : null,
+      requires_compaction_confirmation: false, estimated_active_input_tokens: 50,
+      target_context_window: 8000, target_input_tokens: 6000,
+    }});
+    if (pathname.endsWith("/chat/sessions/harness-provider-chat/runtime-switch") && request.method() === "POST") {
+      switched = true;
+      return route.fulfill({json: session()});
+    }
+    if (pathname.endsWith("/chat/completions") && request.method() === "POST") {
+      submitted = request.postDataJSON() as Record<string, unknown>;
+      return route.fulfill({contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify({
+        type: "done", session_id: "harness-provider-chat", turn_id: "provider-turn", provider_id: provider.id,
+        model: "provider-model", message: {id: "provider-answer", role: "assistant", content: "Provider turn saved."},
+        usage: {input_tokens: 5, output_tokens: 3, total_tokens: 8}, finish_reason: "stop", citations: [],
+      })}\n\n`});
+    }
+    return route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=harness-provider-chat", "Workbench");
+  await expect(page.getByText("Earlier harness context")).toBeVisible();
+  await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+  const settings = page.getByRole("dialog", {name: "Assistant settings"});
+  const runtime = settings.getByRole("combobox", {name: "Chat runtime"});
+  await expect(runtime).toHaveValue("harness");
+  await runtime.selectOption("provider");
+  await expect(settings.getByRole("status").filter({hasText: "active response"})).toBeVisible();
+  await expect(runtime).toHaveValue("harness");
+  expect(switched).toBe(false);
+  blocked = false;
+  await runtime.selectOption("provider");
+  await expect(settings.getByRole("status").filter({hasText: "Provider saved on this conversation"})).toBeVisible();
+  await expect(runtime).toHaveValue("provider");
+  expect(switched).toBe(true);
+  expect((await new AxeBuilder({page}).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
+  await settings.getByRole("button", {name: "Close assistant settings"}).click();
+  await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Continue here");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  await expect(page.getByText("Provider turn saved.")).toBeVisible();
+  expect(submitted).toMatchObject({backend: "provider", provider_id: provider.id, session_id: "harness-provider-chat"});
+  await page.reload();
+  await expect(page.getByText("Earlier harness context")).toBeVisible();
+  await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+  await expect(page.getByRole("combobox", {name: "Chat runtime"})).toHaveValue("provider");
+  expect(await page.locator("body").evaluate(body => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
 test("assistant upgrade provider model switch keeps the saved model until compaction is confirmed", async ({ page }, testInfo) => {
@@ -14899,6 +15113,56 @@ reloadTest("assistant popup keeps Butler reply tables readable and contained aft
   await verifyLayout();
 });
 
+reloadTest("assistant popup Butler long history keeps the composer and jump to latest usable", async ({page}) => {
+  await installTruthfulCore(page);
+  const sessionId = "butler-long-history";
+  const history = Array.from({length: 80}, (_, index) => ({
+    ...entity, id: `butler-message-${index}`, engagement_id: "scratch-project", session_id: sessionId,
+    sequence: index + 1, role: index % 2 ? "assistant" : "user",
+    content: `Saved response ${index}. ${"A detailed project update. ".repeat(5)}`,
+    citations: [], metadata: {},
+  }));
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat/control-assistant/session")) return route.fulfill({json: {
+      ...entity, id: sessionId, engagement_id: "scratch-project", title: "Butler",
+      backend: "harness", harness_profile_id: "local", model: "model", metadata: {control_assistant: true},
+    }});
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) return route.fulfill({json: history});
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("button", {name: "Open Butler"}).click();
+  const butler = page.getByRole("dialog", {name: "Butler"});
+  const transcript = butler.getByRole("log", {name: "Butler conversation"});
+  await expect(transcript.getByText(/Saved response 79/)).toBeVisible();
+  await transcript.focus();
+  await expect(transcript).toBeFocused();
+  const composer = butler.getByRole("textbox", {name: "Ask Butler a question"});
+  await composer.fill("A new question after a long conversation");
+  await expect(composer).toHaveValue("A new question after a long conversation");
+  const mobile = await page.evaluate(() => matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches);
+  const surface = mobile ? transcript.locator("..") : transcript;
+  expect(await surface.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(24);
+  await surface.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll", {bubbles: true})); });
+  const jump = butler.getByRole("button", {name: "Scroll to latest message"});
+  await expect(jump).toBeVisible();
+  expectTouchTarget((await jump.boundingBox())?.width, "Butler jump width");
+  expectTouchTarget((await jump.boundingBox())?.height, "Butler jump height");
+  await jump.focus();
+  await expect(jump).toBeFocused();
+  await jump.press("Enter");
+  await expect.poll(async () => surface.evaluate((element, isMobile) => {
+    if (!isMobile) return element.scrollHeight - element.scrollTop - element.clientHeight;
+    const latest = element.querySelector('[role="log"] > :last-child');
+    return latest ? latest.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom : Infinity;
+  }, mobile)).toBeLessThanOrEqual(24);
+  await expect(jump).toHaveCount(0);
+  const accessibility = await new AxeBuilder({page}).include("#nebula-assistant-panel").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 reloadTest("iPhone assistant shell keeps chat and pending actions reachable without work tools", async ({page}, testInfo) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
@@ -14924,13 +15188,15 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await expect(startVoice).toBeVisible();
   if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
     const button = await startVoice.boundingBox();
-    const panel = await controlAssistant.boundingBox();
+    const settingsButton = await controlAssistant.getByRole("button", {name: "Butler settings"}).boundingBox();
     const composer = controlAssistant.getByRole("textbox", {name: "Ask Butler a question"});
     const composerBox = await composer.boundingBox();
     const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
-    expect(button!.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 48);
-    expect(button!.height).toBeGreaterThanOrEqual(48);
-    expect(button!.y).toBeGreaterThanOrEqual(panel!.y + 44);
+    expectTouchTarget(button?.width, "Start Butler Voice width");
+    expectTouchTarget(button?.height, "Start Butler Voice height");
+    expect(Math.abs(button!.y - settingsButton!.y)).toBeLessThanOrEqual(1);
+    expect(button!.x).toBeLessThan(settingsButton!.x);
+    await expect(startVoice).toHaveText("");
     expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(visualBottom + 1);
     await expect(composer).not.toBeFocused();
     await expect(controlAssistant.getByRole("button", {name: "Move Butler"})).toBeHidden();

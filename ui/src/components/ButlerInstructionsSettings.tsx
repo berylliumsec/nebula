@@ -146,7 +146,7 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
   };
 
   return <section id="butler-instructions-settings" className={styles.section} aria-labelledby="butler-instructions-title">
-    <div className="section-heading"><div><h2 id="butler-instructions-title">Butler instructions</h2><p>One Nebula-wide file guides Butler's 15-minute checks, including idle projects.</p></div></div>
+    <div className="section-heading"><div><h2 id="butler-instructions-title">Butler instructions</h2><p>One Nebula-wide file guides Butler's scheduled checks, including idle projects.</p></div></div>
     <p>Butler chooses work across projects. Changes require Act authority in each target project. Child projects begin in Watch.</p>
     {previewMode && <p role="status">Connect to Core to manage Butler instructions.</p>}
     {loading && <p role="status">Loading Butler instructions…</p>}

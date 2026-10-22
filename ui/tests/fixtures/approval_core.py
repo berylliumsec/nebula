@@ -744,6 +744,22 @@ if __name__ == "__main__":
                 native_capabilities=HarnessNativeCapabilities(shell=True),
             )
         )
+    if args.scenario == "goal" and not any(
+        profile.id == "inert-codex" for profile in store.list_entities(HarnessProfile)
+    ):
+        store.create(
+            HarnessProfile(
+                id="inert-codex",
+                name="Codex goal fixture",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="fixture",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+                capabilities=HarnessCapabilities(
+                    models=["fixture", "fixture-next"], mcp=True
+                ),
+            )
+        )
     ssh_service = None
     if args.scenario == "environments":
         ssh_service = environments_fixture(store, args.root)

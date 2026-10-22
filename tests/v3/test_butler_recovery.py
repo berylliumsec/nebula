@@ -12,15 +12,20 @@ from nebula.v3.butler_oversight import project_state_id, project_stream_id
 from nebula.v3.butler_recovery import (
     ButlerRecoveryAgent,
     ButlerRecoveryService,
+    GLOBAL_STATE_ID,
     record_subagent_start_failure,
 )
 from nebula.v3.domain import (
     ButlerAuthorityPolicy,
+    ButlerGlobalState,
     ButlerGoalWatch,
     ButlerProjectState,
     ButlerRecoveryCase,
     ChatBackend,
+    ChatGoal,
     ChatGoalStatus,
+    ChatMessage,
+    ChatRole,
     ChatQueue,
     ChatSession,
     ChatSubagent,
@@ -380,6 +385,36 @@ def test_periodic_check_is_coalesced_and_act_revocation_stops_new_cases(tmp_path
     assert recovery._claim_case(project.id, worker_id) is None
 
 
+def test_project_fallback_check_uses_nebula_wide_saved_interval(tmp_path):
+    store, project, parent, _, _, worker_id = _setup(tmp_path)
+    store.create(
+        ButlerGoalWatch(
+            engagement_id=project.id,
+            goal_id="goal-1",
+            session_id=parent.id,
+            status=ChatGoalStatus.RUNNING,
+            coverage_reason="Goal lifecycle",
+        )
+    )
+    state = store.get(ButlerProjectState, project_state_id(project.id))
+    store.update(
+        ButlerProjectState,
+        state.id,
+        {"last_periodic_recovery_at": utc_now() - timedelta(minutes=3)},
+        expected_revision=state.revision,
+    )
+    recovery = ButlerRecoveryService(store)
+    assert not recovery.fire_periodic_check(project.id, worker_id)
+    store.create(
+        ButlerGlobalState(
+            id=GLOBAL_STATE_ID,
+            check_interval_minutes=2,
+        )
+    )
+    assert recovery.fire_periodic_check(project.id, worker_id)
+    assert not recovery.fire_periodic_check(project.id, worker_id)
+
+
 def test_parent_follow_up_requires_same_child_task_completion_before_resolved(tmp_path):
     store, project, parent, turn, policy, _ = _setup(tmp_path)
     original = store.create(
@@ -462,7 +497,7 @@ def test_parent_follow_up_requires_same_child_task_completion_before_resolved(tm
     assert "Core confirmed" in settled.outcome
 
 
-def test_global_parent_guidance_completion_does_not_require_a_subagent(tmp_path):
+def test_legacy_global_parent_guidance_completion_does_not_require_a_subagent(tmp_path):
     store, project, parent, turn, policy, _ = _setup(tmp_path)
     completed = store.update(
         ChatTurn,
@@ -489,6 +524,210 @@ def test_global_parent_guidance_completion_does_not_require_a_subagent(tmp_path)
     assert settled.status == "resolved"
     assert "guidance turn completed" in settled.outcome
     assert "Goal results remain independently tracked" in settled.outcome
+
+
+def test_blocked_goal_checkin_continues_same_case_through_agent_conversation(tmp_path):
+    store, project, parent, first_turn, policy, worker_id = _setup(tmp_path)
+    goal = store.create(
+        ChatGoal(
+            engagement_id=project.id,
+            session_id=parent.id,
+            objective="Finish the research",
+            completion_criteria=["Evidence saved"],
+            status=ChatGoalStatus.BLOCKED,
+            blocked_reason="Missing trace",
+        )
+    )
+    second_turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=parent.id,
+            provider_profile_id=parent.provider_profile_id,
+            model="model-a",
+        )
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="observed",
+            summary="Help the blocked main agent",
+        )
+    )
+
+    class Agent:
+        calls = 0
+
+        async def run(self, claimed):
+            assert claimed.id == case.id
+            self.calls += 1
+            current = store.get(ButlerRecoveryCase, case.id)
+            if self.calls == 1:
+                assert current.dialogue_results == []
+                target = first_turn
+            elif self.calls == 2:
+                assert current.dialogue_results[-1]["turn_id"] == first_turn.id
+                assert current.dialogue_read_turn_ids == []
+                target = second_turn
+            else:
+                assert self.calls == 3
+                assert current.dialogue_results[-1]["turn_id"] == second_turn.id
+                assert current.dialogue_read_turn_ids == [first_turn.id]
+                target = None
+            changes = {
+                "steps": [
+                    *current.steps,
+                    {
+                        "operation": "nebula.work.await_chat_result"
+                        if target is None
+                        else "nebula.work.message_chat",
+                        "status": "applied",
+                    },
+                ],
+            }
+            if self.calls > 1:
+                changes["dialogue_read_turn_ids"] = [
+                    *current.dialogue_read_turn_ids,
+                    current.dialogue_results[-1]["turn_id"],
+                ]
+            if target is not None:
+                changes["dialogue_pending_turns"] = [
+                    {
+                        "project_id": project.id,
+                        "session_id": parent.id,
+                        "turn_id": target.id,
+                    }
+                ]
+                changes["delivered_turn_id"] = target.id
+                changes["target_session_id"] = parent.id
+            store.update(
+                ButlerRecoveryCase,
+                current.id,
+                changes,
+                expected_revision=current.revision,
+            )
+            return (
+                f"Butler conversation turn {self.calls}",
+                ChatBackend.PROVIDER,
+                "local",
+                "model-a",
+                None,
+            )
+
+    agent = Agent()
+    recovery = ButlerRecoveryService(store, agent)
+    asyncio.run(recovery.process_project(project.id, worker_id))
+    assert store.get(ButlerRecoveryCase, case.id).status == "verifying"
+    assert agent.calls == 1
+
+    store.update(
+        ChatTurn,
+        first_turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=first_turn.revision,
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=parent.id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="I need the saved trace; the goal is still blocked.",
+            metadata={"chat_turn_id": first_turn.id},
+        )
+    )
+    pending = recovery.verify_follow_up(store.get(ButlerRecoveryCase, case.id))
+    assert pending.status == "observed"
+    assert pending.id == case.id
+    assert pending.dialogue_results[-1]["turn_id"] == first_turn.id
+    assert pending.finished_at is None
+
+    asyncio.run(recovery.process_project(project.id, worker_id))
+    assert store.get(ButlerRecoveryCase, case.id).status == "verifying"
+    assert agent.calls == 2
+    store.update(
+        ChatTurn,
+        second_turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=second_turn.revision,
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=parent.id,
+            sequence=2,
+            role=ChatRole.ASSISTANT,
+            content="I found the trace and resumed the goal.",
+            metadata={"chat_turn_id": second_turn.id},
+        )
+    )
+    store.update(
+        ChatGoal,
+        goal.id,
+        {"status": ChatGoalStatus.RUNNING, "blocked_reason": None},
+        expected_revision=goal.revision,
+    )
+    assert (
+        recovery.verify_follow_up(store.get(ButlerRecoveryCase, case.id)).status
+        == "observed"
+    )
+    asyncio.run(recovery.process_project(project.id, worker_id))
+    assert agent.calls == 3
+    settled = store.get(ButlerRecoveryCase, case.id)
+    assert settled.status == "resolved"
+    assert settled.dialogue_read_turn_ids == [first_turn.id, second_turn.id]
+    assert len(settled.dialogue_results) == 2
+
+
+def test_completed_main_turn_waits_for_its_saved_reply(tmp_path):
+    store, project, parent, turn, policy, _ = _setup(tmp_path)
+    completed = store.update(
+        ChatTurn,
+        turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=turn.revision,
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id="periodic-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="verifying",
+            summary="Help the blocked main agent",
+            started_at=utc_now(),
+            dialogue_pending_turns=[
+                {
+                    "project_id": project.id,
+                    "session_id": parent.id,
+                    "turn_id": completed.id,
+                }
+            ],
+        )
+    )
+    recovery = ButlerRecoveryService(store)
+    waiting = recovery.verify_follow_up(case)
+    assert waiting.status == "verifying"
+    assert waiting.dialogue_results == []
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=parent.id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="The missing trace is my blocker.",
+            metadata={"chat_turn_id": completed.id},
+        )
+    )
+    ready = recovery.verify_follow_up(store.get(ButlerRecoveryCase, case.id))
+    assert ready.status == "observed"
+    assert ready.dialogue_results[-1]["turn_id"] == completed.id
 
 
 def test_crash_with_possible_side_effect_becomes_uncertain_without_replay(tmp_path):
@@ -754,6 +993,59 @@ def test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease(
     assert settled.status == expected_status
     renewed = store.get(ButlerProjectState, state.id)
     assert renewed.lease_expires_at > utc_now() + timedelta(seconds=45)
+
+
+def test_global_periodic_reads_do_not_resolve_when_all_goals_are_idle(tmp_path):
+    store, project, parent, _, policy, worker_id = _setup(tmp_path)
+    store.create(
+        ChatGoal(
+            engagement_id=project.id,
+            session_id=parent.id,
+            objective="Finish the research",
+            completion_criteria=["Evidence saved"],
+            status=ChatGoalStatus.PAUSED,
+            elapsed_seconds=14_401,
+            time_budget_seconds=14_400,
+        )
+    )
+    case = store.create(
+        ButlerRecoveryCase(
+            engagement_id=project.id,
+            trigger="periodic",
+            signal="butler.global_periodic_check",
+            source_event_id="global-event",
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            status="observed",
+            summary="Check all goals",
+        )
+    )
+
+    class Agent:
+        async def run(self, claimed):
+            current = store.get(ButlerRecoveryCase, claimed.id)
+            store.update(
+                ButlerRecoveryCase,
+                claimed.id,
+                {
+                    "steps": [
+                        {
+                            "id": "read-step",
+                            "operation": "nebula.global.project",
+                            "status": "applied",
+                        }
+                    ]
+                },
+                expected_revision=current.revision,
+            )
+            return "All goals are okay", ChatBackend.PROVIDER, "provider", "model", None
+
+    asyncio.run(
+        ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id)
+    )
+    settled = store.get(ButlerRecoveryCase, case.id)
+    assert settled.status == "needs_attention"
+    assert "No main goal is running" in settled.outcome
 
 
 @pytest.mark.parametrize(

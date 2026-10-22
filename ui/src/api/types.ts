@@ -2011,7 +2011,7 @@ export interface PendingProviderSubagent {
 export interface ChatRuntimeSwitchPreflight {
   sessionId: Identifier;
   sessionRevision: number;
-  currentProviderId: Identifier;
+  currentProviderId?: Identifier;
   currentModel: string;
   targetProviderId: Identifier;
   targetModel: string;
@@ -2040,6 +2040,7 @@ export interface ChatGoal {
   objective: string;
   completionCriteria: string[];
   plan: string[];
+  resumeInstruction?: string;
   currentStep: number;
   status: "draft" | "running" | "paused" | "blocked" | "completed" | "cancelled";
   tokenBudget?: number;

@@ -22,6 +22,7 @@ from nebula.v3.domain import (
     ChatSession,
     ChatSubagent,
     ChatTurn,
+    ChatTurnStatus,
     Engagement,
     HarnessCapabilities,
     HarnessKind,
@@ -50,6 +51,7 @@ from nebula.v3.providers import (
     ProviderKind,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
+from tests.v3.test_harnesses import FakeAdapter
 
 
 def _app(tmp_path):
@@ -99,6 +101,16 @@ def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(tm
     )
     assert descriptor["name"] == "nebula.work.goals"
     assert descriptor["read_only"] is True
+    update = asyncio.run(
+        dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.catalog",
+            {"operation": "nebula.work.update_goal"},
+        )
+    )
+    assert "resume_instruction" in update["parameters"]["properties"]
+    assert "resume instruction" in update["description"]
     assert asyncio.run(
         dispatch_work_tool(
             work,
@@ -576,9 +588,14 @@ def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(tmp_p
                 "session_id": chat.id,
                 "expected_revision": revision,
                 "objective": "Inspect code and summarize",
+                "resume_instruction": "Read the saved checkpoint and finish the proof.",
             },
         )
         assert updated["goal"]["completion_criteria"] == ["Evidence retained"]
+        assert (
+            updated["goal"]["resume_instruction"]
+            == "Read the saved checkpoint and finish the proof."
+        )
         with pytest.raises(ValueError, match="goal changed"):
             await dispatch_work_tool(
                 work,
@@ -1457,6 +1474,88 @@ def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
     }
 
 
+def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path):
+    async def scenario() -> None:
+        store, app, _ = _app(tmp_path)
+        adapter = FakeAdapter()
+        work = app.state.control_assistant_work
+        work.harness.adapter_factory = lambda _: adapter
+        project = store.create(Engagement(name="Disposable switch check"))
+        old_profile = store.create(
+            HarnessProfile(
+                name="Codex fixture",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="old-model",
+                capabilities=HarnessCapabilities(models=["old-model"]),
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
+        )
+        next_profile = store.create(
+            HarnessProfile(
+                name="Grok fixture",
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+                default_model="next-model",
+                capabilities=HarnessCapabilities(models=["next-model"]),
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
+        )
+        old_harness = store.create(
+            HarnessSession(
+                engagement_id=project.id,
+                harness_profile_id=old_profile.id,
+                model="old-model",
+            )
+        )
+        chat = store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Disposable chat",
+                backend=ChatBackend.HARNESS,
+                harness_profile_id=old_profile.id,
+                harness_session_id=old_harness.id,
+                model="old-model",
+            )
+        )
+        before = work.chat_settings(project.id, chat.id)
+        saved = work.set_chat_settings(
+            project.id,
+            {
+                "session_id": chat.id,
+                "expected_revision": before["revision"],
+                "settings": {
+                    "backend": "harness",
+                    "profile_id": next_profile.id,
+                    "model": "next-model",
+                },
+            },
+        )
+        assert saved["settings"]["profile_id"] == next_profile.id
+        assert store.get(ChatSession, chat.id).harness_session_id == old_harness.id
+        sent = await work.message_chat(
+            project.id,
+            {"session_id": chat.id, "text": "Continue here", "delivery": "immediate"},
+        )
+        assert sent["delivery"] == "started"
+        rebound = store.get(ChatSession, chat.id)
+        assert rebound.id == chat.id
+        assert rebound.harness_session_id != old_harness.id
+        assert rebound.harness_profile_id == next_profile.id
+        assert rebound.model == "next-model"
+        assert store.get(ChatTurn, sent["turn_id"]).session_id == chat.id
+        for _ in range(300):
+            if store.get(ChatTurn, sent["turn_id"]).status == ChatTurnStatus.COMPLETE:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("disposable harness turn did not complete")
+        assert adapter.connections[0].request.profile.id == next_profile.id
+        await work.harness.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
     tmp_path, monkeypatch
 ):
@@ -1997,6 +2096,10 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
         "does not attach an MCP browser"
         in (work.catalog(project.id, "nebula.work.chat_settings")["description"])
     )
+    assert (
+        "does not rebind a harness chat to a provider"
+        in (work.catalog(project.id, "nebula.work.set_chat_settings")["description"])
+    )
     with pytest.raises(ValueError, match="work roster"):
         work.chat_settings(other.id, chat.id)
 
@@ -2080,6 +2183,75 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
                     "timeout_seconds": 0,
                 },
             )
+        )
+
+
+def test_await_chat_result_reads_exact_immediate_turn_reply(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        ProviderProfile(name="Local", provider_type="ollama", is_local=True)
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Research agent",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    work = app.state.control_assistant_work
+    advertised = work.catalog(project.id, "nebula.work.await_chat_result")
+    assert "turn_id" in advertised["parameters"]["properties"]
+    assert {"required": ["turn_id"]} in advertised["parameters"]["oneOf"]
+    target = {"session_id": chat.id, "turn_id": turn.id, "timeout_seconds": 0}
+    pending = asyncio.run(work.await_chat_result(project.id, target))
+    assert pending["turn_status"] == "routing"
+    assert "saved_reply" not in pending
+
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=chat.id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="What evidence is still missing?",
+            metadata={"chat_turn_id": turn.id, "kind": "turn_outcome"},
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=chat.id,
+            sequence=2,
+            role=ChatRole.ASSISTANT,
+            content="I need access to the saved trace to make progress.",
+            metadata={"chat_turn_id": turn.id},
+        )
+    )
+    store.update(
+        ChatTurn,
+        turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=turn.revision,
+    )
+    answer = asyncio.run(work.await_chat_result(project.id, target))
+    assert answer["turn_status"] == "complete"
+    assert answer["saved_reply"] == "I need access to the saved trace to make progress."
+    with pytest.raises(ValueError, match="work roster"):
+        asyncio.run(work.await_chat_result(other.id, target))
+    with pytest.raises(ValueError, match="exactly one"):
+        asyncio.run(
+            work.await_chat_result(project.id, {**target, "item_id": "queue-item"})
         )
 
 

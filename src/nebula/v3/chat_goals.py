@@ -7,13 +7,14 @@ from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .chat_subagents import SUBAGENT_LIMIT_CEILING
 from .chat_agent_messages import resolve_agent_messaging_choice
 from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
+    DEFAULT_GOAL_RESUME_INSTRUCTION,
     ChatBackend,
     Approval,
     ApprovalStatus,
@@ -50,10 +51,21 @@ class GoalCreate(BaseModel):
     objective: str = Field(min_length=1, max_length=20_000)
     completion_criteria: list[str] = Field(min_length=1, max_length=50)
     plan: list[str] = Field(default_factory=list, max_length=200)
+    resume_instruction: str | None = Field(default=None, min_length=1, max_length=4_000)
     token_budget: int | None = Field(default=None, ge=1)
     time_budget_seconds: int | None = Field(default=None, ge=30 * 60)
     step_budget: int | None = Field(default=None, ge=1)
     child_budget: int | None = Field(default=None, ge=0, le=CHAT_GOAL_CHILD_LIMIT)
+
+    @field_validator("resume_instruction")
+    @classmethod
+    def nonempty_resume_instruction(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("resume instruction cannot be blank")
+        return stripped
 
 
 class GoalWrite(BaseModel):
@@ -296,6 +308,8 @@ class ChatGoalService:
                 objective=body.objective,
                 completion_criteria=body.completion_criteria,
                 plan=body.plan,
+                resume_instruction=body.resume_instruction
+                or DEFAULT_GOAL_RESUME_INSTRUCTION,
                 token_budget=body.token_budget,
                 time_budget_seconds=body.time_budget_seconds,
                 step_budget=body.step_budget,
@@ -409,6 +423,8 @@ class ChatGoalService:
                     objective=body.objective,
                     completion_criteria=body.completion_criteria,
                     plan=body.plan,
+                    resume_instruction=body.resume_instruction
+                    or DEFAULT_GOAL_RESUME_INSTRUCTION,
                     token_budget=body.token_budget,
                     time_budget_seconds=body.time_budget_seconds,
                     step_budget=body.step_budget,
@@ -490,6 +506,8 @@ class ChatGoalService:
             objective=body.objective,
             completion_criteria=body.completion_criteria,
             plan=body.plan,
+            resume_instruction=body.resume_instruction
+            or DEFAULT_GOAL_RESUME_INSTRUCTION,
             token_budget=body.token_budget,
             time_budget_seconds=body.time_budget_seconds,
             step_budget=body.step_budget,
@@ -689,6 +707,7 @@ class ChatGoalService:
             objective=handoff_note,
             completion_criteria=source.completion_criteria,
             plan=source.plan,
+            resume_instruction=source.resume_instruction,
             token_budget=remaining_tokens,
             time_budget_seconds=min(body.max_time_seconds, remaining_time),
             step_budget=min(body.max_steps, remaining_steps),
@@ -905,6 +924,11 @@ class ChatGoalService:
                     "objective": body.objective,
                     "completion_criteria": body.completion_criteria,
                     "plan": body.plan,
+                    **(
+                        {"resume_instruction": body.resume_instruction}
+                        if body.resume_instruction is not None
+                        else {}
+                    ),
                     "token_budget": body.token_budget,
                     "time_budget_seconds": body.time_budget_seconds,
                     "step_budget": body.step_budget,
@@ -1005,6 +1029,8 @@ class ChatGoalService:
                 objective=body.objective,
                 completion_criteria=body.completion_criteria,
                 plan=body.plan,
+                resume_instruction=body.resume_instruction
+                or DEFAULT_GOAL_RESUME_INSTRUCTION,
                 token_budget=body.token_budget,
                 time_budget_seconds=body.time_budget_seconds,
                 step_budget=body.step_budget,
@@ -1180,9 +1206,7 @@ def goals_router(
                 "objective and completion criteria provided by Core, then make "
                 "concrete progress without waiting for another operator message."
                 if body.action == "start"
-                else "Resume work on the active conversation goal now. Review the "
-                "latest durable progress and continue without waiting for another "
-                "operator message."
+                else updated.resume_instruction
             )
             await goal_dispatcher(session_id, instruction)
             return service.read(session_id)

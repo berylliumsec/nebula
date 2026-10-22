@@ -2023,6 +2023,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   ), [savedConversations, sessionActivity, sessionQuery, expandedSubagentParents]);
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+  // A saved provider chat is bound by Core. Local picker state can still have
+  // the former harness model while an asynchronous session refresh settles.
+  const boundProviderSession = runtimeKind === "provider" && activeChatSession?.backend === "provider"
+    ? activeChatSession : undefined;
+  const runtimeProviderId = boundProviderSession?.providerId ?? providerId;
+  const runtimeModel = boundProviderSession?.model ?? model;
   useEffect(() => {
     if (!api || !sessionId) return;
     const controller = new AbortController();
@@ -2080,18 +2086,18 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = contextUsePercent(activeContextStatus);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
-  const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
+  const selectedProvider = enabledProviders.find((provider) => provider.id === runtimeProviderId);
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
   const runtimeReady = runtimeKind === "provider" ? Boolean(selectedProvider) : Boolean(selectedHarness);
   useEffect(() => {
     if (embeddedSideChat || !engagement || !runtimeReady) return;
     registerAssistantSnapshot({
       engagementId: engagement.id, sessionId: sessionId || undefined,
-      backend: runtimeKind, providerId: runtimeKind === "provider" ? providerId : undefined,
-      harnessProfileId: runtimeKind === "harness" ? harnessId : undefined, model: model.trim(),
+      backend: runtimeKind, providerId: runtimeKind === "provider" ? runtimeProviderId : undefined,
+      harnessProfileId: runtimeKind === "harness" ? harnessId : undefined, model: runtimeModel.trim(),
       includeKnowledge: false,
     });
-  }, [embeddedSideChat, engagement?.id, sessionId, runtimeKind, providerId, harnessId, model, runtimeReady, registerAssistantSnapshot]);
+  }, [embeddedSideChat, engagement?.id, sessionId, runtimeKind, runtimeProviderId, harnessId, runtimeModel, runtimeReady, registerAssistantSnapshot]);
   const selectedHarnessSkill = harnessSkills.find((skill) => skill.path === harnessSkillPath);
   const matchingHarnessSkills = useMemo(() => {
     const query = skillToken?.query.toLocaleLowerCase() ?? "";
@@ -2119,7 +2125,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     : providerIsLocal || selectedProvider?.permitsSensitiveData === true;
   const knowledgeItemCount = knowledgeSources.length + libraryItems.length;
   const canUseKnowledge = Boolean(knowledgeItemCount > 0 && runtimePermitsKnowledge);
-  const modelVerification = providerModelVerification(selectedProvider, model);
+  const modelVerification = providerModelVerification(selectedProvider, runtimeModel);
   const modelVerified = modelVerification?.status === "verified";
   const subagentProvider = enabledProviders.find((provider) => provider.id === subagentProviderId);
   const subagentModelVerification = providerModelVerification(subagentProvider, subagentModel);
@@ -2181,7 +2187,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return true;
   };
   const commandRuntimeReason = !modelVerified
-    ? model ? `Tool calling is unverified for ${model}.` : "Select a model to verify tool calling."
+    ? runtimeModel ? `Tool calling is unverified for ${runtimeModel}.` : "Select a model to verify tool calling."
     : toolRuntimeReason ?? (!commandRuntimeReady ? "The command runtime is not ready." : undefined);
   const canUseTools = commandRuntimeAvailable;
   const commandRuntimeUnavailableReason = commandRuntimeReason;
@@ -2245,12 +2251,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
 
   useEffect(() => {
-    if (embeddedSideChat || runtimeKind !== "provider" || coreState !== "online" || (view !== "chat" && view !== "browser") || !selectedProvider || !model.trim() || modelVerification) return;
-    const key = `${selectedProvider.id}:${model.trim()}`;
+    if (embeddedSideChat || runtimeKind !== "provider" || coreState !== "online" || (view !== "chat" && view !== "browser") || !selectedProvider || !runtimeModel.trim() || modelVerification) return;
+    const key = `${selectedProvider.id}:${runtimeModel.trim()}`;
     if (attemptedToolVerificationRef.current.has(key)) return;
     attemptedToolVerificationRef.current.add(key);
-    void reverifyProvider(selectedProvider.id, model).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_01", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; });
-  }, [coreState, embeddedSideChat, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
+    void reverifyProvider(selectedProvider.id, runtimeModel).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_01", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; });
+  }, [coreState, embeddedSideChat, runtimeModel, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
 
   useEffect(() => {
     if (runtimeKind !== "harness" || !allowSubagents || coreState !== "online" || !subagentProvider || !subagentModel.trim() || subagentModelVerification) return;
@@ -2949,13 +2955,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   const createGoalConversation = async (draft: ProviderGoalDraft): Promise<ChatGoal> => {
     if (!api || !engagement) throw new Error("Select a project before adding a goal.");
-    if (!model.trim() || (runtimeKind === "provider" ? !providerId : !harnessId)) throw new Error("Choose an assistant and model before adding a goal.");
+    if (!runtimeModel.trim() || (runtimeKind === "provider" ? !runtimeProviderId : !harnessId)) throw new Error("Choose an assistant and model before adding a goal.");
     const created = await api.createChatGoalConversation({
       engagementId: engagement.id,
       backend: runtimeKind,
-      providerId: runtimeKind === "provider" ? providerId : undefined,
+      providerId: runtimeKind === "provider" ? runtimeProviderId : undefined,
       harnessProfileId: runtimeKind === "harness" ? harnessId : undefined,
-      model: model.trim(),
+      model: runtimeModel.trim(),
       toolsEnabled: runtimeKind === "harness" ? true : canUseTools,
       planningEnabled,
       mcpServerIds: selectedMcpIds,
@@ -3394,6 +3400,16 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
 
   const chooseChatRuntime = (next: "provider" | "harness") => {
+    if (next === "provider" && (sessionId || requestedSessionId)) {
+      const selected = enabledProviders.find((item) => item.id === providerId) ?? enabledProviders[0];
+      const nextModel = providerDefaultModel(selected);
+      if (!selected?.id || !nextModel) {
+        setAssistantSettingsStatus("Add an enabled provider and model before switching this conversation.");
+        return;
+      }
+      void proposeProviderRuntime(selected.id, nextModel);
+      return;
+    }
     if (engagement) runtimeDefaultEngagementRef.current = engagement.id;
     setRuntimeKind(next);
     setHarnessSessionId("");
@@ -3635,15 +3651,30 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   const proposeProviderRuntime = async (nextProviderId: string, nextModel: string) => {
     const generation = ++runtimeSwitchGenerationRef.current;
-    let activeSession = sessions.find((item) => item.id === sessionId);
-    if (!api || !engagement || !activeSession || activeSession.backend !== "provider") {
+    const targetSessionId = sessionId || requestedSessionId;
+    let activeSession = sessions.find((item) => item.id === targetSessionId);
+    if (api && engagement && targetSessionId && !activeSession) {
+      try {
+        const current = await api.getChatSession(targetSessionId);
+        if (current.engagementId !== engagement.id) throw new Error("The conversation belongs to another project.");
+        if (generation !== runtimeSwitchGenerationRef.current) return;
+        activeSession = current;
+        setSessions((items) => mergeRecentListedSessions(items, [current]));
+      } catch (error) {
+        void logCaughtDiagnostic("interface.sessions.runtime_switch_session_read_failed", "The conversation could not be read before switching runtime.", error, "assistant_settings");
+        setAssistantSettingsStatus(error instanceof Error ? error.message : "Could not read this conversation. Try again.");
+        return;
+      }
+    }
+    if (!api || !engagement || !activeSession) {
       setProviderId(nextProviderId);
       setModel(nextModel);
       void rememberAssistantDefaults({ backend: "provider", providerId: nextProviderId || null, model: nextModel || null });
       setAssistantSettingsStatus("Model updated. Applies to your next message.");
       return;
     }
-    if (activeSession.providerId === nextProviderId && activeSession.model === nextModel) {
+    if (activeSession.backend === "provider" && activeSession.providerId === nextProviderId && activeSession.model === nextModel) {
+      setRuntimeKind("provider");
       setProviderId(nextProviderId);
       setModel(nextModel);
       void rememberAssistantDefaults({ backend: "provider", providerId: nextProviderId || null, model: nextModel || null });
@@ -3654,6 +3685,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     // next message: while a response runs, the next turn may be one Core
     // starts itself (a running goal, a queued follow-up or a schedule).
     const responseRunning = composerBusy;
+    const changingBackend = activeSession.backend === "harness";
     const sessionIdForSwitch = activeSession.id;
     const engagementIdForSwitch = engagement.id;
     // Core bumps the conversation's revision whenever a turn starts or settles,
@@ -3672,8 +3704,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       }
     };
     setAssistantSettingsStatus("Checking the selected model against this conversation…");
+    if (changingBackend) setAssistantSettingsBusy(true);
     try {
-      const toolsEnabled = Boolean(canUseTools || selectedMcpIds.length || browserControlEnabled || selectedHarnessSkill);
+      const toolsEnabled = changingBackend ? false : Boolean(canUseTools || selectedMcpIds.length || browserControlEnabled || selectedHarnessSkill);
       const check = () => withCurrentRevision((current) => api.preflightChatRuntimeSwitch(current.id, {
         providerId: nextProviderId,
         model: nextModel,
@@ -3722,11 +3755,24 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         confirmationToken: preflight.confirmationToken,
       }));
       if (generation !== runtimeSwitchGenerationRef.current) return;
-      setSessions((items) => items.map((item) => item.id === switched.id ? switched : item));
+      const persisted = changingBackend ? await api.getChatSession(switched.id) : switched;
+      if (persisted.backend !== "provider" || persisted.providerId !== nextProviderId || persisted.model !== nextModel) {
+        throw new Error("Core did not save the selected provider. Reload this conversation and try again.");
+      }
+      setSessions((items) => items.map((item) => item.id === persisted.id ? persisted : item));
+      if (changingBackend) {
+        setRuntimeKind("provider");
+        setHarnessSessionId("");
+        setSelectedMcpIds([]);
+        setSelectedHookIds([]);
+        setReasoningEffort("");
+      }
       setProviderId(nextProviderId);
       setModel(nextModel);
       await rememberAssistantDefaults({ backend: "provider", providerId: nextProviderId || null, model: nextModel || null });
-      setAssistantSettingsStatus(responseRunning
+      setAssistantSettingsStatus(changingBackend
+        ? "Provider saved on this conversation. Its next turn uses the selected model."
+        : responseRunning
         ? `Model updated. The running response keeps its model; the next turn uses ${nextModel}.`
         : preflight.requiresCompactionConfirmation
           ? "Compaction approved. The switch applies to your next message."
@@ -3734,19 +3780,21 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions.runtime_switch_failed", "The model switch could not be verified.", error, "assistant_settings");
       setAssistantSettingsStatus(error instanceof Error ? error.message : "Could not verify the model switch.");
+    } finally {
+      if (changingBackend) setAssistantSettingsBusy(false);
     }
   };
 
-  const modelDiscoveryInProgress = discoveringProviderId === providerId;
-  const selectedModelIsUnavailable = Boolean(model && selectedProvider && !selectedProvider.models.includes(model));
-  const selectedModelSummary = modelCatalogSummary(model, selectedProvider?.modelDescriptors);
+  const modelDiscoveryInProgress = discoveringProviderId === runtimeProviderId;
+  const selectedModelIsUnavailable = Boolean(runtimeModel && selectedProvider && !selectedProvider.models.includes(runtimeModel));
+  const selectedModelSummary = modelCatalogSummary(runtimeModel, selectedProvider?.modelDescriptors);
   // Discovered models outside the provider's allowlist; choosing one adds it to the allowlist.
   const unlistedProviderModels = selectedProvider?.modelAllowlist.length
     ? (selectedProvider.availableModels ?? []).filter((item) => !selectedProvider.models.includes(item))
     : [];
   const modelDescriptions = new Map(selectedProvider?.modelDescriptors?.map((item) => [item.id, item.description]) ?? []);
   const providerPickerOptions: ModelPickerOption[] = [
-    ...(selectedModelIsUnavailable && !unlistedProviderModels.includes(model) ? [{ id: model, label: `${model} · saved model`, group: "saved" as const }] : []),
+    ...(selectedModelIsUnavailable && !unlistedProviderModels.includes(runtimeModel) ? [{ id: runtimeModel, label: `${runtimeModel} · saved model`, group: "saved" as const }] : []),
     ...(selectedProvider?.models ?? []).map((id) => ({ id, label: modelOptionLabel(id, selectedProvider?.modelDescriptors), searchText: modelDescriptions.get(id), group: "allowed" as const })),
     ...unlistedProviderModels.map((id) => ({ id, label: modelOptionLabel(id, selectedProvider?.modelDescriptors), searchText: modelDescriptions.get(id), group: "more" as const })),
   ];
@@ -3778,7 +3826,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         return;
       }
     }
-    await proposeProviderRuntime(providerId, nextModel);
+    await proposeProviderRuntime(runtimeProviderId, nextModel);
   };
   const modelPlaceholder = modelDiscoveryInProgress
     ? "Discovering models…"
@@ -3998,11 +4046,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     harnessFollowDetachRef.current = undefined;
     if (summary) {
       const next = summary.assistantConfig;
-      setRuntimeKind(next?.backend ?? summary.backend);
+      setRuntimeKind(summary.backend);
       setProviderId(next?.backend === "provider" ? next.profileId : summary.providerId ?? "");
       setHarnessId(next?.backend === "harness" ? next.profileId : summary.harnessProfileId ?? "");
       setHarnessSessionId(summary.harnessSessionId ?? "");
-      setModel(next?.model ?? summary.model ?? "");
+      setModel(next?.backend === summary.backend ? next.model : summary.model ?? "");
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
@@ -4828,11 +4876,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
     if (summary) {
       const next = summary.assistantConfig;
-      setRuntimeKind(next?.backend ?? summary.backend);
+      setRuntimeKind(summary.backend);
       setProviderId(next?.backend === "provider" ? next.profileId : summary.providerId ?? "");
       setHarnessId(next?.backend === "harness" ? next.profileId : summary.harnessProfileId ?? "");
       setHarnessSessionId(summary.harnessSessionId ?? "");
-      setModel(next?.model ?? summary.model ?? "");
+      setModel(next?.backend === summary.backend ? next.model : summary.model ?? "");
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
@@ -5314,7 +5362,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const content = (resent?.text ?? queuedFollowUp?.text ?? draft.trim()) || (!resent && pendingImages.length ? "Attached image" : "");
     const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
     const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
-    if (!content || assistantSettingsBusy || (!queueOptions && composerBusy) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
+    if (!content || assistantSettingsBusy || (!queueOptions && composerBusy) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !runtimeModel.trim()) return;
 
     const failQueuedFollowUp = (detail: string) => {
       if (!queuedFollowUp) return;
@@ -5461,7 +5509,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     };
     const initialSessionId = sessionId || undefined;
     let returnedSessionId = initialSessionId;
-    const nextSettings = activeChatSession?.assistantConfig;
+    const nextSettings = activeChatSession?.assistantConfig?.backend === runtimeKind
+      ? activeChatSession.assistantConfig : undefined;
     const chatRequest: ChatCompletionRequest = {
       backend: runtimeKind,
       controlAssistant: activeChatSession?.isControlAssistant === true,
@@ -5477,7 +5526,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       skill: !embeddedSideChat && runtimeKind === "provider" && selectedHarnessSkill
         ? { name: selectedHarnessSkill.name, path: selectedHarnessSkill.path }
         : undefined,
-      model: model.trim(),
+      model: runtimeModel.trim(),
       messages: returnedSessionId
         ? [{ role: "user", content, contentBlocks: userMessage.contentBlocks }]
         : [
@@ -6274,7 +6323,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [assistantSettingsOpen]);
   const authoritativeProviderBusy = runtimeKind === "provider" && Boolean(authoritativeState?.busy);
   const composerBusy = sending || authoritativeProviderBusy || pendingResponseActive || Boolean(interruptedRecovery) || Boolean(waitingCallback);
-  const canSend = Boolean(!requestedSessionPending && (!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !assistantSettingsBusy && !uploadingImage);
+  const canSend = Boolean(!requestedSessionPending && (!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && runtimeModel.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !assistantSettingsBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     !isHarnessCommand(draft)
     && sending
@@ -6346,7 +6395,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     ? selectedHarness?.name ?? "Agent harness"
     : selectedProvider?.name ?? "Model provider";
   const runtimeConfiguration = [
-    model,
+    runtimeModel,
     runtimeKind === "harness" && harnessReasoningEffort ? `${harnessReasoningEffort} effort` : "",
     runtimeKind === "harness" && harnessServiceTier ? `${harnessServiceTier} speed` : "",
   ].filter(Boolean).join(" · ");
@@ -6610,11 +6659,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 <div className="chat-context-bar">
                 <div className="chat-settings-fields" data-guide="assistant-runtime">
                 <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => chooseChatRuntime(event.target.value as "provider" | "harness")}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
-                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} onChange={(event) => { const nextProvider = enabledProviders.find(item => item.id === event.target.value); void proposeProviderRuntime(event.target.value, providerDefaultModel(nextProvider)); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => chooseHarness(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
+                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={runtimeProviderId} onChange={(event) => { const nextProvider = enabledProviders.find(item => item.id === event.target.value); void proposeProviderRuntime(event.target.value, providerDefaultModel(nextProvider)); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => chooseHarness(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
                 {runtimeKind === "provider" ? <>
                   {(selectedProvider?.models.length ?? 0) + unlistedProviderModels.length > 8
-                    ? <div className="chat-model-field" title={selectedProvider?.message}><span>Model</span><SearchableModelPicker key={selectedProvider?.id} options={providerPickerOptions} value={model} providerName={selectedProvider?.name ?? "provider"} busy={modelDiscoveryInProgress} disabled={modelDiscoveryInProgress} onSelect={(nextModel) => void chooseProviderModel(nextModel)} />{selectedModelSummary && <small>{selectedModelSummary}</small>}</div>
-                    : <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={modelDiscoveryInProgress || !providerPickerOptions.length} onChange={(event) => void chooseProviderModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && !unlistedProviderModels.includes(model) && <option value={model}>{model} · saved model</option>}{unlistedProviderModels.length > 0
+                    ? <div className="chat-model-field" title={selectedProvider?.message}><span>Model</span><SearchableModelPicker key={selectedProvider?.id} options={providerPickerOptions} value={runtimeModel} providerName={selectedProvider?.name ?? "provider"} busy={modelDiscoveryInProgress} disabled={modelDiscoveryInProgress} onSelect={(nextModel) => void chooseProviderModel(nextModel)} />{selectedModelSummary && <small>{selectedModelSummary}</small>}</div>
+                    : <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={runtimeModel} disabled={modelDiscoveryInProgress || !providerPickerOptions.length} onChange={(event) => void chooseProviderModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && !unlistedProviderModels.includes(runtimeModel) && <option value={runtimeModel}>{runtimeModel} · saved model</option>}{unlistedProviderModels.length > 0
                       ? <><optgroup label="Allowed models">{selectedProvider?.models.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup><optgroup label={`More ${selectedProvider?.name ?? "provider"} models · adds to allowed`}>{unlistedProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup></>
                       : selectedProvider?.models.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label>}
                 </> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={assistantSettingsBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); void rememberAssistantDefaults({ backend: "harness", harnessId, model: event.target.value || null }); setAssistantSettingsStatus("Model updated. Applies to your next message."); void saveNextTurnSettings({backend: "harness", profileId: harnessId, model: event.target.value, harnessReasoningEffort: null, harnessServiceTier: null, harnessCyberAccessProgram: "automatic"}); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}

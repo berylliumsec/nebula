@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator, ValidationError
+
 from .butler_instructions import read_butler_instructions
 from .harnesses import HarnessConfigurationError
 from .domain import (
@@ -213,6 +215,77 @@ class ButlerGlobalActions:
         self._project(arguments["project_id"])
         return self.work.goal_detail(arguments["project_id"], arguments["session_id"])
 
+    async def assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._project(arguments["project_id"])
+        return self.work.assistant_defaults(arguments["project_id"])
+
+    async def set_assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_id = arguments["project_id"]
+        self._act(project_id, arguments["expected_authority_revision"])
+        return self.work.set_assistant_defaults(
+            project_id,
+            {
+                "expected_revision": arguments["expected_revision"],
+                "settings": arguments["settings"],
+            },
+        )
+
+    async def chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._project(arguments["project_id"])
+        return self.work.chat_settings(arguments["project_id"], arguments["session_id"])
+
+    async def work_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_id = arguments["project_id"]
+        self._project(project_id)
+        return self.work.catalog(project_id, arguments.get("operation"))
+
+    async def work_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self._dispatch_work(arguments, change=False)
+
+    async def work_change(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self._dispatch_work(arguments, change=True)
+
+    async def _dispatch_work(
+        self, arguments: dict[str, Any], *, change: bool
+    ) -> dict[str, Any]:
+        from .control_assistant_work import _ALL_WORK_TOOLS, dispatch_work_tool
+
+        project_id = arguments["project_id"]
+        if change:
+            self._act(project_id, arguments["expected_authority_revision"])
+        else:
+            self._project(project_id)
+        operation = arguments["operation"]
+        entry = next((item for item in _ALL_WORK_TOOLS if item[0] == operation), None)
+        if entry is None or entry[0] == "nebula.work.catalog":
+            raise ValueError("Choose an Assistant work action from work_catalog")
+        if entry[3] == change:
+            route = "work_read" if entry[3] else "work_change"
+            raise ValueError(f"Use nebula.global.{route} for {operation}")
+        payload = arguments["arguments"]
+        try:
+            Draft202012Validator(entry[2]).validate(payload)
+        except ValidationError as exc:
+            raise ValueError(
+                f"Invalid Assistant work arguments for {operation}: {exc.message}; "
+                "read work_catalog for its exact schema"
+            ) from exc
+        if change:
+            self._act(project_id, arguments["expected_authority_revision"])
+        return await dispatch_work_tool(self.work, project_id, operation, payload)
+
+    async def set_chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_id = arguments["project_id"]
+        self._act(project_id, arguments["expected_authority_revision"])
+        return self.work.set_chat_settings(
+            project_id,
+            {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"project_id", "expected_authority_revision"}
+            },
+        )
+
     async def harness_quota(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._project(arguments["project_id"])
         return await self.work.harness_quota(arguments["project_id"], arguments)
@@ -400,10 +473,6 @@ class ButlerGlobalActions:
                             "Scheduled Butler check changed; read it again"
                         )
                     if existing.id not in current.recovery_goal_ids:
-                        if len(current.recovery_goal_ids) >= 20:
-                            raise ValueError(
-                                "This check already has 20 linked recovery goals"
-                            )
                         transaction.update(
                             ButlerRecoveryCase,
                             current.id,
@@ -490,10 +559,11 @@ class ButlerGlobalActions:
     async def goal_action(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         project = self._act(project_id, arguments["expected_authority_revision"])
-        if project.status != EngagementStatus.ACTIVE:
+        if (
+            arguments["action"] in {"start", "resume"}
+            and project.status != EngagementStatus.ACTIVE
+        ):
             raise ValueError("Activate the project before starting or resuming a goal")
-        if arguments["action"] not in {"start", "resume"}:
-            raise ValueError("Scheduled Butler may only start or resume a main goal")
         current = self.work.goal_detail(project_id, arguments["session_id"])
         goal = current.get("goal")
         if (
@@ -502,15 +572,34 @@ class ButlerGlobalActions:
             or goal["revision"] != arguments["expected_revision"]
         ):
             raise ValueError("Main goal changed; read it again")
-        project = self._act(project_id, arguments["expected_authority_revision"])
-        if project.status != EngagementStatus.ACTIVE:
-            raise ValueError("Activate the project before starting or resuming a goal")
+        self._act(project_id, arguments["expected_authority_revision"])
         return await self.work.goal_action(
             project_id,
             {
-                "session_id": arguments["session_id"],
-                "expected_revision": arguments["expected_revision"],
-                "action": arguments["action"],
+                key: value
+                for key, value in arguments.items()
+                if key not in {"project_id", "expected_authority_revision"}
+            },
+        )
+
+    async def update_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_id = arguments["project_id"]
+        self._act(project_id, arguments["expected_authority_revision"])
+        current = self.work.goal_detail(project_id, arguments["session_id"])
+        goal = current.get("goal")
+        if (
+            current.get("kind") != "main"
+            or goal is None
+            or goal["revision"] != arguments["expected_revision"]
+        ):
+            raise ValueError("Main goal changed; read it again")
+        self._act(project_id, arguments["expected_authority_revision"])
+        return await self.work.update_goal(
+            project_id,
+            {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"project_id", "expected_authority_revision"}
             },
         )
 
@@ -643,7 +732,13 @@ class ButlerGlobalActions:
         return result
 
     def plugins(self) -> list[AnalysisTool]:
-        from .control_assistant_work import START_GOAL_CONVERSATION_SCHEMA
+        from .control_assistant_work import (
+            GOAL_ACTION_SCHEMA,
+            SET_ASSISTANT_DEFAULTS_SCHEMA,
+            SET_CHAT_SETTINGS_SCHEMA,
+            START_GOAL_CONVERSATION_SCHEMA,
+            UPDATE_GOAL_SCHEMA,
+        )
 
         goal_fields = START_GOAL_CONVERSATION_SCHEMA["properties"]
         operations = (
@@ -678,6 +773,115 @@ class ButlerGlobalActions:
                 },
                 RiskClass.LOCAL_READ,
                 self.goal,
+            ),
+            (
+                "nebula.global.work_catalog",
+                "List every Assistant work action for an Act project, or read one action's exact input schema before using work_read or work_change.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"project_id": _ID, "operation": _ID},
+                    "required": ["project_id"],
+                },
+                RiskClass.LOCAL_READ,
+                self.work_catalog,
+            ),
+            (
+                "nebula.global.work_read",
+                "Read any listed Assistant work item in an Act project. Get the operation's exact arguments from work_catalog first.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "operation": _ID,
+                        "arguments": {"type": "object"},
+                    },
+                    "required": ["project_id", "operation", "arguments"],
+                },
+                RiskClass.LOCAL_READ,
+                self.work_read,
+            ),
+            (
+                "nebula.global.work_change",
+                "Change any listed Assistant chat, goal, mission, queue, schedule, subagent, approval, question, or saved setting in an Act project. Read current state and the exact schema first. Core enforces target ownership, revisions and action policy; verify the observed result.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "expected_authority_revision": _REV,
+                        "operation": _ID,
+                        "arguments": {"type": "object"},
+                    },
+                    "required": [
+                        "project_id",
+                        "expected_authority_revision",
+                        "operation",
+                        "arguments",
+                    ],
+                },
+                RiskClass.WORKSPACE_WRITE,
+                self.work_change,
+            ),
+            (
+                "nebula.global.assistant_defaults",
+                "Read every saved Assistant default for future chats in one Act project, with its revision and available runtimes.",
+                _PROJECT,
+                RiskClass.LOCAL_READ,
+                self.assistant_defaults,
+            ),
+            (
+                "nebula.global.set_assistant_defaults",
+                "Edit any saved Assistant default for future chats in an Act project after reading its revision.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "expected_authority_revision": _REV,
+                        **SET_ASSISTANT_DEFAULTS_SCHEMA["properties"],
+                    },
+                    "required": [
+                        "project_id",
+                        "expected_authority_revision",
+                        *SET_ASSISTANT_DEFAULTS_SCHEMA["required"],
+                    ],
+                },
+                RiskClass.WORKSPACE_WRITE,
+                self.set_assistant_defaults,
+            ),
+            (
+                "nebula.global.chat_settings",
+                "Read all next-turn Assistant choices, available runtimes, and revision for one main chat in an Act project.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"project_id": _ID, "session_id": _ID},
+                    "required": ["project_id", "session_id"],
+                },
+                RiskClass.LOCAL_READ,
+                self.chat_settings,
+            ),
+            (
+                "nebula.global.set_chat_settings",
+                "Edit any next-turn Assistant setting of one main chat in an Act project. Read its settings and revision first; the saved choice applies to the next turn.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "expected_authority_revision": _REV,
+                        **SET_CHAT_SETTINGS_SCHEMA["properties"],
+                    },
+                    "required": [
+                        "project_id",
+                        "expected_authority_revision",
+                        *SET_CHAT_SETTINGS_SCHEMA["required"],
+                    ],
+                },
+                RiskClass.WORKSPACE_WRITE,
+                self.set_chat_settings,
             ),
             (
                 "nebula.global.harness_quota",
@@ -772,27 +976,43 @@ class ButlerGlobalActions:
             ),
             (
                 "nebula.global.goal_action",
-                "Start or resume one main goal in an active Act project after reading its revision. Activate a draft or paused project first.",
+                "Start, pause, resume, block, complete, or cancel one main goal under Act authority after reading its revision. Core requires completion evidence and enforces holds. Activate the project before starting or resuming.",
                 {
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
                         "project_id": _ID,
-                        "session_id": _ID,
                         "expected_authority_revision": _REV,
-                        "expected_revision": _REV,
-                        "action": {"type": "string", "enum": ["start", "resume"]},
+                        **GOAL_ACTION_SCHEMA["properties"],
                     },
                     "required": [
                         "project_id",
-                        "session_id",
                         "expected_authority_revision",
-                        "expected_revision",
-                        "action",
+                        *GOAL_ACTION_SCHEMA["required"],
                     ],
                 },
                 RiskClass.WORKSPACE_WRITE,
                 self.goal_action,
+            ),
+            (
+                "nebula.global.update_goal",
+                "Edit any objective, criteria, plan, resume instruction, time, token, step, or child budget on one nonterminal main goal in an Act project. Read its revision first, then resume separately after verifying all other holds.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "expected_authority_revision": _REV,
+                        **UPDATE_GOAL_SCHEMA["properties"],
+                    },
+                    "required": [
+                        "project_id",
+                        "expected_authority_revision",
+                        *UPDATE_GOAL_SCHEMA["required"],
+                    ],
+                },
+                RiskClass.WORKSPACE_WRITE,
+                self.update_goal,
             ),
             (
                 "nebula.global.handoff_goal",

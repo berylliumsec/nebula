@@ -71,4 +71,4 @@ npm --prefix ui run dev:desktop
 
 ## Documentation
 
-Start with the [Nebula 3 guide](docs/NEBULA3.md) or [usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md). The [documentation index](docs/README.md) groups setup, integrations, troubleshooting, technical reference, and release information.
+Start with the [Nebula 3 guide](docs/NEBULA3.md), [system architecture](docs/ARCHITECTURE.md), or [usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md). The [documentation index](docs/README.md) groups setup, integrations, troubleshooting, technical reference, and release information.

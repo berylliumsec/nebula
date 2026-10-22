@@ -7,6 +7,8 @@ import { useConfirmation } from "./DialogSystem";
 
 type GoalAction = "start" | "pause" | "resume" | "cancel" | "block" | "complete";
 
+export const DEFAULT_GOAL_RESUME_INSTRUCTION = "Resume work on the active conversation goal now. Review the latest durable progress and continue without waiting for another operator message.";
+
 /**
  * Active seconds as Core would compute them: what it has banked, plus the
  * stretch still running. Reading the stored field alone leaves a running goal
@@ -69,6 +71,7 @@ export interface ProviderGoalDraft {
   objective: string;
   completionCriteria: string[];
   plan: string[];
+  resumeInstruction?: string;
   tokenBudget?: number;
   timeBudgetSeconds?: number;
   stepBudget?: number;
@@ -95,6 +98,8 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
   const [plan, setPlan] = useState("");
+  const [resumeInstruction, setResumeInstruction] = useState(DEFAULT_GOAL_RESUME_INSTRUCTION);
+  const invalidResumeInstruction = !resumeInstruction.trim() || resumeInstruction.trim().length > 4_000;
   const [tokenBudget, setTokenBudget] = useState("");
   const [timeBudget, setTimeBudget] = useState("");
   const invalidTimeBudget = timeBudget !== "" && (!Number.isInteger(Number(timeBudget)) || Number(timeBudget) < 30);
@@ -189,6 +194,8 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         objective: objective.trim(),
         completionCriteria,
         plan: plan.split("\n").map(item => item.trim()).filter(Boolean),
+        ...(resumeInstruction.trim() !== DEFAULT_GOAL_RESUME_INSTRUCTION
+          ? { resumeInstruction: resumeInstruction.trim() } : {}),
         ...(tokenBudget ? { tokenBudget: Number(tokenBudget) } : {}),
         ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
         ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
@@ -198,7 +205,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       if (sessionId) created = await api.createChatGoal(sessionId, draft);
       else if (onCreate) created = await onCreate(draft);
       else throw new Error("Save the conversation before adding a goal.");
-      onChange(created); setExpanded(false);
+      onChange(created); setExpanded(false); setResumeInstruction(DEFAULT_GOAL_RESUME_INSTRUCTION);
     } catch (caught) {
       void logCaughtDiagnostic("interface.goal.create_failed", "A conversation goal could not be created.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal could not be created.");
@@ -210,6 +217,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     setObjective(goal.objective);
     setCriteria(goal.completionCriteria.join("\n"));
     setPlan(goal.plan.join("\n"));
+    setResumeInstruction(goal.resumeInstruction ?? DEFAULT_GOAL_RESUME_INSTRUCTION);
     setTokenBudget(goal.tokenBudget?.toString() ?? "");
     setTimeBudget(goal.timeBudgetSeconds ? String(goal.timeBudgetSeconds / 60) : "");
     setStepBudget(goal.stepBudget?.toString() ?? "");
@@ -224,18 +232,22 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     if (!goal || !sessionId || busy) return;
     const completionCriteria = criteria.split("\n").map(item => item.trim()).filter(Boolean);
     if (!objective.trim() || !completionCriteria.length || invalidTimeBudget) return;
+    if (invalidResumeInstruction) return;
+    const body = (revision: number) => ({
+      expectedRevision: revision,
+      objective: objective.trim(),
+      completionCriteria,
+      plan: plan.split("\n").map(item => item.trim()).filter(Boolean),
+      ...(resumeInstruction.trim() !== (goal.resumeInstruction ?? DEFAULT_GOAL_RESUME_INSTRUCTION)
+        ? { resumeInstruction: resumeInstruction.trim() } : {}),
+      ...(tokenBudget ? { tokenBudget: Number(tokenBudget) } : {}),
+      ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
+      ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
+      ...(childBudget ? { childBudget: Number(childBudget) } : {}),
+    });
     setBusy(true); setError(undefined);
     try {
-      onChange(await api.updateChatGoal(sessionId, {
-        expectedRevision: goal.revision,
-        objective: objective.trim(),
-        completionCriteria,
-        plan: plan.split("\n").map(item => item.trim()).filter(Boolean),
-        ...(tokenBudget ? { tokenBudget: Number(tokenBudget) } : {}),
-        ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
-        ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
-        ...(childBudget ? { childBudget: Number(childBudget) } : {}),
-      }));
+      onChange(await api.updateChatGoal(sessionId, body(goal.revision)));
       setEditingGoal(false);
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409) {
@@ -244,22 +256,14 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
           const contentUnchanged = current.objective === goal.objective
             && JSON.stringify(current.completionCriteria) === JSON.stringify(goal.completionCriteria)
             && JSON.stringify(current.plan) === JSON.stringify(goal.plan)
+            && (current.resumeInstruction ?? DEFAULT_GOAL_RESUME_INSTRUCTION) === (goal.resumeInstruction ?? DEFAULT_GOAL_RESUME_INSTRUCTION)
             && current.tokenBudget === goal.tokenBudget
             && current.timeBudgetSeconds === goal.timeBudgetSeconds
             && current.stepBudget === goal.stepBudget
             && current.childBudget === goal.childBudget;
           onChange(current);
           if (contentUnchanged) {
-            onChange(await api.updateChatGoal(sessionId, {
-              expectedRevision: current.revision,
-              objective: objective.trim(),
-              completionCriteria,
-              plan: plan.split("\n").map(item => item.trim()).filter(Boolean),
-              ...(tokenBudget ? { tokenBudget: Number(tokenBudget) } : {}),
-              ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
-              ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
-              ...(childBudget ? { childBudget: Number(childBudget) } : {}),
-            }));
+            onChange(await api.updateChatGoal(sessionId, body(current.revision)));
             setEditingGoal(false);
             return;
           }
@@ -320,6 +324,9 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       <label>Objective<textarea value={objective} maxLength={20_000} required onChange={event => setObjective(event.target.value)} /></label>
       <label>Completion criteria<textarea value={criteria} required placeholder="One criterion per line" onChange={event => setCriteria(event.target.value)} /></label>
       <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
+      <label>Resume instruction<textarea value={resumeInstruction} maxLength={4_000} required onChange={event => setResumeInstruction(event.target.value)} /></label>
+      <small>Sent when you resume this goal.</small>
+      <div><button className="button quiet chat-goal-resume-default" type="button" disabled={resumeInstruction === DEFAULT_GOAL_RESUME_INSTRUCTION} onClick={() => setResumeInstruction(DEFAULT_GOAL_RESUME_INSTRUCTION)}>Use default</button></div>
       <details><summary>Limits</summary><div className="chat-goal-limits">
         {tokenBudgetAvailable && <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>}
         {!tokenBudgetAvailable && <small>Token limits need usage reported by the harness. Step and time limits remain available.</small>}
@@ -327,7 +334,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
       </div></details>
-      <div><button className="button secondary" type="button" onClick={() => setExpanded(false)}>Cancel</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || !objective.trim() || !criteria.trim()} onClick={() => void create()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Flag size={14} />} Save draft</button></div>
+      <div><button className="button secondary" type="button" onClick={() => setExpanded(false)}>Cancel</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || invalidResumeInstruction || !objective.trim() || !criteria.trim()} onClick={() => void create()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Flag size={14} />} Save draft</button></div>
     </div>}
     {error && <p role="alert">{error}</p>}
   </section>;
@@ -366,6 +373,9 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       <label>Objective<textarea value={objective} maxLength={20_000} required onChange={event => setObjective(event.target.value)} /></label>
       <label>Completion criteria<textarea value={criteria} required placeholder="One criterion per line" onChange={event => setCriteria(event.target.value)} /></label>
       <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
+      <label>Resume instruction<textarea value={resumeInstruction} maxLength={4_000} required onChange={event => setResumeInstruction(event.target.value)} /></label>
+      <small>Sent when you resume this goal.</small>
+      <div><button className="button quiet chat-goal-resume-default" type="button" disabled={resumeInstruction === DEFAULT_GOAL_RESUME_INSTRUCTION} onClick={() => setResumeInstruction(DEFAULT_GOAL_RESUME_INSTRUCTION)}>Use default</button></div>
       <details><summary>Limits</summary><div className="chat-goal-limits">
         {(tokenBudgetAvailable || goal.tokenBudget !== undefined) && <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>}
         {!tokenBudgetAvailable && <small>Token tracking is unavailable for this harness. Remove an existing token limit to resume.</small>}
@@ -373,7 +383,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
       </div></details>
-      <div><button className="button quiet" type="button" disabled={busy} onClick={() => setEditingGoal(false)}>Back</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || !objective.trim() || !criteria.trim()} onClick={() => void saveGoal()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null} Save changes</button></div>
+      <div><button className="button quiet" type="button" disabled={busy} onClick={() => setEditingGoal(false)}>Back</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || invalidResumeInstruction || !objective.trim() || !criteria.trim()} onClick={() => void saveGoal()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null} Save changes</button></div>
     </div>}
     {editingSkills && !terminal && <div className="chat-goal-form">
       <fieldset><legend>Goal skills</legend>{skillOptions.length ? skillOptions.map(skill => <label key={skill.path}><input type="checkbox" checked={selectedSkillPaths.includes(skill.path)} onChange={event => setSelectedSkillPaths(current => event.target.checked ? [...current, skill.path] : current.filter(path => path !== skill.path))} /> <span><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}{goal.skillSnapshots.some(item => item.path === skill.path) && !(skills ?? []).some(item => item.path === skill.path) ? " · retained snapshot; source unavailable" : ""}</small></span></label>) : <p>No skills are currently available.</p>}</fieldset>

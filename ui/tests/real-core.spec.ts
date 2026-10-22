@@ -1351,6 +1351,10 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await page.getByRole("button", { name: "Add goal" }).click();
     await page.getByRole("textbox", { name: "Objective" }).fill("Prove goal-first conversation lifecycle");
     await page.getByRole("textbox", { name: "Completion criteria" }).fill("The first turn is linked\nStopping pauses the goal");
+    await expect(page.getByRole("textbox", { name: "Resume instruction" })).toHaveValue(/Resume work on the active conversation goal now/);
+    if (await page.evaluate(() => matchMedia("(pointer: coarse)").matches)) {
+      expect((await page.getByRole("button", { name: "Use default" }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
     await page.getByText("Limits", { exact: true }).click();
     await page.getByRole("spinbutton", { name: "Step budget" }).fill("3");
     const timeLimit = page.getByRole("spinbutton", { name: "Active time limit (minutes, 30 minimum)" });
@@ -1403,6 +1407,8 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Edit goal" }).click();
     await page.getByRole("textbox", { name: "Completion criteria" }).fill("The first turn is linked\nA running goal edit is durable");
+    const resumeInstruction = "Check the saved evidence first, then complete the remaining work.";
+    await page.getByRole("textbox", { name: "Resume instruction" }).fill(resumeInstruction);
     await page.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByRole("region", { name: "Conversation goal" })).not.toContainText("Save changes");
     // A running goal is always mid-response, so its model and effort stay
@@ -1425,11 +1431,12 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(page.getByText(/^Stopped(?: ·|$)/)).toBeVisible();
     const messages = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string }>;
     expect(messages.filter(message => message.role === "user")).toHaveLength(1);
-    const persistedGoal = await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as { linked_turn_ids: string[]; status: string; objective: string; completion_criteria: string[]; time_budget_seconds: number };
+    const persistedGoal = await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as { linked_turn_ids: string[]; status: string; objective: string; completion_criteria: string[]; resume_instruction: string; time_budget_seconds: number };
     expect(persistedGoal.linked_turn_ids).toHaveLength(1);
     expect(persistedGoal.status).toBe("paused");
     expect(persistedGoal.objective).toBe("Prove editable goal lifecycle");
     expect(persistedGoal.completion_criteria).toContain("A running goal edit is durable");
+    expect(persistedGoal.resume_instruction).toBe(resumeInstruction);
     expect(persistedGoal.time_budget_seconds).toBe(1800);
     const sessionState = await (await api.get(`chat/sessions/${sessionId}/state`)).json() as { execution: string; busy: boolean; actions: string[] };
     expect(sessionState).toMatchObject({ execution: "cancelled", busy: false });
@@ -1442,6 +1449,9 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await openFullGoal();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("paused");
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("Prove editable goal lifecycle");
+    await goalPanel.getByRole("button", { name: "Edit goal" }).click();
+    await expect(goalPanel.getByRole("textbox", { name: "Resume instruction" })).toHaveValue(resumeInstruction);
+    await goalPanel.getByRole("button", { name: "Back" }).click();
     if (await railGoal.isVisible()) await expect(railGoal.locator(".chat-studio-goal-summary")).toHaveText("Prove editable goal lifecycle");
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("m left");
     await clickAssistantSettings(page);
@@ -1466,7 +1476,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(goalPanel).toContainText("Goal step budget is exhausted");
     const messagesAfterContinuation = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string }>;
     expect(messagesAfterContinuation.filter(message => message.role === "user")).toHaveLength(3);
-    expect(messagesAfterContinuation.some(message => message.content.includes("without waiting for another operator message"))).toBe(true);
+    expect(messagesAfterContinuation.filter(message => message.role === "user").some(message => message.content === resumeInstruction)).toBe(true);
     expect(messagesAfterContinuation.some(message => message.content.includes("Is the goal complete?") && message.content.includes("continue making concrete progress"))).toBe(true);
     const savedSession = (await (await api.get(`chat-sessions?engagement_id=${projectId}`)).json() as Array<{ id: string; metadata: { reasoning_effort?: string } }>).find(item => item.id === sessionId);
     expect(savedSession?.metadata.reasoning_effort).toBe("high");
@@ -6492,8 +6502,29 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await page.goto(workbenchUrl);
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
+    await expect(assistant.getByRole("button", {name: "Chat"})).toHaveAttribute("aria-current", "page");
+    const voiceButton = assistant.getByRole("button", {name: "Start Butler Voice"});
+    const settingsButton = assistant.getByRole("button", {name: "Butler settings"});
+    const hideButton = assistant.getByRole("button", {name: "Hide Butler"});
+    const closeButton = assistant.getByRole("button", {name: "Close Butler"});
+    const [voiceBox, settingsBox, hideBox, closeBox] = await Promise.all([
+      voiceButton.boundingBox(), settingsButton.boundingBox(), hideButton.boundingBox(), closeButton.boundingBox(),
+    ]);
+    expect(voiceBox && settingsBox && hideBox && closeBox && voiceBox.x < settingsBox.x && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+    expect(voiceBox?.width).toBeGreaterThanOrEqual(44);
+    expect(voiceBox?.height).toBeGreaterThanOrEqual(44);
+    await expect(voiceButton).toHaveText("");
+    expect(hideBox?.width).toBeGreaterThanOrEqual(44);
+    expect(hideBox?.height).toBeGreaterThanOrEqual(44);
+    await expect(hideButton).toHaveText("");
+    await hideButton.click();
+    await expect(assistant).toBeHidden();
+    await openNebulaAssistantFromShell(page);
+    await expect(assistant).toBeVisible();
+    await assistant.getByRole("button", {name: "Work"}).click();
     const oversight = assistant.getByRole("region", {name: "Butler oversight"});
     await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("0 watched");
+    await assistant.getByRole("button", {name: "More"}).click();
     const memory = assistant.getByRole("region", {name: "Butler memory"});
     const memoryToggle = memory.getByRole("button", {name: "Memory", exact: true});
     expect((await memoryToggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
@@ -6502,6 +6533,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
     expect(await memory.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     expect((await new AxeBuilder({page}).include('[aria-label="Butler memory"]').analyze()).violations).toEqual([]);
     await memoryToggle.click();
+    await assistant.getByRole("button", {name: "Work"}).click();
     await expect(assistant.getByRole("button", {name: "Start mission"})).toBeVisible();
     const bounds = await assistant.boundingBox();
     const viewport = page.viewportSize()!;
@@ -6542,6 +6574,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Send to Butler"}).click();
     await expect(statusRequest.then(request => request.postDataJSON() as {reasoning_effort?: string})).resolves.toMatchObject({reasoning_effort: "high"});
     await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The mission was started in this project. Open Missions to follow its progress.").last()).toBeVisible({timeout: 45_000});
+    await assistant.getByRole("button", {name: "More"}).click();
     await memoryToggle.click();
     stub.responseContent = "I saved your preference for Eastern Time.";
     await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(preference);
@@ -6560,6 +6593,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
         return {user: messages[lastUser]?.content, rolesAfterUser: messages.slice(lastUser + 1).map(message => message.role), toolNames: Array.isArray(body.tools) ? (body.tools as Array<{function?: {name?: string}}>).map(tool => tool.function?.name) : []};
       })), contentType: "application/json",
     });
+    await assistant.getByRole("button", {name: "More"}).click();
     const preferenceRow = memory.getByRole("listitem").filter({hasText: savedPreference});
     await expect(preferenceRow).toBeVisible({timeout: 30_000});
     await preferenceRow.locator("summary").click();
@@ -6569,6 +6603,7 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await preferenceRow.getByRole("button", {name: "Delete memory"}).click();
     await expect(preferenceRow).toHaveCount(0);
     await memory.getByRole("button", {name: "Memory", exact: true}).click();
+    await assistant.getByRole("button", {name: "Chat"}).click();
     const missionLink = assistant.getByRole("link", {name: "Open mission"});
     await expect(missionLink).toBeVisible();
     await expect(missionLink).toHaveAttribute("href", new RegExp(`^/projects/${projectId}/workbench\\?view=missions&mission=[a-f0-9-]+$`));
@@ -6667,6 +6702,48 @@ test("assistant upgrade Butler shows live work and restores it after reload on p
     await expect(butler.getByText(answer, {exact: true})).toBeVisible({timeout: 45_000});
     await expect(restored).toHaveCount(0);
     await expect(butler.getByRole("textbox", {name: "Ask Butler a question"})).toBeEnabled();
+    const saved = await (await api.get(`chat/sessions/${encodeURIComponent(session.id)}/messages`)).json() as Array<{sequence: number}>;
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const coreBinary = [process.env.NEBULA_TEST_CORE_BIN, process.env.NEBULA_CORE_BINARY, path.join(repository, ".venv/bin/nebula-core"), commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined].find(candidate => candidate && existsSync(candidate));
+    expect(coreBinary, "A Python environment matching the real Core binary is required").toBeTruthy();
+    const python = process.env.NEBULA_TEST_PYTHON || path.join(path.dirname(coreBinary!), "python");
+    expect(existsSync(python), "The real-Core test interpreter must be available").toBe(true);
+    const seed = spawnSync(python, ["-c", `
+import sys
+from nebula.v3.domain import ChatMessage
+from nebula.v3.storage import NebulaStore
+store = NebulaStore(sys.argv[1])
+start = int(sys.argv[4])
+messages = [ChatMessage(id=f"butler-scroll-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=start + index, role="user" if index % 2 else "assistant", content=f"Saved Butler message {index}. " + "A detailed project update. " * 5, provider_profile_id=sys.argv[5], model="security-model") for index in range(80)]
+with store.transaction() as transaction:
+    transaction.add_chat_messages(messages)
+`, path.join(core.dataDir, "nebula.db"), projectId, session.id, String(Math.max(...saved.map(item => item.sequence)) + 1), provider.id], {
+      encoding: "utf8", env: {...process.env, PYTHONPATH: path.resolve(import.meta.dirname, "../../src")}, timeout: 30_000,
+    });
+    expect(seed.status, seed.error?.message ?? seed.stderr).toBe(0);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    butler = page.getByRole("dialog", {name: "Butler"});
+    const transcript = butler.getByRole("log", {name: "Butler conversation"});
+    await expect(transcript.getByText(/Saved Butler message 79/)).toBeVisible();
+    const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+    const surface = mobile ? transcript.locator("..") : transcript;
+    await surface.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll", {bubbles: true})); });
+    const jump = butler.getByRole("button", {name: "Scroll to latest message"});
+    await expect(jump).toBeVisible();
+    const composer = butler.getByRole("textbox", {name: "Ask Butler a question"});
+    await composer.pressSequentially("A new Butler question");
+    await expect(composer).toHaveValue("A new Butler question");
+    await jump.focus();
+    await jump.press("Enter");
+    await expect.poll(async () => surface.evaluate((element, isMobile) => {
+      if (!isMobile) return element.scrollHeight - element.scrollTop - element.clientHeight;
+      const latest = element.querySelector('[role="log"] > :last-child');
+      return latest ? latest.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom : Infinity;
+    }, mobile)).toBeLessThanOrEqual(24);
+    await expect(jump).toHaveCount(0);
+    await expect(composer).toHaveValue("A new Butler question");
     await testInfo.attach("butler-live-feedback-lan", {
       body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}),
       contentType: "application/json",
@@ -7327,6 +7404,46 @@ test("assistant upgrade Butler max effort persists through settings on productio
   ]);
 });
 
+test("assistant upgrade Butler check interval persists and resolves conflicts on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await pairRealCoreBrowser(page, core, "Butler interval LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/settings#butler-check-interval-settings`);
+    const section = page.getByRole("region", {name: "Butler check interval"});
+    const input = section.getByRole("spinbutton", {name: "Check every"});
+    await expect(input).toHaveValue("5");
+    expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await input.fill("2");
+    await section.getByRole("button", {name: "Save interval"}).click();
+    await expect(section.getByText("Saved. Butler checks every 2 minutes.")).toBeVisible();
+    const saved = await (await api.get("butler/check-interval")).json() as {check_interval_minutes: number; revision: number};
+    expect(saved.check_interval_minutes).toBe(2);
+    await page.reload();
+    await expect(input).toHaveValue("2");
+    await input.fill("3");
+    const changed = await api.put("butler/check-interval", {data: {check_interval_minutes: 4, expected_revision: saved.revision}});
+    expect(changed.ok(), await changed.text()).toBe(true);
+    await section.getByRole("button", {name: "Save interval"}).click();
+    await expect(section.getByRole("alert")).toContainText("changed elsewhere");
+    await section.getByRole("button", {name: "Reload"}).click();
+    await expect(input).toHaveValue("4");
+    expect((await new AxeBuilder({page}).include("#butler-check-interval-settings").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-interval-lan", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, asset: entry, assetSha256: build.assets[entry!], project: testInfo.project.name, viewport: page.viewportSize(), savedMinutes: saved.check_interval_minutes, conflictResolvedMinutes: 4}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const replaceButlerText = async (text: string) => {
@@ -7422,6 +7539,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     expect(stub.requests.some(request => JSON.stringify(request).includes("Inspect Act projects and report only due work"))).toBe(true);
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Work"}).click();
     const oversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await oversight.getByRole("button", {name: /Oversight/}).click();
     const scheduledActivity = oversight.getByRole("region", {name: "Butler scheduled activity"});
@@ -7430,7 +7548,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     await expect(scheduledActivity.getByText(/provider check saved its actions and outcome/)).toBeVisible();
     await oversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
     await expect(oversight.getByText(path.join(core.dataDir, ".butler", "BUTLER.md"))).toBeVisible();
-    await expect(oversight.getByText(/Butler checks once every 15 minutes/)).toBeVisible();
+    await expect(oversight.getByText(/Butler checks once every 5 minutes/)).toBeVisible();
     await page.goto(`${core.origin}/settings#butler-oversight`);
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await expect(restored.getByRole("region", {name: "Butler scheduled activity"})).toBeVisible();
@@ -7474,6 +7592,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     expect(editorAccess.violations).toEqual([]);
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Work"}).click();
     const finalOversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await finalOversight.getByRole("button", {name: /Oversight/}).click();
     await finalOversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
@@ -7531,6 +7650,7 @@ test("assistant upgrade Butler scheduled retry shows both saved attempts after r
     const show = async () => {
       await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
       await openNebulaAssistantFromShell(page);
+      await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Work"}).click();
       const oversight = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
       await oversight.getByRole("button", {name: /Oversight/}).click();
       const scheduled = oversight.getByRole("region", {name: "Butler scheduled activity"});
@@ -7628,6 +7748,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     }, {timeout: 45_000}).toMatchObject({watched_goals: 1, open_incidents: 1});
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
+    await assistant.getByRole("button", {name: /Work/}).click();
     const oversight = assistant.getByRole("region", {name: "Butler oversight"});
     await expect(oversight.getByRole("button", {name: /Oversight/})).toContainText("1 watched · 1 need attention");
     await oversight.getByRole("button", {name: /Oversight/}).click();
@@ -7720,6 +7841,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     expect(await actResponse.json()).toMatchObject({authority: "act", delegate_actions: ["pause_urgent_machine_blocker"]});
     await page.reload();
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: /Work/}).click();
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await restored.getByRole("button", {name: /Oversight/}).click();
     await expect(restored.getByText("fixture/private · MCP")).toBeVisible();
@@ -7754,6 +7876,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
     await expect(restored.getByText("An agent request needs approval.")).toBeVisible();
     await page.reload();
     await openNebulaAssistantFromShell(page);
+    await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: /Work/}).click();
     const pendingAfterReload = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await pendingAfterReload.getByRole("button", {name: /Oversight/}).click();
     await expect(pendingAfterReload.getByText("An agent request needs approval.")).toBeVisible();
@@ -10451,11 +10574,105 @@ test("notebook real Core runs bundled Python on a LAN origin and restores output
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
+test("assistant upgrade saved harness chat switches to provider in the same production LAN conversation", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const model = await startLocalModelStub({responseContent: "Provider continuation saved in the same chat.", streamDelayMs: 0});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const manifest = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>; builtAt: string};
+    const entry = Object.keys(manifest.assets).find(name => name.startsWith("assets/index-") && name.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(manifest.assets[entry!]);
+    const project = (await (await api.get("engagements")).json() as Array<{id: string}>)[0];
+    expect(project?.id).toBeTruthy();
+    const providerResponse = await api.post("providers", {data: {
+      name: "Local continuation model", provider_type: "vllm", endpoint: `${model.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seed = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ChatBackend, ChatGoal, ChatGoalStatus, ChatMessage, ChatRole, ChatSession, HarnessProfile, HarnessSession",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "project = sys.argv[2]",
+      "store.create(HarnessProfile(id='saved-harness-fixture', name='Saved harness fixture', kind='codex_app_server', executable='/bin/true', default_model='harness-model', capabilities={'models': ['harness-model']}))",
+      "store.create(HarnessSession(id='saved-vendor-fixture', engagement_id=project, harness_profile_id='saved-harness-fixture', model='harness-model'))",
+      "store.create(ChatSession(id='saved-harness-provider-chat', engagement_id=project, title='Saved harness conversation', backend=ChatBackend.HARNESS, harness_profile_id='saved-harness-fixture', harness_session_id='saved-vendor-fixture', model='harness-model', metadata={'message_count': 1, 'last_sequence': 1}))",
+      "store.create(ChatMessage(id='prior-harness-message', engagement_id=project, session_id='saved-harness-provider-chat', sequence=1, role=ChatRole.USER, content='Earlier harness context is still here.'))",
+      "store.create(ChatGoal(id='saved-harness-goal', engagement_id=project, session_id='saved-harness-provider-chat', objective='Continue the same goal', completion_criteria=['Provider reply is saved'], status=ChatGoalStatus.BLOCKED, blocked_reason='Fixture hold', step_budget=3))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), project.id], {
+      cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8",
+    });
+    expect(seed.status, seed.stderr || seed.stdout).toBe(0);
+    await pairRealCoreBrowser(page, core, "Runtime switch LAN browser");
+    await page.goto(`${core.origin}/?view=chat&session=saved-harness-provider-chat`);
+    await expect(page.getByText("Earlier harness context is still here.")).toBeVisible({timeout: 20_000});
+    await clickAssistantSettings(page);
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    const runtime = settings.getByRole("combobox", {name: "Chat runtime"});
+    await expect(runtime).toHaveValue("harness");
+    await runtime.selectOption("provider");
+    await expect(settings.getByRole("status").filter({hasText: "resolve its block"})).toBeVisible();
+    await expect(runtime).toHaveValue("harness");
+    const before = await (await api.get("chat-sessions/saved-harness-provider-chat")).json() as {backend: string};
+    expect(before.backend).toBe("harness");
+    const release = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.domain import ChatGoal, ChatGoalStatus",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(sys.argv[1])",
+      "goal = store.get(ChatGoal, 'saved-harness-goal')",
+      "store.update(ChatGoal, goal.id, {'status': ChatGoalStatus.PAUSED, 'blocked_reason': None}, expected_revision=goal.revision)",
+    ].join("\n"), path.join(core.dataDir, "nebula.db")], {
+      cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8",
+    });
+    expect(release.status, release.stderr || release.stdout).toBe(0);
+    await runtime.selectOption("provider");
+    await expect(settings.getByRole("status").filter({hasText: "Provider saved on this conversation"})).toBeVisible({timeout: 20_000});
+    await expect(runtime).toHaveValue("provider");
+    await expect(settings.getByRole("combobox", {name: "Chat model"})).toHaveValue("security-model");
+    const switched = await (await api.get("chat-sessions/saved-harness-provider-chat")).json() as {id: string; backend: string; provider_profile_id: string; harness_session_id: string | null; model: string};
+    expect(switched).toMatchObject({id: "saved-harness-provider-chat", backend: "provider", provider_profile_id: provider.id, harness_session_id: null, model: "security-model"});
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Continue in this conversation.");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.getByText("Provider continuation saved in the same chat.")).toBeVisible({timeout: 20_000});
+    expect(model.requests.some(request => request.model === "security-model"
+      && Array.isArray(request.messages)
+      && request.messages.some((message: {content?: unknown}) => message.content === "Earlier harness context is still here.")
+      && request.messages.some((message: {content?: unknown}) => message.content === "Continue in this conversation."))).toBe(true);
+    const messages = await (await api.get("chat/sessions/saved-harness-provider-chat/messages")).json() as Array<{content: string}>;
+    expect(messages.map(message => message.content)).toContain("Earlier harness context is still here.");
+    expect(messages.map(message => message.content)).toContain("Provider continuation saved in the same chat.");
+    const goal = await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json() as {id: string; status: string};
+    expect(goal).toMatchObject({id: "saved-harness-goal", status: "paused"});
+    await page.reload();
+    await expect(page.getByText("Earlier harness context is still here.")).toBeVisible();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Provider continuation saved in the same chat.");
+    await clickAssistantSettings(page);
+    await expect(page.getByRole("combobox", {name: "Chat runtime"})).toHaveValue("provider");
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    await testInfo.attach("harness-provider-switch-lan", {body: JSON.stringify({origin: core.origin, build: "ui/dist production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), sessionId: switched.id, goalId: goal.id, outcome: "blocked, retry, saved provider turn, reload"}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}, {name: "model stub", dispose: () => stopLocalModelStub(model)}]);
+});
+
 test("assistant upgrade harness goal works on production LAN Core across new and existing chats", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startApprovalCore(localNetworkIpv4(), "goal");
   await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    expect((await core.api.post("harnesses/inert-codex/health")).ok()).toBe(true);
     const manifest = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>; builtAt: string};
     const entry = Object.keys(manifest.assets).find(name => name.startsWith("assets/index-") && name.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -10481,7 +10698,12 @@ test("assistant upgrade harness goal works on production LAN Core across new and
         if (await reveal.isVisible()) await reveal.click({timeout: 10_000});
       }
       if (!await goalPanel.isVisible()) await clickAssistantSettings(page);
-      await expect(goalPanel).toBeVisible();
+      if (!await goalPanel.isVisible() && await rail.isVisible()) {
+        if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+        if (pointerFine) await page.locator(".chat-studio-rail").hover();
+        await rail.getByRole("button", {name: /Create goal|View full goal and evidence gates/}).click({timeout: 10_000});
+      }
+      await expect(goalPanel).toBeVisible({timeout: 15_000});
       const expand = goalPanel.getByRole("button", {name: "Expand goal controls"});
       if (await expand.isVisible()) await expand.click();
     };
@@ -10531,6 +10753,22 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY");
     const existingSessionId = new URL(page.url()).searchParams.get("session")!;
+    await clickAssistantSettings(page);
+    await settingsDialog.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption("inert-codex");
+    await expect.poll(async () => {
+      const config = await (await core.api.get(`chat-sessions/${existingSessionId}/assistant-config`)).json() as {settings: {profile_id: string}};
+      return config.settings.profile_id;
+    }).toBe("inert-codex");
+    await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+    const beforeMessageSwitch = await (await core.api.get(`chat-sessions/${existingSessionId}`)).json() as {harness_profile_id: string; harness_session_id: string};
+    expect(beforeMessageSwitch.harness_profile_id).toBe("inert-fixture");
+    await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Continue on the Codex fixture");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("GOAL_FIXTURE_REPLY", {timeout: 20_000});
+    expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
+    const afterMessageSwitch = await (await core.api.get(`chat-sessions/${existingSessionId}`)).json() as {harness_profile_id: string; harness_session_id: string};
+    expect(afterMessageSwitch.harness_profile_id).toBe("inert-codex");
+    expect(afterMessageSwitch.harness_session_id).not.toBe(beforeMessageSwitch.harness_session_id);
     await addGoal("FAIL_ONCE then recover with an explicit Resume", 2);
     expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
     await goalPanel.getByRole("button", {name: "Start"}).click({timeout: 10_000});
@@ -10561,11 +10799,12 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     const blockedHarnessBefore = await (await core.api.get(`harness-sessions/${blockedChatBefore.harness_session_id}`)).json() as {metadata: {runtime_options: {reasoning_effort: string}}};
     expect(blockedHarnessBefore.metadata.runtime_options.reasoning_effort).toBe("low");
     if (!await settingsDialog.isVisible()) await clickAssistantSettings(page);
+    await settingsDialog.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption("inert-codex");
     await settingsDialog.getByRole("combobox", {name: "Harness reasoning effort"}).selectOption("max");
     await expect.poll(async () => {
-      const config = await (await core.api.get(`chat-sessions/${blockedSessionId}/assistant-config`)).json() as {settings: {harness_reasoning_effort: string}};
-      return config.settings.harness_reasoning_effort;
-    }).toBe("max");
+      const config = await (await core.api.get(`chat-sessions/${blockedSessionId}/assistant-config`)).json() as {settings: {profile_id: string; harness_reasoning_effort: string}};
+      return [config.settings.profile_id, config.settings.harness_reasoning_effort];
+    }).toEqual(["inert-codex", "max"]);
     await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
     await page.reload();
     await revealGoal();
@@ -10576,8 +10815,9 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     await goalPanel.getByRole("button", {name: "Resume"}).click();
     await expect.poll(async () => (await (await core.api.get(`chat/sessions/${blockedSessionId}/goal`)).json()).status).toBe("paused");
     await expect(goalPanel).toContainText("Goal step budget is exhausted.");
-    const blockedChatAfter = await (await core.api.get(`chat-sessions/${blockedSessionId}`)).json() as {harness_session_id: string};
+    const blockedChatAfter = await (await core.api.get(`chat-sessions/${blockedSessionId}`)).json() as {harness_profile_id: string; harness_session_id: string};
     expect(blockedChatAfter.harness_session_id).not.toBe(blockedChatBefore.harness_session_id);
+    expect(blockedChatAfter.harness_profile_id).toBe("inert-codex");
     const blockedHarnessAfter = await (await core.api.get(`harness-sessions/${blockedChatAfter.harness_session_id}`)).json() as {metadata: {runtime_options: {reasoning_effort: string}}};
     expect(blockedHarnessAfter.metadata.runtime_options.reasoning_effort).toBe("max");
 
@@ -10810,6 +11050,9 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await expect(page.getByRole("button", {name: "New chat", exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Open Butler"}).click();
     const controlAssistant = page.getByRole("dialog", {name: "Butler"});
+    const sheet = await controlAssistant.boundingBox();
+    expect(sheet!.y).toBeGreaterThanOrEqual(40);
+    expect(sheet!.height).toBeLessThanOrEqual(page.viewportSize()!.height * 0.8);
     await expect(controlAssistant.getByRole("button", {name: "Start Butler Voice"})).toBeVisible();
     await controlAssistant.getByRole("button", {name: "Start Butler Voice"}).click();
     await expect(page.getByRole("dialog", {name: "Butler Voice"}).getByRole("alert")).toContainText("trusted HTTPS address");

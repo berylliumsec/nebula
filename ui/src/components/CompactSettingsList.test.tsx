@@ -58,6 +58,39 @@ describe("CompactSettingsList", () => {
     );
   });
 
+  it("finds Butler's check interval and opens its control", () => {
+    const openSetting = vi.fn();
+    render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "check frequency" } });
+    fireEvent.click(screen.getByRole("button", { name: /Butler check interval/ }));
+    expect(openSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings.butler-check-interval", target: "butler-check-interval-settings" }),
+      expect.any(HTMLElement),
+    );
+  });
+
+  it("finds scheduled Butler oversight for idle goal budgets", () => {
+    const openSetting = vi.fn();
+    render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "goal budget" } });
+    fireEvent.click(screen.getByRole("button", { name: /Butler scheduled activity/ }));
+    expect(openSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings.butler-activity", target: "butler-oversight" }),
+      expect.any(HTMLElement),
+    );
+  });
+
+  it("finds the Butler check-in conversation in Oversight", () => {
+    const openSetting = vi.fn();
+    render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "agent reply" } });
+    fireEvent.click(screen.getByRole("button", { name: /Butler scheduled activity/ }));
+    expect(openSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings.butler-activity", target: "butler-oversight" }),
+      expect.any(HTMLElement),
+    );
+  });
+
   it("offers the native connection sheet only inside the iPhone shell", () => {
     const userAgent = vi.spyOn(navigator, "userAgent", "get");
     userAgent.mockReturnValue("Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0");

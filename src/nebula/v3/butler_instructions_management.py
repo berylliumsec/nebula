@@ -6,6 +6,7 @@ import hashlib
 import os
 import secrets
 import stat
+from datetime import timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -14,6 +15,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .butler_instructions import ButlerInstructionsError, MAX_INSTRUCTIONS_BYTES
+from .butler_recovery import DEFAULT_CHECK_INTERVAL_MINUTES, GLOBAL_STATE_ID
+from .database import EntityRow
+from .domain import ButlerGlobalState
+from .storage import NebulaStore
 
 
 MAX_INSPECT_BYTES = 1024 * 1024
@@ -23,6 +28,26 @@ _WRITE_LOCK = Lock()
 class ButlerInstructionsUpdate(BaseModel):
     content: str
     expected_sha256: str | None = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ButlerCheckIntervalUpdate(BaseModel):
+    check_interval_minutes: int = Field(ge=1, le=1440)
+    expected_revision: int = Field(ge=0)
+
+
+def butler_check_interval_snapshot(store: NebulaStore) -> dict[str, Any]:
+    state = store.find_entity(ButlerGlobalState, "id", GLOBAL_STATE_ID)
+    minutes = state.check_interval_minutes if state else DEFAULT_CHECK_INTERVAL_MINUTES
+    return {
+        "check_interval_minutes": minutes,
+        "revision": state.revision if state else 0,
+        "last_check_at": state.last_periodic_at if state else None,
+        "next_check_at": (
+            state.last_periodic_at + timedelta(minutes=minutes)
+            if state and state.last_periodic_at
+            else None
+        ),
+    }
 
 
 def _source(data_root: Path) -> bytes | None:
@@ -195,7 +220,7 @@ class ButlerInstructionsConflict(ValueError):
     """The operator's saved file changed after the caller loaded it."""
 
 
-def butler_instructions_router(data_root: Path) -> APIRouter:
+def butler_instructions_router(data_root: Path, store: NebulaStore) -> APIRouter:
     router = APIRouter(tags=["butler"])
 
     @router.get("/butler/instructions")
@@ -212,5 +237,35 @@ def butler_instructions_router(data_root: Path) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ButlerInstructionsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/butler/check-interval")
+    def read_check_interval() -> dict[str, Any]:
+        return butler_check_interval_snapshot(store)
+
+    @router.put("/butler/check-interval")
+    def update_check_interval(request: ButlerCheckIntervalUpdate) -> dict[str, Any]:
+        with store.transaction(immediate=True) as transaction:
+            row = transaction.session.get(EntityRow, GLOBAL_STATE_ID)
+            state = ButlerGlobalState.model_validate(row.payload) if row else None
+            if (state.revision if state else 0) != request.expected_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Butler's check interval changed; reload before saving",
+                )
+            if state is None:
+                transaction.add(
+                    ButlerGlobalState(
+                        id=GLOBAL_STATE_ID,
+                        check_interval_minutes=request.check_interval_minutes,
+                    )
+                )
+            else:
+                transaction.update(
+                    ButlerGlobalState,
+                    state.id,
+                    {"check_interval_minutes": request.check_interval_minutes},
+                    expected_revision=state.revision,
+                )
+        return butler_check_interval_snapshot(store)
 
     return router

@@ -126,6 +126,7 @@ from .domain import (
     ChatContentBlock,
     ChatBackend,
     ChatMessage,
+    ChatQueue,
     ChatRole,
     ChatSchedule,
     ChatSession,
@@ -759,7 +760,7 @@ class ChatRuntimeSwitchPreflightRequest(NebulaModel):
 class ChatRuntimeSwitchPreflight(NebulaModel):
     session_id: str
     session_revision: int
-    current_provider_id: str
+    current_provider_id: str | None = None
     current_model: str
     target_provider_id: str
     target_model: str
@@ -14258,6 +14259,7 @@ class ChatService:
                             objective=goal.objective,
                             completion_criteria=goal.completion_criteria,
                             plan=goal.plan,
+                            resume_instruction=goal.resume_instruction,
                             token_budget=goal.token_budget,
                             time_budget_seconds=goal.time_budget_seconds,
                             step_budget=goal.step_budget,
@@ -14380,14 +14382,16 @@ class ChatService:
         """
 
         session = self.store.get(ChatSession, session_id)
-        if session.provider_profile_id is None:
+        provider_id, model = runtime or (session.provider_profile_id, session.model)
+        if provider_id is None:
             raise ChatConfigurationError("chat session does not identify a provider")
-        profile = self.store.get(ProviderProfile, session.provider_profile_id)
+        profile = self.store.get(ProviderProfile, provider_id)
         if images_supported is None:
             images_supported = profile.capabilities.vision
         calibration = _context_calibration(
             session.metadata,
-            *(runtime or (session.provider_profile_id, session.model)),
+            provider_id,
+            model,
         )
         reserved = _context_reserve(session.metadata)
         messages = self._session_messages(session)
@@ -14409,15 +14413,19 @@ class ChatService:
             )
             for message in messages
         }
-        limits = resolve_context_limits(profile, model=session.model)
+        limits = resolve_context_limits(profile, model=model)
         base_instructions = self._estimated_base_instructions(session.engagement_id)
         estimated = calibrated_estimate(
             estimate_messages(estimated_forms.values(), base_instructions) + reserved,
             calibration,
         )
         active_estimated = estimated
-        latest = ContextCompactor(self.store).latest(
-            ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
+        latest = (
+            ContextCompactor(self.store).latest(
+                ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
+            )
+            if session.backend == ChatBackend.PROVIDER
+            else None
         )
         if latest is None or estimated <= limits.target_input_tokens:
             # A conversation within the target is sent whole (see
@@ -14513,19 +14521,12 @@ class ChatService:
         """Validate a proposed provider/model switch against durable active context."""
 
         session = self.store.get(ChatSession, session_id)
-        if (
-            session.backend != ChatBackend.PROVIDER
-            or session.provider_profile_id is None
-        ):
-            raise ChatConfigurationError(
-                "runtime switching is only available for provider conversations"
-            )
         if session.revision != request.expected_session_revision:
             raise ChatHistoryConflict(
                 "conversation changed; reload it before changing provider or model"
             )
-        # An active response does not block the switch: its turn keeps the
-        # provider and model it started with, and the switch applies next turn.
+        # Provider turns carry their own runtime. A harness turn can still
+        # reattach its vendor session, so a backend change needs an idle chat.
         profile = self.store.get(ProviderProfile, request.provider_id)
         current: dict[str, Any] = {
             "session_id": session.id,
@@ -14535,6 +14536,15 @@ class ChatService:
             "target_provider_id": request.provider_id,
             "target_model": request.model,
         }
+        if session.backend == ChatBackend.HARNESS:
+            reason = self._harness_to_provider_blocker(session)
+            if reason:
+                return ChatRuntimeSwitchPreflight(
+                    **current,
+                    compatible=False,
+                    reason=reason,
+                    reason_code="harness_not_idle",
+                )
         if not profile.enabled:
             return ChatRuntimeSwitchPreflight(
                 **current,
@@ -14619,6 +14629,38 @@ class ChatService:
             metadata_revision=limits.metadata_revision,
         )
 
+    def _harness_to_provider_blocker(self, session: ChatSession) -> str | None:
+        if session.metadata.get("side_chat") or session.metadata.get(
+            "temporary_assistant"
+        ):
+            return "Switch the runtime from a saved main conversation."
+        if isinstance(session.metadata.get("archived_at"), str):
+            return "Unarchive this conversation before switching its runtime."
+        with self.store.database.session() as database:
+            if any(
+                self._header_is_pending(turn)
+                for turn in session_turn_headers(database, session.id)
+            ):
+                return "Wait for the active response or resolve its pending action before switching to a provider."
+        goals = self.store.list_session_entities(ChatGoal, session.id)
+        if any(
+            goal.status in {ChatGoalStatus.RUNNING, ChatGoalStatus.BLOCKED}
+            or goal.execution_claim_id is not None
+            for goal in goals
+        ):
+            return "Pause the running goal or resolve its block before switching to a provider."
+        from .chat_goals import ChatGoalService
+
+        if ChatGoalService(self.store).has_working_subagents(session.id):
+            return "Wait for this conversation's subagents to finish before switching to a provider."
+        for queue in self.store.list_session_entities(ChatQueue, session.id):
+            if any(
+                item.get("status") not in {"complete", "cancelled"}
+                for item in queue.items
+            ):
+                return "Finish, cancel, or remove queued follow-ups before switching to a provider."
+        return None
+
     def apply_runtime_switch(
         self, session_id: str, request: ChatRuntimeSwitchRequest
     ) -> ChatSession:
@@ -14627,8 +14669,9 @@ class ChatService:
         The switch is durable at once rather than riding on the next message,
         because the next turn is not always one the operator sends: a running
         goal continues itself, and queued follow-ups and schedules start turns
-        too. Each of them reads the conversation's runtime. A response that is
-        already running keeps the provider and model its turn recorded.
+        too. Each of them reads the conversation's runtime. An existing
+        provider response keeps the provider and model its turn recorded;
+        harness conversations must be idle before changing backend.
         """
 
         switch = self.runtime_switch_preflight(session_id, request)
@@ -14652,16 +14695,44 @@ class ChatService:
                 "profile_id": request.provider_id,
                 "model": request.model,
             }
-        return self.store.update(
-            ChatSession,
-            session_id,
-            {
-                "provider_profile_id": request.provider_id,
-                "model": request.model,
-                "metadata": metadata,
-            },
-            expected_revision=switch.session_revision,
-        )
+        if session.backend == ChatBackend.HARNESS:
+            metadata.pop("provider_subagent", None)
+            metadata["allow_subagents"] = False
+            metadata["mcp_server_ids"] = []
+            metadata["hook_ids"] = []
+            metadata["tools_enabled"] = request.tools_enabled
+            metadata["reasoning_effort"] = None
+            if isinstance(metadata.get("assistant_config"), dict):
+                metadata["assistant_config"] = {
+                    **metadata["assistant_config"],
+                    "allow_subagents": False,
+                    "mcp_server_ids": [],
+                    "hook_ids": [],
+                    "tools_enabled": request.tools_enabled,
+                    "reasoning_effort": None,
+                    "harness_reasoning_effort": None,
+                    "harness_service_tier": None,
+                    "harness_mode": None,
+                    "harness_cyber_access_program": None,
+                }
+        with self.store.transaction(immediate=True) as transaction:
+            if session.backend == ChatBackend.HARNESS:
+                reason = self._harness_to_provider_blocker(session)
+                if reason:
+                    raise ChatHistoryConflict(reason)
+            return transaction.update(
+                ChatSession,
+                session_id,
+                {
+                    "backend": ChatBackend.PROVIDER,
+                    "provider_profile_id": request.provider_id,
+                    "harness_profile_id": None,
+                    "harness_session_id": None,
+                    "model": request.model,
+                    "metadata": metadata,
+                },
+                expected_revision=switch.session_revision,
+            )
 
     @staticmethod
     def _runtime_switch_token(

@@ -20,6 +20,8 @@ from nebula.v3.domain import (
     ChatBackend,
     ChatDecision,
     ChatGoal,
+    ChatGoalStatus,
+    ChatQueue,
     ChatSession,
     ChatMessage,
     ChatRole,
@@ -1269,6 +1271,177 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert stored.metadata["reasoning_effort"] == "high"
     # The running response keeps the runtime it started with.
     assert store.get(ChatTurn, turn.id).model == "model-a"
+
+
+def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "harness-to-provider.db")
+    engagement = store.create(Engagement(name="Same conversation"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            metadata={"default_model": "model-a"},
+        )
+    )
+    vendor = store.create(
+        HarnessSession(
+            engagement_id=engagement.id,
+            harness_profile_id="harness-a",
+            model="harness-model",
+            status=HarnessSessionStatus.RUNNING,
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Keep this history",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-a",
+            harness_session_id=vendor.id,
+            model="harness-model",
+            metadata={
+                "assistant_config": {
+                    "backend": "harness",
+                    "profile_id": "harness-a",
+                    "model": "harness-model",
+                    "allow_subagents": True,
+                }
+            },
+        )
+    )
+    original = store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Earlier harness context",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Continue here",
+            completion_criteria=["Finished"],
+            status=ChatGoalStatus.PAUSED,
+            step_budget=5,
+        )
+    )
+    monkeypatch.setattr(
+        chat_module, "provider_from_profile", lambda _: ApiChatProvider(profile.id)
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+    endpoint = f"/api/v1/chat/sessions/{session.id}/runtime-switch"
+    request = {
+        "provider_id": profile.id,
+        "model": "model-a",
+        "expected_session_revision": session.revision,
+    }
+    preflight = client.post(f"{endpoint}/preflight", headers=_auth(), json=request)
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["compatible"] is True
+    assert preflight.json()["current_provider_id"] is None
+    switched = client.post(endpoint, headers=_auth(), json=request)
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["id"] == session.id
+    assert switched.json()["backend"] == "provider"
+    assert switched.json()["harness_session_id"] is None
+    assert switched.json()["metadata"]["assistant_config"]["backend"] == "provider"
+    assert store.get(HarnessSession, vendor.id).id == vendor.id
+    assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED
+
+    completion = client.post(
+        "/api/v1/chat/completions",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "provider_id": profile.id,
+            "session_id": session.id,
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "Continue with the provider"}],
+        },
+    )
+    assert completion.status_code == 200, completion.text
+    assert completion.json()["session_id"] == session.id
+    assert store.get(ChatMessage, original.id).content == "Earlier harness context"
+    assert any(
+        message.content == "Continue with the provider"
+        for message in store.list_session_entities(ChatMessage, session.id)
+    )
+    assert store.get(ChatGoal, goal.id).id == goal.id
+
+
+def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
+    store = NebulaStore(tmp_path / "busy-harness-switch.db")
+    engagement = store.create(Engagement(name="Busy conversation"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Busy harness",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-a",
+            harness_session_id="vendor-a",
+            model="harness-model",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+    endpoint = f"/api/v1/chat/sessions/{session.id}/runtime-switch/preflight"
+    request = {
+        "provider_id": profile.id,
+        "model": "model-a",
+        "expected_session_revision": session.revision,
+    }
+    turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            backend=ChatBackend.HARNESS,
+            model="harness-model",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    active = client.post(endpoint, headers=_auth(), json=request)
+    assert active.status_code == 200, active.text
+    assert active.json()["reason_code"] == "harness_not_idle"
+    assert "active response" in active.json()["reason"]
+    store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE})
+    queue = store.create(
+        ChatQueue(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            items=[{"id": "follow-up", "status": "queued"}],
+        )
+    )
+    queued = client.post(endpoint, headers=_auth(), json=request)
+    assert queued.json()["reason_code"] == "harness_not_idle"
+    assert "queued follow-ups" in queued.json()["reason"]
+    store.update(ChatQueue, queue.id, {"items": []})
+    store.create(
+        ChatGoal(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Still working",
+            completion_criteria=["Done"],
+            status=ChatGoalStatus.RUNNING,
+        )
+    )
+    running = client.post(endpoint, headers=_auth(), json=request)
+    assert running.json()["reason_code"] == "harness_not_idle"
+    assert "Pause the running goal" in running.json()["reason"]
+    assert store.get(ChatSession, session.id).backend == ChatBackend.HARNESS
 
 
 def test_harness_subagent_choice_is_saved_before_model_verification(tmp_path):

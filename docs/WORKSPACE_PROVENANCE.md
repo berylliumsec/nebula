@@ -1,6 +1,6 @@
 # Workspace provenance for native hooks
 
-Nebula adds a bounded `workspace_provenance` receipt to project-native hook
+Nebula adds a time-bounded `workspace_provenance` receipt to project-native hook
 events. The contract lets a hook distinguish dirty paths changed by the current
 agent from pre-existing, other-agent, unknown, or concurrent state without
 putting metadata into user files.
@@ -30,13 +30,11 @@ Only Core's hook runtime writes observations: the API exposes no route that
 creates, edits or deletes one, so a client cannot forge or rewrite a receipt.
 
 For Git workspaces, Core asks Git for its dirty-path list and fingerprints only
-those paths. It does not walk the workspace. Non-Git workspaces and dirty sets
-past a bound return an unsupported receipt rather than a false or partial
-attribution. The bounds are 2,000 dirty paths, 256 MiB of dirty regular-file
-content, and 10 seconds for the whole snapshot (Git and hashing); the
-`unsupported_reason` names the bound, for example
-`dirty_bytes_limit_exceeded:<bytes>><limit>` or
-`snapshot_time_limit_exceeded:10s`.
+those paths. It does not walk the workspace. Non-Git workspaces and snapshots
+that exceed the 10-second wall-clock budget return an unsupported receipt
+rather than a false or partial attribution. There is no fixed path-count or
+dirty-byte limit. The `unsupported_reason` reports
+`snapshot_time_limit_exceeded:10s` when the budget expires.
 
 Before/after observations are recorded around selected chat lifecycle hooks and
 automatically discovered `tool.before`/`tool.after` hooks. A chat turn records

@@ -3960,6 +3960,12 @@ class ChatGoalStatus(StringEnum):
 CHAT_GOAL_CHILD_LIMIT = 32
 """Most child conversations one goal may list, and so the largest child budget."""
 
+DEFAULT_GOAL_RESUME_INSTRUCTION = (
+    "Resume work on the active conversation goal now. Review the "
+    "latest durable progress and continue without waiting for another "
+    "operator message."
+)
+
 
 class ChatGoal(Entity):
     """One Core-owned provider-chat objective with explicit lifecycle and limits."""
@@ -3970,6 +3976,9 @@ class ChatGoal(Entity):
     objective: str = Field(min_length=1, max_length=20_000)
     completion_criteria: list[str] = Field(min_length=1, max_length=50)
     plan: list[str] = Field(default_factory=list, max_length=200)
+    resume_instruction: str = Field(
+        default=DEFAULT_GOAL_RESUME_INSTRUCTION, min_length=1, max_length=4_000
+    )
     current_step: int = Field(default=0, ge=0)
     status: ChatGoalStatus = ChatGoalStatus.DRAFT
     token_budget: int | None = Field(default=None, ge=1)
@@ -4069,6 +4078,7 @@ class ButlerGlobalState(Entity):
     """One durable clock for the Nebula-wide Butler mandate."""
 
     entity_kind: ClassVar[str] = "butler_global_states"
+    check_interval_minutes: int = Field(default=5, ge=1, le=1440)
     last_periodic_at: datetime | None = None
     last_project_id: str | None = Field(default=None, max_length=200)
 
@@ -4248,7 +4258,7 @@ class ButlerIssueCandidate(Entity):
 
 
 class ButlerRecoveryCase(Entity):
-    """One bounded, project-scoped Butler investigation and its verified outcome."""
+    """One project-scoped Butler investigation and its verified outcome."""
 
     entity_kind: ClassVar[str] = "butler_recovery_cases"
     engagement_id: str = Field(min_length=1, max_length=200)
@@ -4272,18 +4282,22 @@ class ButlerRecoveryCase(Entity):
     ] = "observed"
     summary: str = Field(min_length=1, max_length=500)
     outcome: str = Field(default="", max_length=1000)
-    steps: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
     model_backend: ChatBackend | None = None
     model_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
     model_turn_id: str | None = Field(default=None, max_length=200)
-    model_turn_ids: list[str] = Field(default_factory=list, max_length=3)
+    model_turn_ids: list[str] = Field(default_factory=list, max_length=8)
     capacity_retry_count: int = Field(default=0, ge=0, le=1)
-    recovery_goal_ids: list[str] = Field(default_factory=list, max_length=20)
+    recovery_goal_ids: list[str] = Field(default_factory=list)
     queued_item_id: str | None = Field(default=None, max_length=200)
     delivered_turn_id: str | None = Field(default=None, max_length=200)
     delivery_hold_reason: str | None = Field(default=None, max_length=200)
     target_session_id: str | None = Field(default=None, max_length=200)
+    dialogue_pending_turns: list[dict[str, str]] = Field(default_factory=list)
+    dialogue_results: list[dict[str, str]] = Field(default_factory=list)
+    dialogue_read_turn_ids: list[str] = Field(default_factory=list)
+    dialogue_review_retries: int = Field(default=0, ge=0, le=1)
     next_check_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -4748,7 +4762,7 @@ class NativeHookExecution(Entity):
 
 
 class WorkspaceProvenanceObservation(Entity):
-    """One bounded before/after observation used to attribute dirty paths.
+    """One time-bounded before/after observation used to attribute dirty paths.
 
     The workspace remains authoritative for file content.  This record is an
     append-only attribution receipt for lifecycle hooks; it never grants write
@@ -4770,7 +4784,7 @@ class WorkspaceProvenanceObservation(Entity):
     unsupported_reason: str | None = Field(default=None, max_length=1_000)
     baseline: dict[str, dict[str, Any]] = Field(default_factory=dict)
     current: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    mutations: list[dict[str, Any]] = Field(default_factory=list, max_length=2_000)
+    mutations: list[dict[str, Any]] = Field(default_factory=list)
     attribution: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     confidence: Literal["exact", "uncertain_parallel_turns", "unsupported"] = "exact"
     concurrent_scope_ids: list[str] = Field(default_factory=list, max_length=128)

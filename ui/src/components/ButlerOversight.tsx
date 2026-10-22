@@ -390,7 +390,7 @@ export function ButlerOversight({ api, projectId, coreState, onNavigate, onIncid
     {overview && <>
       {overview.globalInstructions && <details className={styles.disclosure}>
         <summary>Nebula-wide Butler <span>{overview.globalInstructions.status === "ready" ? "Ready" : overview.globalInstructions.status === "missing" ? "No file" : overview.globalInstructions.status === "needs_act_host" ? "Needs Act" : overview.globalInstructions.status === "invalid" ? "Invalid file" : "Unavailable"}</span></summary>
-        <p className={styles.note}>Butler checks once every 15 minutes, including idle projects, and chooses where to work. Changes require Act authority in the target project.</p>
+        <p className={styles.note}>Butler checks every {overview.globalInstructions.checkIntervalMinutes ?? 5} minute{(overview.globalInstructions.checkIntervalMinutes ?? 5) === 1 ? "" : "s"}, including idle projects, and chooses where to work. Changes require Act authority in the target project.</p>
         {overview.globalInstructions.path && <p className={styles.note}>Add your own instructions at <code>{overview.globalInstructions.path}</code>. Nebula does not create this file.</p>}
         {overview.globalInstructions.status === "needs_act_host" && <p className={styles.note}>Set one project to Act and configure its Butler chat to host the scheduled run.</p>}
         {overview.globalInstructions.detail && <p role="alert" className={styles.error}>{overview.globalInstructions.detail}</p>}

@@ -102,7 +102,7 @@ def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
         "Where do I put the Nebula-wide BUTLER.md instructions for idle projects?"
     )
     assert any(
-        ".butler/BUTLER.md" in str(item["text"]) and "15 minutes" in str(item["text"])
+        ".butler/BUTLER.md" in str(item["text"]) and "five minutes" in str(item["text"])
         for item in matches
     )
 
@@ -160,12 +160,35 @@ def test_product_search_finds_butler_goal_handoff(monkeypatch):
     assert any("nebula.global.handoff_goal" in str(item["text"]) for item in matches)
 
 
+def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge("Where do I edit a goal resume instruction?")
+    assert any(
+        "Edit a goal's resume instruction" in str(item["text"]) for item in matches
+    )
+
+
 def test_product_search_finds_butler_effort_setting(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
         "Where do I set Butler to max reasoning effort for scheduled checks?"
     )
     assert any(item["heading"] == "Butler model and effort" for item in matches)
+
+
+def test_product_search_explains_butler_goal_budget_and_assistant_authority(
+    monkeypatch,
+):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler extend paused goal time step budget resume"
+    )
+    assert any(
+        "Increasing an exhausted budget does not itself resume a goal"
+        in str(item["text"])
+        and "every saved next-turn Assistant setting" in str(item["text"])
+        for item in matches
+    )
 
 
 def test_product_search_finds_scheduled_history_and_grok_quota(monkeypatch):
@@ -180,6 +203,38 @@ def test_product_search_finds_scheduled_history_and_grok_quota(monkeypatch):
     assert any(item["heading"] == "Butler scheduled activity" for item in history)
     assert any(item["heading"] == "Usage and credits" for item in quota)
     assert any(item["heading"] == "Usage and credits" for item in credits)
+
+
+def test_product_search_explains_blocked_checkin_dialogue(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Does Butler wait for a blocked agent reply in the same check-in?"
+    )
+    assert any(
+        "exact saved reply" in str(item["text"])
+        and "next scheduled check" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_check_interval_setting(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where do I change Butler check frequency from the five minute default?"
+    )
+    assert any(item["heading"] == "Butler check interval" for item in matches)
+
+
+def test_product_search_explains_harness_to_provider_chat_switch(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "switch saved harness conversation to provider same chat idle goal"
+    )
+    assert any(
+        "provider" in str(item["text"]).lower()
+        and "same chat" in str(item["text"]).lower()
+        for item in matches
+    )
 
 
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
