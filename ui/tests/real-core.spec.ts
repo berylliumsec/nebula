@@ -7444,6 +7444,110 @@ test("assistant upgrade Butler check interval persists and resolves conflicts on
   ]);
 });
 
+test("assistant upgrade Butler settings open the editable file and full Assistant settings on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    const projectResponse = await api.post("engagements", {data: {name: "Butler settings navigation fixture", status: "active"}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string};
+    const harnessResponse = await api.post("harnesses", {data: {
+      name: "Inert Butler settings fixture", kind: "codex_app_server", executable: "/bin/true",
+      default_model: "fixture-model", enabled: true,
+      privacy: {local_only: true, permits_sensitive_data: true}, capabilities: {models: ["fixture-model"]},
+    }});
+    expect(harnessResponse.ok(), await harnessResponse.text()).toBe(true);
+    const harness = await harnessResponse.json() as {id: string};
+    const reserved = await api.post("chat/control-assistant/session", {data: {
+      engagement_id: project.id, backend: "harness", harness_profile_id: harness.id, model: "fixture-model",
+    }});
+    expect(reserved.ok(), await reserved.text()).toBe(true);
+    const session = await reserved.json() as {id: string};
+    const initial = "# Synthetic Butler instructions\nKeep this fixture inert.\n";
+    const seeded = await api.put("butler/instructions", {data: {content: initial, expected_sha256: null}});
+    expect(seeded.ok(), await seeded.text()).toBe(true);
+
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Butler settings navigation browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const butler = page.getByRole("dialog", {name: "Butler"});
+    await butler.getByRole("button", {name: "More"}).click();
+    await butler.getByText("Settings I can help with").click();
+    await butler.getByRole("textbox", {name: "Find a setting"}).fill("Butler instructions");
+    await butler.getByRole("button", {name: /Nebula-wide Butler instructions/}).click();
+    const lens = page.getByRole("dialog", {name: "Nebula-wide Butler instructions"});
+    const editor = page.getByRole("dialog", {name: "BUTLER.md"});
+    const code = editor.getByRole("textbox", {name: "BUTLER.md"});
+    await expect(lens).toBeVisible();
+    await expect(editor.getByRole("button", {name: "Edit Markdown"})).toHaveAttribute("aria-pressed", "true");
+    await expect(code).toContainText("Synthetic Butler instructions");
+    await expect(code).toContainText("Keep this fixture inert.");
+    if (!testInfo.project.name.includes("webkit")) await expect(code).toBeFocused();
+    const stack = await code.evaluate(element => {
+      const backdrop = document.querySelector<HTMLElement>(".dialog-backdrop");
+      const lens = document.querySelector<HTMLElement>(".settings-lens-backdrop");
+      const rect = element.getBoundingClientRect();
+      return {
+        hit: document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest<HTMLElement>("[role='dialog']")?.getAttribute("aria-labelledby"),
+        backdropZ: backdrop ? getComputedStyle(backdrop).zIndex : "missing",
+        lensZ: lens ? getComputedStyle(lens).zIndex : "missing",
+      };
+    });
+    expect(stack).toMatchObject({hit: "butler-instructions-editor-title", backdropZ: "120", lensZ: "110"});
+    await code.click(); // Also verifies that the Settings lens cannot intercept the editor.
+    await expect(code).toBeFocused();
+    await code.press(testInfo.project.name.includes("webkit") ? "Meta+A" : "Control+A");
+    await page.keyboard.insertText(`${initial}Updated from the Settings popup.\n`);
+    await expect(code).toContainText("Updated from the Settings popup.");
+    await editor.getByRole("button", {name: "Save to Core"}).click();
+    await expect(editor.getByText(/Saved on Core/)).toBeVisible();
+    const saved = await (await api.get("butler/instructions")).json() as {content: string};
+    expect(saved.content).toContain("Updated from the Settings popup.");
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-labelledby="butler-instructions-editor-title"]').analyze()).violations).toEqual([]);
+    await page.screenshot({path: testInfo.outputPath("butler-settings-code-editor.png")});
+    await editor.getByRole("button", {name: "Close Butler editor"}).click();
+    await lens.getByRole("button", {name: "Done"}).click();
+
+    await page.goto(`${core.origin}/settings`);
+    const compactEntry = page.locator(".compact-settings").getByRole("button", {name: /Nebula-wide Butler instructions/});
+    if (await compactEntry.isVisible()) {
+      await compactEntry.click();
+      await expect(page.getByRole("dialog", {name: "BUTLER.md"}).getByRole("textbox", {name: "BUTLER.md"}))
+        .toContainText("Updated from the Settings popup.");
+      await page.getByRole("dialog", {name: "BUTLER.md"}).getByRole("button", {name: "Close Butler editor"}).click();
+      await page.getByRole("dialog", {name: "Nebula-wide Butler instructions"}).getByRole("button", {name: "Done"}).click();
+    }
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+
+    await openNebulaAssistantFromShell(page);
+    await butler.getByRole("button", {name: "Butler settings"}).click();
+    await butler.getByRole("button", {name: "Full Assistant settings"}).click();
+    await expect(page).toHaveURL(new RegExp(`session=${session.id}`));
+    const assistantSettings = page.getByRole("dialog", {name: "Assistant settings"});
+    await expect(assistantSettings).toBeVisible();
+    await expect(assistantSettings.getByRole("combobox", {name: "Chat runtime"})).toBeVisible();
+    await expect(butler).toBeHidden();
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat&session=${session.id}&assistantSettings=open`);
+    await expect(assistantSettings).toBeVisible();
+    await testInfo.attach("butler-settings-navigation-lan", {body: JSON.stringify({
+      origin: core.origin, buildCommit: build.commit, asset: entry, assetSha256: build.assets[entry!],
+      project: testInfo.project.name, viewport: page.viewportSize(), savedBytes: saved.content.length, sessionId: session.id,
+    }), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Nebula-wide Butler checks idle projects from a user file on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const replaceButlerText = async (text: string) => {

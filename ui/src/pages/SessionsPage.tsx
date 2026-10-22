@@ -1699,6 +1699,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [chatError, setChatError] = useState<unknown>();
   const [chatReconnecting, setChatReconnecting] = useState(false);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
+  const requestedAssistantSettings = searchParams.get("assistantSettings") === "open";
+  useEffect(() => {
+    if (!requestedAssistantSettings || embeddedSideChat || view !== "chat"
+      || (requestedSessionId && (requestedSessionPending || loadingHistory || !sessionReadReady))) return;
+    setAssistantSettingsOpen(true);
+    updateSearchParams(params => params.delete("assistantSettings"), {replace: true});
+  }, [embeddedSideChat, loadingHistory, requestedAssistantSettings, requestedSessionId, requestedSessionPending, sessionReadReady, updateSearchParams, view]);
   const [assistantSettingsStatus, setAssistantSettingsStatus] = useState("");
   const [assistantSettingsError, setAssistantSettingsError] = useState<string>();
   const [assistantSettingsBusy, setAssistantSettingsBusy] = useState(false);
