@@ -4782,6 +4782,12 @@ class WorkspaceProvenanceObservation(Entity):
     status: Literal["active", "complete"] = "active"
     supported: bool = True
     unsupported_reason: str | None = Field(default=None, max_length=1_000)
+    # New observations keep large maps in content-addressed, shared chunks.
+    # The inline fields remain readable for observations written before the
+    # provenance ledger was introduced.
+    baseline_snapshot_id: str | None = Field(default=None, max_length=64)
+    current_snapshot_id: str | None = Field(default=None, max_length=64)
+    attribution_snapshot_id: str | None = Field(default=None, max_length=64)
     baseline: dict[str, dict[str, Any]] = Field(default_factory=dict)
     current: dict[str, dict[str, Any]] = Field(default_factory=dict)
     mutations: list[dict[str, Any]] = Field(default_factory=list)
