@@ -1,5 +1,5 @@
 {
-  "change_digest": "69e0bd39e5b9d8066dae1606c70243e35bd3d64f6704ea95285db265634383e6",
+  "change_digest": "b4bf0dac00f83aaf25c3eebdd85815236a55f4d339cf78fd98c4e3a530e9163f",
   "reviewed_by": "Codex product knowledge passage boundary review",
   "reason": "The product guidance generator splits long headings into bundled searchable passages. Exercise all 19 product knowledge tests because overlapping passages affect every indexed document, lexical retrieval, existing operator guidance queries, and Chroma source-digest synchronization. The selected file includes both reproduced Butler guidance queries and a direct regression for a sentence crossing the previous 1,400-character boundary.",
   "exclusions": "No full suites. Frontend, native, and Playwright tests are not selected because this change has no UI controls, browser state, native code, or API contract changes. The operator query will also be exercised against a disposable authenticated LAN Core with synthetic data; the selected Python tests cover generation, retrieval, and Chroma synchronization.",

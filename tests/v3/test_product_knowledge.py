@@ -37,7 +37,9 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
-def test_product_passages_keep_short_sentences_at_chunk_boundaries(tmp_path, monkeypatch):
+def test_product_passages_keep_short_sentences_at_chunk_boundaries(
+    tmp_path, monkeypatch
+):
     from scripts import build_product_knowledge as builder
 
     monkeypatch.setattr(builder, "ROOT", tmp_path)
@@ -51,7 +53,10 @@ def test_product_passages_keep_short_sentences_at_chunk_boundaries(tmp_path, mon
     entries = builder.passages([source])
     assert len(entries) == 2
     assert any(sentence in text for _, _, _, text in entries)
-    assert all(len(text) <= builder.MAX_CHARS + len("Assistant\n\n") for _, _, _, text in entries)
+    assert all(
+        len(text) <= builder.MAX_CHARS + len("Assistant\n\n")
+        for _, _, _, text in entries
+    )
 
 
 def test_product_search_finds_docker_host_access_guidance(monkeypatch):
