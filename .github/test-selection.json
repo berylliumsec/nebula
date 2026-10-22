@@ -1,21 +1,16 @@
 {
-  "change_digest": "94b31db9a96f63d3001d35a8a72ca2d8f53b1a11e65b1521de03187a1d984bcc",
-  "reviewed_by": "Codex focused Core tool and built-in MCP failure review",
-  "reason": "Exercise the shared failure envelope across actual fixed command, gateway, Notebook, and Security Tools declarations; Butler capability refusals; brokered chat and mission failed-receipt handoff; real gateway MCP dispatch; bounded retrieval queries and Work conflicts; MCP grants and built-in runtime prerequisites. The six selected feature-specific Python files collect 132 tests.",
-  "exclusions": "No full suites. UI, frontend, Playwright, native, and low-level MCP framing tests are not selected because the change is confined to Core-owned tool-error classification and provider/harness result handoff; it does not change browser controls, layout, or MCP wire framing. A disposable authenticated source Core with synthetic data and an inert provider exercised the actual LAN chat API: a rejected Notebook read delivered usage and recovery to the next model request, followed by a successful Notebook list. Browser journeys are not selected because there is no UI or browser-state change. No live provider, live Core deployment, or physical device is involved.",
+  "change_digest": "b4bf0dac00f83aaf25c3eebdd85815236a55f4d339cf78fd98c4e3a530e9163f",
+  "reviewed_by": "Codex product knowledge passage boundary review",
+  "reason": "The product guidance generator splits long headings into bundled searchable passages. Exercise all 19 product knowledge tests because overlapping passages affect every indexed document, lexical retrieval, existing operator guidance queries, and Chroma source-digest synchronization. The selected file includes both reproduced Butler guidance queries and a direct regression for a sentence crossing the previous 1,400-character boundary.",
+  "exclusions": "No full suites. Frontend, native, and Playwright tests are not selected because this change has no UI controls, browser state, native code, or API contract changes. The operator query will also be exercised against a disposable authenticated LAN Core with synthetic data; the selected Python tests cover generation, retrieval, and Chroma synchronization.",
   "expected_tests": {
-    "python": 132,
+    "python": 19,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_capabilities.py",
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_all_tool_failure_guidance.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_notebooks.py",
-    "tests/v3/test_agent_security_tools.py"
+    "tests/v3/test_product_knowledge.py"
   ],
   "frontend": [],
   "native": [],
