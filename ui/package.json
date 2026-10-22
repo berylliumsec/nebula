@@ -77,7 +77,7 @@
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^29.1.1",
     "typescript": "^7.0.2",
-    "vite": "^8.1.4",
+    "vite": "^8.3.5",
     "vitest": "^4.1.11"
   }
 }
