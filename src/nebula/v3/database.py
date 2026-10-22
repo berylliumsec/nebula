@@ -156,6 +156,77 @@ class EntityRow(Base):
     )
 
 
+class WorkspaceProvenanceBlobRow(Base):
+    """One immutable chunk or manifest shared by workspace observations."""
+
+    __tablename__ = "workspace_provenance_blobs"
+    __table_args__ = (
+        Index("ix_workspace_provenance_blobs_engagement", "engagement_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    engagement_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class WorkspaceProvenanceIndexRow(Base):
+    """Small overlap index; the entity row remains the receipt authority."""
+
+    __tablename__ = "workspace_provenance_index"
+    __table_args__ = (
+        Index(
+            "ix_workspace_provenance_overlap",
+            "workspace_key",
+            "started_at",
+            "completed_at",
+        ),
+        Index("ix_workspace_provenance_index_engagement", "engagement_id"),
+    )
+
+    observation_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+    engagement_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WorkspaceProvenanceOwnerRow(Base):
+    """Latest matching mutation for a path and exact fingerprint in a workspace."""
+
+    __tablename__ = "workspace_provenance_owners"
+    __table_args__ = (
+        Index("ix_workspace_provenance_owners_engagement", "engagement_id"),
+        Index("ix_workspace_provenance_owners_observation", "observation_id"),
+    )
+
+    engagement_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    path_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    path: Mapped[str] = mapped_column(String(4096), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(40), nullable=False)
+    observation_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class SessionProjectionRow(Base):
     """Derived display watermark, separate from authoritative execution records."""
 

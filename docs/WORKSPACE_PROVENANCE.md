@@ -24,10 +24,22 @@ hooks remain compatible because both fields are additive.
 ## Storage and observation boundary
 
 The authoritative observation is stored in Nebula Core's existing database as
-a `workspace_provenance_observations` entity. Nebula does not create a metadata
-file inside the workspace and does not require a repository-specific directory.
-Only Core's hook runtime writes observations: the API exposes no route that
-creates, edits or deletes one, so a client cannot forge or rewrite a receipt.
+a `workspace_provenance_observations` entity. Large path maps are stored as
+content-addressed chunks referenced by that entity; unchanged chunks are shared
+between observations. An indexed table records the latest actor for each path
+and exact fingerprint, and a small index records overlapping observations.
+Completing an observation reads these indexes instead of loading historical
+full path maps. The entity retains only mutations that occurred in its own
+scope, so repeated observations of an unchanged dirty checkout do not copy the
+entire checkout into every row.
+
+The ledger starts with new observations. Earlier full-snapshot entities remain
+readable but are not scanned for new attribution. At cutover, dirty paths with
+no new indexed mutation are pre-existing until an observed actor changes them.
+Nebula does not create a metadata file inside the workspace and does not
+require a repository-specific directory. Only Core's hook runtime writes
+observations: the API exposes no route that creates, edits or deletes one, so a
+client cannot forge or rewrite a receipt.
 
 For Git workspaces, Core asks Git for its dirty-path list and fingerprints only
 those paths. It does not walk the workspace. Non-Git workspaces and snapshots

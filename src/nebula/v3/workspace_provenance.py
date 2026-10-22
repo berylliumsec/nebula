@@ -18,12 +18,30 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from .database import (
+    EntityRow,
+    WorkspaceProvenanceIndexRow,
+    WorkspaceProvenanceOwnerRow,
+)
 from .domain import (
     ChatSession,
     WorkspaceProvenanceObservation,
     utc_now,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
+from .workspace_provenance_ledger import (
+    matching_owners,
+    overlapping_scopes,
+    path_key,
+    remember_mutations,
+    save_map,
+    load_map,
+    state_key,
+    workspace_key,
+)
 
 
 PROVENANCE_SCHEMA = "nebula.workspace-provenance/v1"
@@ -260,6 +278,73 @@ class WorkspaceProvenanceService:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
+    def _hydrate(
+        self,
+        observation: WorkspaceProvenanceObservation,
+        session: Session,
+    ) -> WorkspaceProvenanceObservation:
+        workspace = workspace_key(observation.engagement_id, observation.workspace_root)
+        baseline = (
+            load_map(session, workspace, "paths", observation.baseline_snapshot_id)
+            if observation.baseline_snapshot_id
+            else observation.baseline
+        )
+        current = (
+            load_map(session, workspace, "paths", observation.current_snapshot_id)
+            if observation.current_snapshot_id
+            else observation.current
+        )
+        attribution = observation.attribution
+        if observation.attribution_snapshot_id:
+            labels = load_map(
+                session, workspace, "attribution", observation.attribution_snapshot_id
+            )
+            attribution = self._expand_attribution(current, labels)
+        return observation.model_copy(
+            update={
+                "baseline": baseline,
+                "current": current,
+                "attribution": attribution,
+            }
+        )
+
+    @staticmethod
+    def _lock_workspace(session: Session, workspace: str) -> None:
+        if session.get_bind().dialect.name == "postgresql":
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:workspace))"),
+                {"workspace": f"workspace-provenance:{workspace}"},
+            )
+
+    @staticmethod
+    def _stored_observation(
+        session: Session, identity: str
+    ) -> WorkspaceProvenanceObservation | None:
+        row = session.get(EntityRow, identity)
+        if row is None:
+            return None
+        if row.kind != WorkspaceProvenanceObservation.entity_kind:
+            raise ConflictError(f"entity id belongs to {row.kind}: {identity}")
+        return WorkspaceProvenanceObservation.model_validate(row.payload)
+
+    def get(
+        self,
+        *,
+        engagement_id: str,
+        scope_kind: Literal["turn", "tool"],
+        scope_id: str,
+    ) -> WorkspaceProvenanceObservation:
+        """Read one receipt, including its shared path chunks."""
+
+        identity = _observation_id(engagement_id, scope_kind, scope_id)
+        with self.store.database.session() as session:
+            observation = self._stored_observation(session, identity)
+            if observation is None:
+                raise NotFoundError(
+                    f"workspace provenance observation not found: {identity}"
+                )
+            return self._hydrate(observation, session)
+
     def begin(
         self,
         workspace: Path,
@@ -275,10 +360,13 @@ class WorkspaceProvenanceService:
     ) -> WorkspaceProvenanceObservation:
         identity = _observation_id(engagement_id, scope_kind, scope_id)
         try:
-            return self.store.get(WorkspaceProvenanceObservation, identity)
+            return self.get(
+                engagement_id=engagement_id, scope_kind=scope_kind, scope_id=scope_id
+            )
         except NotFoundError:  # diagnostic-expected: first observation for this scope continues to creation
             pass
         observed = snapshot(workspace)
+        workspace_id = workspace_key(engagement_id, observed.workspace_root)
         entity = WorkspaceProvenanceObservation(
             id=identity,
             engagement_id=engagement_id,
@@ -292,13 +380,41 @@ class WorkspaceProvenanceService:
             chat_turn_id=chat_turn_id,
             supported=observed.supported,
             unsupported_reason=observed.reason,
-            baseline=observed.paths,
             confidence="exact" if observed.supported else "unsupported",
         )
         try:
-            return self.store.create(entity)
-        except ConflictError:  # diagnostic-expected: a concurrent begin won; return its durable observation
-            return self.store.get(WorkspaceProvenanceObservation, identity)
+            with self.store.transaction(immediate=True) as transaction:
+                self._lock_workspace(transaction.session, workspace_id)
+                existing = self._stored_observation(transaction.session, identity)
+                if existing is not None:
+                    return self._hydrate(existing, transaction.session)
+                baseline_id = save_map(
+                    transaction.session,
+                    engagement_id,
+                    workspace_id,
+                    "paths",
+                    observed.paths,
+                )
+                entity.baseline_snapshot_id = baseline_id
+                transaction.add(entity)
+                transaction.session.add(
+                    WorkspaceProvenanceIndexRow(
+                        observation_id=entity.id,
+                        engagement_id=engagement_id,
+                        workspace_key=workspace_id,
+                        actor_id=entity.actor_id,
+                        scope_id=entity.scope_id,
+                        started_at=entity.started_at,
+                        completed_at=None,
+                    )
+                )
+        except (
+            ConflictError
+        ):  # diagnostic-expected: a concurrent begin won the durable scope id
+            return self.get(
+                engagement_id=engagement_id, scope_kind=scope_kind, scope_id=scope_id
+            )
+        return entity.model_copy(update={"baseline": observed.paths})
 
     def finish(
         self,
@@ -309,85 +425,107 @@ class WorkspaceProvenanceService:
         scope_id: str,
     ) -> WorkspaceProvenanceObservation:
         identity = _observation_id(engagement_id, scope_kind, scope_id)
-        observation = self.store.get(WorkspaceProvenanceObservation, identity)
+        observation = self.get(
+            engagement_id=engagement_id, scope_kind=scope_kind, scope_id=scope_id
+        )
         if observation.status == "complete":
             return observation
         observed = snapshot(workspace)
         completed_at = utc_now()
-        if not observation.supported or not observed.supported:
-            reason = observation.unsupported_reason or observed.reason or "unsupported"
-            return self.store.update(
-                WorkspaceProvenanceObservation,
-                observation.id,
-                {
-                    "status": "complete",
-                    "supported": False,
-                    "unsupported_reason": reason,
-                    "current": observed.paths,
-                    "confidence": "unsupported",
-                    "completed_at": completed_at,
-                },
-                expected_revision=observation.revision,
-            )
-        if observed.workspace_root != observation.workspace_root:
-            return self.store.update(
-                WorkspaceProvenanceObservation,
-                observation.id,
-                {
-                    "status": "complete",
-                    "supported": False,
-                    "unsupported_reason": "workspace_root_changed",
-                    "current": observed.paths,
-                    "confidence": "unsupported",
-                    "completed_at": completed_at,
-                },
-                expected_revision=observation.revision,
-            )
-        observations = self.store.find_entities(
-            WorkspaceProvenanceObservation,
-            {"workspace_root": observation.workspace_root},
-            engagement_id=engagement_id,
-            limit=1_000,
-            newest_first=True,
-        )
-        concurrent = sorted(
-            {
-                item.scope_id
-                for item in observations
-                if item.id != observation.id
-                and item.actor_id != observation.actor_id
-                and item.started_at <= completed_at
-                and (
-                    item.completed_at is None
-                    or item.completed_at >= observation.started_at
+        workspace_id = workspace_key(engagement_id, observation.workspace_root)
+        with self.store.transaction(immediate=True) as transaction:
+            session = transaction.session
+            self._lock_workspace(session, workspace_id)
+            stored = self._stored_observation(session, identity)
+            if stored is None:
+                raise NotFoundError(
+                    f"workspace provenance observation not found: {identity}"
                 )
-            }
-        )[:128]
-        confidence = "uncertain_parallel_turns" if concurrent else "exact"
-        mutations = [
-            {**row, "confidence": confidence}
-            for row in _change_rows(observation.baseline, observed.paths)
-        ]
-        attribution = self._classify(
-            observation,
-            observed.paths,
-            mutations,
-            confidence,
-            observations,
-        )
-        return self.store.update(
-            WorkspaceProvenanceObservation,
-            observation.id,
-            {
-                "status": "complete",
+            if stored.status == "complete":
+                return self._hydrate(stored, session)
+            observation = self._hydrate(stored, session)
+
+            index = session.get(WorkspaceProvenanceIndexRow, identity)
+            if index is None:
+                # An in-flight observation from before the cutover can finish
+                # using its inline baseline, without loading old history.
+                index = WorkspaceProvenanceIndexRow(
+                    observation_id=identity,
+                    engagement_id=engagement_id,
+                    workspace_key=workspace_id,
+                    actor_id=observation.actor_id,
+                    scope_id=observation.scope_id,
+                    started_at=observation.started_at,
+                )
+                session.add(index)
+
+            supported = observation.supported and observed.supported
+            reason = observation.unsupported_reason or observed.reason
+            if supported and observed.workspace_root != observation.workspace_root:
+                supported = False
+                reason = "workspace_root_changed"
+
+            concurrent: list[str] = []
+            confidence = "unsupported"
+            mutations: list[dict[str, Any]] = []
+            attribution: dict[str, list[dict[str, Any]]] = {}
+            attribution_id: str | None = None
+            owners = {}
+            if supported:
+                concurrent = overlapping_scopes(session, observation, completed_at)
+                confidence = "uncertain_parallel_turns" if concurrent else "exact"
+                mutations = [
+                    {**row, "confidence": confidence}
+                    for row in _change_rows(observation.baseline, observed.paths)
+                ]
+                owners = matching_owners(session, workspace_id, observed.paths)
+                attribution = self._classify(
+                    observation, observed.paths, mutations, confidence, owners
+                )
+                labels = self._compact_attribution(attribution)
+                attribution_id = save_map(
+                    session, engagement_id, workspace_id, "attribution", labels
+                )
+
+            baseline_id = stored.baseline_snapshot_id or save_map(
+                session, engagement_id, workspace_id, "paths", observation.baseline
+            )
+            current_id = save_map(
+                session, engagement_id, workspace_id, "paths", observed.paths
+            )
+            if supported:
+                remember_mutations(
+                    session, workspace_id, observation, mutations, completed_at, owners
+                )
+            updated = transaction.update(
+                WorkspaceProvenanceObservation,
+                identity,
+                {
+                    "status": "complete",
+                    "supported": supported,
+                    "unsupported_reason": None
+                    if supported
+                    else reason or "unsupported",
+                    "baseline_snapshot_id": baseline_id,
+                    "current_snapshot_id": current_id,
+                    "attribution_snapshot_id": attribution_id,
+                    "baseline": {},
+                    "current": {},
+                    "mutations": mutations,
+                    "attribution": {},
+                    "confidence": confidence,
+                    "concurrent_scope_ids": concurrent,
+                    "completed_at": completed_at,
+                },
+                expected_revision=stored.revision,
+            )
+            index.completed_at = completed_at
+        return updated.model_copy(
+            update={
+                "baseline": observation.baseline,
                 "current": observed.paths,
-                "mutations": mutations,
                 "attribution": attribution,
-                "confidence": confidence,
-                "concurrent_scope_ids": concurrent,
-                "completed_at": completed_at,
-            },
-            expected_revision=observation.revision,
+            }
         )
 
     @staticmethod
@@ -396,7 +534,7 @@ class WorkspaceProvenanceService:
         current: dict[str, dict[str, Any]],
         mutations: list[dict[str, Any]],
         confidence: str,
-        prior: list[WorkspaceProvenanceObservation],
+        owners: dict[tuple[str, str], WorkspaceProvenanceOwnerRow],
     ) -> dict[str, list[dict[str, Any]]]:
         result: dict[str, list[dict[str, Any]]] = {
             "owned": [],
@@ -405,19 +543,6 @@ class WorkspaceProvenanceService:
             "unknown": [],
             "uncertain": [],
         }
-        completed = sorted(
-            (item for item in prior if item.status == "complete"),
-            key=lambda item: (item.completed_at or item.started_at, item.id),
-            reverse=True,
-        )
-        prior_mutations: dict[
-            str, list[tuple[WorkspaceProvenanceObservation, dict[str, Any]]]
-        ] = {}
-        for candidate in completed:
-            for entry in reversed(candidate.mutations):
-                path = entry.get("path")
-                if isinstance(path, str) and path in current:
-                    prior_mutations.setdefault(path, []).append((candidate, entry))
         current_mutations = {row["path"]: row for row in mutations}
         for path, state in sorted(current.items()):
             row = current_mutations.get(path)
@@ -425,15 +550,10 @@ class WorkspaceProvenanceService:
                 item = {"path": path, "actor_id": observation.actor_id, "state": state}
                 result["uncertain" if confidence != "exact" else "owned"].append(item)
                 continue
-            matched: tuple[WorkspaceProvenanceObservation, dict[str, Any]] | None = None
-            for candidate, mutation in prior_mutations.get(path, []):
-                if mutation.get("after") == state:
-                    matched = candidate, mutation
-                    break
-            if matched is not None:
-                owner, mutation = matched
+            owner = owners.get((path_key(path), state_key(state)))
+            if owner is not None and owner.path == path:
                 item = {"path": path, "actor_id": owner.actor_id, "state": state}
-                if mutation.get("confidence") != "exact":
+                if owner.confidence != "exact":
                     result["uncertain"].append(item)
                 elif owner.actor_id == observation.actor_id:
                     result["owned"].append(item)
@@ -443,6 +563,46 @@ class WorkspaceProvenanceService:
                 result["preexisting"].append({"path": path, "state": state})
             else:
                 result["unknown"].append({"path": path, "state": state})
+        return result
+
+    @staticmethod
+    def _compact_attribution(
+        attribution: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, dict[str, str]]:
+        return {
+            item["path"]: {
+                "bucket": bucket,
+                **({"actor_id": item["actor_id"]} if "actor_id" in item else {}),
+            }
+            for bucket, items in attribution.items()
+            if bucket != "preexisting"
+            for item in items
+        }
+
+    @staticmethod
+    def _expand_attribution(
+        current: dict[str, dict[str, Any]], labels: dict[str, dict[str, str]]
+    ) -> dict[str, list[dict[str, Any]]]:
+        result: dict[str, list[dict[str, Any]]] = {
+            "owned": [],
+            "other": [],
+            "preexisting": [],
+            "unknown": [],
+            "uncertain": [],
+        }
+        if set(labels) - set(current):
+            raise CorruptRecordError(
+                "workspace attribution names a missing current path"
+            )
+        for path, state in sorted(current.items()):
+            label = labels.get(path, {"bucket": "preexisting"})
+            bucket = label.get("bucket")
+            if bucket not in result:
+                raise CorruptRecordError("workspace attribution has an invalid bucket")
+            item: dict[str, Any] = {"path": path, "state": state}
+            if actor_id := label.get("actor_id"):
+                item["actor_id"] = actor_id
+            result[bucket].append(item)
         return result
 
     @staticmethod
