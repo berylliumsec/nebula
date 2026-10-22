@@ -1,3 +1,9 @@
+import applicationModel from "./playwright.application-model.config";
+import catchUp from "./playwright.catch-up.config";
+import hostMode from "./playwright.host-mode.config";
+import projectDeletion from "./playwright.project-deletion.config";
+import workspaceQuota from "./playwright.workspace-quota.config";
+import workspaceRecovery from "./playwright.workspace-recovery.config";
 import reconnection from "./playwright.reconnection.config";
 import thinking from "./playwright.thinking.config";
 import { defineConfig, devices } from "@playwright/test";
@@ -15,7 +21,24 @@ const isolatedMatrixEntry = true;
 
 // Workers inherit the validated parent selection rather than its CLI arguments.
 const selectedArgs: string[] = JSON.parse(process.env.NEBULA_PLAYWRIGHT_FOCUSED_ARGS ?? "[]");
-export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconnection : selectedArgs.includes("tests/thinking.spec.ts") ? thinking : defineConfig({
+// One invocation owns one fixture server; reject incompatible selections early.
+const fixtureConfigs = {
+  "tests/assistant-browser-viewer.spec.ts": applicationModel,
+  "tests/working-knowledge.spec.ts": applicationModel,
+  "tests/catch-up.spec.ts": catchUp,
+  "tests/host-mode.spec.ts": hostMode,
+  "tests/project-deletion.spec.ts": projectDeletion,
+  "tests/workspace-quota.spec.ts": workspaceQuota,
+  "tests/workspace-recovery.spec.ts": workspaceRecovery,
+  "tests/chat-reconnection.spec.ts": reconnection,
+  "tests/thinking.spec.ts": thinking,
+};
+const selectedFiles = selectedArgs.filter(arg => /^tests\/.*\.spec\.tsx?$/.test(arg));
+const selectedFixtures = selectedFiles.map(file => fixtureConfigs[file as keyof typeof fixtureConfigs]);
+if (selectedFixtures.some(Boolean) && new Set(selectedFixtures).size > 1) {
+  throw new Error("Select one fixture configuration per Playwright invocation.");
+}
+export default selectedFixtures.find(Boolean) ?? defineConfig({
   testDir: "./tests",
   // Usage-video scripts mutate a narrated fixture and have their own config.
   // They are not product acceptance tests and must not enter deployment E2E.

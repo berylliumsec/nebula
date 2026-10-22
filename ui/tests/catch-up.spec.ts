@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+// WebKit service-worker-controlled requests bypass page.route() fault injection.
+test.use({ serviceWorkers: "block" });
+
 test("catch-up refresh icon recovers read state with a compact accessible target", async ({ page, request }, info) => {
   const origin = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
   const pairing = await (await request.post(`${origin}/api/v1/auth/pairings`, { headers: { Authorization: "Bearer model-test-token" }, data: { name: "Catch-up icon test" } })).json();
@@ -10,7 +13,9 @@ test("catch-up refresh icon recovers read state with a compact accessible target
   await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20000 });
   const route = "**/api/v1/chat/sessions/recovery-chat/catch-up?*";
   await page.route(route, r => r.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture connection interrupted" }) }));
+  const interrupted = page.waitForResponse(r => r.url().includes("/recovery-chat/catch-up?") && r.status() === 503);
   await page.goto("/projects/recovery-project/workbench?view=chat&session=recovery-chat");
+  await interrupted;
   const button = page.getByRole("button", { name: "Reload catch-up", exact: true });
   await expect(button).toBeVisible();
   await expect(button).toHaveText("");

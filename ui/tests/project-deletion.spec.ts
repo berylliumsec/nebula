@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+// Keep the simulated deletion conflict observable in service-worker-capable browsers.
+test.use({ serviceWorkers: "block" });
+
 test("archived project deletion confirms, persists and preserves its linked folder", async ({ page, request }, info) => {
   const api = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}/api/v1`;
   const headers = { Authorization: "Bearer model-test-token" };
@@ -20,7 +23,7 @@ test("archived project deletion confirms, persists and preserves its linked fold
   await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20000 });
   await page.goto("/projects/linked-model-regression/workbench?view=files");
   const openArchives = async () => {
-    const sidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
+    const sidebar = page.getByRole("button", { name: "Open navigation", exact: true });
     const switcher = page.getByRole("button", { name: "Switch project", exact: true });
     await expect(sidebar.or(switcher).filter({ visible: true }).first()).toBeVisible();
     if (await sidebar.isVisible()) await sidebar.click();
@@ -44,8 +47,13 @@ test("archived project deletion confirms, persists and preserves its linked fold
     if (route.request().method() === "DELETE") await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Project has queued follow-ups. Restore it and clear the queue before deleting." }) });
     else await route.continue();
   });
+  const rejectedDelete = page.waitForResponse(response =>
+    new URL(response.url()).pathname === `/api/v1/engagements/${project.id}` &&
+    response.request().method() === "DELETE" && response.status() === 409);
   await dialog.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await rejectedDelete;
   await expect(page.getByRole("alert").filter({ hasText: "clear the queue" })).toBeVisible();
+  expect((await request.get(`${api}/engagements/${project.id}`, { headers })).status()).toBe(200);
   await page.unroute(`**/api/v1/engagements/${project.id}`);
   await page.getByRole("button", { name: `Delete project ${name}`, exact: true }).click();
   await dialog.getByRole("button", { name: "Delete permanently", exact: true }).click();
