@@ -81,6 +81,35 @@ class InvalidToolArguments(ToolBrokerError):
     pass
 
 
+class GuidedToolError(ToolBrokerError):
+    """A Core-owned refusal with fixed, model-safe recovery instructions.
+
+    The public text is authored by Core, never copied from tool arguments or
+    upstream MCP output. Only a caller that knows execution has not begun may
+    set ``before_execution``.
+    """
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        code: str,
+        category: str,
+        problem: str,
+        next_action: str,
+        field: str | None = None,
+        before_execution: bool = False,
+    ) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.category = category
+        self.problem = problem
+        self.next_action = next_action
+        self.field = field
+        if before_execution:
+            refused_before_execution(self)
+
+
 class CapabilityInputError(InvalidToolArguments):
     """A Butler catalog or argument refusal before the selected action runs.
 
@@ -364,6 +393,9 @@ class ToolExecutionResult(BaseModel):
     stderr_artifact_path: Path | None = Field(default=None, exclude=True)
     output_directory: Path | None = Field(default=None, exclude=True)
     mcp_content_blocks: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
+    # The caller converts this trusted in-process cause into the shared public
+    # failure envelope. It must never be serialized into an artifact or result.
+    failure_error: Any = Field(default=None, exclude=True)
     observed_stdout_bytes: int = Field(default=0, ge=0)
     observed_stderr_bytes: int = Field(default=0, ge=0)
     stdout_truncated: bool = False

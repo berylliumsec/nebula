@@ -25,7 +25,11 @@ from nebula.v3.providers import ToolCall
 from nebula.v3.sandbox import AnalysisOnlyRunner
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_results import ToolOutputAccessError, ToolOutputService
-from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
+from nebula.v3.tool_results import (
+    ToolOutputPreview,
+    ToolResultReceipt,
+    ToolResultStatus,
+)
 from nebula.v3.tool_failures import FAILURE_SCHEMA, tool_failure
 from nebula.v3.tools import (
     AnalysisTool,
@@ -298,6 +302,49 @@ def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
     ]
 
 
+def test_chat_next_request_keeps_failed_receipt_evidence_and_usage(tmp_path):
+    class FailedBroker:
+        async def execute(self, invocation, scope, *, approval=None):
+            receipt = ToolResultReceipt(
+                tool_call_id=invocation.id,
+                tool_name=invocation.tool_name,
+                tool_version="1",
+                status=ToolResultStatus.FAILED,
+                summary="The command failed.",
+                output_preview=[
+                    ToolOutputPreview(
+                        artifact_id="stderr-id",
+                        kind="stderr",
+                        text="invalid option",
+                    )
+                ],
+            )
+            return ToolExecutionResult(
+                output=receipt.as_model_result(),
+                receipt=receipt,
+                result_artifact_id="receipt-id",
+            )
+
+    responses = [
+        _response(
+            calls=[ToolCall(id="bad", name="safe_read", arguments={"value": "x"})]
+        ),
+        _response(calls=[ToolCall(id="finish", name="finish_response", arguments={})]),
+        _response(text="The call failed and I inspected its result."),
+    ]
+    _, service, prepared, provider = _prepared(tmp_path, responses, RecordingBroker())
+    prepared.tool_components = replace(prepared.tool_components, broker=FailedBroker())
+    completed = asyncio.run(service.complete(prepared))
+    assert "inspected" in completed.message.content
+    failure = provider.requests[1].tool_results[0].output
+    assert failure["schema"] == FAILURE_SCHEMA
+    assert failure["usage"]["description"]
+    assert "result_receipt" in failure, failure
+    assert failure["result_receipt"]["tool_call_id"]
+    assert failure["result_receipt"]["artifact_id"] == "receipt-id"
+    assert failure["result_receipt"]["output_preview"][0]["text"] == "invalid option"
+
+
 def test_butler_unknown_operation_guidance_reaches_next_provider_request(tmp_path):
     responses = [
         _response(
@@ -483,6 +530,11 @@ def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(tmp_
                 tool_name=invocation.tool_name,
                 tool_version="1",
                 status=ToolResultStatus.TIMED_OUT,
+                output_preview=[
+                    ToolOutputPreview(
+                        artifact_id="stderr-id", kind="stderr", text="partial result"
+                    )
+                ],
             )
             return ToolExecutionResult(
                 output=receipt.as_model_result(),
@@ -516,6 +568,8 @@ def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(tmp_
     assert failure["category"] == "timeout"
     assert failure["side_effects"] == "unknown"
     assert failure["retry_safe"] is False
+    assert failure["result_receipt"]["tool_call_id"]
+    assert failure["result_receipt"]["output_preview"][0]["text"] == "partial result"
     assert (
         failure["effective_input_schema"] == specialist.specs["nmap.tcp"].input_schema
     )

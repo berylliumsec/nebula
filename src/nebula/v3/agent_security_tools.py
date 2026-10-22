@@ -54,6 +54,7 @@ from .domain import (
 )
 from .storage import NebulaStore, NotFoundError
 from .security_upstream import parse_upstream_settings
+from .tools import GuidedToolError
 
 
 PROFILE_ID = "nebula-security-tools-v1"
@@ -64,6 +65,50 @@ _CURATED: dict[str, list[str]] = {
     "boundary_numbers": ["-1", "0", "1", "2147483647", "2147483648"],
     "path_boundaries": [".", "..", "../", "%2e%2e%2f"],
     "header_boundaries": ["", "0", "null", "undefined"],
+}
+_SECURITY_RECOVERY: dict[str, tuple[str, str, str, str | None]] = {
+    "An enabled upstream proxy requires a URL": (
+        "security_tools.proxy_url_required",
+        "invalid_arguments",
+        "Set url to an HTTP(S) or SOCKS5 proxy when enabled is true, or set enabled to false. Check session status before retrying.",
+        "url",
+    ),
+    "Stop active security work before changing the upstream proxy": (
+        "security_tools.work_active",
+        "conflict",
+        "Read status and wait for or stop active security work before changing the upstream proxy. Check the current proxy state first.",
+        None,
+    ),
+    "Decide paused intercepts before changing the upstream proxy": (
+        "security_tools.intercepts_paused",
+        "conflict",
+        "Read status and decide paused intercepts before changing the upstream proxy. Check the current proxy state first.",
+        None,
+    ),
+    "The protected upstream proxy credential is unavailable": (
+        "security_tools.proxy_credential_unavailable",
+        "permission_denied",
+        "Ask the operator to restore the protected proxy credential, or use an authorized proxy without it. Do not retry unchanged.",
+        "credential_ref",
+    ),
+    "Redacted body capture requires the Project artifact store": (
+        "security_tools.artifact_store_required",
+        "unavailable_dependency",
+        "Use metadata or headers capture, or ask the operator to restore the Project artifact store before selecting bodies.",
+        "mode",
+    ),
+    "intercept is not in the active Project security session": (
+        "security_tools.intercept_unavailable",
+        "unavailable_resource",
+        "Read status and choose a paused intercept ID from this Project's active headless session.",
+        "intercept_id",
+    ),
+    "research exchange belongs to another security session": (
+        "security_tools.exchange_unavailable",
+        "unavailable_resource",
+        "Read traffic from this Project's active headless session and use an exchange ID it returned.",
+        None,
+    ),
 }
 
 
@@ -439,6 +484,54 @@ class SecurityToolsRuntime:
         )
 
     async def call_tool(
+        self, project_id: str, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        if (
+            name
+            in {
+                "traffic",
+                "har_export",
+                "token_analysis",
+                "evidence_from_exchange",
+                "finding_candidate",
+            }
+            and self._active(project_id) is None
+        ):
+            raise GuidedToolError(
+                "headless security session is not active",
+                code="security_tools.session_required",
+                category="unavailable_resource",
+                problem="This tool needs an active headless security session; no action ran.",
+                next_action="Call Security Tools status. After an authorized navigate call starts the headless session, call this tool again with its advertised arguments.",
+                before_execution=True,
+            )
+        try:
+            return await self._call_tool_unwrapped(project_id, name, arguments)
+        except ValueError as exc:
+            advice = _SECURITY_RECOVERY.get(str(exc))
+            if advice is None:
+                code, category, next_action, field = (
+                    "security_tools.request_or_state_invalid",
+                    "execution_failed",
+                    "Read Security Tools status and the failed result, compare this call with its offered usage and schema, and check current state before a new call.",
+                    None,
+                )
+            else:
+                code, category, next_action, field = advice
+            raise GuidedToolError(
+                str(exc),
+                code=code,
+                category=category,
+                problem=(
+                    str(exc)
+                    if advice is not None
+                    else "Security Tools could not complete this request with the current input or session state."
+                ),
+                next_action=next_action,
+                field=field,
+            ) from exc
+
+    async def _call_tool_unwrapped(
         self, project_id: str, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         if name == "status":
