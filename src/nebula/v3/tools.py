@@ -81,6 +81,19 @@ class InvalidToolArguments(ToolBrokerError):
     pass
 
 
+class CapabilityInputError(InvalidToolArguments):
+    """A Butler catalog or argument refusal before the selected action runs.
+
+    ``reason`` selects fixed model-facing advice; the original detail remains in
+    the protected diagnostic rather than being copied into a tool result.
+    """
+
+    def __init__(self, detail: str, *, reason: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        refused_before_execution(self)
+
+
 class PolicyDenied(ToolBrokerError):
     def __init__(self, decision: PolicyDecision) -> None:
         super().__init__(decision.reason)

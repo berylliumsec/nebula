@@ -16,6 +16,7 @@ from .diagnostics import get_diagnostics, record_diagnostic
 from .redaction import redact_text, sanitize_display_text
 from .tools import (
     BudgetExhausted,
+    CapabilityInputError,
     CapacityReached,
     InvalidToolArguments,
     PolicyDenied,
@@ -40,6 +41,39 @@ _SAFE_SCHEMA_KEYS = (
     "additionalProperties",
 )
 _HOOK_OUTPUT_BYTES_PER_STREAM = 1_024
+_CAPABILITY_GUIDANCE = {
+    "unlisted_operation": (
+        "The operation is not in this Butler's capability catalog; no action ran.",
+        "Do not repeat this operation. Call nebula.capabilities.search with the task intent, "
+        "then nebula.capabilities.describe for a returned operation. Invoke it with "
+        "the described arguments and invoke_with tool. For Work items, use the "
+        "separate work_list tool if it is offered. If no matching action or tool "
+        "is available, report that fresh state could not be read.",
+    ),
+    "use_read": (
+        "This operation requires nebula.capabilities.read; no action ran.",
+        "Call nebula.capabilities.describe for this operation, then call "
+        "nebula.capabilities.read with arguments matching input_schema. Do not repeat "
+        "the call through nebula.capabilities.change.",
+    ),
+    "use_change": (
+        "This operation requires nebula.capabilities.change; no action ran.",
+        "Call nebula.capabilities.describe for this operation. If the operator "
+        "authorized the change, call nebula.capabilities.change with arguments "
+        "matching input_schema; otherwise report that a change is required.",
+    ),
+    "missing_arguments": (
+        "The operation needs an arguments object; no action ran.",
+        "Call nebula.capabilities.describe for this operation, then pass an "
+        "arguments object matching its input_schema to its invoke_with tool.",
+    ),
+    "invalid_action_arguments": (
+        "The operation's arguments do not match its described input_schema; no action ran.",
+        "Call nebula.capabilities.describe for this operation, correct the nested "
+        "arguments object to match input_schema, then call its invoke_with tool. "
+        "Do not repeat unchanged arguments.",
+    ),
+}
 
 
 def _hook_output_for_model(value: str) -> tuple[str, bool]:
@@ -197,6 +231,12 @@ def tool_failure(
     """Classify without copying untrusted error text or argument values to a model."""
 
     field = _invalid_field(error, arguments)
+    if isinstance(error, CapabilityInputError):
+        field = (
+            "arguments"
+            if error.reason in {"missing_arguments", "invalid_action_arguments"}
+            else "operation"
+        )
     hash_as_artifact = (
         spec.name == "tool_output.read"
         and isinstance(arguments.get("artifact_id"), str)
@@ -264,6 +304,10 @@ def tool_failure(
     elif hash_as_artifact:
         problem = "artifact_id contains a SHA-256 digest, not an artifact receipt ID."
         action = "Use the artifact_id from an authorized tool result receipt; sha256 is a separate digest field."
+    elif (
+        isinstance(error, CapabilityInputError) and error.reason in _CAPABILITY_GUIDANCE
+    ):
+        problem, action = _CAPABILITY_GUIDANCE[error.reason]
     elif invalid:
         problem = f"Invalid input{f' in {field}' if field else ''}."
         action = (

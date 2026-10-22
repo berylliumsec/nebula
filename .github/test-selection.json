@@ -1,27 +1,19 @@
 {
-  "change_digest": "90550557601ce4b32e5cc9ad2dde91eb0f6d05766ef889ad657f6c3279020765",
-  "reviewed_by": "Codex focused Butler settings navigation review",
-  "reason": "Exercise direct editable BUTLER.md entry from the Settings lens, editor stacking and Core readback, then open the saved Butler session with its Full Assistant settings panel. Cover the affected component actions, assistant setting discovery, bundled product-help digest and Chroma synchronization, and all eight permanent desktop/mobile real-Core profiles.",
-  "exclusions": "No full suites, live provider turns, native changes, unrelated SessionsPage or Butler workflows, or physical-device tests. Shared UI files and the real-core spec make automatic impact broad, so the catalogued Butler settings navigation journey was explicitly reviewed and selected. Disposable LAN fixtures use only synthetic data and an inert harness.",
+  "change_digest": "78dd254800e565e0a30070ffc7519a6e86fa27f49d54a64c2ae59e36c4a7a2d3",
+  "reviewed_by": "Codex focused Butler tool-failure review",
+  "reason": "Exercise Butler capability discovery, unknown-operation and nested-schema refusals, safe model-facing guidance, provider chat delivery to the next request, and the existing shared tool-failure contract. The two selected feature-specific Python files collect 38 tests.",
+  "exclusions": "No full suites. UI, frontend, Playwright, and native tests are not selected because this change only alters backend Butler tool-failure classification and its provider-facing receipt; no browser controls or layout change. A separate disposable authenticated source Core on a non-loopback LAN address exercised the actual chat API with synthetic data and an inert provider. No live provider, deployment, or physical device is involved.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 58,
+    "python": 38,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_direct_butler_editor_navigation",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans"
+    "tests/v3/test_butler_capabilities.py",
+    "tests/v3/test_tool_failures.py"
   ],
-  "frontend": [
-    "ui/src/components/ButlerInstructionsSettings.test.tsx",
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:butler-settings-navigation"
-  ]
+  "playwright": []
 }

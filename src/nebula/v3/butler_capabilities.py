@@ -32,7 +32,7 @@ from .domain import (
     utc_now,
 )
 from .settings_assistant_tools import provider_plugins
-from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
+from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
 
 
 _SEARCH_SCHEMA: dict[str, Any] = {
@@ -752,8 +752,9 @@ class ButlerCapabilities:
     async def describe(self, arguments: dict[str, Any]) -> dict[str, Any]:
         name = arguments.get("operation")
         if not isinstance(name, str) or name not in self._actions:
-            raise ValueError(
-                "choose a listed operation from nebula.capabilities.search"
+            raise CapabilityInputError(
+                "choose a listed operation from nebula.capabilities.search",
+                reason="unlisted_operation",
             )
         plugin = self._actions[name]
         return {
@@ -773,22 +774,29 @@ class ButlerCapabilities:
     ) -> dict[str, Any]:
         name = arguments.get("operation")
         if not isinstance(name, str) or name not in self._actions:
-            raise ValueError(
-                "choose a listed operation from nebula.capabilities.search"
+            raise CapabilityInputError(
+                "choose a listed operation from nebula.capabilities.search",
+                reason="unlisted_operation",
             )
         plugin = self._actions[name]
         if self._read_only(plugin) == change:
             route = "read" if self._read_only(plugin) else "change"
-            raise ValueError(f"use nebula.capabilities.{route} for {name}")
+            raise CapabilityInputError(
+                f"use nebula.capabilities.{route} for {name}",
+                reason=f"use_{route}",
+            )
         payload = arguments.get("arguments")
         if not isinstance(payload, dict):
-            raise ValueError("provide an arguments object")
+            raise CapabilityInputError(
+                "provide an arguments object", reason="missing_arguments"
+            )
         try:
             Draft202012Validator(self._input_schema(plugin)).validate(payload)
         except ValidationError as exc:
-            raise ValueError(
+            raise CapabilityInputError(
                 f"invalid arguments for {name}: {exc.message}; "
-                "call nebula.capabilities.describe for its exact schema"
+                "call nebula.capabilities.describe for its exact schema",
+                reason="invalid_action_arguments",
             ) from exc
         step_id: str | None = None
         if self._background_case_id is not None:

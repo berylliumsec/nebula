@@ -89,6 +89,17 @@ Brokers classify by exception type, not by message: `InvalidToolArguments`
 harness gateway pass the same exception to `tool_failure`, so one refusal has
 one category on both paths.
 
+Butler discovery and invocation reject an unlisted operation, an incorrect
+read/change route, or an invalid nested `arguments` object before dispatch.
+These return `invalid_arguments`, `side_effects: none`, and a fixed instruction
+in `next_action`. An unlisted operation tells the assistant to search the
+Butler catalog by intent, describe a returned action, and invoke that action
+with its advertised tool and input schema. A separately offered `work_list`
+tool is the route for Work items; a harness `work.list` name is not a Butler
+operation. If neither route is offered, the assistant must report that it
+could not read fresh state. These messages never echo the attempted operation,
+nested arguments, or the original exception.
+
 ## Subagent, agent-messaging and catalog refusals
 
 | Refusal | Category |
