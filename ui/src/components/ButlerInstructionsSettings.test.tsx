@@ -1,4 +1,4 @@
-import {render, screen, waitFor} from "@testing-library/react";
+import {render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {describe, expect, it, vi} from "vitest";
 import type {ApiClient} from "../api/client";
@@ -11,6 +11,16 @@ vi.mock("./CodeMirrorSurface", () => ({
 const path = "/data/nebula/.butler/BUTLER.md";
 
 describe("ButlerInstructionsSettings", () => {
+  it("opens the editable file directly after Core loads a Settings popup request", async () => {
+    const ready = {path, status: "ready", content: "Inspect Act projects.", sha256: "a".repeat(64), detail: null};
+    const request = vi.fn().mockResolvedValue(ready);
+    render(<ButlerInstructionsSettings api={{request} as unknown as ApiClient} openEditorOnLoad />);
+    const editor = await screen.findByRole("dialog", {name: "BUTLER.md"});
+    expect(within(editor).getByRole("textbox", {name: "BUTLER.md"})).toHaveValue("Inspect Act projects.");
+    expect(within(editor).getByRole("button", {name: "Edit Markdown"})).toHaveAttribute("aria-pressed", "true");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("creates the user file and confirms Core's readback before showing saved", async () => {
     const user = userEvent.setup();
     const missing = {path, status: "missing", content: null, sha256: null, detail: null};

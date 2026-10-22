@@ -14,7 +14,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-instructions",
     label: "Nebula-wide Butler instructions",
-    description: "Upload or edit the Nebula-wide BUTLER.md file and check its status",
+    description: "Open Nebula-wide BUTLER.md directly in the Markdown code editor, or upload a replacement",
     category: "Automation",
     scope: "Workspace",
     target: "butler-instructions-settings",

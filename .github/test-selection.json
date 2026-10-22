@@ -1,69 +1,27 @@
 {
-  "change_digest": "213d0040185907ef3c6b39c2313123477ff13861acfb819073bef45fa0ab5516",
-  "reviewed_by": "Codex focused E2E wiring review",
-  "reason": "Retain the merged Python planning, Butler, product-help, selector and provenance checks (100 collected cases), Voice browser regressions, restored planning/handoff/control-assistant entries and seven fixture journeys. Browser count107 is an estimate from previous collected selections, not the91 matrix entries. Register the eight model profiles, resolve the Poetry executable for direct-spawn fixtures, and isolate catch-up/deletion fault injection from service workers. Repair host-mode rollover cleanup so old-session activity cannot abort a newly submitted stream. Verify14 collected lifecycle/polling/status component cases and the eight host-mode profiles plus mobile WebKit LAN acceptance. Earlier focused verification covers38 selector tests, three synthetic planning cases, and catch-up/deletion across eight profiles plus LAN checks.",
-  "exclusions": "No full suites, live-provider runs, native changes, or physical-device tests. The real GPT-Live check remains opt-in. Preserve existing bounded selections; only the three frontend files relevant to stream ownership, polling and status are added. Synthetic fixtures use disposable Core data and production UI. Local environment edits are unrelated and excluded from the intended commit digest. Remote CI is not claimed green until it runs these changes.",
+  "change_digest": "90550557601ce4b32e5cc9ad2dde91eb0f6d05766ef889ad657f6c3279020765",
+  "reviewed_by": "Codex focused Butler settings navigation review",
+  "reason": "Exercise direct editable BUTLER.md entry from the Settings lens, editor stacking and Core readback, then open the saved Butler session with its Full Assistant settings panel. Cover the affected component actions, assistant setting discovery, bundled product-help digest and Chroma synchronization, and all eight permanent desktop/mobile real-Core profiles.",
+  "exclusions": "No full suites, live provider turns, native changes, unrelated SessionsPage or Butler workflows, or physical-device tests. Shared UI files and the real-core spec make automatic impact broad, so the catalogued Butler settings navigation journey was explicitly reviewed and selected. Disposable LAN fixtures use only synthetic data and an inert harness.",
   "expected_tests": {
-    "python": 100,
-    "frontend": 14,
+    "python": 4,
+    "frontend": 58,
     "native": 0,
-    "playwright": 107
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_chat_planning.py",
-    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
-    "tests/v3/test_control_assistant_work.py::test_immediate_guidance_steers_active_harness_and_holds_active_provider",
-    "tests/v3/test_control_assistant_work.py::test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue",
-    "tests/v3/test_control_assistant_work.py::test_selected_harness_chat_can_be_steered_and_stopped",
-    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_direct_butler_editor_navigation",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/test_playwright_impact.py",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_chat_planning_guidance",
-    "tests/v3/test_turn_write_amplification.py",
-    "tests/v3/test_workspace_provenance.py"
+    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans"
   ],
   "frontend": [
-    "ui/src/pages/chatStreamLifecycle.test.ts",
-    "ui/src/pages/harnessActivityPolling.test.ts",
-    "ui/src/components/HarnessStatusRail.test.tsx"
+    "ui/src/components/ButlerInstructionsSettings.test.tsx",
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:nebula-voice/desktop",
-    "entry:nebula-voice/compact",
-    "entry:nebula-voice/mobile-chromium-small",
-    "entry:nebula-voice/mobile-chromium-ledger-390",
-    "entry:nebula-voice/mobile-chromium-wide",
-    "entry:nebula-voice/mobile-webkit-small",
-    "entry:nebula-voice/mobile-webkit",
-    "entry:nebula-voice/mobile-webkit-wide",
-    "entry:nebula-voice/assistant-real-desktop",
-    "entry:nebula-voice/assistant-real-chromium-390",
-    "entry:nebula-voice/assistant-real-webkit-390",
-    "entry:nebula-voice-live/assistant-real-desktop",
-    "area:assistant-browser-viewer",
-    "area:catch-up",
-    "area:host-mode",
-    "area:project-deletion",
-    "area:working-knowledge",
-    "area:workspace-quota",
-    "area:workspace-recovery",
-    "entry:chat-planning/assistant-real-desktop",
-    "entry:chat-planning/assistant-real-compact",
-    "entry:chat-planning/assistant-real-chromium-320",
-    "entry:chat-planning/assistant-real-chromium-390",
-    "entry:chat-planning/assistant-real-chromium-430",
-    "entry:chat-planning/assistant-real-webkit-320",
-    "entry:chat-planning/assistant-real-webkit-390",
-    "entry:chat-planning/assistant-real-webkit-430",
-    "entry:goal-handoff/assistant-real-desktop",
-    "entry:control-assistant-work/assistant-real-desktop",
-    "entry:control-assistant-work/assistant-real-chromium-390",
-    "entry:control-assistant-work/assistant-real-webkit-390"
-  ],
-  "python_node": true,
-  "python_versions": [
-    "3.12"
+    "area:butler-settings-navigation"
   ]
 }

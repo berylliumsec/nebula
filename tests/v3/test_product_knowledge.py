@@ -107,6 +107,19 @@ def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
     )
 
 
+def test_product_search_finds_direct_butler_editor_navigation(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I edit Butler instructions from the Settings popup?"
+    )
+    assert any(
+        "butler" in str(item["text"]).lower()
+        and "code editor" in str(item["text"]).lower()
+        and "settings popup" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_explains_butler_conversation_grouping(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

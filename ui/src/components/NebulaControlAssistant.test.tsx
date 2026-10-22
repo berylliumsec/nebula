@@ -535,7 +535,7 @@ describe("NebulaControlAssistant", () => {
     }), expect.any(Function), expect.any(AbortSignal)));
     await user.click(screen.getByRole("button", {name: "More"}));
     await user.click(screen.getByRole("button", {name: "Full Assistant settings"}));
-    expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
+    expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control&assistantSettings=open");
   });
 
   it("lets Butler choose first-turn settings before a saved conversation exists", async () => {
