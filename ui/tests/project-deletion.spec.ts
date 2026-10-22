@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+// Keep the simulated deletion conflict observable in service-worker-capable browsers.
+test.use({ serviceWorkers: "block" });
+
 test("archived project deletion confirms, persists and preserves its linked folder", async ({ page, request }, info) => {
   const api = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}/api/v1`;
   const headers = { Authorization: "Bearer model-test-token" };
@@ -44,8 +47,13 @@ test("archived project deletion confirms, persists and preserves its linked fold
     if (route.request().method() === "DELETE") await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Project has queued follow-ups. Restore it and clear the queue before deleting." }) });
     else await route.continue();
   });
+  const rejectedDelete = page.waitForResponse(response =>
+    new URL(response.url()).pathname === `/api/v1/engagements/${project.id}` &&
+    response.request().method() === "DELETE" && response.status() === 409);
   await dialog.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await rejectedDelete;
   await expect(page.getByRole("alert").filter({ hasText: "clear the queue" })).toBeVisible();
+  expect((await request.get(`${api}/engagements/${project.id}`, { headers })).status()).toBe(200);
   await page.unroute(`**/api/v1/engagements/${project.id}`);
   await page.getByRole("button", { name: `Delete project ${name}`, exact: true }).click();
   await dialog.getByRole("button", { name: "Delete permanently", exact: true }).click();

@@ -211,6 +211,14 @@ def test_full_manifest_covers_every_permanent_playwright_project():
         "mobile-webkit",
         "mobile-webkit-wide",
         "real-core",
+        "model-desktop",
+        "model-compact",
+        "model-chromium-320",
+        "model-chromium-390",
+        "model-chromium-430",
+        "model-webkit-320",
+        "model-webkit-390",
+        "model-webkit-430",
     }
     assert {entry["project"] for entry in MANIFEST["full_include"]} == expected
     assert {

@@ -1,11 +1,11 @@
 {
-  "change_digest": "71331d1f3e0a13e266026f85c4f23133ac1d93e68310b2019c9669270be8f61d",
+  "change_digest": "213d0040185907ef3c6b39c2313123477ff13861acfb819073bef45fa0ab5516",
   "reviewed_by": "Codex focused E2E wiring review",
-  "reason": "Repair the merged selection while retaining its Python planning, Butler guidance, product-help, CI-selector and workspace-provenance checks, the Voice browser regression entries, and the seven newly registered fixture journeys. Restore the twelve planning, goal-handoff and control-assistant browser entries misplaced under python_versions. Python collection confirms 100 cases. Browser count is an estimate of 107 from the previously recorded 71 Voice/fixture cases plus 36 planning/handoff/control-assistant cases; matrix entry counts are not test counts. Reviewed the 13-file CI-wiring diff against PR baseline 39a21abb3e3b02b14954b84c2022e429078fb348.",
-  "exclusions": "Bounded combined selection, not a full suite. Preserve the merged plan's empty frontend and native selections: this branch changes CI/test configuration and existing E2E specs, not product components or native code. Unrelated journeys, physical devices and installed desktop testing remain excluded. The real GPT-Live check remains opt-in via NEBULA_LIVE_VOICE_CHECK=1. This repair validates JSON, selection and matrix generation; it does not claim that selected test bodies pass.",
+  "reason": "Retain the merged Python planning, Butler, product-help, selector and provenance checks (100 collected cases), Voice browser regressions, restored planning/handoff/control-assistant entries and seven fixture journeys. Browser count107 is an estimate from previous collected selections, not the91 matrix entries. Register the eight model profiles, resolve the Poetry executable for direct-spawn fixtures, and isolate catch-up/deletion fault injection from service workers. Repair host-mode rollover cleanup so old-session activity cannot abort a newly submitted stream. Verify14 collected lifecycle/polling/status component cases and the eight host-mode profiles plus mobile WebKit LAN acceptance. Earlier focused verification covers38 selector tests, three synthetic planning cases, and catch-up/deletion across eight profiles plus LAN checks.",
+  "exclusions": "No full suites, live-provider runs, native changes, or physical-device tests. The real GPT-Live check remains opt-in. Preserve existing bounded selections; only the three frontend files relevant to stream ownership, polling and status are added. Synthetic fixtures use disposable Core data and production UI. Local environment edits are unrelated and excluded from the intended commit digest. Remote CI is not claimed green until it runs these changes.",
   "expected_tests": {
     "python": 100,
-    "frontend": 0,
+    "frontend": 14,
     "native": 0,
     "playwright": 107
   },
@@ -23,7 +23,11 @@
     "tests/v3/test_turn_write_amplification.py",
     "tests/v3/test_workspace_provenance.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/chatStreamLifecycle.test.ts",
+    "ui/src/pages/harnessActivityPolling.test.ts",
+    "ui/src/components/HarnessStatusRail.test.tsx"
+  ],
   "native": [],
   "playwright": [
     "entry:nebula-voice/desktop",

@@ -206,7 +206,7 @@ import {
   shouldShowActivityItem,
   type HarnessActivityItem,
 } from "./harnessActivity";
-import { beginGuardedStream, detachChatStream } from "./chatStreamLifecycle";
+import { beginGuardedStream, detachChatStream, harnessActivityOwnsStream } from "./chatStreamLifecycle";
 import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } from "./turnElapsed";
 import {
   cancelActiveAssistantMessage,
@@ -2466,6 +2466,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       ? ["complete", "failed", "cancelled", "interrupted"].includes(harnessActivity.turnStatus)
       : !harnessActivity.busy;
     if (!terminal) return;
+    if (abortRef.current && !harnessActivityOwnsStream(
+      harnessActivity, streamBackendRef.current, harnessProgress?.turnId,
+    )) return;
     setResolvedApproval(undefined);
     detachActiveChatStream();
     harnessFollowDetachRef.current?.();
@@ -2474,7 +2477,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setPendingResponse(undefined);
     setInterruptedRecovery(undefined);
     setSending(false);
-  }, [harnessActivity, resolvedApproval]);
+  }, [harnessActivity, resolvedApproval, harnessProgress?.turnId]);
 
   useEffect(() => {
     let active = true;
