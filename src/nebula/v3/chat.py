@@ -356,6 +356,7 @@ from .tool_failures import (
     failure_receipt_text,
     tool_failure,
     unavailable_tool_failure,
+    with_failed_result_receipt,
 )
 
 if TYPE_CHECKING:
@@ -11797,6 +11798,7 @@ class ChatService:
         model_result = result.model_result()
         receipt = result.receipt
         if self._tool_result_failed(result) and spec is not None:
+            cause = getattr(result, "failure_error", None)
             failure = tool_failure(
                 spec,
                 arguments or {},
@@ -11805,17 +11807,26 @@ class ChatService:
                 or (receipt and receipt.status == ToolResultStatus.TIMED_OUT)
                 else asyncio.CancelledError("tool execution was cancelled")
                 if receipt and receipt.status == ToolResultStatus.CANCELLED
+                else cause
+                if isinstance(cause, BaseException)
                 else RuntimeError(
                     f"tool execution returned {receipt.status.value if receipt else result.exit_code}; "
                     f"receipt={model_result!r}"
                 ),
-                phase="after_execution",
+                phase=(
+                    "before_execution"
+                    if isinstance(cause, BaseException)
+                    and getattr(cause, "_nebula_before_execution", False)
+                    else "after_execution"
+                ),
                 call_id=call_id,
             )
-            failure["result_receipt"] = {
-                "artifact_id": result.result_artifact_id,
-                "status": receipt.status.value if receipt else "failed",
-            }
+            if receipt is not None:
+                failure = with_failed_result_receipt(
+                    failure,
+                    receipt.as_model_result(),
+                    artifact_id=result.result_artifact_id,
+                )
             model_result = failure
         waiting_callback = bool(receipt and receipt.results_url and receipt.process_id)
         fields = {

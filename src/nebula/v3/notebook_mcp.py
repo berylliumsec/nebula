@@ -13,8 +13,15 @@ from .domain import (
     McpTransport,
     utc_now,
 )
-from .notebooks import NotebookService, NotebookError
+from .notebooks import (
+    NotebookConflict,
+    NotebookError,
+    NotebookPermissionRequired,
+    NotebookRuntimeUnavailable,
+    NotebookService,
+)
 from .storage import NebulaStore, NotFoundError
+from .tools import GuidedToolError
 
 
 def profile_id(project_id: str) -> str:
@@ -31,7 +38,12 @@ def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
 
 
 TEXT = {"type": "string"}
-PATH = {"type": "string", "minLength": 1, "maxLength": 4096}
+PATH = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 4096,
+    "description": "A project-relative path ending in .ipynb; use list to find an existing notebook.",
+}
 TOOLS = (
     (
         "status",
@@ -203,11 +215,109 @@ class NotebookMcpTools:
     async def call_tool(
         self, project_id: str, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        try:
+            profile = self.store.get(McpServerProfile, profile_id(project_id))
+        except NotFoundError as exc:
+            raise GuidedToolError(
+                str(exc),
+                code="notebook.grant_unavailable",
+                category="unavailable_resource",
+                problem="Notebook MCP is not available in this Project; no action ran.",
+                next_action="Ask the operator to enable Notebook tools for this Project, or use another offered tool.",
+                before_execution=True,
+            ) from exc
+        if not profile.enabled or profile.metadata.get("engagement_id") != project_id:
+            raise GuidedToolError(
+                "Notebook MCP grant was revoked",
+                code="notebook.grant_revoked",
+                category="permission_denied",
+                problem="Notebook MCP grant was revoked; no action ran.",
+                next_action="Ask the operator to restore the Project Notebook grant; do not retry unchanged.",
+                before_execution=True,
+            )
+        path_tools = {
+            "read",
+            "create",
+            "edit_cell",
+            "execute",
+            "restart",
+            "install_package",
+            "search_package",
+        }
+        if name in path_tools:
+            path = arguments.get("path")
+            if not isinstance(path, str) or not path:
+                raise GuidedToolError(
+                    "Notebook path is missing or invalid",
+                    code="notebook.path_invalid",
+                    category="invalid_arguments",
+                    field="path",
+                    problem="A project-relative .ipynb path is required; no action ran.",
+                    next_action="Use Notebook list to find an existing path, or supply a project-relative .ipynb path to create. Correct path before calling again.",
+                    before_execution=True,
+                )
+            try:
+                self.notebooks.documents.path(project_id, path)
+            except NotebookError as exc:
+                raise GuidedToolError(
+                    str(exc),
+                    code="notebook.path_invalid",
+                    category="invalid_arguments",
+                    field="path",
+                    problem="Notebook path must be project-relative, end in .ipynb, and stay inside the project workspace; no action ran.",
+                    next_action="Use Notebook list to find an existing path, or supply a project-relative .ipynb path to create. Correct path before calling again.",
+                    before_execution=True,
+                ) from exc
+        try:
+            return await self._call_tool_unwrapped(project_id, name, arguments)
+        except NotebookPermissionRequired as exc:
+            raise GuidedToolError(
+                str(exc),
+                code="notebook.permission_required",
+                category="permission_denied",
+                problem="Notebook execution or package access needs an operator permission or consent.",
+                next_action="Read Notebook status and ask the operator to enable the required Project notebook access. Do not retry unchanged.",
+            ) from exc
+        except NotebookRuntimeUnavailable as exc:
+            raise GuidedToolError(
+                str(exc),
+                code="notebook.runtime_unavailable",
+                category="unavailable_dependency",
+                problem="The selected Project notebook runtime is unavailable.",
+                next_action="Read Notebook status, inspect the selected Project runtime, and retry only after it is available. Check run state first.",
+            ) from exc
+        except NotebookConflict as exc:
+            raise GuidedToolError(
+                str(exc),
+                code="notebook.conflict",
+                category="execution_failed",
+                problem="The notebook, cell, or kernel state changed or is busy.",
+                next_action="Read the notebook and current run status, then use the latest revision or wait for the active cell before a new call.",
+            ) from exc
+        except NotebookError as exc:
+            raise GuidedToolError(
+                str(exc),
+                code="notebook.state_invalid",
+                category="execution_failed",
+                problem="The notebook request could not use the current file or run state.",
+                next_action="Read Notebook status and the current notebook or run, then correct the path, cell, revision, or package name using the tool usage. Check state before retrying.",
+            ) from exc
+
+    async def _call_tool_unwrapped(
+        self, project_id: str, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         # The gateway checks the live profile grant as well; this service never
         # accepts a project ID supplied by the model in tool arguments.
         profile = self.store.get(McpServerProfile, profile_id(project_id))
         if not profile.enabled or profile.metadata.get("engagement_id") != project_id:
-            raise NotebookError("Notebook MCP grant was revoked")
+            raise GuidedToolError(
+                "Notebook MCP grant was revoked during dispatch",
+                code="notebook.grant_revoked",
+                category="permission_denied",
+                problem="Notebook MCP grant was revoked; no action ran.",
+                next_action="Ask the operator to restore the Project Notebook grant; do not retry unchanged.",
+                before_execution=True,
+            )
         path_value = arguments.get("path")
         if path_value is not None and not isinstance(path_value, str):
             raise NotebookError("notebook path must be a string")

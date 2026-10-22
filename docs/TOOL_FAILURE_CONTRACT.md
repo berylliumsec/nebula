@@ -1,15 +1,21 @@
 # Assistant tool failures
 
-`nebula.tool-failure/v1` is the model-facing failure envelope. It carries the
-effective input schema for the call when the schema fits within 4 KiB. Larger
-schemas carry the relevant field, a SHA-256 schema reference, and
-`schema_truncated: true`. The complete effective schema and original exception
-are stored in Core's `tool-failure-diagnostics` directory under a random
-diagnostic reference. That directory is mode 0700 and its records are mode 0600.
-The model receives no argument values, exception text, paths, or diagnostic
-record contents through this envelope. `diagnostic_available` states whether the
-protected record was actually written; the reference remains usable for the
-public diagnostic event when private storage is unavailable.
+`nebula.tool-failure/v1` is the model-facing failure envelope for Core-owned
+tools. It carries the actual offered tool description, required argument names,
+and effective input schema, plus a Core-authored problem and next action. The
+schema is inline when it fits within 4 KiB. Larger schemas carry the relevant
+field, a SHA-256 schema reference, and `schema_truncated: true`. The whole
+envelope stays within the 8 KiB model-result limit; optional previews and long
+descriptions are reduced before the schema or recovery instruction.
+
+The complete effective schema and original exception are stored in Core's
+`tool-failure-diagnostics` directory under a random diagnostic reference. That
+directory is mode 0700 and its records are mode 0600. The model receives no
+argument values, raw exception text, paths from exceptions, or diagnostic
+record contents through this envelope. A failed tool-result receipt may supply
+its existing bounded, redacted output preview and searchable artifact IDs;
+those are labeled untrusted tool output. `diagnostic_available` states whether
+the protected record was written.
 
 | Source | Assistant-visible tools | Schema owner | Failure handoff |
 | --- | --- | --- | --- |
@@ -31,9 +37,11 @@ Core writes them, and none holds tool or exception text.
 | `status` | `failed` |
 | `tool` | the name the model called |
 | `category` | one of the categories below |
+| `error_code` | a stable Core code for a known built-in refusal, or `null` |
 | `problem` | Core's fixed sentence for the category |
 | `side_effects` | `none` or `unknown` |
 | `invalid_input` | the argument at fault, or `null` |
+| `usage` | bounded offered tool description, required argument names, and declaration source; `null` when the tool was never offered |
 | `effective_input_schema` | the schema offered for the call (see above), or `null` |
 | `schema_truncated` | `true` when only the relevant field is repeated |
 | `schema_reference` | `<tool>@<version>:sha256:<digest>` of the full schema, or `null` |
@@ -42,7 +50,8 @@ Core writes them, and none holds tool or exception text.
 | `diagnostic_reference` | the protected record's reference, or `null` |
 | `diagnostic_available` | whether that record was written |
 | `limit` | only for `capacity_reached` and `budget_exhausted` (below) |
-| `result_receipt` | only when a tool returned a failed receipt: `{artifact_id, status}` |
+| `result_receipt` | only for a failed Core receipt: status, tool call ID, receipt artifact ID, safe summary and preview, and searchable output artifact IDs when available |
+| `available_tools` | bounded offered names when a gateway call used an unavailable tool |
 
 `limit` is `{"resource": <name>, "maximum": <int>, "current": <int>}`: the
 limit that refused the call and how much of it is in use, as Core's own
@@ -60,6 +69,7 @@ cannot.
 | Category | Meaning | Guidance (`next_action`) | Retry |
 | --- | --- | --- | --- |
 | `invalid_arguments` | An argument is wrong | Correct the argument from the schema, then reissue | After correcting it, when refused before execution |
+| `conflict` | A selected item or revision changed | Read fresh state and verify the earlier effect before a new call | No unchanged retry |
 | `capacity_reached` | Running work holds every slot a limit allows | Wait for running work to finish, then retry this call | Yes, after waiting (`retry_safe: true`) |
 | `budget_exhausted` | An allowance the call needs is used up; waiting does not restore it | Do not retry; continue with what is available, or tell the operator | No |
 | `permission_denied` | A setting, access or approval rule refuses the call | Request access or choose an authorized action; do not repeat | No |
@@ -77,10 +87,19 @@ the capability is one of the bounded read-only retrievers; otherwise it is
 `unknown`. A `capacity_reached` or `budget_exhausted` refusal is always refused
 before execution, whichever path reports it. `retry_safe` is `true` only when
 `side_effects` is `none` and the category is not `permission_denied`,
-`unavailable_resource` or `budget_exhausted`. A call with unknown effects has
+`unavailable_resource`, `unavailable_tool` or `budget_exhausted`. A call with unknown effects has
 `retry_safe: false` and tells the assistant to inspect recorded state before
 issuing another call. Missing and unauthorized resources use the same public
 description, so the result cannot reveal whether a resource exists elsewhere.
+
+When a command or MCP call returns a failed `nebula.tool-result/v2` receipt,
+Core keeps the receipt's `tool_call_id`, bounded output preview, and searchable
+artifact IDs in `result_receipt`. The model can use `tool_output.search` with
+`tool_call_id` or `tool_output.read` with a searchable output artifact ID if
+those tools are offered. The receipt artifact ID itself is an audit reference,
+not a searchable output artifact. The preview is data from the tool, never an
+operator instruction. For unknown side effects, inspecting output does not
+authorize repeating the call; the assistant must check recorded state first.
 
 Brokers classify by exception type, not by message: `InvalidToolArguments`
 (and schema `ValidationError`), `CapacityReached`, `BudgetExhausted`,
@@ -88,6 +107,34 @@ Brokers classify by exception type, not by message: `InvalidToolArguments`
 `refused_before_execution` in `nebula.v3.tools`. The provider-chat loop and the
 harness gateway pass the same exception to `tool_failure`, so one refusal has
 one category on both paths.
+
+Butler discovery and invocation reject an unlisted operation, an incorrect
+read/change route, or an invalid nested `arguments` object before dispatch.
+These return `invalid_arguments`, `side_effects: none`, and a fixed instruction
+in `next_action`. An unlisted operation tells the assistant to search the
+Butler catalog by intent, describe a returned action, and invoke that action
+with its advertised tool and input schema. A separately offered `work_list`
+tool is the route for Work items; a harness `work.list` name is not a Butler
+operation. If neither route is offered, the assistant must report that it
+could not read fresh state. These messages never echo the attempted operation,
+nested arguments, or the original exception.
+
+Notebook and Security Tools are Core-owned built-in MCPs. Their offered
+declarations include the built-in profile's usage instruction. Notebook path
+refusals explain the project-relative `.ipynb` rule and identify `path`; a
+missing headless Security Tools session tells the assistant to read `status`
+and use an authorized `navigate` call to start it. Notebook conflict, consent,
+and runtime failures give distinct Core-authored recovery steps. A disabled
+MCP server, revoked grant, unavailable built-in service, and schema rejection
+have stable codes and instructions. Only pre-dispatch checks prove
+`side_effects: none`; a conflict or runtime error after execution begins keeps
+`side_effects: unknown`.
+Security Tools also maps known static session and proxy refusals to specific
+codes and recovery actions; an unrecognized runtime `ValueError` receives a
+safe status-and-state instruction, not raw exception text. Bounded output query
+errors name the field to correct, while a Work revision conflict tells the
+assistant to read the current item and verify the prior effect before a new
+call.
 
 ## Subagent, agent-messaging and catalog refusals
 
@@ -127,5 +174,7 @@ has no Nebula goal, so `goal_tokens` only reaches provider chats.
 Vendor-native tools run inside the provider harness. Nebula does not receive
 their effective input schemas or control the result returned by that SDK to its
 model. Those failures remain provider-owned until the harness offers a schema
-and result interception contract. Core gateway tools and brokered tools follow
-the shared contract.
+and result interception contract. Selected third-party MCP tools use the
+offered description and schema in this contract, but their own error text is
+untrusted and cannot be promoted to a Core-authored correction. Core gateway
+tools, brokered tools, and built-in MCPs follow the shared contract.

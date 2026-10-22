@@ -44,6 +44,8 @@ from nebula.v3.domain import (
 )
 from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tool_failures import FAILURE_SCHEMA, tool_failure
+from nebula.v3.tools import CapabilityInputError
 
 
 def _capabilities(tmp_path):
@@ -703,7 +705,7 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             arguments = {"session_id": own_chat.id, "text": "Check the proof gate"}
             if delivery is not None:
                 arguments["delivery"] = delivery
-            with pytest.raises(ValueError, match="invalid arguments"):
+            with pytest.raises(CapabilityInputError, match="invalid arguments"):
                 await global_butler.invoke(
                     {"operation": "nebula.work.message_chat", "arguments": arguments},
                     change=True,
@@ -1030,6 +1032,96 @@ def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path
     asyncio.run(scenario())
 
 
+def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):
+    _, _, _, _, capabilities = _capabilities(tmp_path)
+    spec = next(
+        plugin.spec
+        for plugin in capabilities.plugins()
+        if plugin.spec.name == "nebula.capabilities.read"
+    )
+    attempted = {
+        "operation": "work.list",
+        "arguments": {"project_name": "private-project"},
+    }
+
+    async def scenario():
+        with pytest.raises(CapabilityInputError) as caught:
+            await capabilities.invoke(attempted, change=False)
+        return caught.value
+
+    error = asyncio.run(scenario())
+    assert error.reason == "unlisted_operation"
+    assert error._nebula_before_execution is True
+    failure = tool_failure(spec, attempted, error, phase="before_execution")
+    assert failure["schema"] == FAILURE_SCHEMA
+    assert failure["category"] == "invalid_arguments"
+    assert failure["invalid_input"] == "operation"
+    assert failure["side_effects"] == "none"
+    assert failure["retry_safe"] is True
+    assert failure["problem"] == (
+        "The operation is not in this Butler's capability catalog; no action ran."
+    )
+    assert failure["next_action"] == (
+        "Do not repeat this operation. Call nebula.capabilities.search with the task intent, "
+        "then nebula.capabilities.describe for a returned operation. Invoke it with "
+        "the described arguments and invoke_with tool. For Work items, use the "
+        "separate work_list tool if it is offered. If no matching action or tool "
+        "is available, report that fresh state could not be read."
+    )
+    assert "work.list" not in str(failure)
+    assert "private-project" not in str(failure)
+    assert failure["effective_input_schema"] == spec.input_schema
+
+
+def test_butler_pre_dispatch_errors_name_the_repair(tmp_path):
+    _, _, own_chat, _, capabilities = _capabilities(tmp_path)
+    specs = {plugin.spec.name: plugin.spec for plugin in capabilities.plugins()}
+
+    async def scenario():
+        cases = [
+            (
+                "nebula.capabilities.change",
+                {
+                    "operation": "nebula.work.chat",
+                    "arguments": {"session_id": own_chat.id},
+                },
+                True,
+                "use_read",
+                "operation",
+                "nebula.capabilities.read",
+            ),
+            (
+                "nebula.capabilities.read",
+                {"operation": "nebula.work.update_chat", "arguments": {}},
+                False,
+                "use_change",
+                "operation",
+                "nebula.capabilities.change",
+            ),
+            (
+                "nebula.capabilities.read",
+                {"operation": "nebula.work.chat", "arguments": {}},
+                False,
+                "invalid_action_arguments",
+                "arguments",
+                "input_schema",
+            ),
+        ]
+        for tool, attempted, change, reason, field, guidance in cases:
+            with pytest.raises(CapabilityInputError) as caught:
+                await capabilities.invoke(attempted, change=change)
+            assert caught.value.reason == reason
+            failure = tool_failure(
+                specs[tool], attempted, caught.value, phase="before_execution"
+            )
+            assert failure["category"] == "invalid_arguments"
+            assert failure["invalid_input"] == field
+            assert failure["side_effects"] == "none"
+            assert guidance in failure["next_action"]
+
+    asyncio.run(scenario())
+
+
 def test_butler_change_routes_validate_schema_revision_and_project(tmp_path):
     store, _, own_chat, foreign_chat, capabilities = _capabilities(tmp_path)
 
@@ -1043,9 +1135,9 @@ def test_butler_change_routes_validate_schema_revision_and_project(tmp_path):
                 "title": "Sources review",
             },
         }
-        with pytest.raises(ValueError, match="capabilities.change"):
+        with pytest.raises(CapabilityInputError, match="capabilities.change"):
             await capabilities.invoke(payload, change=False)
-        with pytest.raises(ValueError, match="exact schema"):
+        with pytest.raises(CapabilityInputError, match="exact schema"):
             await capabilities.invoke(
                 {"operation": operation, "arguments": {"session_id": own_chat.id}},
                 change=True,
@@ -1127,10 +1219,11 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
     )
 
     async def scenario():
-        with pytest.raises(ValueError, match="listed operation"):
+        with pytest.raises(CapabilityInputError, match="listed operation"):
             await background.describe({"operation": "nebula.settings.set_device_theme"})
-        with pytest.raises(ValueError, match="listed operation"):
-            await background.describe({"operation": "nebula.work.delete_chat"})
+        assert (await background.describe({"operation": "nebula.work.delete_chat"}))[
+            "invoke_with"
+        ] == "nebula.capabilities.change"
         with pytest.raises(ValueError, match="main chat"):
             await background.invoke(
                 {
@@ -1138,7 +1231,7 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
                     "arguments": {
                         "session_id": child.id,
                         "text": "Retry work",
-                        "delivery": "next",
+                        "delivery": "immediate",
                     },
                 },
                 change=True,

@@ -192,9 +192,15 @@ from .tool_results import (
     ToolResultReceipt,
     WorkspaceOutputService,
 )
-from .tool_failures import FAILURE_SCHEMA, tool_failure, unavailable_tool_failure
+from .tool_failures import (
+    FAILURE_SCHEMA,
+    tool_failure,
+    unavailable_tool_failure,
+    with_failed_result_receipt,
+)
 from .tools import (
     ApprovalRequired,
+    GuidedToolError,
     InvalidToolArguments,
     PolicyDenied,
     StoreToolEvidenceRecorder,
@@ -15037,7 +15043,14 @@ class HarnessRuntimeService:
                     {
                         "name": gateway_name,
                         "description": (
-                            f"{tool.description}\n\nResults are captured by Nebula and returned "
+                            f"{tool.description}"
+                            + (
+                                f"\n{profile.capabilities.instructions}"
+                                if profile.transport == McpTransport.BUILTIN
+                                and profile.capabilities.instructions
+                                else ""
+                            )
+                            + "\n\nResults are captured by Nebula and returned "
                             "as nebula.tool-result/v2 receipts; use tool_output.search to inspect them."
                         )[:10_000],
                         "inputSchema": tool.input_schema,
@@ -15142,6 +15155,7 @@ class HarnessRuntimeService:
         """Normalize every gateway error before the harness model reads it."""
 
         offered = None
+        available_names: list[str] = []
         cursor = None
         seen_cursors: set[str] = set()
         try:
@@ -15151,6 +15165,11 @@ class HarnessRuntimeService:
                     session,
                     {"cursor": cursor} if cursor else None,
                     turn=turn,
+                )
+                available_names.extend(
+                    str(item.get("name"))
+                    for item in catalog["tools"]
+                    if isinstance(item, dict) and isinstance(item.get("name"), str)
                 )
                 offered = next(
                     (item for item in catalog["tools"] if item["name"] == name),
@@ -15180,7 +15199,9 @@ class HarnessRuntimeService:
             }
         if offered is None:
             failure = unavailable_tool_failure(
-                name, "gateway tool is absent from this session's offered catalog"
+                name,
+                "gateway tool is absent from this session's offered catalog",
+                available_tools=available_names,
             )
             return {
                 "content": [
@@ -15270,12 +15291,7 @@ class HarnessRuntimeService:
                 isinstance(receipt, dict)
                 and receipt.get("schema") == "nebula.tool-result/v2"
             ):
-                failure["result_receipt"] = {
-                    "artifact_id": receipt.get("artifacts", [{}])[0].get("artifact_id")
-                    if receipt.get("artifacts")
-                    else None,
-                    "status": receipt.get("status"),
-                }
+                failure = with_failed_result_receipt(failure, receipt)
             return {
                 "content": [
                     {"type": "text", "text": json.dumps(failure, sort_keys=True)}
@@ -16239,7 +16255,13 @@ class HarnessRuntimeService:
         )
         raw_result = ToolExecutionResult(
             output={},
-            stderr=_safe_error(failure) if failure is not None else "",
+            stderr=(
+                failure.problem
+                if isinstance(failure, GuidedToolError)
+                else "MCP tool failed; inspect the Core diagnostic reference."
+                if failure is not None
+                else ""
+            ),
             exit_code=1 if is_error else 0,
             mcp_content_blocks=blocks,
             execution={
@@ -16302,6 +16324,45 @@ class HarnessRuntimeService:
             expected_revision=latest.revision,
         )
         serialized = json.dumps(receipt.as_model_result(), sort_keys=True)
+        if failure is not None:
+            gateway_spec = spec.model_copy(
+                update={
+                    "name": name,
+                    "description": (
+                        tool.description
+                        + (
+                            f"\n{profile.capabilities.instructions}"
+                            if profile.transport == McpTransport.BUILTIN
+                            and profile.capabilities.instructions
+                            else ""
+                        )
+                    ),
+                    "input_schema": tool.input_schema,
+                }
+            )
+            public = tool_failure(
+                gateway_spec,
+                arguments,
+                failure,
+                phase=(
+                    "before_execution"
+                    if getattr(failure, "_nebula_before_execution", False)
+                    else "after_execution"
+                ),
+                call_id=call.id,
+            )
+            public = with_failed_result_receipt(
+                public,
+                receipt.as_model_result(),
+                artifact_id=recorded.result_artifact_id,
+            )
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(public, sort_keys=True)}
+                ],
+                "structuredContent": public,
+                "isError": True,
+            }
         return {
             "content": [{"type": "text", "text": serialized}],
             "structuredContent": receipt.as_model_result(),
