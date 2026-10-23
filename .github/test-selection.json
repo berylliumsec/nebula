@@ -1,24 +1,33 @@
 {
-  "change_digest": "4384d3ee44ee46fd17a84a99d2b230b0615fb23170d0a331f86291efc65b48a4",
-  "reviewed_by": "Codex workspace provenance scale review",
-  "reason": "The provenance persistence change replaces full historical observation reads with shared path chunks and indexed ownership. The selected tests cover exact and uncertain attribution, old-record cutover, schema upgrade without backfill, project deletion, restart, large dirty checkouts and database growth, turn and tool hook integration, the protected API write boundary, and SQLite and PostgreSQL migration paths.",
-  "exclusions": "No full suites. Frontend, native, and Playwright tests are excluded because there are no UI controls, browser state, native code, or HTTP contract changes. The changed hook journey was checked separately through a disposable authenticated LAN Core with synthetic data. Unrelated automation and chat tests do not exercise this ledger.",
+  "change_digest": "5dcdecd939ad40a86be3a8c81432a1ead2966790f5f21c646e09a96540adb09a",
+  "reviewed_by": "Codex Butler native iPhone view review",
+  "reason": "The iPhone app now gives Butler the visual viewport, keeps its composer and controls inside safe areas, and makes saved response tables readable at phone widths. The selected component tests check app-only modal presentation, focus recovery and existing Butler behavior. The iPhone shell browser journey covers the exact entry, portrait and landscape geometry, saved table rendering, and return to analyst chat. Disposable production LAN Core checks cover authenticated pairing, reconnect, and durable Butler table reload.",
+  "exclusions": "No full suites. Python and native tests are excluded because no Core API, persistence schema, or native code changes. Other Butler catalog areas exercise provider, oversight, settings, and chat operations unaffected by this presentation fix. Physical iPhone testing is unavailable in this workspace and is reported separately.",
   "expected_tests": {
-    "python": 22,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 44,
     "native": 0,
-    "playwright": 0
+    "playwright": 14
   },
-  "python": [
-    "tests/v3/test_workspace_provenance.py",
-    "tests/v3/test_turn_write_amplification.py::test_turn_workspace_provenance_keeps_the_event_loop_running",
-    "tests/v3/test_turn_write_amplification.py::test_turn_workspace_provenance_is_skipped_for_tool_only_hooks",
-    "tests/v3/test_automation_runtime.py::test_command_tools_run_automatic_project_hooks_before_and_after",
-    "tests/v3/test_automation_runtime.py::test_blocking_before_hook_denies_command_before_runtime_execution",
-    "tests/v3/test_generic_crud_exposure.py::test_workspace_provenance_receipts_cannot_be_forged_or_edited",
-    "tests/v3/test_migrations.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/NebulaControlAssistant.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "butler-response-table/assistant-real-webkit-390",
+    "ios-assistant-only/assistant-real-chromium-390",
+    "ios-assistant-only/assistant-real-desktop",
+    "ios-assistant-only/assistant-real-webkit-390",
+    "ios-assistant-only/browser-chromium-landscape",
+    "ios-assistant-only/browser-webkit-landscape",
+    "ios-assistant-only/compact",
+    "ios-assistant-only/desktop",
+    "ios-assistant-only/mobile-chromium",
+    "ios-assistant-only/mobile-chromium-small",
+    "ios-assistant-only/mobile-chromium-wide",
+    "ios-assistant-only/mobile-webkit",
+    "ios-assistant-only/mobile-webkit-small",
+    "ios-assistant-only/mobile-webkit-wide"
+  ]
 }

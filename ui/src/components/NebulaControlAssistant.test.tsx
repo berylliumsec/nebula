@@ -25,6 +25,30 @@ describe("NebulaControlAssistant", () => {
     vi.mocked(useWorkspace).mockReturnValue({ api: undefined, engagement: undefined, providers: [], harnesses: [] } as unknown as ReturnType<typeof useWorkspace>);
   });
 
+  it("makes Butler the active iPhone app view and restores focus on close", async () => {
+    const originalAgent = Object.getOwnPropertyDescriptor(navigator, "userAgent");
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "Mozilla/5.0 (iPhone) NebulaShell/1.0" });
+    try {
+      const user = userEvent.setup();
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+        <div className="assistant-only-shell"><NebulaAssistantLauncherButton mobile /></div>
+      </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+      const launcher = screen.getByRole("button", { name: "Open Butler" });
+      await user.click(launcher);
+      const dialog = screen.getByRole("dialog", { name: "Butler" });
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+      expect(dialog).toHaveFocus();
+      expect(document.querySelector<HTMLElement>(".assistant-only-shell")?.inert).toBe(true);
+      expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveAttribute("placeholder", "Message Butler…");
+      await user.click(screen.getByRole("button", { name: "Close Butler" }));
+      expect(document.querySelector<HTMLElement>(".assistant-only-shell")?.inert).toBe(false);
+      expect(launcher).toHaveFocus();
+    } finally {
+      if (originalAgent) Object.defineProperty(navigator, "userAgent", originalAgent);
+      else Reflect.deleteProperty(navigator, "userAgent");
+    }
+  });
+
   it("starts in Chat and keeps the draft while Work and More reveal secondary controls", async () => {
     const user = userEvent.setup();
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);

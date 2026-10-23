@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
+import { isNebulaShell } from "../hooks/useCompactLayout";
 import { startVisiblePoll } from "../api/visiblePoll";
 import { logDiagnostic } from "../diagnostics";
 import type { ToolSharingRuntime } from "../api/toolSharingConsent";
@@ -70,6 +71,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
   const { api, coreState, engagement, providers, harnesses } = useWorkspace();
+  const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
   const { preference, setPreference } = useTheme();
@@ -148,8 +150,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const activeBusy = busy || Boolean(activePendingTurn) || awaitingTurnResolution;
   const pendingReady = !sessionId || !api?.getPendingChatTurn || (pendingCheckedSessionId === sessionId && !pendingStatusError);
 
-  const scrollSurface = useCallback(() => window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches
-    ? body.current : transcript.current, []);
+  const scrollSurface = useCallback(() => nativeShell || window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches
+    ? body.current : transcript.current, [nativeShell]);
   const distanceFromLatest = useCallback((element: HTMLDivElement) => {
     if (element === body.current) {
       const lastMessage = transcript.current?.lastElementChild;
@@ -342,7 +344,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const visible = open && !hidden && view === "chat";
     const previous = lastScroll.current;
     if (visible) {
-      const mobile = window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches;
+      const mobile = nativeShell || window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches;
       if (mobile && body.current) {
         if (attentionCount > 0 && (!previous.visible || attentionCount > previous.attentionCount)) {
           body.current.scrollTop = 0;
@@ -357,13 +359,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       if (surface) setHasNewerMessages(messages.length > 0 && distanceFromLatest(surface) > 24);
     }
     lastScroll.current = { visible, messages, attentionCount, loadingHistory };
-  }, [messages, open, hidden, view, attentionCount, loadingHistory, distanceFromLatest, scrollSurface]);
+  }, [messages, open, hidden, view, attentionCount, loadingHistory, distanceFromLatest, scrollSurface, nativeShell]);
 
   useEffect(() => {
     if (!open || hidden) return;
-    if (window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches) return;
+    if (nativeShell || window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches) return;
     input.current?.focus();
-  }, [open, hidden]);
+  }, [open, hidden, nativeShell]);
 
   const move = (x: number, y: number) => {
     const width = panel.current?.offsetWidth ?? 560;
@@ -541,9 +543,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const clamp = () => {
       const viewport = window.visualViewport;
       const visualHeight = viewport?.height ?? window.innerHeight;
+      panel.current?.style.setProperty("--panel-visual-top", `${viewport?.offsetTop ?? 0}px`);
       panel.current?.style.setProperty("--panel-visual-height", `${visualHeight}px`);
       panel.current?.style.setProperty("--panel-visual-bottom", `${Math.max(0, window.innerHeight - (viewport?.offsetTop ?? 0) - visualHeight)}px`);
-      if (window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches) return;
+      if (nativeShell || window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches) return;
       const rect = panel.current?.getBoundingClientRect();
       if (rect) move(rect.left, rect.top);
     };
@@ -556,7 +559,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       window.visualViewport?.removeEventListener("resize", clamp);
       window.visualViewport?.removeEventListener("scroll", clamp);
     };
-  }, [open, hidden]);
+  }, [open, hidden, nativeShell]);
+
+  useEffect(() => {
+    if (!nativeShell || !open || hidden) return;
+    const shell = document.querySelector<HTMLElement>(".assistant-only-shell");
+    const wasInert = shell?.inert ?? false;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    if (shell) shell.inert = true;
+    panel.current?.focus({ preventScroll: true });
+    return () => {
+      if (shell) shell.inert = wasInert;
+      const returnFocus = shell?.querySelector<HTMLElement>('[aria-controls="nebula-assistant-panel"]') ?? previousFocus;
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+  }, [nativeShell, open, hidden]);
 
   const stop = async () => {
     if (!api) return;
@@ -1219,8 +1236,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up", "settings.network-scope", "settings.automation-runtime"]);
   const panelContent = open ? <>
-    <button className={styles.backdrop} type="button" aria-label="Dismiss Butler panel" title="Dismiss Butler panel" hidden={hidden} onClick={() => setHidden(true)} />
-    <div ref={panel} id="nebula-assistant-panel" className={styles.panel} role="dialog" aria-label="Butler" data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
+    {!nativeShell && <button className={styles.backdrop} type="button" aria-label="Dismiss Butler panel" title="Dismiss Butler panel" hidden={hidden} onClick={() => setHidden(true)} />}
+    <div ref={panel} id="nebula-assistant-panel" className={`${styles.panel}${nativeShell ? ` ${styles.shellPanel}` : ""}`} role="dialog" aria-label="Butler" aria-modal={nativeShell ? true : undefined} tabIndex={nativeShell ? -1 : undefined} data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
     <div className={styles.header}>
       <button className={`icon-button subtle ${styles.dragButton}`} type="button" aria-label="Move Butler" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
       <div className={styles.identity}><strong>Butler</strong><small>{engagement?.name ?? "Choose a project"}</small></div>
@@ -1331,7 +1348,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>
       <input ref={imageInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp" aria-label="Choose images for Butler" onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; void attachImageFiles(files); }} />
       <button className="icon-button subtle" type="button" aria-label="Attach image to Butler" title="Attach image to Butler" aria-describedby={imageHelp && !imageInputSupported ? "butler-image-help" : undefined} disabled={!api || !engagement || activeBusy || loadingHistory || uploadingImage || !pendingReady} onClick={() => imageInputSupported ? imageInput.current?.click() : setImageHelp(true)}><Image size={18} /></button>
-      <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Ask about work, start an assistant or mission, or change a setting…" disabled={activeBusy || loadingHistory || !pendingReady} />
+      <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Message Butler…" disabled={activeBusy || loadingHistory || !pendingReady} />
       {activeBusy && canStopActive ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" title="Stop Butler’s response" onClick={() => void stop()}><Square size={18} /></button> : activeBusy ? null : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={(!draft.trim() && !pendingImages.length) || (pendingImages.length > 0 && (!api || !engagement || !runtime || !imageInputSupported)) || (!pendingImages.length && !isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory || uploadingImage || !pendingReady}><Send size={18} /></button>}
     </form>
     </div>

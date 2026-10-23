@@ -6974,7 +6974,7 @@ test("assistant upgrade Butler saved table stays readable after reload on produc
     const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
     const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
     const sessionId = "butler-mobile-table-fixture";
-    const answer = "| Goal | What its assistants are checking |\n| --- | --- |\n| Sample Project | One is checking the next task and its owner. |\n| Documentation | One is checking the draft for open questions. |";
+    const answer = "| Goal | ID | Status |\n| --- | --- | --- |\n| Sample Project | 89851bf1-1f41-40e1-8a9d-437f131ab601 | Paused |\n| Documentation | 83f8f1bb-e444-4327-9aa8-1f2c3788ba14 | Paused |";
     const seeded = spawnSync(python, ["-c", [
       "import sys",
       "from nebula.v3.domain import ChatMessage, ChatSession",
@@ -6989,6 +6989,9 @@ test("assistant upgrade Butler saved table stays readable after reload on produc
     expect(seeded.status, seeded.error?.message ?? seeded.stderr).toBe(0);
 
     await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
+    });
     await pairRealCoreBrowser(page, core, "Butler table LAN browser", {requireReady: false});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
@@ -6997,6 +7000,11 @@ test("assistant upgrade Butler saved table stays readable after reload on produc
     const check = async () => {
       await expect(goal).toBeVisible();
       await expect.poll(() => goal.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(80);
+      const bounds = await butler.getByRole("region", {name: "Butler response table"}).evaluate(region => ({
+        tableRight: region.getBoundingClientRect().right,
+        statusRight: region.querySelector("td:last-child")!.getBoundingClientRect().right,
+      }));
+      expect(bounds.statusRight).toBeLessThanOrEqual(bounds.tableRight + 1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     };
     await check();
@@ -11154,9 +11162,13 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await expect(page.getByRole("button", {name: "New chat", exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Open Butler"}).click();
     const controlAssistant = page.getByRole("dialog", {name: "Butler"});
-    const sheet = await controlAssistant.boundingBox();
-    expect(sheet!.y).toBeGreaterThanOrEqual(40);
-    expect(sheet!.height).toBeLessThanOrEqual(page.viewportSize()!.height * 0.8);
+    const view = await controlAssistant.evaluate(dialog => {
+      const bounds = dialog.getBoundingClientRect();
+      const visual = window.visualViewport;
+      return {top: bounds.top, height: bounds.height, visualTop: visual?.offsetTop ?? 0, visualHeight: visual?.height ?? innerHeight};
+    });
+    expect(Math.abs(view.top - view.visualTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(view.height - view.visualHeight)).toBeLessThanOrEqual(1);
     await expect(controlAssistant.getByRole("button", {name: "Start Butler Voice"})).toBeVisible();
     await controlAssistant.getByRole("button", {name: "Start Butler Voice"}).click();
     await expect(page.getByRole("dialog", {name: "Butler Voice"}).getByRole("alert")).toContainText("trusted HTTPS address");

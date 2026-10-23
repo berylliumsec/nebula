@@ -105,3 +105,47 @@
   .turnStatus > button { margin-left: 15px; }
 }
 @media (max-width: 430px) { .catalog .settingList { grid-template-columns: 1fr; } }
+
+/* The installed iPhone app has one active chat view at a time. Butler owns that
+   view while open, including when the phone rotates or the keyboard appears. */
+.shellPanel {
+  left: 0;
+  right: 0;
+  top: var(--panel-visual-top, 0px);
+  bottom: auto;
+  width: 100%;
+  height: var(--panel-visual-height, 100dvh);
+  max-height: var(--panel-visual-height, 100dvh);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
+}
+.shellPanel .header { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 44px); gap: 6px; }
+.shellPanel .header .dragButton, .shellPanel .header .hideButton { display: none; }
+.shellPanel .identity { grid-column: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
+.shellPanel .identity strong { flex: none; white-space: nowrap; }
+.shellPanel .identity small { max-width: 100%; }
+.shellPanel .header .voiceButton { grid-column: 2; }
+.shellPanel .header .settingsButton { grid-column: 3; }
+.shellPanel .header .closeButton { grid-column: 4; }
+.shellPanel .body { flex: 1; min-height: 0; }
+.shellPanel .transcript { max-height: none; overflow: visible; }
+.shellPanel .tableScroll table { table-layout: fixed; }
+.shellPanel .tableScroll table:has(tr > :nth-child(4)) { table-layout: auto; min-width: max(100%, 440px); }
+.shellPanel .tableScroll th, .shellPanel .tableScroll td { overflow-wrap: anywhere; }
+.shellPanel .tableScroll th:first-child, .shellPanel .tableScroll td:first-child { min-width: 0; }
+.shellPanel .scrollJumpRail { height: 52px; align-items: center; padding: 4px 12px; border-top: 1px solid var(--border); }
+.shellPanel .scrollJumpRail button { transform: none; }
+@media (max-width: 430px) {
+  .shellPanel .tableScroll:has(tr > :nth-child(4))::before {
+    content: "Swipe for more columns →";
+    position: sticky;
+    left: 0;
+    display: block;
+    width: fit-content;
+    color: var(--muted);
+    font-size: .72rem;
+  }
+}
