@@ -1,5 +1,5 @@
 {
-  "change_digest": "90c6936cb4d7a04f5c1c6964fd8a6841f0eb924625fbb7c1e986e988190ff975",
+  "change_digest": "8884c93083c26619c50eed9634a52535a1b0999c56a81bfa50dd791e78107ea4",
   "reviewed_by": "Codex",
   "reason": "The generic authenticated workspace stream upload now optionally verifies the incoming content SHA-256 before atomic replacement. The selected API test checks mismatch rejection, preservation of an existing destination, successful hash-bound upload, and compatibility without the header.",
   "exclusions": "No UI, frontend, browser, or device behavior changed. Existing workspace upload API test is the narrow changed journey; no full Core or unrelated workspace tests are selected.",
