@@ -1,33 +1,18 @@
 {
-  "change_digest": "5dcdecd939ad40a86be3a8c81432a1ead2966790f5f21c646e09a96540adb09a",
-  "reviewed_by": "Codex Butler native iPhone view review",
-  "reason": "The iPhone app now gives Butler the visual viewport, keeps its composer and controls inside safe areas, and makes saved response tables readable at phone widths. The selected component tests check app-only modal presentation, focus recovery and existing Butler behavior. The iPhone shell browser journey covers the exact entry, portrait and landscape geometry, saved table rendering, and return to analyst chat. Disposable production LAN Core checks cover authenticated pairing, reconnect, and durable Butler table reload.",
-  "exclusions": "No full suites. Python and native tests are excluded because no Core API, persistence schema, or native code changes. Other Butler catalog areas exercise provider, oversight, settings, and chat operations unaffected by this presentation fix. Physical iPhone testing is unavailable in this workspace and is reported separately.",
+  "change_digest": "f7790f922788fee8d7b7fd15ce2d0bc5bc64b0a93e51c796847707e1925ed934",
+  "reviewed_by": "Codex Butler provider effort review",
+  "reason": "Butler recovery reads its saved assistant effort and must pass it into every provider request, including requests after tool results. The selected recovery case exercises multiple provider rounds with a saved xhigh effort and asserts each request retains it.",
+  "exclusions": "No full suite. Frontend, native, and Playwright layers are excluded because this change only forwards an existing saved value inside the background Core provider path; it does not alter UI, browser persistence, or native code. Other Python tests do not exercise this request construction.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 44,
+    "python": 1,
+    "frontend": 0,
     "native": 0,
-    "playwright": 14
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx"
+  "python": [
+    "tests/v3/test_butler_recovery.py::test_act_switches_worker_to_provider_and_queues_only_the_parent"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-response-table/assistant-real-webkit-390",
-    "ios-assistant-only/assistant-real-chromium-390",
-    "ios-assistant-only/assistant-real-desktop",
-    "ios-assistant-only/assistant-real-webkit-390",
-    "ios-assistant-only/browser-chromium-landscape",
-    "ios-assistant-only/browser-webkit-landscape",
-    "ios-assistant-only/compact",
-    "ios-assistant-only/desktop",
-    "ios-assistant-only/mobile-chromium",
-    "ios-assistant-only/mobile-chromium-small",
-    "ios-assistant-only/mobile-chromium-wide",
-    "ios-assistant-only/mobile-webkit",
-    "ios-assistant-only/mobile-webkit-small",
-    "ios-assistant-only/mobile-webkit-wide"
-  ]
+  "playwright": []
 }

@@ -779,7 +779,7 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
             title="Butler",
             provider_profile_id=provider.id,
             model="model-a",
-            metadata={"control_assistant": True},
+            metadata={"control_assistant": True, "reasoning_effort": "xhigh"},
         )
     )
     _failure(store, project, parent, turn, ConnectionError("runtime unavailable"))
@@ -789,6 +789,7 @@ def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_path):
 
         def require(self, request):
             assert request.metadata["operation"] == "butler_recovery"
+            assert request.reasoning_effort == "xhigh"
             assert len(request.tools) == 4
 
         async def complete(self, request):
