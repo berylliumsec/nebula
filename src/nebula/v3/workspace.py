@@ -1439,6 +1439,7 @@ class WorkspaceService:
         *,
         overwrite: bool = False,
         expected_sha256: str | None = None,
+        expected_content_sha256: str | None = None,
     ) -> WorkspaceUploadResult:
         """Atomically stream one regular file into an engagement workspace."""
 
@@ -1450,6 +1451,7 @@ class WorkspaceService:
                 chunks,
                 overwrite=overwrite,
                 expected_sha256=expected_sha256,
+                expected_content_sha256=expected_content_sha256,
             )
 
     async def _upload_locked(
@@ -1460,6 +1462,7 @@ class WorkspaceService:
         *,
         overwrite: bool,
         expected_sha256: str | None,
+        expected_content_sha256: str | None,
     ) -> WorkspaceUploadResult:
         """Write an upload while serializing only other API uploads."""
 
@@ -1493,6 +1496,16 @@ class WorkspaceService:
             os.fsync(descriptor)
             os.close(descriptor)
             descriptor = None
+
+            actual_sha256 = digest.hexdigest()
+            if expected_content_sha256 is not None and not hmac.compare_digest(
+                actual_sha256, expected_content_sha256
+            ):
+                raise ExecutionServiceError(
+                    "workspace_upload_hash_mismatch",
+                    "uploaded content did not match the expected SHA-256",
+                    status_code=422,
+                )
 
             try:
                 destination = os.stat(
@@ -1588,7 +1601,7 @@ class WorkspaceService:
             engagement_id=engagement_id,
             path=normalized,
             size=size,
-            sha256=digest.hexdigest(),
+            sha256=actual_sha256,
             overwritten=replaced,
         )
         self.store.append_operation_event(
