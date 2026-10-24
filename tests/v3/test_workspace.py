@@ -799,6 +799,46 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
     _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
 
     with client:
+        mismatch = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "X-Content-SHA256": "0" * 64,
+            },
+            params={"path": "integrity.bin"},
+            content=b"first payload",
+        )
+        assert mismatch.status_code == 422
+        assert mismatch.json()["code"] == "workspace_upload_hash_mismatch"
+        assert not (platform.workspace_for(engagement.id) / "integrity.bin").exists()
+
+        integrity_created = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "X-Content-SHA256": hashlib.sha256(b"first payload").hexdigest(),
+            },
+            params={"path": "integrity.bin"},
+            content=b"first payload",
+        )
+        assert integrity_created.status_code == 201
+        assert integrity_created.json()["sha256"] == hashlib.sha256(b"first payload").hexdigest()
+
+        overwrite_mismatch = client.put(
+            f"/api/v1/engagements/{engagement.id}/workspace/file",
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "X-Content-SHA256": "0" * 64,
+            },
+            params={"path": "integrity.bin", "overwrite": "true"},
+            content=b"replacement",
+        )
+        assert overwrite_mismatch.status_code == 422
+        assert (platform.workspace_for(engagement.id) / "integrity.bin").read_bytes() == b"first payload"
+
         created = client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={**AUTH, "Content-Type": "application/octet-stream"},

@@ -1,33 +1,11 @@
 {
-  "change_digest": "5dcdecd939ad40a86be3a8c81432a1ead2966790f5f21c646e09a96540adb09a",
-  "reviewed_by": "Codex Butler native iPhone view review",
-  "reason": "The iPhone app now gives Butler the visual viewport, keeps its composer and controls inside safe areas, and makes saved response tables readable at phone widths. The selected component tests check app-only modal presentation, focus recovery and existing Butler behavior. The iPhone shell browser journey covers the exact entry, portrait and landscape geometry, saved table rendering, and return to analyst chat. Disposable production LAN Core checks cover authenticated pairing, reconnect, and durable Butler table reload.",
-  "exclusions": "No full suites. Python and native tests are excluded because no Core API, persistence schema, or native code changes. Other Butler catalog areas exercise provider, oversight, settings, and chat operations unaffected by this presentation fix. Physical iPhone testing is unavailable in this workspace and is reported separately.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 44,
-    "native": 0,
-    "playwright": 14
-  },
-  "python": [],
-  "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx"
-  ],
-  "native": [],
-  "playwright": [
-    "butler-response-table/assistant-real-webkit-390",
-    "ios-assistant-only/assistant-real-chromium-390",
-    "ios-assistant-only/assistant-real-desktop",
-    "ios-assistant-only/assistant-real-webkit-390",
-    "ios-assistant-only/browser-chromium-landscape",
-    "ios-assistant-only/browser-webkit-landscape",
-    "ios-assistant-only/compact",
-    "ios-assistant-only/desktop",
-    "ios-assistant-only/mobile-chromium",
-    "ios-assistant-only/mobile-chromium-small",
-    "ios-assistant-only/mobile-chromium-wide",
-    "ios-assistant-only/mobile-webkit",
-    "ios-assistant-only/mobile-webkit-small",
-    "ios-assistant-only/mobile-webkit-wide"
-  ]
+  "change_digest": "90c6936cb4d7a04f5c1c6964fd8a6841f0eb924625fbb7c1e986e988190ff975",
+  "reviewed_by": "Codex",
+  "reason": "The generic authenticated workspace stream upload now optionally verifies the incoming content SHA-256 before atomic replacement. The selected API test checks mismatch rejection, preservation of an existing destination, successful hash-bound upload, and compatibility without the header.",
+  "exclusions": "No UI, frontend, browser, or device behavior changed. Existing workspace upload API test is the narrow changed journey; no full Core or unrelated workspace tests are selected.",
+  "expected_tests": {"python": 1, "frontend": 0, "playwright": 0, "native": 0},
+  "python": ["tests/v3/test_workspace.py::test_workspace_streaming_upload_api_requires_explicit_overwrite"],
+  "frontend": [],
+  "playwright": [],
+  "native": []
 }

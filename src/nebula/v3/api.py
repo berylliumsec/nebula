@@ -7058,6 +7058,11 @@ def create_app(
             alias="If-Match",
             pattern=r"^[0-9a-f]{64}$",
         ),
+        expected_content_sha256: str | None = Header(
+            default=None,
+            alias="X-Content-SHA256",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
     ) -> WorkspaceUploadResult:
         workspace = require_workspace_service()
 
@@ -7068,6 +7073,7 @@ def create_app(
                 request.stream(),
                 overwrite=overwrite,
                 expected_sha256=if_match,
+                expected_content_sha256=expected_content_sha256,
             )
 
         # Uploads use a private file plus an atomic directory-fd rename and are
