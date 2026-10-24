@@ -824,7 +824,10 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
             content=b"first payload",
         )
         assert integrity_created.status_code == 201
-        assert integrity_created.json()["sha256"] == hashlib.sha256(b"first payload").hexdigest()
+        assert (
+            integrity_created.json()["sha256"]
+            == hashlib.sha256(b"first payload").hexdigest()
+        )
 
         overwrite_mismatch = client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
@@ -837,7 +840,9 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
             content=b"replacement",
         )
         assert overwrite_mismatch.status_code == 422
-        assert (platform.workspace_for(engagement.id) / "integrity.bin").read_bytes() == b"first payload"
+        assert (
+            platform.workspace_for(engagement.id) / "integrity.bin"
+        ).read_bytes() == b"first payload"
 
         created = client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
