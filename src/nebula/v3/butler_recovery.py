@@ -712,6 +712,7 @@ class ButlerRecoveryAgent:
         while True:
             request = ModelRequest(
                 model=model,
+                reasoning_effort=config["reasoning_effort"],
                 instructions=instructions,
                 messages=[ModelMessage(role="user", content=packet)],
                 tools=tools,
