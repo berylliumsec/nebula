@@ -278,6 +278,8 @@ class ProviderConfig(BaseModel):
     # Models the catalog marks as always reasoning (OpenRouter
     # ``reasoning.mandatory``); they are never asked to skip it.
     reasoning_mandatory_models: list[str] = Field(default_factory=list)
+    # Exact model effort lists from the OpenRouter catalog.
+    model_reasoning_efforts: dict[str, list[str]] = Field(default_factory=dict)
     # Per-token prices each exact model's catalog entry publishes (OpenRouter
     # ``pricing``: decimal strings by billing unit), for cost estimates.
     model_prices: dict[str, dict[str, str]] = Field(default_factory=dict)
@@ -2473,8 +2475,20 @@ def _openai_refusal(message: dict[str, Any]) -> str:
     return value if isinstance(value, str) else ""
 
 
+_OPENROUTER_PINNED_REASONING_EFFORTS: dict[str, frozenset[str]] = {
+    # This immutable October 2026 snapshot predates persisted effort lists in
+    # Nebula profiles. Keep its existing xhigh settings effective until the
+    # profile catalog is refreshed; fresh metadata always takes precedence.
+    "deepseek/deepseek-v4.1-flash-1017": frozenset({"max", "high", "low", "none"}),
+}
+
+
 def _openrouter_reasoning(
-    request: "ModelRequest", supported: set[str], *, mandatory: bool = False
+    request: "ModelRequest",
+    supported: set[str],
+    *,
+    mandatory: bool = False,
+    supported_efforts: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """The reasoning object OpenRouter is sent for one request.
 
@@ -2493,7 +2507,18 @@ def _openrouter_reasoning(
     if request.reasoning_effort is not None and not (
         mandatory and request.reasoning_effort == "none"
     ):
-        reasoning["effort"] = request.reasoning_effort
+        effort: str = request.reasoning_effort
+        # Nebula has historically called its highest level xhigh. A model
+        # whose catalog lists max but not xhigh needs the literal max value;
+        # otherwise an old saved xhigh setting has an uncertain upstream effect.
+        if (
+            effort == "xhigh"
+            and supported_efforts is not None
+            and "max" in supported_efforts
+            and "xhigh" not in supported_efforts
+        ):
+            effort = "max"
+        reasoning["effort"] = effort
     if request.reasoning_max_tokens is not None:
         reasoning["max_tokens"] = request.reasoning_max_tokens
     return reasoning
@@ -4261,6 +4286,11 @@ class OpenAICompatibleProvider(ModelProvider):
                 set(self.config.model_parameters.get(model, ())),
                 mandatory=model in self.config.reasoning_mandatory_models
                 or _claude_always_thinks(model),
+                supported_efforts=(
+                    set(self.config.model_reasoning_efforts[model])
+                    if model in self.config.model_reasoning_efforts
+                    else _OPENROUTER_PINNED_REASONING_EFFORTS.get(model)
+                ),
             )
             # OpenRouter compresses the middle of an oversized prompt by default
             # on endpoints of 8K or less. Nebula sizes its own context and
@@ -6719,6 +6749,15 @@ def provider_from_profile(
                     for item in described
                     if item.get("reasoning_mandatory") is True
                 ],
+                "model_reasoning_efforts": {
+                    str(item["id"]): [
+                        str(value)
+                        for value in item["reasoning_supported_efforts"]
+                        if isinstance(value, str)
+                    ]
+                    for item in described
+                    if isinstance(item.get("reasoning_supported_efforts"), list)
+                },
                 "model_prices": _catalog_prices(described),
             }
         )
