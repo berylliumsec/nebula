@@ -1,10 +1,10 @@
 {
-  "change_digest": "8884c93083c26619c50eed9634a52535a1b0999c56a81bfa50dd791e78107ea4",
+  "change_digest": "94111efadc7f2af1570cc4995f1bd0886ad5abbfe2742967efe7b06eefc0eff9",
   "reviewed_by": "Codex",
-  "reason": "The generic authenticated workspace stream upload now optionally verifies the incoming content SHA-256 before atomic replacement. The selected API test checks mismatch rejection, preservation of an existing destination, successful hash-bound upload, and compatibility without the header.",
-  "exclusions": "No UI, frontend, browser, or device behavior changed. Existing workspace upload API test is the narrow changed journey; no full Core or unrelated workspace tests are selected.",
-  "expected_tests": {"python": 1, "frontend": 0, "playwright": 0, "native": 0},
-  "python": ["tests/v3/test_workspace.py::test_workspace_streaming_upload_api_requires_explicit_overwrite"],
+  "reason": "OpenRouter must send the exact model-supported max effort when an existing xhigh setting targets deepseek/deepseek-v4.1-flash-1017. The three selected tests cover fresh catalog metadata, an existing profile without effort metadata, and unchanged handling of a model without known effort metadata.",
+  "exclusions": "No UI, frontend, native, or browser behavior changed. The disposable LAN Core chat probe covers the authenticated end-to-end API and captured provider request; unrelated providers and full suites are outside this narrow adapter fix.",
+  "expected_tests": {"python": 3, "frontend": 0, "playwright": 0, "native": 0},
+  "python": ["tests/v3/test_openrouter_reasoning_effort.py"],
   "frontend": [],
   "playwright": [],
   "native": []
