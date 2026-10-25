@@ -356,6 +356,7 @@ body:has(.settings-lens-backdrop) > .dialog-backdrop { z-index: 120; }
 .integration-card-facts dd { min-width: 0; margin: 0; color: var(--text); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .integration-card > .provider-capability-policy { margin-top: 0; }
 .integration-card > footer { margin-top: auto; }
+#mcp-settings .integration-card > footer { margin-right: 0; flex-wrap: wrap; gap: 4px; }
 .integration-card-actions { display: flex; align-items: center; gap: 3px; }
 .harness-settings-card > footer { flex-wrap: wrap; gap: 4px; }
 .harness-settings-card .integration-card-actions { flex-wrap: wrap; margin-left: auto; }

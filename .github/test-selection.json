@@ -1,11 +1,19 @@
 {
-  "change_digest": "94111efadc7f2af1570cc4995f1bd0886ad5abbfe2742967efe7b06eefc0eff9",
-  "reviewed_by": "Codex",
-  "reason": "OpenRouter must send the exact model-supported max effort when an existing xhigh setting targets deepseek/deepseek-v4.1-flash-1017. The three selected tests cover fresh catalog metadata, an existing profile without effort metadata, and unchanged handling of a model without known effort metadata.",
-  "exclusions": "No UI, frontend, native, or browser behavior changed. The disposable LAN Core chat probe covers the authenticated end-to-end API and captured provider request; unrelated providers and full suites are outside this narrow adapter fix.",
-  "expected_tests": {"python": 3, "frontend": 0, "playwright": 0, "native": 0},
-  "python": ["tests/v3/test_openrouter_reasoning_effort.py"],
-  "frontend": [],
-  "playwright": [],
-  "native": []
+  "change_digest": "780b0f7624130129e124ae8c3ecbdf8f8f30eca00157d7e7c50c7b63cf0af271",
+  "reviewed_by": "Codex agent",
+  "reason": "Project-scoped MCP catalog presentation in Settings and mission setup, including responsive MCP card actions; cover both components and the production LAN Core journey with desktop and mobile Chromium/WebKit profiles.",
+  "exclusions": "No Python or native code changed. MCP import, probing, backend dispatch, and unrelated mission execution are unchanged, so their separate suites are excluded. The browser selection exercises project switching, durable Notebook grant update, reload, and shared server visibility.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 26,
+    "native": 0,
+    "playwright": 8
+  },
+  "python": [],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/MissionControls.test.tsx"
+  ],
+  "native": [],
+  "playwright": ["area:mcp-project-scope"]
 }

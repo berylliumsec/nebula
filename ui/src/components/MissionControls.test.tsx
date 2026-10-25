@@ -74,6 +74,7 @@ describe("NewMissionButton", () => {
     engagementId = "engagement-1";
     providers = [];
     startMission.mockClear();
+    api.listMcpServers.mockResolvedValue([]);
   });
 
   it("keeps the dialog open while a mission is starting so a failure stays visible", async () => {
@@ -114,6 +115,26 @@ describe("NewMissionButton", () => {
     expect(screen.getByRole("checkbox", { name: /Recon tools/ })).toBeChecked();
     expect(limit).toHaveValue(5);
     expect(concurrency).toHaveValue(2);
+  });
+
+  it("offers shared MCP servers and only this project's Notebook grant", async () => {
+    api.listMcpServers.mockResolvedValue([
+      mcpServer,
+      {...mcpServer, id: "notebook-1", name: "Notebook", projectId: "engagement-1", transport: "builtin", tools: [{}]},
+      {...mcpServer, id: "notebook-2", name: "Notebook", projectId: "engagement-2", transport: "builtin", tools: [{}, {}]},
+    ]);
+    const user = userEvent.setup();
+    const {rerender} = await openDialog(user);
+    await user.click(screen.getByText("Advanced"));
+    expect(await screen.findByRole("checkbox", {name: /Recon tools/})).toBeVisible();
+    expect(screen.getAllByRole("checkbox", {name: /Notebook/})).toHaveLength(1);
+    expect(screen.getByText(/builtin · 1 discovered tools/)).toBeVisible();
+
+    engagementId = "engagement-2";
+    rerender(<DialogProvider><NewMissionButton /></DialogProvider>);
+    expect(await screen.findByText(/builtin · 2 discovered tools/)).toBeVisible();
+    expect(screen.queryByText(/builtin · 1 discovered tools/)).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", {name: /Recon tools/})).toBeVisible();
   });
 
   it("re-checks the automation runtime for the project selected while the dialog is open", async () => {
