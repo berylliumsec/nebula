@@ -37,6 +37,7 @@
     {"name": "agent-messaging", "patterns": ["src/nebula/v3/chat_agent_messages.py", "src/nebula/v3/migrations/versions/*default_main_agent_messaging.py", "ui/tests/fixtures/approval_core.py"], "areas": ["agent-messaging"]},
     {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import", "harness-delete", "harness-delete-core"]},
+    {"name": "mcp-project-scope", "patterns": ["ui/src/components/HarnessSettings*", "ui/src/components/MissionControls*"], "areas": ["mcp-project-scope"]},
     {"name": "ssh-environments", "patterns": ["ui/src/components/Environment*", "ui/src/sshTools.ts", "src/nebula/v3/environments.py", "src/nebula/v3/ssh_environments.py"], "areas": ["ssh-environments"]},
     {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatToolResultConsent.ts", "ui/src/pages/providerCredentialRecovery.ts", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant", "chat-edit-in-place", "provider-thinking", "research-context-core"]},
     {"name": "assistant-direct-request", "patterns": ["src/nebula/v3/application_model/workflow.py", "src/nebula/v3/chat.py", "src/nebula/v3/harnesses.py"], "areas": ["assistant-direct-request"]},
@@ -1756,6 +1757,16 @@
     "shard": "1/1"
   }
 ],
+    "mcp-project-scope": [
+      {"area":"mcp-project-scope","project":"assistant-real-desktop","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"},
+      {"area":"mcp-project-scope","project":"assistant-real-compact","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"},
+      {"area":"mcp-project-scope","project":"assistant-real-chromium-320","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"},
+      {"area":"mcp-project-scope","project":"assistant-real-chromium-390","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"},
+      {"area":"mcp-project-scope","project":"assistant-real-chromium-430","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"},
+      {"area":"mcp-project-scope","project":"assistant-real-webkit-320","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"},
+      {"area":"mcp-project-scope","project":"assistant-real-webkit-390","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"},
+      {"area":"mcp-project-scope","project":"assistant-real-webkit-430","test_match":"tests/mcp-project-scope.spec.ts","grep":"project MCP catalog shows one Notebook grant","runtime":"real-core","shard":"1/1"}
+    ],
     "harness-accounts": [
   {
     "area": "harness-accounts",

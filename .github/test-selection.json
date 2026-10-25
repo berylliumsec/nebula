@@ -1,11 +1,19 @@
 {
-  "change_digest": "8884c93083c26619c50eed9634a52535a1b0999c56a81bfa50dd791e78107ea4",
-  "reviewed_by": "Codex",
-  "reason": "The generic authenticated workspace stream upload now optionally verifies the incoming content SHA-256 before atomic replacement. The selected API test checks mismatch rejection, preservation of an existing destination, successful hash-bound upload, and compatibility without the header.",
-  "exclusions": "No UI, frontend, browser, or device behavior changed. Existing workspace upload API test is the narrow changed journey; no full Core or unrelated workspace tests are selected.",
-  "expected_tests": {"python": 1, "frontend": 0, "playwright": 0, "native": 0},
-  "python": ["tests/v3/test_workspace.py::test_workspace_streaming_upload_api_requires_explicit_overwrite"],
-  "frontend": [],
-  "playwright": [],
-  "native": []
+  "change_digest": "8d31ed5c19a3bcbd9dfde2ebcafa4b70d1beebd1c815dc3f9998d3eb757d399d",
+  "reviewed_by": "Codex agent",
+  "reason": "Project-scoped MCP catalog presentation in Settings and mission setup; cover both components and the production LAN Core journey with desktop and mobile Chromium/WebKit profiles.",
+  "exclusions": "No Python or native code changed. MCP import, probing, backend dispatch, and unrelated mission execution are unchanged, so their separate suites are excluded. The browser selection exercises project switching, durable Notebook grant update, reload, and shared server visibility.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 26,
+    "native": 0,
+    "playwright": 8
+  },
+  "python": [],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/MissionControls.test.tsx"
+  ],
+  "native": [],
+  "playwright": ["area:mcp-project-scope"]
 }
