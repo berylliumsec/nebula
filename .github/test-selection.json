@@ -1,7 +1,7 @@
 {
-  "change_digest": "8d31ed5c19a3bcbd9dfde2ebcafa4b70d1beebd1c815dc3f9998d3eb757d399d",
+  "change_digest": "780b0f7624130129e124ae8c3ecbdf8f8f30eca00157d7e7c50c7b63cf0af271",
   "reviewed_by": "Codex agent",
-  "reason": "Project-scoped MCP catalog presentation in Settings and mission setup; cover both components and the production LAN Core journey with desktop and mobile Chromium/WebKit profiles.",
+  "reason": "Project-scoped MCP catalog presentation in Settings and mission setup, including responsive MCP card actions; cover both components and the production LAN Core journey with desktop and mobile Chromium/WebKit profiles.",
   "exclusions": "No Python or native code changed. MCP import, probing, backend dispatch, and unrelated mission execution are unchanged, so their separate suites are excluded. The browser selection exercises project switching, durable Notebook grant update, reload, and shared server visibility.",
   "expected_tests": {
     "python": 0,

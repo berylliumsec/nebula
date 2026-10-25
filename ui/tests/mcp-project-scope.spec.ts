@@ -35,7 +35,7 @@ test("project MCP catalog shows one Notebook grant and keeps shared servers acro
     const created = await core.api.post("engagements", {data: {name: "Notebook Project B", status: "active"}});
     expect(created.ok(), await created.text()).toBe(true);
     const projectB = await created.json() as {id: string; name: string};
-    expect((await core.api.get(`engagements/${projectB.id}/notebooks/status`)).ok()).toBe(true);
+    await core.restart();
     const shared = await core.api.post("mcp-servers", {data: {
       name: "shared-fixture", transport: "stdio", command: "/bin/true", arguments: [],
       trusted_stdio: true, enabled: false,
@@ -47,11 +47,11 @@ test("project MCP catalog shows one Notebook grant and keeps shared servers acro
     expect(new Set(notebooks.map(item => item.metadata?.engagement_id))).toEqual(new Set([projectA.id, projectB.id]));
 
     const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "MCP project catalog"}})).json() as {secret: string; confirmation_code: string};
-    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectA.id);
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("MCP project catalog");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     await expect(page.locator(".app-shell")).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/projects/${projectA.id}/workbench`);
     await page.goto(`${core.origin}/settings#harness-settings`);
     const section = page.locator("#mcp-settings");
     const notebookCard = () => section.locator(".integration-card").filter({has: page.getByRole("heading", {name: "Notebook", exact: true})});
@@ -73,7 +73,17 @@ test("project MCP catalog shows one Notebook grant and keeps shared servers acro
     expect(saved.find(item => item.metadata?.engagement_id === projectB.id)?.enabled).toBe(false);
     await page.reload();
     await expect(notebookCard().getByRole("button", {name: "Enable"})).toBeVisible();
-    expect(await section.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    const overflow = await section.evaluate(element => {
+      const right = element.getBoundingClientRect().right;
+      return {
+        pixels: element.scrollWidth - element.clientWidth,
+        outliers: [...element.querySelectorAll("*")]
+          .filter(child => child.getBoundingClientRect().right > right + 1)
+          .slice(0, 5)
+          .map(child => ({tag: child.tagName, className: child.className, right: child.getBoundingClientRect().right - right})),
+      };
+    });
+    expect(overflow.pixels, JSON.stringify(overflow.outliers)).toBeLessThanOrEqual(1);
     expect((await new AxeBuilder({page}).include("#mcp-settings").analyze()).violations).toEqual([]);
     await info.attach("project-mcp-catalog", {body: JSON.stringify({origin: core.origin, build: "ui/dist production", project: info.project.name, viewport: page.viewportSize(), grants: notebooks.map(item => item.id)}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
