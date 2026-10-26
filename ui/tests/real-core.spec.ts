@@ -416,7 +416,7 @@ async function clickAssistantSettings(page: Page) {
   await trigger.click();
 }
 
-async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string>; tls?: boolean } = {}): Promise<RealCore> {
+async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string>; tls?: boolean; startupTimeoutMs?: number } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   // Match the production-test override used by the shared real-Core harness.
   const coreCandidates = [
@@ -487,7 +487,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
   );
   let output = "";
   const origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), 30_000);
+    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), options.startupTimeoutMs ?? 30_000);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = output.match(/"url"\s*:\s*"(https?):\/\/[^:\"]+:(\d+)"/);
@@ -10185,6 +10185,111 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     {name: "inert goal reply barrier", dispose: () => releaseGoalAnswer()},
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade provider completes a goal from its own tool call on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(300_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 150_000});
+  const stub = await startLocalModelStub({
+    responseContent: "The synthetic recon handoff is complete.",
+    streamDelayMs: 0,
+    toolCall: body => {
+      const tools = Array.isArray(body.tools) ? body.tools as Array<{function?: {name?: string}}> : [];
+      if (!tools.some(tool => tool.function?.name === "goal_complete")) return undefined;
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string}> : [];
+      if (messages.some(message => message.role === "tool")) return undefined;
+      return {name: "goal_complete", arguments: {
+        completion_summary: "Synthetic recon handoff complete.",
+        completion_evidence: ["Synthetic artifact saved in the test fixture."],
+      }};
+    },
+  });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", {data: {
+      name: "Goal completion fixture", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const createdResponse = await api.post("chat/goal-conversations", {data: {
+      engagement_id: projectId, backend: "provider", provider_id: provider.id,
+      model: "security-model", tools_enabled: true,
+      objective: "Finish a synthetic recon handoff",
+      completion_criteria: ["Save the synthetic artifact"], step_budget: 3,
+    }});
+    expect(createdResponse.ok(), await createdResponse.text()).toBe(true);
+    const created = await createdResponse.json() as {session: {id: string}; goal: {id: string; revision: number}};
+
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Goal completion LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/?view=chat&session=${created.session.id}`);
+    const started = await api.post(`chat/sessions/${created.session.id}/goal/actions`, {
+      data: {expected_revision: created.goal.revision, action: "start"},
+    });
+    expect(started.ok(), await started.text()).toBe(true);
+    const readGoal = async () => (await (await api.get(`chat/sessions/${created.session.id}/goal`)).json()) as {
+      status: string; completion_summary: string; completion_evidence: Array<{kind: string; detail: string}>;
+      linked_turn_ids: string[];
+    };
+    await expect.poll(async () => (await readGoal()).status, {timeout: 90_000}).toMatch(/^(completed|paused|blocked|cancelled)$/);
+    const savedGoal = await readGoal();
+    const offeredTools = stub.requests.map(body => (Array.isArray(body.tools) ? body.tools as Array<{function?: {name?: string}}> : [])
+      .map(tool => tool.function?.name).filter(Boolean));
+    const transcript = await (await api.get(`chat/sessions/${created.session.id}/messages`)).json() as Array<{
+      role: string; metadata?: {tool_results?: Array<{capability?: string; status?: string; summary?: string}>};
+    }>;
+    const results = transcript.filter(message => message.role === "assistant").map(message => message.metadata?.tool_results);
+    expect(savedGoal.status, `offered tools: ${JSON.stringify(offeredTools)}; saved results: ${JSON.stringify(results)}`).toBe("completed");
+    expect(savedGoal.completion_summary).toBe("Synthetic recon handoff complete.");
+    expect(savedGoal.completion_evidence).toEqual([{
+      kind: "agent_reported", detail: "Synthetic artifact saved in the test fixture.",
+      turn_id: savedGoal.linked_turn_ids[0],
+    }]);
+    expect(savedGoal.linked_turn_ids).toHaveLength(1);
+    const goalPanel = page.getByRole("region", {name: "Conversation goal"});
+    const reveal = page.getByRole("button", {name: "View full goal and evidence gates"});
+    const showCompletedGoal = async () => {
+      await expect.poll(async () => (await reveal.isVisible()) || (await goalPanel.locator(".chat-goal-status.completed").isVisible()), {timeout: 20_000}).toBe(true);
+      if (!await goalPanel.locator(".chat-goal-status.completed").isVisible()) {
+        await reveal.focus();
+        await reveal.press("Enter");
+      }
+      await expect(goalPanel).toContainText("completed", {timeout: 20_000});
+    };
+    await showCompletedGoal();
+    await goalPanel.getByText("Completion evidence").click();
+    await expect(goalPanel).toContainText("Synthetic artifact saved in the test fixture.");
+    await expect(page.getByText("The synthetic recon handoff is complete.", {exact: true})).toBeVisible();
+    await page.reload();
+    await showCompletedGoal();
+    expect((await readGoal()).linked_turn_ids).toHaveLength(1);
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    await testInfo.attach("provider-goal-completion-lan", {body: JSON.stringify({
+      origin: core.origin, build: "ui/dist production", project: testInfo.project.name,
+      viewport: page.viewportSize(), goalId: created.goal.id, outcome: "tool call, completed, no continuation, refreshed",
+    }), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
   ]);
 });

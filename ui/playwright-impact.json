@@ -983,6 +983,11 @@
       {"area":"provider-goal-lifecycle-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core creates a goal before the first turn and pauses it on stop","runtime":"real-core","shard":"1/1"},
       {"area":"provider-goal-lifecycle-core","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core creates a goal before the first turn and pauses it on stop","runtime":"real-core","shard":"1/1"}
     ],
+    "provider-goal-completion-core": [
+      {"area":"provider-goal-completion-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider completes a goal from its own tool call on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-goal-completion-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider completes a goal from its own tool call on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-goal-completion-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider completes a goal from its own tool call on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "paused-supervisor-recovery": [
       {"area":"paused-supervisor-recovery","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade restores paused provider supervisor thinking and partial text after refresh|assistant upgrade replaces a callback wait when its turn finishes between polls","runtime":"mock","shard":"1/1"},
       {"area":"paused-supervisor-recovery","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade restores paused provider supervisor thinking and partial text after refresh|assistant upgrade replaces a callback wait when its turn finishes between polls","runtime":"mock","shard":"1/1"},

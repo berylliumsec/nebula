@@ -83,6 +83,13 @@ from .chat_turn_ledger import (
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .butler_reporting_tools import REPORT_TOOL_NAMES, report_components
+from .chat_goal_tools import (
+    GOAL_COMPLETE_TOOL_NAME,
+    GOAL_TOOL_NAMES,
+    GoalCompletionProposal,
+    accepted_goal_completion,
+    goal_completion_components,
+)
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
 from .conversation_search import CONVERSATION_SEARCH_TOOL_NAME, conversation_search_spec
@@ -2078,9 +2085,10 @@ _STALE_APPROVED_CALL_AGE = timedelta(minutes=10)
 # What Core asks when a running goal continues without an operator message.
 _GOAL_CONTINUE_INSTRUCTION = (
     "Review the active conversation goal and its completion criteria. Is the "
-    "goal complete? If it is complete, provide a final completion summary with "
-    "evidence. If it is not complete, continue making concrete progress toward "
-    "the goal now. Do not stop merely to report status."
+    "goal complete? If it is complete, call the offered goal_complete tool with a final summary "
+    "and concrete evidence, then give the operator a concise handoff. If it is "
+    "not complete, continue making concrete progress toward the goal now. Do "
+    "not stop merely to report status."
 )
 
 
@@ -2708,6 +2716,15 @@ class ChatService:
 
     def _turn_history(self, turn: ChatTurn) -> list[dict[str, Any]]:
         return self.turn_ledger.history(turn)
+
+    def _accepted_goal_completion(
+        self, turn: ChatTurn
+    ) -> GoalCompletionProposal | None:
+        if turn.goal_id is None:
+            return None
+        return accepted_goal_completion(
+            self._turn_history(turn), goal_id=turn.goal_id, turn_id=turn.id
+        )
 
     def _turn_tool_call_ids(self, turn: ChatTurn) -> list[str]:
         return self.turn_ledger.tool_call_ids(turn)
@@ -5858,7 +5875,9 @@ class ChatService:
                 "the changed work, evidence, completion criterion, and next step. "
                 "If a machine is down or unreachable, use report_attention promptly. "
                 "These are attributed observations, not verified findings; continue "
-                "the goal work after reporting."
+                "the goal work after reporting. When all completion criteria are met, "
+                "call the offered goal_complete tool with a summary and concrete evidence. A final "
+                "answer alone does not complete the Core goal."
             )
         knowledge_search = False
         if tools_enabled:
@@ -6078,6 +6097,15 @@ class ChatService:
                             scope=tool_components.scope,
                         ),
                     )
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        goal_completion_components(
+                            self.store,
+                            engagement_id=goal.engagement_id,
+                            workspace=Path(tool_components.workspace),
+                            scope=tool_components.scope,
+                        ),
+                    )
                 if tool_components is not None:
                     # Any turn with tools can outgrow its window, so any can
                     # keep working notes. They write only this conversation's
@@ -6148,7 +6176,11 @@ class ChatService:
                             if skill_resources_selected
                             else frozenset()
                         )
-                        | (REPORT_TOOL_NAMES if goal is not None else frozenset())
+                        | (
+                            REPORT_TOOL_NAMES | GOAL_TOOL_NAMES
+                            if goal is not None
+                            else frozenset()
+                        )
                         | frozenset({"plan.submit"}),
                     )
                 except InvalidToolArguments as exc:
@@ -6161,7 +6193,11 @@ class ChatService:
                     always_loaded=[
                         *tool_components.scope.always_loaded_tools,
                         "plan.submit",
-                        *(REPORT_TOOL_NAMES if goal is not None else ()),
+                        *(
+                            (REPORT_TOOL_NAMES | GOAL_TOOL_NAMES)
+                            if goal is not None
+                            else ()
+                        ),
                     ],
                     always_loaded_sources=[f"mcp:{item.id}" for item in mcp_profiles],
                 )
@@ -8535,7 +8571,10 @@ class ChatService:
             # Routing responses in a row whose calls Core answered itself.
             deviations = 0
             route_deviated = False
-            while turn.status != ChatTurnStatus.FINALIZING:
+            while (
+                turn.status != ChatTurnStatus.FINALIZING
+                and self._accepted_goal_completion(turn) is None
+            ):
                 session = self.store.get(ChatSession, turn.session_id)
                 if self.plans.required(turn, session):
                     plan = self.plans.ensure(turn, session)
@@ -8576,7 +8615,8 @@ class ChatService:
                 budgeted_specs = [
                     spec
                     for spec in components.specs.values()
-                    if (
+                    if spec.name == GOAL_COMPLETE_TOOL_NAME
+                    or (
                         spec.budget_class == "artifact_query"
                         and (
                             turn.max_artifact_queries is None
@@ -9289,6 +9329,10 @@ class ChatService:
                         "step": step,
                     },
                 )
+                if self._accepted_goal_completion(turn) is not None:
+                    # A completion proposal ends tool routing. The final
+                    # answer and goal transition commit in one transaction.
+                    break
 
             turn = self.store.update(
                 ChatTurn,
@@ -9700,6 +9744,8 @@ class ChatService:
             spec = specs.get(call.name)
             if spec is None:
                 continue
+            if call.name == GOAL_COMPLETE_TOOL_NAME:
+                return True
             if spec.budget_class == "artifact_query":
                 if (
                     turn.max_artifact_queries is None
@@ -11708,7 +11754,8 @@ class ChatService:
             "execution_tool_calls": turn.execution_tool_calls
             + (
                 1
-                if entry.get("budget_class")
+                if entry.get("name") != GOAL_COMPLETE_TOOL_NAME
+                and entry.get("budget_class")
                 not in {"artifact_query", "delivery", _REFUSED_BUDGET_CLASS}
                 else 0
             ),
@@ -16539,7 +16586,25 @@ class ChatService:
         a turn that resumes and answers again.
         """
 
+        from .chat_goals import ChatGoalService
+
         latest = self._assert_execution_owner(prepared)
+        proposal = self._accepted_goal_completion(latest)
+        goal = (
+            self.store.get(ChatGoal, latest.goal_id)
+            if proposal is not None and latest.goal_id is not None
+            else None
+        )
+        if goal is not None:
+            if (
+                goal.status != ChatGoalStatus.RUNNING
+                or goal.execution_owner_id != self.worker_id
+                or goal.execution_claim_id != prepared.execution_claim_id
+                or ChatGoalService(self.store).has_working_subagents(latest.session_id)
+            ):
+                raise ChatHistoryConflict(
+                    "the goal changed or still has working subagents before completion"
+                )
         changes: dict[str, Any] = {
             "status": ChatTurnStatus.COMPLETE,
             "final_message_id": completion.message.id,
@@ -16553,6 +16618,31 @@ class ChatService:
             changes,
             expected_revision=latest.revision,
         )
+        if goal is not None and proposal is not None:
+            now = utc_now()
+            transaction.update(
+                ChatGoal,
+                goal.id,
+                {
+                    "status": ChatGoalStatus.COMPLETED,
+                    "completed_at": now,
+                    "completion_summary": proposal.completion_summary,
+                    "completion_evidence": [
+                        {
+                            "kind": "agent_reported",
+                            "detail": detail,
+                            "turn_id": latest.id,
+                        }
+                        for detail in proposal.completion_evidence
+                    ],
+                    "active_since": None,
+                    "elapsed_seconds": goal.active_elapsed_seconds(now),
+                    "execution_owner_id": None,
+                    "execution_claim_id": None,
+                    "execution_claimed_at": None,
+                },
+                expected_revision=goal.revision,
+            )
         if latest.goal_id and not prepared.tools_enabled:
             uncharged = ChatTokenUsage(
                 input_tokens=max(

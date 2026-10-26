@@ -45,6 +45,7 @@ Settings assistant and the complete destination catalog.
 | Ask for a task plan | The chat's Assistant settings asks any provider or harness agent to share a plan on future turns, or Butler records one exact one-task request with the target revision and reason. Normal tools remain available, and the activity view shows whether a plan was shared | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
 | Hand off a previously planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source; the new planning preference is advisory | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
 | Edit a goal's resume instruction | Chat → Goal → Edit goal shows the saved text; the current Core wording is the default. Saving it updates the goal by revision, and the next explicit Resume sends that text in the same conversation. Automatic continuation turns retain their separate Core instruction | Core goal record and resumed turn; goal editor owns the draft | Core unit, component, real Core and browser |
+| Complete a provider goal | A tool-enabled provider agent calls the offered `goal_complete` tool (`goal.complete` in Core) with a summary and concrete evidence after meeting the goal criteria. Core saves the completed goal with the final answer, labels the evidence agent-reported, and starts no further continuation; the goal panel shows the saved state after refresh | Core goal, turn ledger, final message and goal panel | Core unit and real Core browser |
 | Switch a saved harness chat to a provider | Chat → Assistant settings → Runtime → Provider checks the chosen provider and model, then Core changes the same chat's durable binding at an idle boundary. The chat ID, transcript, and paused goal stay in place; the next provider turn is saved there. An active response, running or blocked goal, working subagent, or queued follow-up gives an actionable refusal | Core chat binding and goal; React owns only the unsaved picker choice | Core unit, desktop/mobile browser, real Core and LAN |
 
 The setting catalog lists every Settings section, Butler's Voice control, and
@@ -193,6 +194,14 @@ still does not receive Nebula settings tools. When its answer cites a known
 Settings destination, the UI opens that destination as a lens on click.
 
 ## Core goal troubleshooting
+
+For a tool-enabled provider goal, a final answer alone leaves the Core goal
+running. The agent calls the offered `goal_complete` tool (`goal.complete` in Core)
+with a completion summary and concrete
+evidence after meeting every criterion. Core checks the active turn and saves
+the completed goal with the final answer in one transaction, then stops
+automatic continuations. The goal panel shows this evidence as agent-reported;
+the call does not independently verify the research claim.
 
 For a Core-owned goal in a harness chat, the active agent can call `goal.block`
 with a concrete reason. Core saves the blocked goal and stops automatic
