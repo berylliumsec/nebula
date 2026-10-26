@@ -16590,7 +16590,11 @@ class ChatService:
 
         latest = self._assert_execution_owner(prepared)
         proposal = self._accepted_goal_completion(latest)
-        goal = self.store.get(ChatGoal, latest.goal_id) if proposal else None
+        goal = (
+            self.store.get(ChatGoal, latest.goal_id)
+            if proposal is not None and latest.goal_id is not None
+            else None
+        )
         if goal is not None:
             if (
                 goal.status != ChatGoalStatus.RUNNING

@@ -1,5 +1,5 @@
 {
-  "change_digest": "6a407500e716c70cf00a86fa0ea3c065ef79ae21cd6b7136d9e6408aea54c6cb",
+  "change_digest": "a91c6f4181e5544fa9df8cae73613a4c81c06378d86523f409f346a75e9d8eec",
   "reviewed_by": "Codex agent",
   "reason": "Provider goal completion must persist only with the final answer and stop automatic continuation. Cover the existing continuation path, the new completion and exhausted tool budget path, current product guidance, saved goal-panel evidence, and the synthetic production LAN Core journey in desktop Chromium and mobile Chromium/WebKit.",
   "exclusions": "No native code or harness-goal behavior changed. Unrelated chat, Settings, browser control, and mission suites are excluded. The selected real-Core test owns an isolated database and inert local model; it does not validate a live third-party provider or physical phone.",
