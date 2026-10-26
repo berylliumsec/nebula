@@ -75,7 +75,9 @@ def accepted_goal_completion(
         result = entry.get("provider_result")
         try:
             result = json.loads(result) if isinstance(result, str) else result
-        except json.JSONDecodeError:
+        except (
+            json.JSONDecodeError
+        ):  # diagnostic-expected: malformed tool history cannot prove completion
             continue
         arguments = entry.get("arguments")
         if not isinstance(result, dict) or not isinstance(arguments, dict):
@@ -88,7 +90,7 @@ def accepted_goal_completion(
         ):
             try:
                 return GoalCompletionProposal.model_validate(arguments)
-            except ValidationError:
+            except ValidationError:  # diagnostic-expected: invalid historical arguments cannot prove completion
                 continue
     return None
 
