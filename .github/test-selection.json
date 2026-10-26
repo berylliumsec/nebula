@@ -1,19 +1,20 @@
 {
-  "change_digest": "780b0f7624130129e124ae8c3ecbdf8f8f30eca00157d7e7c50c7b63cf0af271",
+  "change_digest": "c758564336f620fb455638866d6ff2e681f62e83309d1b3df2086b6bf86abacf",
   "reviewed_by": "Codex agent",
-  "reason": "Project-scoped MCP catalog presentation in Settings and mission setup, including responsive MCP card actions; cover both components and the production LAN Core journey with desktop and mobile Chromium/WebKit profiles.",
-  "exclusions": "No Python or native code changed. MCP import, probing, backend dispatch, and unrelated mission execution are unchanged, so their separate suites are excluded. The browser selection exercises project switching, durable Notebook grant update, reload, and shared server visibility.",
+  "reason": "Provider goal completion must persist only with the final answer and stop automatic continuation. Cover the existing continuation path, the new completion and exhausted tool budget path, current product guidance, saved goal-panel evidence, and the synthetic production LAN Core journey in desktop Chromium and mobile Chromium/WebKit.",
+  "exclusions": "No native code or harness-goal behavior changed. Unrelated chat, Settings, browser control, and mission suites are excluded. The selected real-Core test owns an isolated database and inert local model; it does not validate a live third-party provider or physical phone.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 26,
+    "python": 3,
+    "frontend": 24,
     "native": 0,
-    "playwright": 8
+    "playwright": 3
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/components/MissionControls.test.tsx"
+  "python": [
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
+    "tests/v3/test_chat_goals.py::test_provider_goal_completion_saves_final_answer_and_stops_continuation",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
+  "frontend": ["ui/src/components/ProviderGoalPanel.test.tsx"],
   "native": [],
-  "playwright": ["area:mcp-project-scope"]
+  "playwright": ["area:provider-goal-completion-core"]
 }
