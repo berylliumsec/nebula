@@ -5,6 +5,9 @@ type ActivityState = "working" | "waiting" | "idle";
 export interface ConversationSidebarRow {
   session: ChatSessionSummary;
   depth: 0 | 1 | 2;
+  /** A collapsed archive belonging to this Butler conversation. */
+  archivedChildren?: number;
+  archiveToggle?: boolean;
   childCount: number;
   childKind: "chats" | "subagents";
   waitingChildren: number;
@@ -25,6 +28,7 @@ export function groupSidebarConversations(
   search: string,
   expandedParents: ReadonlySet<string>,
   now = Date.now(),
+  expandedArchives: ReadonlySet<string> = new Set(),
 ): { groups: ConversationSidebarGroup[]; matchCount: number } {
   const query = search.trim().toLocaleLowerCase();
   const matches = (session: ChatSessionSummary) => !query || [
@@ -40,6 +44,7 @@ export function groupSidebarConversations(
 
   for (const session of sessions) {
     if (!session.isSubagent || !session.parentSessionId) continue;
+    if (session.pinned && !session.archivedAt) continue;
     const parent = byId.get(session.parentSessionId);
     if (!parent || parent.isSubagent) continue;
     subagents.set(parent.id, [...(subagents.get(parent.id) ?? []), session]);
@@ -58,6 +63,7 @@ export function groupSidebarConversations(
   }
   for (const session of sessions) {
     if (!session.isButlerInitiated || session.isControlAssistant || session.isSubagent) continue;
+    if (session.pinned && !session.archivedAt) continue;
     const butler = butlerByProject.get(session.engagementId);
     if (!butler || butler.id === session.id) continue;
     butlerChats.set(butler.id, [...(butlerChats.get(butler.id) ?? []), session]);
@@ -68,7 +74,7 @@ export function groupSidebarConversations(
   startOfToday.setHours(0, 0, 0, 0);
   const weekAgo = now - 7 * 24 * 60 * 60 * 1_000;
   const descendants = (session: ChatSessionSummary): ChatSessionSummary[] => {
-    const chats = butlerChats.get(session.id) ?? [];
+    const chats = (butlerChats.get(session.id) ?? []).filter(chat => !chat.archivedAt);
     return [
       ...(subagents.get(session.id) ?? []),
       ...chats,
@@ -80,21 +86,25 @@ export function groupSidebarConversations(
   );
   const groups = new Map<string, ConversationSidebarGroup>();
   const roots = sessions.filter(session => !attached.has(session.id))
-    .sort((a, b) => newestUpdate(b) - newestUpdate(a));
+    .sort((a, b) => Number(Boolean(b.pinned && !b.archivedAt)) - Number(Boolean(a.pinned && !a.archivedAt))
+      || newestUpdate(b) - newestUpdate(a));
   for (const session of roots) {
-    const chats = butlerChats.get(session.id) ?? [];
+    const chats = (butlerChats.get(session.id) ?? []).filter(chat => !chat.archivedAt);
+    const archivedChats = (butlerChats.get(session.id) ?? []).filter(chat => Boolean(chat.archivedAt));
     const children = [...chats, ...(subagents.get(session.id) ?? [])];
-    const childKind = chats.length ? "chats" : "subagents";
+    const childKind = chats.length || archivedChats.length ? "chats" : "subagents";
     const allDescendants = descendants(session);
-    const matchingDescendants = allDescendants.filter(matches);
+    const matchingDescendants = [...allDescendants, ...archivedChats,
+      ...archivedChats.flatMap(chat => subagents.get(chat.id) ?? [])].filter(matches);
     const parentMatches = matches(session);
     if (query && !parentMatches && !matchingDescendants.length) continue;
     const waitingChildren = children.filter(child => activity[child.id] === "waiting").length;
     const workingChildren = children.filter(child => activity[child.id] === "working"
       || (subagents.get(child.id) ?? []).some(agent => ["working", "waiting"].includes(activity[agent.id]))).length;
     const childWorking = allDescendants.some(child => ["working", "waiting"].includes(activity[child.id]));
-    const label = activity[session.id] === "waiting" || (childKind === "chats" && waitingChildren) ? "Needs you"
-      : session.archivedAt ? "Archived"
+    const label = session.archivedAt ? "Archived"
+      : session.pinned ? "Pinned"
+        : activity[session.id] === "waiting" || (childKind === "chats" && waitingChildren) ? "Needs you"
         : activity[session.id] === "working" || childWorking ? "Working"
           : newestUpdate(session) >= startOfToday.getTime() ? "Today"
             : newestUpdate(session) >= weekAgo ? "Previous 7 days" : "Older";
@@ -102,7 +112,8 @@ export function groupSidebarConversations(
     const expanded = expandedParents.has(session.id) || searchRevealed;
     const group = groups.get(label) ?? { label, rows: [], rootCount: 0 };
     group.rootCount += 1;
-    group.rows.push({ session, depth: 0, childCount: children.length, childKind, waitingChildren, workingChildren, expanded, searchRevealed });
+    group.rows.push({ session, depth: 0, childCount: children.length, archivedChildren: archivedChats.length,
+      childKind, waitingChildren, workingChildren, expanded, searchRevealed });
     if (expanded) {
       const visibleChildren = query && !parentMatches
         ? children.filter(child => matches(child) || (subagents.get(child.id) ?? []).some(matches))
@@ -123,11 +134,36 @@ export function groupSidebarConversations(
           }
         }
       }
+      if (archivedChats.length) {
+        const matchingArchived = archivedChats.filter(chat => matches(chat) || (subagents.get(chat.id) ?? []).some(matches));
+        if (!query || matchingArchived.length) {
+          const archiveOpen = expandedArchives.has(session.id) || Boolean(query);
+          group.rows.push({ session, depth: 1, archiveToggle: true, archivedChildren: archivedChats.length,
+            childCount: 0, childKind: "chats", waitingChildren: 0, workingChildren: 0,
+            expanded: archiveOpen, searchRevealed: Boolean(query) });
+          if (archiveOpen) {
+            for (const child of query ? matchingArchived : archivedChats) {
+              const agents = subagents.get(child.id) ?? [];
+              const matchingAgents = agents.filter(matches);
+              const childExpanded = expandedParents.has(child.id) || Boolean(query && matchingAgents.length);
+              group.rows.push({ session: child, depth: 1, childCount: agents.length, childKind: "subagents",
+                waitingChildren: 0, workingChildren: 0, expanded: childExpanded,
+                searchRevealed: Boolean(query && matchingAgents.length) });
+              if (childExpanded) {
+                for (const agent of query && !matches(child) ? matchingAgents : agents) {
+                  group.rows.push({ session: agent, depth: 2, childCount: 0, childKind: "subagents",
+                    waitingChildren: 0, workingChildren: 0, expanded: false, searchRevealed: false });
+                }
+              }
+            }
+          }
+        }
+      }
     }
     groups.set(label, group);
   }
   return {
-    groups: ["Needs you", "Working", "Today", "Previous 7 days", "Older", "Archived"]
+    groups: ["Pinned", "Needs you", "Working", "Today", "Previous 7 days", "Older", "Archived"]
       .flatMap(label => groups.has(label) ? [groups.get(label)!] : []),
     matchCount,
   };
