@@ -6314,22 +6314,39 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       sessionActionsButtonRef.current?.focus();
     };
     const closeOnViewportChange = () => setSessionActionsId(undefined);
-    // The menu is placed beside its trigger, so only a scroll that moves the
-    // trigger displaces it; a streaming transcript scrolling must not close it.
-    const closeOnTriggerScroll = (event: Event) => {
+    // Keep the menu beside its trigger when the conversation list scrolls.
+    // A scroll queued by the click that opens it can arrive after the menu mounts.
+    const syncOnTriggerScroll = (event: Event) => {
       const trigger = sessionActionsButtonRef.current;
-      if (!trigger || !(event.target instanceof Node) || event.target === document || event.target.contains(trigger)) closeOnViewportChange();
+      if (!trigger) { closeOnViewportChange(); return; }
+      if (!(event.target instanceof Node) || (event.target !== document && !event.target.contains(trigger))) return;
+      const bounds = trigger.getBoundingClientRect();
+      const scrollBounds = event.target instanceof Element ? event.target.getBoundingClientRect() : undefined;
+      if (bounds.bottom <= Math.max(0, scrollBounds?.top ?? 0)
+        || bounds.top >= Math.min(window.innerHeight, scrollBounds?.bottom ?? window.innerHeight)) {
+        closeOnViewportChange();
+        return;
+      }
+      const menuHeight = sessionActionsMenuRef.current?.getBoundingClientRect().height ?? 310;
+      const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
+      const next = {
+        left: Math.max(8, Math.min(bounds.right - 228, window.innerWidth - 236)),
+        openAbove,
+        top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
+      };
+      setSessionActionsPosition(current => current && current.left === next.left && current.top === next.top
+        && current.openAbove === next.openAbove ? current : next);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
-    document.addEventListener("scroll", closeOnTriggerScroll, true);
+    document.addEventListener("scroll", syncOnTriggerScroll, true);
     window.addEventListener("resize", closeOnViewportChange);
     // The first item an operator can act on, whichever actions this conversation offers.
     requestAnimationFrame(() => sessionActionsMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled):not([hidden])')?.focus());
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
-      document.removeEventListener("scroll", closeOnTriggerScroll, true);
+      document.removeEventListener("scroll", syncOnTriggerScroll, true);
       window.removeEventListener("resize", closeOnViewportChange);
     };
   }, [sessionActionsId]);
