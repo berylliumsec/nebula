@@ -128,4 +128,31 @@ describe("groupSidebarConversations", () => {
     expect(waiting.groups[0].label).toBe("Needs you");
     expect(waiting.groups[0].rows[0].waitingChildren).toBe(1);
   });
+
+  it("keeps archived Butler chats in Butler's own collapsed archive", () => {
+    const butler = session("butler", { isControlAssistant: true });
+    const active = session("active", { isButlerInitiated: true });
+    const archived = session("archived", { isButlerInitiated: true, archivedAt: "2026-09-22T12:00:00Z" });
+    const collapsed = groupSidebarConversations([butler, active, archived], {}, "", new Set([butler.id]), now);
+    expect(collapsed.groups[0].rows.map(row => row.session.id)).toEqual(["butler", "active", "butler"]);
+    expect(collapsed.groups[0].rows.at(-1)).toMatchObject({ archiveToggle: true, archivedChildren: 1, expanded: false });
+    expect(collapsed.groups.some(group => group.label === "Archived")).toBe(false);
+
+    const open = groupSidebarConversations([butler, active, archived], {}, "", new Set([butler.id]), now, new Set([butler.id]));
+    expect(open.groups[0].rows.map(row => row.session.id)).toEqual(["butler", "active", "butler", "archived"]);
+    const searched = groupSidebarConversations([butler, active, archived], {}, "archived", new Set(), now);
+    expect(searched.groups[0].rows.map(row => row.session.id)).toEqual(["butler", "butler", "archived"]);
+    const onlyArchived = groupSidebarConversations([butler, archived], {}, "", new Set(), now);
+    expect(onlyArchived.groups[0].rows[0]).toMatchObject({ childCount: 0, archivedChildren: 1 });
+  });
+
+  it("promotes pinned chats above urgent and recent chats, including Butler children", () => {
+    const butler = session("butler", { isControlAssistant: true });
+    const pinned = session("pinned", { isButlerInitiated: true, pinned: true, updatedAt: "2026-09-01T10:00:00Z" });
+    const waiting = session("waiting", { updatedAt: "2026-09-22T14:00:00Z" });
+    const result = groupSidebarConversations([butler, pinned, waiting], { waiting: "waiting" }, "", new Set([butler.id]), now);
+    expect(result.groups.map(group => group.label)).toEqual(["Pinned", "Needs you", "Today"]);
+    expect(result.groups[0].rows[0].session.id).toBe("pinned");
+    expect(result.groups[2].rows.map(row => row.session.id)).toEqual(["butler"]);
+  });
 });

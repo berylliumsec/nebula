@@ -961,6 +961,30 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert settings.json()["metadata"]["hook_ids"] == ["audit"]
     assert settings.json()["metadata"]["reasoning_effort"] == "high"
     assert store.get(ChatSession, session_id).metadata["mcp_server_ids"] == [mcp.id]
+    priority = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={
+            "pinned": True,
+            "flag_color": "red",
+            "expected_revision": settings.json()["revision"],
+        },
+    )
+    assert priority.status_code == 200, priority.text
+    assert priority.json()["metadata"]["pinned"] is True
+    assert priority.json()["metadata"]["flag_color"] == "red"
+    assert store.get(ChatSession, session_id).metadata["flag_color"] == "red"
+    assert (
+        client.patch(
+            f"/api/v1/chat-sessions/{session_id}",
+            headers=_auth(),
+            json={
+                "flag_color": "ultraviolet",
+                "expected_revision": priority.json()["revision"],
+            },
+        ).status_code
+        == 422
+    )
     stale_rename = client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
@@ -970,7 +994,7 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     archived = client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
-        json={"archived": True, "expected_revision": settings.json()["revision"]},
+        json={"archived": True, "expected_revision": priority.json()["revision"]},
     )
     assert archived.status_code == 200
     assert archived.json()["title"] == "Renamed API conversation"
@@ -983,6 +1007,18 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     )
     assert unarchived.status_code == 200
     assert "archived_at" not in unarchived.json()["metadata"]
+    cleared_priority = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={
+            "pinned": False,
+            "flag_color": None,
+            "expected_revision": unarchived.json()["revision"],
+        },
+    )
+    assert cleared_priority.status_code == 200, cleared_priority.text
+    assert "pinned" not in cleared_priority.json()["metadata"]
+    assert "flag_color" not in cleared_priority.json()["metadata"]
     assert (
         client.patch(
             f"/api/v1/chat-sessions/{session_id}", headers=_auth(), json={}

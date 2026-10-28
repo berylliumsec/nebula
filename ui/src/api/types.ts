@@ -2469,6 +2469,8 @@ export interface ChatSessionSummary {
   /** The operator's running-at-once subagent limit; absent means no limit. */
   subagentLimit?: number;
   archivedAt?: string;
+  pinned?: boolean;
+  flagColor?: "red" | "orange" | "yellow" | "green" | "blue" | "purple";
   createdAt: string;
   updatedAt: string;
   revision: number;

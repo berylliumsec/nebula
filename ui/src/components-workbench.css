@@ -605,6 +605,10 @@ kbd { font-size: 11px; }
 .session-list-group-toggle svg { transition: transform .12s ease; }
 .session-list-group-toggle svg.collapsed { transform: rotate(-90deg); }
 .session-list-group-toggle span { font-variant-numeric: tabular-nums; opacity: .8; }
+.session-butler-archive-toggle { display: flex; align-items: center; gap: 5px; min-height: 40px; margin-left: 24px; padding: 0 8px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: 11px; text-align: left; cursor: pointer; }
+.session-butler-archive-toggle:hover, .session-butler-archive-toggle:focus-visible { color: var(--text); background: var(--surface-hover); }
+.session-butler-archive-toggle svg.collapsed { transform: rotate(-90deg); }
+.session-butler-archive-toggle span { font-variant-numeric: tabular-nums; opacity: .8; }
 .chat-archived-notice { display: flex; align-items: center; gap: 8px; margin: 6px 12px 0; padding: 5px 6px 5px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); color: var(--muted-strong); font-size: 12px; }
 .chat-archived-notice > span { flex: 1; min-width: 0; }
 .chat-archived-notice > svg { flex: none; }
@@ -630,6 +634,16 @@ kbd { font-size: 11px; }
 .session-list-item.renaming { display: block; }
 .session-list-item > .session-select { display: grid; min-width: 0; min-height: 46px; overflow: hidden; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px 9px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .session-list-item > .session-select > span { display: flex; min-width: 0; max-width: 100%; overflow: hidden; flex-direction: column; }
+.session-list-item > .session-select strong { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-list-item > .session-select .conversation-title-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-pin-marker, .conversation-flag-marker { flex: none; }
+.conversation-pin-marker { color: var(--muted-strong); }
+.conversation-flag-marker[data-color="red"], .session-flag-picker button[data-color="red"] { color: #db4e57; }
+.conversation-flag-marker[data-color="orange"], .session-flag-picker button[data-color="orange"] { color: #d87832; }
+.conversation-flag-marker[data-color="yellow"], .session-flag-picker button[data-color="yellow"] { color: #bd9220; }
+.conversation-flag-marker[data-color="green"], .session-flag-picker button[data-color="green"] { color: #2c9b68; }
+.conversation-flag-marker[data-color="blue"], .session-flag-picker button[data-color="blue"] { color: #498ade; }
+.conversation-flag-marker[data-color="purple"], .session-flag-picker button[data-color="purple"] { color: #9a6bd4; }
 .session-list-item > .session-select > .conversation-activity-marker { display: block; width: 9px; min-width: 9px; height: 9px; justify-self: center; border: 1.5px solid currentColor; border-radius: 50%; opacity: .72; }
 .session-list-item > .session-select > .conversation-activity-marker.working { border-color: var(--blue); background: var(--blue); animation: conversation-working-pulse 2s ease-in-out infinite; }
 .session-list-item > .session-select > .conversation-activity-marker.waiting { border-color: currentColor; border-radius: 2px; background: currentColor; opacity: 1; transform: rotate(45deg) scale(.78); }
@@ -644,8 +658,13 @@ kbd { font-size: 11px; }
 .session-item-actions { position: relative; display: grid; place-items: center; }
 .session-actions-trigger { width: 34px; height: 34px; opacity: 0; pointer-events: none; transition: opacity 120ms ease, background-color 120ms ease; }
 .session-list-item:hover .session-actions-trigger, .session-list-item:focus-within .session-actions-trigger, .session-list-item.actions-open .session-actions-trigger { opacity: 1; pointer-events: auto; }
-.session-actions-menu { position: fixed; z-index: 220; display: grid; width: 196px; padding: 5px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: none; }
+.session-actions-menu { position: fixed; z-index: 220; display: grid; width: 228px; max-height: min(430px, calc(100dvh - 16px)); overflow-y: auto; padding: 5px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: none; }
 .session-actions-menu > button { display: flex; min-height: 38px; align-items: center; gap: 9px; padding: 0 10px; border: 0; border-radius: var(--radius-control); color: var(--muted-strong); background: transparent; font-size: 12px; text-align: left; cursor: pointer; }
+.session-flag-picker { padding: 4px 8px 6px; color: var(--muted-strong); font-size: 11px; }
+.session-flag-picker > div { display: flex; flex-wrap: wrap; gap: 1px; }
+.session-flag-picker button { display: grid; width: 28px; height: 32px; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; }
+.session-flag-picker button:hover, .session-flag-picker button:focus-visible, .session-flag-picker button[data-selected="true"] { border-color: var(--border); background: var(--surface-hover); }
+.session-flag-picker button:disabled { opacity: .4; cursor: default; }
 .session-actions-menu > button:hover, .session-actions-menu > button:focus-visible { color: var(--text); background: var(--surface-hover); outline: 0; }
 .session-actions-menu > button.danger { color: var(--red); }
 .session-actions-menu > button.danger:hover, .session-actions-menu > button.danger:focus-visible { background: var(--red-muted); }
@@ -656,6 +675,8 @@ kbd { font-size: 11px; }
   .session-subagents-toggle { width: 44px; min-height: 44px; }
   .session-actions-trigger { width: 44px; height: 44px; opacity: 1; pointer-events: auto; }
   .session-actions-menu > button { min-height: 44px; }
+  .session-flag-picker button { width: 44px; height: 44px; }
+  .session-butler-archive-toggle { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .session-subagents-toggle svg { transition: none; } }
 .session-list nav strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

@@ -8999,7 +8999,7 @@ reliabilityTest("assistant upgrade real Core nests durable subagent conversation
 });
 
 reliabilityTest("assistant upgrade real Core groups Butler initiated chats after reload", async ({page}, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(300_000);
   const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
   await withOwnedCleanup(async () => {
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
@@ -9020,16 +9020,44 @@ reliabilityTest("assistant upgrade real Core groups Butler initiated chats after
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", {name: "Show conversations"}).click();
     const sidebar = page.getByRole("complementary", {name: "Conversations"});
+    const openActions = async (title: string) => {
+      const trigger = sidebar.getByRole("button", {name: `More actions for ${title}`});
+      await sidebar.locator(".session-list-item").filter({hasText: title}).hover();
+      await trigger.click();
+    };
     await expect(sidebar.locator('[data-session-id="sidebar-butler"]')).toBeVisible();
     await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toHaveCount(0);
     await expect(sidebar.locator('[data-session-id="sidebar-ordinary-recovery"]')).toBeVisible();
     await sidebar.getByRole("button", {name: "Expand 2 chats for Butler"}).click();
     await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
     await expect(sidebar.locator('[data-session-id="sidebar-butler-chat"]')).toBeVisible();
+    await openActions("Recover paused goal");
+    await page.getByRole("menu", {name: "Actions for Recover paused goal"}).getByRole("menuitem", {name: "Archive", exact: true}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toHaveCount(0);
+    await expect(sidebar.getByRole("button", {name: "Show 1 archived Butler chats"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-recovery")).json()).metadata.archived_at).toBeTruthy();
+    await sidebar.getByRole("button", {name: "Show 1 archived Butler chats"}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
+    await openActions("Recover paused goal");
+    await page.getByRole("menu", {name: "Actions for Recover paused goal"}).getByRole("menuitem", {name: "Unarchive"}).click();
+    await expect(sidebar.getByRole("button", {name: /archived Butler chats/})).toHaveCount(0);
+    expect((await (await core.api.get("chat-sessions/sidebar-recovery")).json()).metadata.archived_at).toBeUndefined();
+    await openActions("Review blocked goal");
+    await page.getByRole("menu", {name: "Actions for Review blocked goal"}).getByRole("menuitem", {name: "Pin to top"}).click();
+    await expect(sidebar.locator(".session-list-group").first()).toContainText("Pinned");
+    await openActions("Review blocked goal");
+    await page.getByRole("menu", {name: "Actions for Review blocked goal"}).getByRole("menuitem", {name: "Set red flag for Review blocked goal"}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-butler-chat"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
+    expect((await (await core.api.get("chat-sessions/sidebar-butler-chat")).json()).metadata).toMatchObject({pinned: true, flag_color: "red"});
     await sidebar.locator('[data-session-id="sidebar-recovery"]').click();
     await expect(page).toHaveURL(/session=sidebar-recovery/);
     await page.reload();
-    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
+    const reopen = page.getByRole("button", {name: "Show conversations"});
+    await expect(sidebar.or(reopen).first()).toBeVisible({timeout: 30_000});
+    if (await reopen.isVisible()) await reopen.click();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible({timeout: 20_000});
+    await expect(sidebar.locator(".session-list-group").first()).toContainText("Pinned");
+    await expect(sidebar.locator('[data-session-id="sidebar-butler-chat"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
     await testInfo.attach("butler-sidebar-real-core", {body: JSON.stringify({origin: core.origin, build: "production", buildCommit: build.commit, builtAt: build.builtAt, asset: entry, assetSha256: build.assets[entry!], viewport: page.viewportSize(), sessionId: "sidebar-recovery"}), contentType: "application/json"});
     await testInfo.attach("butler-sidebar-screen", {body: await page.screenshot(), contentType: "image/png"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);

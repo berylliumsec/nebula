@@ -4164,6 +4164,7 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
 });
 
 reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane", async ({ page }) => {
+  test.setTimeout(270_000);
   const butler = { ...entity, id: "group-butler", engagement_id: "scratch-project", title: "Butler", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { control_assistant: true } };
   const recovery = { ...entity, id: "group-recovery", engagement_id: "scratch-project", title: "Recover paused Apple Music goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
   const other = { ...entity, id: "group-other", engagement_id: "scratch-project", title: "Recover blocked Siri AI goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
@@ -4184,6 +4185,19 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
     }
     if (path.endsWith("/chat/control-assistant/session") && route.request().method() === "GET") return route.fulfill({ json: butler });
     const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && route.request().method() === "PATCH") {
+      const change = route.request().postDataJSON() as { archived?: boolean; pinned?: boolean; flag_color?: string | null; expected_revision: number };
+      if (change.expected_revision !== selected.revision) return route.fulfill({ status: 409, json: { detail: "Conversation changed" } });
+      const metadata: Record<string, unknown> = { ...selected.metadata };
+      if (change.archived === true) metadata.archived_at = "2026-09-22T12:00:00Z";
+      if (change.archived === false) delete metadata.archived_at;
+      if (change.pinned === true) metadata.pinned = true;
+      if (change.pinned === false) delete metadata.pinned;
+      if (change.flag_color) metadata.flag_color = change.flag_color;
+      if (change.flag_color === null) delete metadata.flag_color;
+      Object.assign(selected, { revision: selected.revision + 1, metadata });
+      return route.fulfill({ json: selected });
+    }
     if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
     if (/\/chat\/sessions\/group-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
     if (/\/chat\/sessions\/group-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
@@ -4191,6 +4205,11 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
   });
   await openWorkspace(page, "/?view=chat&session=group-ordinary", "Workbench");
   const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const openActions = async (title: string) => {
+    const trigger = sidebar.getByRole("button", { name: `More actions for ${title}` });
+    await sidebar.locator(".session-list-item").filter({ hasText: title }).hover();
+    await trigger.click();
+  };
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
   if (await show.isVisible()) await show.click();
@@ -4210,19 +4229,37 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
   await sidebar.getByRole("button", { name: "Expand 1 subagent for Recover paused Apple Music goal" }).click();
   await expect(sidebar.locator('[data-session-id="group-subagent"]')).toBeVisible();
   await expect(sidebar.locator('[data-session-id="group-subagent"]').locator("..")).toHaveClass(/nested-subagent-deep/);
-  await sidebar.getByRole("button", { name: "More actions for Recover paused Apple Music goal" }).click();
+  await openActions("Recover paused Apple Music goal");
   await expect(page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Copy link" })).toBeVisible();
   await page.keyboard.press("Escape");
+  await openActions("Recover paused Apple Music goal");
+  const archiveAction = page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Archive", exact: true });
+  await expect(archiveAction).toBeVisible();
+  await sidebar.locator("nav").evaluate(element => { element.scrollTop += 24; });
+  await archiveAction.click();
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: "Show 1 archived Butler chats" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "Show 1 archived Butler chats" }).click();
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await openActions("Recover paused Apple Music goal");
+  await page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Unarchive" }).click();
+  await expect(sidebar.getByRole("button", { name: /archived Butler chats/ })).toHaveCount(0);
+  await openActions("Operator research");
+  await page.getByRole("menu", { name: "Actions for Operator research" }).getByRole("menuitem", { name: "Pin to top" }).click();
+  await expect(sidebar.locator(".session-list-group").first()).toContainText("Pinned");
+  await openActions("Operator research");
+  await page.getByRole("menu", { name: "Actions for Operator research" }).getByRole("menuitem", { name: "Set red flag for Operator research" }).click();
+  await expect(sidebar.locator('[data-session-id="group-ordinary"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
   await sidebar.locator('[data-session-id="group-recovery"]').click();
   await expect(page).toHaveURL(/session=group-recovery/);
   await page.reload();
   const reopened = page.getByRole("complementary", { name: "Conversations" });
   const reopen = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
-  if (mobile) {
-    await expect(reopen).toBeVisible();
-    await reopen.click();
-  } else if (await reopen.isVisible()) await reopen.click();
+  await expect(reopened.or(reopen).first()).toBeVisible({ timeout: 30_000 });
+  if (await reopen.isVisible()) await reopen.click();
   await expect(reopened).toBeVisible();
+  await expect(reopened.locator(".session-list-group").first()).toContainText("Pinned");
+  await expect(reopened.locator('[data-session-id="group-ordinary"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
   await expect(reopened.locator('[data-session-id="group-recovery"]')).toBeVisible();
   await reopened.getByRole("searchbox", { name: "Search conversations" }).fill("Inspect stream path");
   await expect(reopened.locator('[data-session-id="group-butler"]')).toBeVisible();
