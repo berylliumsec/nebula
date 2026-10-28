@@ -1,20 +1,25 @@
 {
-  "change_digest": "a91c6f4181e5544fa9df8cae73613a4c81c06378d86523f409f346a75e9d8eec",
+  "change_digest": "eaa11f88af4b3d0d932da1e204daf95541e09dbc5d3934132490056ccd0876fa",
   "reviewed_by": "Codex agent",
-  "reason": "Provider goal completion must persist only with the final answer and stop automatic continuation. Cover the existing continuation path, the new completion and exhausted tool budget path, current product guidance, saved goal-panel evidence, and the synthetic production LAN Core journey in desktop Chromium and mobile Chromium/WebKit.",
-  "exclusions": "No native code or harness-goal behavior changed. Unrelated chat, Settings, browser control, and mission suites are excluded. The selected real-Core test owns an isolated database and inert local model; it does not validate a live third-party provider or physical phone.",
+  "reason": "Verify Butler-owned archived chats move into Butler's collapsed archive, pinned chats lead the conversation list, color flags persist in Core, and Butler can discover the conversation destination. The catalogued Butler sidebar journey exercises the production UI on desktop and emulated mobile browsers plus a paired real-Core LAN fixture.",
+  "exclusions": "No native code or provider execution changed. Unrelated chat, mission, project deletion, and broad browser suites are excluded. The real-Core fixture uses synthetic sessions and an inert provider; physical-device testing is unavailable.",
   "expected_tests": {
-    "python": 3,
-    "frontend": 24,
+    "python": 4,
+    "frontend": 15,
     "native": 0,
-    "playwright": 3
+    "playwright": 9
   },
   "python": [
-    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
-    "tests/v3/test_chat_goals.py::test_provider_goal_completion_saves_final_answer_and_stops_continuation",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
+    "tests/v3/test_chat_api.py::test_chat_api_completes_streams_and_exposes_durable_history",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_pins_flags_and_butler_archive",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": ["ui/src/components/ProviderGoalPanel.test.tsx"],
+  "frontend": [
+    "ui/src/pages/conversationSidebar.test.ts",
+    "ui/src/api/client.chatPriority.test.ts",
+    "ui/src/assistantDestinations.test.ts"
+  ],
   "native": [],
-  "playwright": ["area:provider-goal-completion-core"]
+  "playwright": ["area:butler-sidebar"]
 }

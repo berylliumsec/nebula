@@ -1026,6 +1026,10 @@ def _observation_dependencies(
 class ChatSessionUpdateRequest(NebulaModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     archived: bool | None = None
+    pinned: bool | None = None
+    flag_color: Literal["red", "orange", "yellow", "green", "blue", "purple"] | None = (
+        None
+    )
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     hook_ids: list[str] | None = Field(default=None, max_length=32)
     reasoning_effort: ReasoningEffort | None = None
@@ -1043,6 +1047,8 @@ class ChatSessionUpdateRequest(NebulaModel):
         if (
             self.title is None
             and self.archived is None
+            and self.pinned is None
+            and "flag_color" not in self.model_fields_set
             and self.mcp_server_ids is None
             and self.hook_ids is None
             and "reasoning_effort" not in self.model_fields_set
@@ -1054,7 +1060,9 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.subagent_harness_profile_id is None
             and self.subagent_model is None
         ):
-            raise ValueError("Provide a title, archived state, or assistant settings")
+            raise ValueError(
+                "Provide a title, archived state, pin, flag, or assistant settings"
+            )
         for name, values in (
             ("MCP server", self.mcp_server_ids),
             ("hook", self.hook_ids),
@@ -12245,6 +12253,16 @@ def create_app(
             metadata.setdefault("archived_at", utc_now().isoformat())
         elif request.archived is False:
             metadata.pop("archived_at", None)
+        if request.pinned is not None:
+            if request.pinned:
+                metadata["pinned"] = True
+            else:
+                metadata.pop("pinned", None)
+        if "flag_color" in request.model_fields_set:
+            if request.flag_color is None:
+                metadata.pop("flag_color", None)
+            else:
+                metadata["flag_color"] = request.flag_color
         if request.mcp_server_ids is not None:
             for profile_id in request.mcp_server_ids:
                 profile = store.get(McpServerProfile, profile_id)

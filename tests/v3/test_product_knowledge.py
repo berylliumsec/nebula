@@ -195,6 +195,18 @@ def test_product_search_finds_butler_goal_handoff(monkeypatch):
     assert any("nebula.global.handoff_goal" in str(item["text"]) for item in matches)
 
 
+def test_product_search_explains_pins_flags_and_butler_archive(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where are pinned flagged chats and archived Butler chats?"
+    )
+    assert any(
+        "Butler's own collapsed Archived section" in str(item["text"])
+        and "pin a chat" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge("Where do I edit a goal resume instruction?")
