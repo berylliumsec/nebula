@@ -1,7 +1,7 @@
 {
-  "change_digest": "eaa11f88af4b3d0d932da1e204daf95541e09dbc5d3934132490056ccd0876fa",
+  "change_digest": "8acb34d4c1c8f787f5011e49261bd67f289aa16d6b3c751a54d1a65a348f6ac4",
   "reviewed_by": "Codex agent",
-  "reason": "Verify Butler-owned archived chats move into Butler's collapsed archive, pinned chats lead the conversation list, color flags persist in Core, and Butler can discover the conversation destination. The catalogued Butler sidebar journey exercises the production UI on desktop and emulated mobile browsers plus a paired real-Core LAN fixture.",
+  "reason": "Verify Butler-owned archived chats move into Butler's collapsed archive, pinned chats lead the conversation list, color flags persist in Core, and Butler can discover the conversation destination. The catalogued Butler sidebar journey exercises the production UI on desktop and emulated mobile browsers plus a paired real-Core LAN fixture. The selected Butler sidebar journey also checks that the actions menu remains usable when its conversation list scrolls during opening.",
   "exclusions": "No native code or provider execution changed. Unrelated chat, mission, project deletion, and broad browser suites are excluded. The real-Core fixture uses synthetic sessions and an inert provider; physical-device testing is unavailable.",
   "expected_tests": {
     "python": 4,
@@ -21,5 +21,7 @@
     "ui/src/assistantDestinations.test.ts"
   ],
   "native": [],
-  "playwright": ["area:butler-sidebar"]
+  "playwright": [
+    "area:butler-sidebar"
+  ]
 }

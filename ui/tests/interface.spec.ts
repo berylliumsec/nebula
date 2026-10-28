@@ -4233,7 +4233,10 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
   await expect(page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Copy link" })).toBeVisible();
   await page.keyboard.press("Escape");
   await openActions("Recover paused Apple Music goal");
-  await page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Archive", exact: true }).click();
+  const archiveAction = page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Archive", exact: true });
+  await expect(archiveAction).toBeVisible();
+  await sidebar.locator("nav").evaluate(element => { element.scrollTop += 24; });
+  await archiveAction.click();
   await expect(sidebar.locator('[data-session-id="group-recovery"]')).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "Show 1 archived Butler chats" })).toBeVisible();
   await sidebar.getByRole("button", { name: "Show 1 archived Butler chats" }).click();
