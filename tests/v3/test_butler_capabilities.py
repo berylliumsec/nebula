@@ -147,6 +147,145 @@ def _scheduled_capabilities(tmp_path):
     return store, project, chat, foreign_chat, policy, case, scheduled
 
 
+def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    older = [store.create(Engagement(name=f"Project {index}")) for index in range(51)]
+
+    async def scenario():
+        found = await capabilities.search({"query": "archive project"})
+        assert any(
+            row["operation"] == "nebula.projects.archive" for row in found["matches"]
+        )
+        listed = await capabilities.invoke(
+            {"operation": "nebula.projects.list", "arguments": {}}, change=False
+        )
+        assert listed["next_offset"] == 50
+        second = await capabilities.invoke(
+            {"operation": "nebula.projects.list", "arguments": {"offset": 50}},
+            change=False,
+        )
+        assert any(row["project_id"] == older[-1].id for row in second["projects"])
+        detail = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.detail",
+                "arguments": {"project_id": selected.id},
+            },
+            change=False,
+        )
+        assert detail["revision"] == selected.revision
+        archive = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.archive",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": selected.revision,
+                },
+            },
+            change=True,
+        )
+        assert archive["state"] == "pending_browser_apply"
+        assert archive["client_action"] == {
+            "kind": "project_archive",
+            "project_id": selected.id,
+            "expected_revision": selected.revision,
+            "name": selected.name,
+        }
+        assert store.get(Engagement, selected.id).status == selected.status
+        renamed = store.update(
+            Engagement,
+            selected.id,
+            {"name": "Changed on another device"},
+            expected_revision=selected.revision,
+        )
+        with pytest.raises(ValueError, match="project changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.projects.rename",
+                    "arguments": {
+                        "project_id": selected.id,
+                        "expected_revision": selected.revision,
+                        "name": "Stale name",
+                    },
+                },
+                change=True,
+            )
+        rename = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.rename",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": renamed.revision,
+                    "name": "New name",
+                },
+            },
+            change=True,
+        )
+        assert rename["client_action"]["old_name"] == renamed.name
+        assert store.get(Engagement, selected.id).name == renamed.name
+        create = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.create",
+                "arguments": {"name": "New project"},
+            },
+            change=True,
+        )
+        assert create["client_action"]["kind"] == "project_create"
+        assert create["client_action"]["name"] == "New project"
+        assert len(store.list_entities(Engagement, limit=1000)) == 53
+        archived = store.update(
+            Engagement,
+            selected.id,
+            {"status": EngagementStatus.ARCHIVED},
+            expected_revision=renamed.revision,
+        )
+        restore = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.restore",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": archived.revision,
+                },
+            },
+            change=True,
+        )
+        assert restore["client_action"]["kind"] == "project_restore"
+        delete = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.delete",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": archived.revision,
+                },
+            },
+            change=True,
+        )
+        assert delete["client_action"]["kind"] == "project_delete"
+        assert store.get(Engagement, selected.id).status == EngagementStatus.ARCHIVED
+
+    asyncio.run(scenario())
+
+
+def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
+    _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
+
+    async def scenario():
+        assert "projects" not in [
+            row["id"] for row in (await capabilities.search({}))["categories"]
+        ]
+        assert not any(
+            row["operation"].startswith("nebula.projects.")
+            for row in (await capabilities.search({"query": "archive project"}))[
+                "matches"
+            ]
+        )
+        with pytest.raises(CapabilityInputError, match="listed operation"):
+            await capabilities.invoke(
+                {"operation": "nebula.projects.archive", "arguments": {}}, change=True
+            )
+
+    asyncio.run(scenario())
+
+
 def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_path):
     store, project, chat, foreign_chat, policy, case, scheduled = (
         _scheduled_capabilities(tmp_path)

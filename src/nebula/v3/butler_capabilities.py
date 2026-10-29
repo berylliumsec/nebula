@@ -120,6 +120,10 @@ _CATEGORIES = (
         "description": "Butler preferences and verified lessons visible in this project",
     },
     {
+        "id": "projects",
+        "description": "Interactive operator project discovery, creation, rename, archive, restore, and deletion through the requesting browser",
+    },
+    {
         "id": "settings",
         "description": "Project and next-turn Assistant settings, model choices, and device actions",
     },
@@ -189,6 +193,12 @@ class ButlerCapabilities:
                 all_work=True,
             )
         }
+        if background_case_id is None:
+            from .butler_projects import ButlerProjects
+
+            self._actions.update(
+                {plugin.spec.name: plugin for plugin in ButlerProjects(store).plugins()}
+            )
         if memory is not None:
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in self._memory_actions()}
@@ -710,6 +720,7 @@ class ButlerCapabilities:
                 "suggested": [
                     name
                     for name in (
+                        "nebula.projects.list",
                         "nebula.work.overview",
                         "nebula.work.attention",
                         "nebula.memory.search",
@@ -892,7 +903,7 @@ class ButlerCapabilities:
         descriptions = (
             (
                 "nebula.capabilities.search",
-                "Find Butler actions for the selected project by intent: chats, agents, subagents, missions, goals, approvals, settings, help, or navigation. Empty query lists categories. Describe a match before invoking it.",
+                "Find Butler actions by intent: projects, selected-project chats and agents, goals, approvals, settings, help, or navigation. Empty query lists categories. Describe a match before invoking it.",
                 _SEARCH_SCHEMA,
                 RiskClass.LOCAL_READ,
                 self.search,

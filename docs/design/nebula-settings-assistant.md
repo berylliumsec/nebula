@@ -113,6 +113,21 @@ For the selected project's Work board, Butler discovers
 check-ins use stable request IDs; edits and check-ins use the current item
 revision. Butler reports the saved Core result and board link. A Work check-in
 does not run or complete an assigned assistant chat.
+Interactive Butler also discovers `nebula.projects.list` and
+`nebula.projects.detail` to page the operator's projects, including archived
+ones, and read an exact target revision. Its typed create, rename, archive,
+restore, and delete actions issue a scoped pending browser action. The
+requesting browser uses Core's project routes, checks the target revision and
+reads the saved result before reporting success. Archive and permanent delete
+show the same project-specific confirmations as the project switcher; a
+cancelled dialog saves nothing. Creating through Butler starts with no linked
+host folder and no Host access acknowledgment. A folder and Host consent must
+be selected through their visible controls. Scheduled Butler cannot discover
+or invoke these interactive project actions. An uncertain create response
+requires a fresh project search before retrying. The requesting browser checks
+all project names before creation and refuses a sequential retry if Core saved
+the first request, including when that project is archived. Concurrent browsers
+still need durable Core idempotency to guarantee a single creation.
 For agent access, Butler reads `nebula.work.work_setting` before calling
 `nebula.work.set_work_setting` with the current project revision. The Core
 read-back confirms whether the selected project's built-in agent Work tools

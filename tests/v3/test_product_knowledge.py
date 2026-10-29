@@ -227,6 +227,18 @@ def test_product_search_finds_butler_work_agent_access_and_history(monkeypatch):
     assert any("nebula.work.work_updates" in str(item["text"]) for item in history)
 
 
+def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler archive restore or delete a project with confirmation?"
+    )
+    assert any(
+        "nebula.projects.list" in str(item["text"])
+        and "confirmations" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_effort_setting(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
