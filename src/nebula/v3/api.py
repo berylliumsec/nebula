@@ -220,6 +220,7 @@ from .work import (
     WorkImportBatch,
     WorkImportResult,
     WorkPatch,
+    WorkSettingPatch,
     WorkProjectBatchResult,
     WorkProjectBatchUpdate,
     WorkService,
@@ -7982,9 +7983,11 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def set_work_enabled(
-        engagement_id: str, enabled: bool = Body(embed=True)
+        engagement_id: str, body: WorkSettingPatch
     ) -> Engagement:
-        return work_service.set_enabled(engagement_id, enabled)
+        return work_service.set_enabled(
+            engagement_id, body.enabled, expected_revision=body.expected_revision
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work",

@@ -113,6 +113,13 @@ For the selected project's Work board, Butler discovers
 check-ins use stable request IDs; edits and check-ins use the current item
 revision. Butler reports the saved Core result and board link. A Work check-in
 does not run or complete an assigned assistant chat.
+For agent access, Butler reads `nebula.work.work_setting` before calling
+`nebula.work.set_work_setting` with the current project revision. The Core
+read-back confirms whether the selected project's built-in agent Work tools
+are enabled. Disabling them leaves existing items and check-ins visible.
+For older check-ins, Butler pages `nebula.work.work_updates` by item and reads
+`nebula.work.work_update` for exact summary, next step, or blocker text in
+bounded chunks. The item and update must belong to the selected project.
 The dedicated assistant reads and edits the saved goal resume instruction
 through `nebula.work.goal` and `nebula.work.update_goal`. It discovers those actions in its work
 catalog, reads the exact goal and revision, and updates only the named goal.

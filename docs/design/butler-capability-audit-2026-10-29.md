@@ -13,7 +13,7 @@ This is a source audit of `origin/main` at `aa797c9` and the capability registry
 not a claim that every action was exercised in a running Core. `api.py` contains
 373 HTTP route decorators across 41 tags. Route count is an inventory aid: some
 routes are internal, some are read-only, and several implement one workflow.
-The branch's project Work catalog has 53 named operations, including discovery
+The branch's project Work catalog has 57 named operations, including discovery
 and reads; these counts are not a coverage percentage.
 
 ## Current coverage
@@ -23,7 +23,7 @@ and reads; these counts are not a coverage percentage.
 | Chats and agents | Discover selected-project work; start, message, steer, stop, fork, rename, archive, restore, delete and retry assistant chats; inspect goals, subagents, queues and schedules | The overview shows at most 30 main chats. Side chats, temporary assistants and Butler's own session are excluded from Work actions. Chat rewind and export are UI-only. |
 | Chat priority | Open the conversation list and see pinned and flagged chats in the UI | Before this branch, `nebula.work.update_chat` had no pin or flag arguments or read-back. |
 | Goals, missions and approvals | Read and change Core-owned goals, missions, follow-up queues, schedules, plans, approvals and nonsecret harness questions through typed Work actions | Native harness goals only expose the controls the harness actually supports. A saved queue or approval receipt does not prove the downstream task completed. |
-| Project work board | Main agents can receive and update assigned work through the agent Work gateway | Before this branch Butler had no direct typed item actions. This branch adds project-scoped list, read, create, edit, and check-in. Work agent-access setting and full update history remain gaps. |
+| Project work board | Main agents can receive and update assigned work through the agent Work gateway | This branch adds Butler's project-scoped item list, read, create, edit, check-in, agent-access setting, and paged check-in history. Browser and real-Core proof is tracked separately below. |
 | Butler memory | List and search visible preferences and lessons; save a quoted memory; edit or forget one on operator request with its current revision | Memory is context with provenance, not authority to change another project or certify a result. |
 | Assistant runtimes | List available runtimes; change chat defaults and next-turn Assistant settings; inspect model and quota information | A next-turn setting does not rebind a running turn. Some runtime lifecycle controls remain in the visible settings screens. |
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
@@ -77,6 +77,35 @@ route, then reports the saved item or check-in and its board URL.
 Creating or checking in a Work item does not run an assigned chat. The Work board
 and Core database own task state; Butler's prose is not a completion receipt.
 
+## Branch slice: Work agent access and check-in history
+
+Entry point: the operator asks Butler to enable or disable the selected
+project's agent Work tools, or to review an older Work item check-in. Butler
+reads the exact project setting or item, changes the setting with the current
+project revision, and reports the saved Core value. Check-ins are paged by
+item, with exact text available in bounded chunks.
+
+| Step | Observable invariant | State authority | Check |
+| --- | --- | --- | --- |
+| Discover | Butler's catalog names the Work setting and paged history actions | Core capability catalog | Tool test |
+| Select | An item and update must both belong to the selected project; paging reaches updates past the UI's recent window | Core Work store | Tool test, real Core |
+| Change | A stale project revision cannot toggle agent tools; disabling does not erase Work records | Core project revision and Work setting | Tool test, real Core |
+| Read back | Butler sees the new setting and full exact check-in text; the Work board shows the same saved setting and update after refresh | Core database and UI | Tool test, real-Core browser |
+| Recover | Conflict directs Butler to reread; missing or cross-project updates are refused | Core conflict and project boundary | Tool test |
+
+The setting controls agent access to the built-in Work MCP. It does not stop a
+running agent, alter an assigned chat, or delete historical check-ins. Stream,
+interrupt, and delete lifecycle steps do not apply to these two actions.
+
+The focused candidate checks passed: 11 selected Python cases, 17 frontend
+cases with CI's 15-second per-test limit, and the selected paired LAN journey
+in desktop Chromium 1440 px, compact Chromium 1024 px, Android Chromium
+320/390/430 px, and iPhone WebKit 320/390/430 px emulation. The browser journey
+uses the production bundle, verifies the served asset hash, reads the saved
+check-in through Butler, and checks the disabled agent-tools setting and Work
+card after refresh. Physical Safari was unavailable. These checks validate this
+branch slice; they do not prove the remaining workflows below.
+
 ## Remaining work to reach the product goal
 
 1. Add a maintained **workflow coverage registry** linking each operator UI
@@ -84,8 +113,7 @@ and Core database own task state; Butler's prose is not a completion receipt.
    authority, and an observed-result test. Use it to detect newly added UI
    actions without silently making them model-callable.
 2. Add typed project lifecycle and content actions in the owning Core services:
-   project create/rename/archive/restore, Work agent-access setting and complete
-   update history, conversation
+   project create/rename/archive/restore, conversation
    rewind/export, and bounded workspace/Notebook/resource management. Each needs target
    discovery, optimistic revisions where applicable, and a durable read-back.
 3. Add specialized device and administration handoffs for local file selection,

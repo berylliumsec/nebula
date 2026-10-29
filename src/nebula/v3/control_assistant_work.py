@@ -76,7 +76,7 @@ from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
 from .storage import NebulaStore, NotFoundError
-from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService
+from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService, WorkSettingPatch
 
 
 EMPTY_SCHEMA: dict[str, Any] = {
@@ -441,6 +441,35 @@ WORK_ITEM_CHECK_IN_SCHEMA: dict[str, Any] = {
         "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
     },
     "required": ["item_id", "expected_revision", "summary", "request_id"],
+}
+WORK_SETTING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "enabled": {"type": "boolean"},
+        "expected_revision": {"type": "integer", "minimum": 1},
+    },
+    "required": ["enabled", "expected_revision"],
+}
+WORK_UPDATES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "offset": {"type": "integer", "minimum": 0},
+    },
+    "required": ["item_id"],
+}
+WORK_UPDATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "update_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "field": {"type": "string", "enum": ["summary", "next_step", "blocker"]},
+        "content_offset": {"type": "integer", "minimum": 0},
+    },
+    "required": ["item_id", "update_id"],
 }
 
 
@@ -1240,6 +1269,70 @@ class ControlAssistantWork:
             description_offset=offset,
             envelope={
                 "project_id": project_id,
+                "url": _work_item_url(project_id, item_id),
+            },
+        )
+
+    def work_setting(self, project_id: str) -> dict[str, Any]:
+        project = self._project(project_id)
+        return {
+            "project_id": project_id,
+            "enabled": project.work_enabled,
+            "revision": project.revision,
+            "url": f"/projects/{quote(project_id, safe='')}/work",
+        }
+
+    async def set_work_setting(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_SETTING_SCHEMA)
+        current = self._project(project_id)
+        if current.revision != arguments["expected_revision"]:
+            raise ValueError(
+                "project Work setting changed; read its current revision before updating"
+            )
+        request = WorkSettingPatch.model_validate(arguments)
+        saved = await self._request(
+            "PATCH",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/setting",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        observed = self.work_setting(project_id)
+        return {
+            **observed,
+            "saved": observed["enabled"] == request.enabled
+            and observed["revision"] == saved["revision"],
+        }
+
+    def work_updates(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_UPDATES_SCHEMA)
+        item_id = _text(arguments["item_id"], "item_id", 200)
+        return self.work_service.agent_updates_page(
+            project_id,
+            item_id,
+            offset=arguments.get("offset", 0),
+            envelope={
+                "project_id": project_id,
+                "item_id": item_id,
+                "url": _work_item_url(project_id, item_id),
+            },
+        )
+
+    def work_update(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_UPDATE_SCHEMA)
+        item_id = _text(arguments["item_id"], "item_id", 200)
+        update_id = _text(arguments["update_id"], "update_id", 200)
+        return self.work_service.agent_get_update(
+            project_id,
+            item_id,
+            update_id,
+            field=arguments.get("field", "summary"),
+            content_offset=arguments.get("content_offset", 0),
+            envelope={
+                "project_id": project_id,
+                "item_id": item_id,
                 "url": _work_item_url(project_id, item_id),
             },
         )
@@ -3143,6 +3236,30 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.work_setting",
+        "Read whether agents may use this project's built-in Work tools and the current project revision before changing access.",
+        EMPTY_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.set_work_setting",
+        "Enable or disable this project's built-in agent Work tools after explicit operator instruction. Read the setting first and pass its current project revision. Existing Work records remain visible.",
+        WORK_SETTING_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.work_updates",
+        "Page saved check-ins for one selected-project Work item, including older updates. Use next_offset until the desired update is found, then read its exact text.",
+        WORK_UPDATES_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.work_update",
+        "Read one saved Work check-in's exact summary, next step, or blocker. Use next_content_offset to retrieve a long field fully.",
+        WORK_UPDATE_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.create_work_item",
         "Create a manual Work item in this project after explicit operator instruction. Use a stable request_id for retry; a saved item and its Work board URL are returned.",
         WORK_ITEM_CREATE_SCHEMA,
@@ -3478,6 +3595,14 @@ async def dispatch_work_tool(
         return work.work_items(project_id, arguments.get("offset", 0))
     if name == "nebula.work.work_item":
         return work.work_item(project_id, arguments)
+    if name == "nebula.work.work_setting":
+        return work.work_setting(project_id)
+    if name == "nebula.work.set_work_setting":
+        return await work.set_work_setting(project_id, arguments)
+    if name == "nebula.work.work_updates":
+        return work.work_updates(project_id, arguments)
+    if name == "nebula.work.work_update":
+        return work.work_update(project_id, arguments)
     if name == "nebula.work.create_work_item":
         return await work.create_work_item(project_id, arguments)
     if name == "nebula.work.update_work_item":
