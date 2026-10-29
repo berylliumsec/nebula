@@ -6440,10 +6440,14 @@ test("assistant upgrade control assistant starts project work on production LAN 
   let priorityChatRevision = 0;
   let workItemId = "";
   let workItemRevision = 0;
+  let workUpdateId = "";
+  let workSettingRevision = 0;
   const requestText = "Start a mission named LAN control mission to inspect this synthetic project.";
   const priorityRequest = "Pin the Priority fixture chat and give it a blue flag.";
   const createWorkRequest = "Create a ready Work item named LAN Butler task.";
   const checkWorkRequest = "Post a review check-in on LAN Butler task.";
+  const historyRequest = "Read the review check-in history on LAN Butler task.";
+  const disableWorkRequest = "Disable agent Work tools for this project.";
   const preference = "Remember that I want time in Eastern and not UTC.";
   const savedPreference = "The operator prefers times in Eastern Time, not UTC.";
   const stub = await startLocalModelStub({
@@ -6470,6 +6474,22 @@ test("assistant upgrade control assistant starts project work on production LAN 
           item_id: workItemId, expected_revision: workItemRevision, summary: "Ready for review", status: "review",
           request_id: "lan-butler-check-1",
         }}};
+        return undefined;
+      }
+      if (userText === historyRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "read Work check-in history"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_updates"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_updates", arguments: {item_id: workItemId}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_update"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_update", arguments: {item_id: workItemId, update_id: workUpdateId}}};
+        return undefined;
+      }
+      if (userText === disableWorkRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "disable Work agent tools"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_setting"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_setting", arguments: {}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.set_work_setting"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.set_work_setting", arguments: {enabled: false, expected_revision: workSettingRevision}}};
         return undefined;
       }
       if (userText === priorityRequest) {
@@ -6634,6 +6654,31 @@ test("assistant upgrade control assistant starts project work on production LAN 
       expect(response.ok(), await response.text()).toBe(true);
       return (await response.json() as {status: string}).status;
     }).toBe("review");
+    const updateResponse = await api.get(`engagements/${projectId}/work/${workItemId}/updates`);
+    expect(updateResponse.ok(), await updateResponse.text()).toBe(true);
+    workUpdateId = (await updateResponse.json() as Array<{id: string}>)[0].id;
+    stub.responseContent = "I read the saved review check-in.";
+    await composer.fill(historyRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    const historyModelCalls = stub.requests.filter(body => {
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+      const lastUser = messages.map(message => message.role).lastIndexOf("user");
+      return messages[lastUser]?.content === historyRequest;
+    });
+    expect(JSON.stringify(historyModelCalls.at(-1)?.messages)).toContain("Ready for review");
+    const projectSettingResponse = await api.get(`engagements/${projectId}`);
+    expect(projectSettingResponse.ok(), await projectSettingResponse.text()).toBe(true);
+    workSettingRevision = (await projectSettingResponse.json() as {revision: number}).revision;
+    stub.responseContent = "I disabled agent Work tools for this project.";
+    await composer.fill(disableWorkRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}`);
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {work_enabled: boolean}).work_enabled;
+    }).toBe(false);
     stub.responseContent = "The mission was started in this project. Open Missions to follow its progress.";
     const controlSession = await (await api.get(`chat/control-assistant/session?engagement_id=${projectId}`)).json() as {id: string};
     await assistant.getByRole("button", {name: "Butler settings"}).click();
@@ -6734,9 +6779,12 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await expect(boardItem.getByRole("heading", {name: "LAN Butler task"})).toBeVisible();
     await expect(boardItem.locator(".work-status")).toHaveText("Review");
     await expect(boardItem.getByText("Ready for review")).toBeVisible();
+    await expect(page.getByRole("button", {name: "Enable agent tools"})).toBeVisible();
+    await expect(page.getByText("Agent tools are off. Existing Work records remain visible.", {exact: false})).toBeVisible();
     await page.reload();
     await expect(boardItem.getByRole("heading", {name: "LAN Butler task"})).toBeVisible();
     await expect(boardItem.locator(".work-status")).toHaveText("Review");
+    await expect(page.getByRole("button", {name: "Enable agent tools"})).toBeVisible();
     await testInfo.attach("control-assistant-work", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
