@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI
+from jsonschema import Draft202012Validator, ValidationError
 
 from .chat import (
     ChatCompletionRequest,
@@ -75,6 +76,7 @@ from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
 from .storage import NebulaStore, NotFoundError
+from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService
 
 
 EMPTY_SCHEMA: dict[str, Any] = {
@@ -388,6 +390,71 @@ PAGE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {"offset": {"type": "integer", "minimum": 0}},
 }
+WORK_ITEM_TARGET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "description_offset": {"type": "integer", "minimum": 0},
+    },
+    "required": ["item_id"],
+}
+WORK_ITEM_CREATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "description": {"type": "string", "maxLength": 20000},
+        "status": {
+            "type": "string",
+            "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done"],
+        },
+        "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+        "assignee_session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["title", "request_id"],
+}
+WORK_ITEM_UPDATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "description": {"type": "string", "maxLength": 20000},
+        "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+        "assignee_session_id": {"type": ["string", "null"], "maxLength": 200},
+    },
+    "required": ["item_id", "expected_revision"],
+}
+WORK_ITEM_CHECK_IN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "next_step": {"type": "string", "maxLength": 2000},
+        "blocker": {"type": "string", "maxLength": 2000},
+        "status": WORK_ITEM_CREATE_SCHEMA["properties"]["status"],
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["item_id", "expected_revision", "summary", "request_id"],
+}
+
+
+def _validate_work_item_arguments(
+    arguments: dict[str, Any], schema: dict[str, Any]
+) -> None:
+    """Enforce the catalog schema when a model calls the managed Work gateway."""
+
+    try:
+        Draft202012Validator(schema).validate(arguments)
+    except ValidationError as exc:
+        raise ValueError(f"invalid Work item arguments: {exc.message}") from exc
+
+
 GOAL_CREATE_FIELDS: dict[str, Any] = {
     "objective": {"type": "string", "minLength": 1, "maxLength": 20000},
     "completion_criteria": {
@@ -565,6 +632,10 @@ def _chat_url(project_id: str, session_id: str) -> str:
     return f"/projects/{quote(project_id, safe='')}/workbench?view=chat&session={quote(session_id, safe='')}"
 
 
+def _work_item_url(project_id: str, item_id: str) -> str:
+    return f"/projects/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}"
+
+
 def _mission_url(project_id: str, run_id: str) -> str:
     return f"/projects/{quote(project_id, safe='')}/workbench?view=missions&mission={quote(run_id, safe='')}"
 
@@ -586,6 +657,7 @@ class ControlAssistantWork:
         harness: HarnessRuntimeService,
         app: FastAPI,
         token: str,
+        work_service: WorkService,
         quota_observer: Any | None = None,
     ) -> None:
         self.store = store
@@ -594,6 +666,7 @@ class ControlAssistantWork:
         self.harness = harness
         self.app = app
         self.token = token
+        self.work_service = work_service
         self.quota_observer = quota_observer
         self.goals = ChatGoalService(store, harness)
         self.schedules = ChatScheduleService(store)
@@ -1145,6 +1218,92 @@ class ControlAssistantWork:
             "project_id": project_id,
             "chats": chats,
             "next_offset": offset + 30 if len(rows) > 30 else None,
+        }
+
+    def work_items(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
+        """Page saved Work board items inside the selected project."""
+
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        return self.work_service.agent_list_page(
+            project_id, offset=offset, envelope={"project_id": project_id}
+        )
+
+    def work_item(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        offset = arguments.get("description_offset", 0)
+        if type(offset) is not int or offset < 0:
+            raise ValueError("description_offset must be a nonnegative integer")
+        return self.work_service.agent_get_item(
+            project_id,
+            item_id,
+            description_offset=offset,
+            envelope={
+                "project_id": project_id,
+                "url": _work_item_url(project_id, item_id),
+            },
+        )
+
+    async def create_work_item(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._project(project_id)
+        _validate_work_item_arguments(arguments, WORK_ITEM_CREATE_SCHEMA)
+        request = WorkCreate.model_validate(
+            {**arguments, "status": arguments.get("status", "ready")}
+        )
+        created = await self._request(
+            "POST",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work",
+            request.model_dump(mode="json"),
+        )
+        return self.work_item(project_id, {"item_id": created["id"]})
+
+    async def update_work_item(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_ITEM_UPDATE_SCHEMA)
+        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        current = self.work_service.get(project_id, item_id)
+        expected = arguments.get("expected_revision")
+        if type(expected) is not int or current.revision != expected:
+            raise ValueError(
+                "work item changed; read its current revision before updating"
+            )
+        changes = {key: value for key, value in arguments.items() if key != "item_id"}
+        if set(changes) == {"expected_revision"}:
+            raise ValueError("provide a Work item field to update")
+        request = WorkPatch.model_validate(changes)
+        await self._request(
+            "PATCH",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        return self.work_item(project_id, {"item_id": item_id})
+
+    async def check_in_work_item(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_ITEM_CHECK_IN_SCHEMA)
+        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        self.work_service.get(project_id, item_id)
+        request = WorkCheckIn.model_validate(
+            {key: value for key, value in arguments.items() if key != "item_id"}
+        )
+        saved = await self._request(
+            "POST",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}/updates",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        current = self.work_service.get(project_id, item_id)
+        return {
+            "project_id": project_id,
+            "item_id": item_id,
+            "update_id": saved["id"],
+            "status": current.status,
+            "revision": current.revision,
+            "url": _work_item_url(project_id, item_id),
+            "saved": True,
         }
 
     async def harness_quota(
@@ -2972,6 +3131,36 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.work_items",
+        "Page saved Work board items in the selected project. Use next_offset to find older tasks. Read an exact item before changing it.",
+        PAGE_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.work_item",
+        "Read one selected-project Work item, its revision, assignment, status, priority and description. Use next_description_offset to read a long description fully.",
+        WORK_ITEM_TARGET_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.create_work_item",
+        "Create a manual Work item in this project after explicit operator instruction. Use a stable request_id for retry; a saved item and its Work board URL are returned.",
+        WORK_ITEM_CREATE_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.update_work_item",
+        "Change the title, description, priority or assignment of one Work item after explicit operator instruction. Read it first and pass its current revision; use assignee_session_id=null to unassign.",
+        WORK_ITEM_UPDATE_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.check_in_work_item",
+        "Post a progress update and optionally change status on one Work item after explicit operator instruction. Read it first, pass its revision and a stable request_id, then verify the saved status. A blocker sets status to blocked.",
+        WORK_ITEM_CHECK_IN_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.harness_quota",
         "Read one enabled harness's vendor-reported included quota windows and separate credit balances by profile ID from the runtime catalog. Grok and Codex credits may remain usable after included usage is exhausted; unavailable is unknown, not zero. Set refresh true for a new vendor read.",
         HARNESS_QUOTA_SCHEMA,
@@ -3261,7 +3450,7 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     *(item for item in _ALL_WORK_TOOLS if item[0] not in _MANAGED_WORK_NAMES),
     (
         "nebula.work.manage",
-        "Read or change a project chat, its Assistant settings and MCP tools, mission, goal, subagent, follow-up queue, or schedule. Use nebula.work.catalog for the chosen operation's exact fields, then pass operation and arguments here. Read before writes, use saved revisions, and check a delegated result before claiming completion.",
+        "Read or change this project's chats, Work board items, Assistant settings, missions, goals, subagents, follow-up queues, or schedules. Use nebula.work.catalog for exact fields, then pass operation and arguments here. Read before writes, use saved revisions, and check the saved result before claiming completion.",
         MANAGE_SCHEMA,
         False,
     ),
@@ -3285,6 +3474,16 @@ async def dispatch_work_tool(
         return work.overview(project_id)
     if name == "nebula.work.chats":
         return work.chats(project_id, arguments.get("offset", 0))
+    if name == "nebula.work.work_items":
+        return work.work_items(project_id, arguments.get("offset", 0))
+    if name == "nebula.work.work_item":
+        return work.work_item(project_id, arguments)
+    if name == "nebula.work.create_work_item":
+        return await work.create_work_item(project_id, arguments)
+    if name == "nebula.work.update_work_item":
+        return await work.update_work_item(project_id, arguments)
+    if name == "nebula.work.check_in_work_item":
+        return await work.check_in_work_item(project_id, arguments)
     if name == "nebula.work.harness_quota":
         return await work.harness_quota(project_id, arguments)
     if name == "nebula.work.chat":

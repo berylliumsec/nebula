@@ -2675,6 +2675,7 @@ def create_app(
         harness_runtime,
         app,
         token,
+        work_service,
         harness_quota_observer,
     )
     from .butler_authority import ButlerAuthorityService

@@ -1,7 +1,7 @@
 [
   {"id":"projects","label":"All projects","path":"/projects","aliases":["projects","my projects","project list","all projects","browse projects"]},
   {"id":"project","label":"Project overview","path":"/projects/{project_id}","aliases":["current project","project overview","project home","project"]},
-  {"id":"project-work","label":"Project work","path":"/projects/{project_id}/work","aliases":["work board","project work","tasks","work items"]},
+  {"id":"project-work","label":"Project work","path":"/projects/{project_id}/work","aliases":["work board","project work","tasks","work items","create work item","assign work item","change work priority","post work update","work check-in"]},
   {"id":"assets","label":"Assets","path":"/projects/{project_id}/assets","aliases":["assets","project assets","asset inventory"]},
   {"id":"evidence","label":"Evidence","path":"/projects/{project_id}/evidence","aliases":["evidence","project evidence"]},
   {"id":"sources","label":"Sources","path":"/projects/{project_id}/sources","aliases":["sources","knowledge","knowledge sources","project sources"]},

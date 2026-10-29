@@ -62,6 +62,7 @@ class WorkCheckIn(NebulaModel):
     blocker: str | None = Field(default=None, max_length=2_000)
     status: WorkStatus | None = None
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class WorkListRequest(NebulaModel):
@@ -80,6 +81,7 @@ class WorkPatch(NebulaModel):
     description: str | None = Field(default=None, max_length=20_000)
     priority: WorkPriority | None = None
     assignee_session_id: str | None = Field(default=None, max_length=200)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class WorkImportUpdate(NebulaModel):
@@ -455,22 +457,30 @@ class WorkService:
         )
 
     def agent_list_page(
-        self, engagement_id: str, *, offset: int = 0, limit: int = 20
+        self,
+        engagement_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+        envelope: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """A byte-fitted page of Work summaries for either agent transport."""
 
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("offset must be nonnegative and limit between 1 and 100")
+        envelope = envelope or {}
         rows = self.list(engagement_id, offset=offset, limit=limit + 1)
         items: list[dict[str, object]] = []
         for item in rows[:limit]:
             summary = item.model_dump(mode="json", exclude={"description"})
             summary["description_preview"] = item.description[:256]
             summary["description_truncated"] = len(item.description) > 256
+            next_count = len(items) + 1
             candidate = {
+                **envelope,
                 "items": [*items, summary],
                 "offset": offset,
-                "next_offset": offset + len(items) + 1,
+                "next_offset": offset + next_count if len(rows) > next_count else None,
             }
             if model_result_bytes(candidate) > MAX_EXCERPT_BYTES:
                 break
@@ -478,17 +488,24 @@ class WorkService:
         if rows and not items:
             raise ValueError("Work item summary exceeds the model-delivery bound")
         return {
+            **envelope,
             "items": items,
             "offset": offset,
             "next_offset": offset + len(items) if len(rows) > len(items) else None,
         }
 
     def agent_get_item(
-        self, engagement_id: str, item_id: str, *, description_offset: int = 0
+        self,
+        engagement_id: str,
+        item_id: str,
+        *,
+        description_offset: int = 0,
+        envelope: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """Read a Work item with its description in byte-fitted chunks."""
 
         item = self.get(engagement_id, item_id)
+        envelope = envelope or {}
         description = item.description
         if not 0 <= description_offset <= len(description):
             raise ValueError("description_offset is outside this item's description")
@@ -497,6 +514,7 @@ class WorkService:
         def chunk(length: int) -> dict[str, object]:
             end = description_offset + length
             return {
+                **envelope,
                 "item": {**base, "description": description[description_offset:end]},
                 "description_offset": description_offset,
                 "next_description_offset": end if end < len(description) else None,
@@ -607,12 +625,19 @@ class WorkService:
     def patch(self, engagement_id: str, item_id: str, data: WorkPatch) -> WorkItem:
         changes = {
             key: value
-            for key, value in data.model_dump(exclude_unset=True).items()
+            for key, value in data.model_dump(
+                exclude_unset=True, exclude={"expected_revision"}
+            ).items()
             if value is not None or key == "assignee_session_id"
         }
         self._session(engagement_id, changes.get("assignee_session_id"))
-        for _ in range(3):
+        for _ in range(1 if data.expected_revision is not None else 3):
             item = self.get(engagement_id, item_id)
+            if (
+                data.expected_revision is not None
+                and item.revision != data.expected_revision
+            ):
+                raise ConflictError("work item changed; read its current revision")
             if not changes:
                 return item
             try:
@@ -622,6 +647,8 @@ class WorkService:
                 self.changes.publish()
                 return updated
             except ConflictError:
+                if data.expected_revision is not None:
+                    raise
                 # diagnostic-expected: a concurrent edit retries with the latest revision.
                 continue
         raise ConflictError("work item changed concurrently; retry")
@@ -674,6 +701,11 @@ class WorkService:
                 pass
         for _ in range(3):
             item = self.get(engagement_id, item_id)
+            if (
+                data.expected_revision is not None
+                and item.revision != data.expected_revision
+            ):
+                raise ConflictError("work item changed; read its current revision")
             status = "blocked" if data.blocker else (data.status or item.status)
             update = (
                 WorkUpdate(
@@ -727,6 +759,8 @@ class WorkService:
                     except NotFoundError:
                         # diagnostic-expected: the conflicting write was another item edit.
                         pass
+                if data.expected_revision is not None:
+                    raise
         raise ConflictError("work item changed concurrently; retry")
 
     def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:

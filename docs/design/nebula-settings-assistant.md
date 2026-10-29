@@ -106,6 +106,13 @@ The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
 `nebula.work.stop_mission`. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
+For the selected project's Work board, Butler discovers
+`nebula.work.work_items`, reads `nebula.work.work_item`, and uses
+`nebula.work.create_work_item`, `nebula.work.update_work_item`, or
+`nebula.work.check_in_work_item` after an operator request. Creation and
+check-ins use stable request IDs; edits and check-ins use the current item
+revision. Butler reports the saved Core result and board link. A Work check-in
+does not run or complete an assigned assistant chat.
 The dedicated assistant reads and edits the saved goal resume instruction
 through `nebula.work.goal` and `nebula.work.update_goal`. It discovers those actions in its work
 catalog, reads the exact goal and revision, and updates only the named goal.
