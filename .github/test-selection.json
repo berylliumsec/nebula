@@ -1,5 +1,5 @@
 {
-  "change_digest": "6a2ca3d39451d7c70c76106bfd7eee62ccc206b69a340f5ced26a549459bf6ff",
+  "change_digest": "37c431ab615c6afc82cbc4d42c7917f0d5dfac5e18e513997811083d11b1a786",
   "reviewed_by": "Codex focused review for Butler interactive project lifecycle and existing Work gateway",
   "reason": "Six selected Python cases cover interactive project discovery, paging, exact revisions, background exclusion, an existing Work action, current product-index digest, discoverable guidance, and Chroma source-digest sync. Sixty-five frontend cases cover scoped action receipts, project archive confirmation and Core readback, create preflight refusal for archived name matches and failed list reads, and the project API revision contract. Eight paired real-Core browser profiles exercise create, dropped-response create retry, rename, archive cancellation, archive, restore, and permanent delete through Butler at a non-loopback LAN origin with a production bundle, inert model, and synthetic projects.",
   "exclusions": "No native source changed, so no native tests are selected. SideNav and unrelated Python, frontend, and Playwright journeys are excluded; the new real-Core journey checks the visible project switcher. Browser profiles emulate mobile devices; physical Safari is unavailable.",

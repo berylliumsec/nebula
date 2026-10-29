@@ -72,7 +72,7 @@ class ButlerProjects:
             "url": f"/projects/{project.id}/workbench?view=chat",
         }
 
-    def list(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def list_projects(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 10000:
             raise ValueError("offset must be from 0 to 10000")
@@ -174,7 +174,7 @@ class ButlerProjects:
                 "Page all operator-visible projects, including archived projects, before choosing an exact target.",
                 _PAGE,
                 RiskClass.LOCAL_READ,
-                self.list,
+                self.list_projects,
             ),
             (
                 "nebula.projects.detail",
