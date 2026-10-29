@@ -16005,22 +16005,22 @@ class HarnessRuntimeService:
                     ]
                 }
             elif name == "work.list":
-                request = WorkListRequest.model_validate(arguments)
+                list_request = WorkListRequest.model_validate(arguments)
                 target_id = self.work.agent_project(
-                    turn.engagement_id, request.project_name
+                    turn.engagement_id, list_request.project_name
                 )
                 result = self.work.agent_list_page(
-                    target_id, offset=request.offset, limit=request.limit
+                    target_id, offset=list_request.offset, limit=list_request.limit
                 )
             elif name == "work.get":
-                request = WorkGetRequest.model_validate(arguments)
+                get_request = WorkGetRequest.model_validate(arguments)
                 target_id = self.work.agent_item_project(
-                    turn.engagement_id, request.item_id
+                    turn.engagement_id, get_request.item_id
                 )
                 result = self.work.agent_get_item(
                     target_id,
-                    request.item_id,
-                    description_offset=request.description_offset,
+                    get_request.item_id,
+                    description_offset=get_request.description_offset,
                 )
             elif name == "work.create":
                 target_id = self.work.agent_project(

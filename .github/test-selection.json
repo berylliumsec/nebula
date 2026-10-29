@@ -1,5 +1,5 @@
 {
-  "change_digest": "7dccd9aeb1a282de884bd29f996aa82a4d1228961a13f32820daec9beb732151",
+  "change_digest": "736de96a4bee4bfe33c96c3d6bc7189dd0cea6a445576bd00bfc188635e05f6b",
   "reviewed_by": "Codex focused review for agent Work pagination",
   "reason": "Eight collected Python cases cover provider Work tool discovery and scope, an actual provider chat traversing model-delivered pages, byte-fitted page traversal, full long-description retrieval, access past the former 500-item cap, and the harness gateway catalog, scope, page traversal, and item reads.",
   "exclusions": "No frontend or native code changed. Browser Work cases do not call the agent tool contract; the changed provider and MCP gateway paths are covered by selected Python cases and a disposable Core check. Unrelated Python and browser suites are excluded. Physical-device testing is unavailable.",

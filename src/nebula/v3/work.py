@@ -980,26 +980,26 @@ class WorkBroker:
             raise ValueError("Work is off for this project")
         actor_id = invocation.chat_session_id or invocation.run_id
         if invocation.tool_name == "work_list":
-            request = WorkListRequest.model_validate(invocation.arguments)
+            list_request = WorkListRequest.model_validate(invocation.arguments)
             target_id = self.service.agent_project(
                 invocation.engagement_id,
-                request.project_name,
+                list_request.project_name,
             )
             return ToolExecutionResult(
                 output=self.service.agent_list_page(
-                    target_id, offset=request.offset, limit=request.limit
+                    target_id, offset=list_request.offset, limit=list_request.limit
                 )
             )
         if invocation.tool_name == "work_get":
-            request = WorkGetRequest.model_validate(invocation.arguments)
+            get_request = WorkGetRequest.model_validate(invocation.arguments)
             target_id = self.service.agent_item_project(
-                invocation.engagement_id, request.item_id
+                invocation.engagement_id, get_request.item_id
             )
             return ToolExecutionResult(
                 output=self.service.agent_get_item(
                     target_id,
-                    request.item_id,
-                    description_offset=request.description_offset,
+                    get_request.item_id,
+                    description_offset=get_request.description_offset,
                 )
             )
         if invocation.tool_name == "work_create":
