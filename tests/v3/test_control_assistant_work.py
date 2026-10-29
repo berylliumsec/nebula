@@ -38,6 +38,7 @@ from nebula.v3.domain import (
     ProviderProfile,
     RiskClass,
     ScopePolicy,
+    WorkItem,
 )
 from nebula.v3.runtime_platform import RuntimePlatform, _ControlAssistantScopeBroker
 from nebula.v3.artifacts import ArtifactStore
@@ -51,6 +52,8 @@ from nebula.v3.providers import (
     ProviderKind,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
+from nebula.v3.tool_results import MAX_EXCERPT_BYTES, model_result_bytes
+from nebula.v3.work import WorkCreate, WorkService
 from tests.v3.test_harnesses import FakeAdapter
 
 
@@ -1371,6 +1374,182 @@ def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
         asyncio.run(change(cleared["revision"], pinned="yes"))
     with pytest.raises(ValueError, match="listed flag color"):
         asyncio.run(change(cleared["revision"], flag_color="magenta"))
+
+
+def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    assigned = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Assigned agent",
+            provider_profile_id="local",
+            model="model-a",
+        )
+    )
+    other_agent = store.create(
+        ChatSession(
+            engagement_id=other.id,
+            title="Other agent",
+            provider_profile_id="local",
+            model="model-a",
+        )
+    )
+    service = WorkService(store)
+    seeded = [
+        service.create(
+            project.id,
+            WorkCreate(title=f"Task {index}"),
+            actor_id="operator",
+        )
+        for index in range(32)
+    ]
+    private = service.create(
+        other.id, WorkCreate(title="Other project's task"), actor_id="operator"
+    )
+    work = app.state.control_assistant_work
+    assert (
+        "request_id"
+        in work.catalog(project.id, "nebula.work.create_work_item")["parameters"][
+            "required"
+        ]
+    )
+
+    async def invoke(operation, arguments):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {"operation": f"nebula.work.{operation}", "arguments": arguments},
+        )
+
+    async def scenario():
+        first = await invoke("work_items", {"offset": 0})
+        second = await invoke("work_items", {"offset": first["next_offset"]})
+        assert model_result_bytes(first) <= MAX_EXCERPT_BYTES
+        assert model_result_bytes(second) <= MAX_EXCERPT_BYTES
+        assert {item["id"] for item in first["items"] + second["items"]} == {
+            item.id for item in seeded
+        }
+        assert second["next_offset"] is None
+        with pytest.raises(NotFoundError):
+            await invoke("work_item", {"item_id": private.id})
+        with pytest.raises(ValueError, match="invalid Work item arguments"):
+            await invoke(
+                "create_work_item",
+                {
+                    "title": "Forged import",
+                    "request_id": "forged-import-1",
+                    "source_kind": "import",
+                },
+            )
+        created = await invoke(
+            "create_work_item",
+            {"title": "Butler task", "request_id": "butler-work-create-1"},
+        )
+        item_id = created["item"]["id"]
+        assert created["item"]["status"] == "ready"
+        assert created["url"].endswith(f"/work/{item_id}")
+        repeated = await invoke(
+            "create_work_item",
+            {"title": "Butler task", "request_id": "butler-work-create-1"},
+        )
+        assert repeated["item"]["id"] == item_id
+        with pytest.raises(NotFoundError):
+            await invoke(
+                "update_work_item",
+                {
+                    "item_id": private.id,
+                    "expected_revision": private.revision,
+                    "priority": "high",
+                },
+            )
+        with pytest.raises(ValueError, match="Core rejected the work action"):
+            await invoke(
+                "update_work_item",
+                {
+                    "item_id": item_id,
+                    "expected_revision": created["item"]["revision"],
+                    "assignee_session_id": other_agent.id,
+                },
+            )
+        changed = await invoke(
+            "update_work_item",
+            {
+                "item_id": item_id,
+                "expected_revision": created["item"]["revision"],
+                "priority": "high",
+                "assignee_session_id": assigned.id,
+            },
+        )
+        assert changed["item"]["priority"] == "high"
+        assert changed["item"]["assignee_session_id"] == assigned.id
+        with pytest.raises(ValueError, match="work item changed"):
+            await invoke(
+                "update_work_item",
+                {
+                    "item_id": item_id,
+                    "expected_revision": created["item"]["revision"],
+                    "title": "Stale overwrite",
+                },
+            )
+        checked = await invoke(
+            "check_in_work_item",
+            {
+                "item_id": item_id,
+                "expected_revision": changed["item"]["revision"],
+                "summary": "Ready for review",
+                "status": "review",
+                "request_id": "butler-work-check-1",
+            },
+        )
+        assert checked["status"] == "review"
+        repeated_check = await invoke(
+            "check_in_work_item",
+            {
+                "item_id": item_id,
+                "expected_revision": changed["item"]["revision"],
+                "summary": "Ready for review",
+                "status": "review",
+                "request_id": "butler-work-check-1",
+            },
+        )
+        assert repeated_check["update_id"] == checked["update_id"]
+        assert repeated_check["revision"] == checked["revision"]
+        with pytest.raises(ValueError, match="Core rejected the work action"):
+            await invoke(
+                "check_in_work_item",
+                {
+                    "item_id": item_id,
+                    "expected_revision": changed["item"]["revision"],
+                    "summary": "Stale status",
+                    "status": "done",
+                    "request_id": "butler-work-check-2",
+                },
+            )
+        assert store.get(WorkItem, item_id).status == "review"
+
+    asyncio.run(scenario())
+
+    long_description = "🔎" * 20_000
+    long_item = service.create(
+        project.id,
+        WorkCreate(title="Large Unicode description", description=long_description),
+        actor_id="operator",
+    )
+    chunks = []
+    offset = 0
+    while True:
+        detail = work.work_item(
+            project.id, {"item_id": long_item.id, "description_offset": offset}
+        )
+        assert model_result_bytes(detail) <= MAX_EXCERPT_BYTES
+        chunks.append(detail["item"]["description"])
+        offset = detail["next_description_offset"]
+        if offset is None:
+            break
+    assert "".join(chunks) == long_description
 
 
 def test_chat_follow_up_is_durable_and_project_bound(tmp_path):

@@ -40,6 +40,7 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessRuntimeOption,
     HarnessSession,
+    WorkItem,
     utc_now,
 )
 from nebula.v3.runtime_platform import RuntimePlatform
@@ -1079,6 +1080,68 @@ def test_butler_discovers_and_uses_chat_priority(tmp_path):
     asyncio.run(scenario())
     assert store.get(ChatSession, chat.id).metadata["pinned"] is True
     assert store.get(ChatSession, chat.id).metadata["flag_color"] == "blue"
+
+
+def test_butler_discovers_and_uses_project_work_board(tmp_path):
+    store, project, _, _, capabilities = _capabilities(tmp_path)
+
+    async def scenario():
+        found = await capabilities.search({"query": "create a Work board item"})
+        assert "nebula.work.create_work_item" in {
+            item["operation"] for item in found["matches"]
+        }
+        described = await capabilities.describe(
+            {"operation": "nebula.work.create_work_item"}
+        )
+        assert described["invoke_with"] == "nebula.capabilities.change"
+        assert "request_id" in described["input_schema"]["required"]
+        created = await capabilities.invoke(
+            {
+                "operation": "nebula.work.create_work_item",
+                "arguments": {"title": "Review launch", "request_id": "launch-1"},
+            },
+            change=True,
+        )
+        item_id = created["item"]["id"]
+        read = await capabilities.invoke(
+            {"operation": "nebula.work.work_item", "arguments": {"item_id": item_id}},
+            change=False,
+        )
+        assert read["item"]["title"] == "Review launch"
+        assert read["item"]["revision"] == created["item"]["revision"]
+        checked = await capabilities.invoke(
+            {
+                "operation": "nebula.work.check_in_work_item",
+                "arguments": {
+                    "item_id": item_id,
+                    "expected_revision": read["item"]["revision"],
+                    "summary": "Ready for review",
+                    "status": "review",
+                    "request_id": "launch-check-1",
+                },
+            },
+            change=True,
+        )
+        assert checked["status"] == "review"
+        with pytest.raises(CapabilityInputError, match="invalid arguments"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.check_in_work_item",
+                    "arguments": {
+                        "item_id": item_id,
+                        "expected_revision": checked["revision"],
+                        "summary": "Invalid status",
+                        "status": "invented",
+                        "request_id": "launch-check-2",
+                    },
+                },
+                change=True,
+            )
+        return item_id
+
+    item_id = asyncio.run(scenario())
+    assert store.get(WorkItem, item_id).engagement_id == project.id
+    assert store.get(WorkItem, item_id).status == "review"
 
 
 def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):

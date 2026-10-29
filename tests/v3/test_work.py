@@ -18,7 +18,7 @@ from nebula.v3.domain import (
     WorkItem,
     WorkUpdate,
 )
-from nebula.v3.storage import NebulaStore, NotFoundError
+from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
 from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
 from nebula.v3.tools import ToolInvocation, ToolNotPermitted
 from nebula.v3.providers import ModelRequest, ModelResponse
@@ -83,6 +83,51 @@ def test_work_default_on_and_check_ins_are_durable_and_idempotent(tmp_path):
     reopened.set_enabled(project.id, False)
     assert reopened.get(project.id, created.id).status == "in_progress"
     assert not WorkService(NebulaStore(path)).enabled(project.id)
+
+
+def test_work_item_revision_checks_preserve_edits_and_idempotent_check_ins(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Revision checks"))
+    service = WorkService(store)
+    item = service.create(
+        project.id, WorkCreate(title="Review plan"), actor_id="operator"
+    )
+    changed = service.patch(
+        project.id,
+        item.id,
+        WorkPatch(priority="high", expected_revision=item.revision),
+    )
+    with pytest.raises(ConflictError, match="work item changed"):
+        service.patch(
+            project.id,
+            item.id,
+            WorkPatch(title="Stale title", expected_revision=item.revision),
+        )
+    with pytest.raises(ConflictError, match="work item changed"):
+        service.check_in(
+            project.id,
+            item.id,
+            WorkCheckIn(summary="Stale status", expected_revision=item.revision),
+            actor_kind="operator",
+            actor_id="operator",
+        )
+    assert service.get(project.id, item.id).title == "Review plan"
+    assert service.updates(project.id, item.id) == []
+    request = WorkCheckIn(
+        summary="Ready to review",
+        status="review",
+        request_id="check-1",
+        expected_revision=changed.revision,
+    )
+    first = service.check_in(
+        project.id, item.id, request, actor_kind="operator", actor_id="operator"
+    )
+    repeated = service.check_in(
+        project.id, item.id, request, actor_kind="operator", actor_id="operator"
+    )
+    assert repeated.id == first.id
+    assert service.get(project.id, item.id).status == "review"
+    assert len(service.updates(project.id, item.id)) == 1
 
 
 def test_work_project_batch_links_existing_projects_and_prevents_cycles(tmp_path):
