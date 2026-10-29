@@ -31,6 +31,7 @@ from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .runtime_platform import RuntimeToolComponents
 from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .tool_results import MAX_EXCERPT_BYTES, model_result_bytes
 from .tools import (
     IdempotencyBehavior,
     ToolExecutionResult,
@@ -61,6 +62,17 @@ class WorkCheckIn(NebulaModel):
     blocker: str | None = Field(default=None, max_length=2_000)
     status: WorkStatus | None = None
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class WorkListRequest(NebulaModel):
+    project_name: str | None = Field(default=None, min_length=1, max_length=300)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class WorkGetRequest(NebulaModel):
+    item_id: str = Field(min_length=1, max_length=200)
+    description_offset: int = Field(default=0, ge=0)
 
 
 class WorkPatch(NebulaModel):
@@ -430,11 +442,78 @@ class WorkService:
             raise NotFoundError("work item does not belong to this project")
         return item
 
-    def list(self, engagement_id: str, *, limit: int = 500) -> list[WorkItem]:
+    def list(
+        self, engagement_id: str, *, offset: int = 0, limit: int = 500
+    ) -> list[WorkItem]:
         self.store.get(Engagement, engagement_id)
         return self.store.list_entities(
-            WorkItem, engagement_id=engagement_id, limit=limit, newest_first=True
+            WorkItem,
+            engagement_id=engagement_id,
+            offset=offset,
+            limit=limit,
+            newest_first=True,
         )
+
+    def agent_list_page(
+        self, engagement_id: str, *, offset: int = 0, limit: int = 20
+    ) -> dict[str, object]:
+        """A byte-fitted page of Work summaries for either agent transport."""
+
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError("offset must be nonnegative and limit between 1 and 100")
+        rows = self.list(engagement_id, offset=offset, limit=limit + 1)
+        items: list[dict[str, object]] = []
+        for item in rows[:limit]:
+            summary = item.model_dump(mode="json", exclude={"description"})
+            summary["description_preview"] = item.description[:256]
+            summary["description_truncated"] = len(item.description) > 256
+            candidate = {
+                "items": [*items, summary],
+                "offset": offset,
+                "next_offset": offset + len(items) + 1,
+            }
+            if model_result_bytes(candidate) > MAX_EXCERPT_BYTES:
+                break
+            items.append(summary)
+        if rows and not items:
+            raise ValueError("Work item summary exceeds the model-delivery bound")
+        return {
+            "items": items,
+            "offset": offset,
+            "next_offset": offset + len(items) if len(rows) > len(items) else None,
+        }
+
+    def agent_get_item(
+        self, engagement_id: str, item_id: str, *, description_offset: int = 0
+    ) -> dict[str, object]:
+        """Read a Work item with its description in byte-fitted chunks."""
+
+        item = self.get(engagement_id, item_id)
+        description = item.description
+        if not 0 <= description_offset <= len(description):
+            raise ValueError("description_offset is outside this item's description")
+        base = item.model_dump(mode="json", exclude={"description"})
+
+        def chunk(length: int) -> dict[str, object]:
+            end = description_offset + length
+            return {
+                "item": {**base, "description": description[description_offset:end]},
+                "description_offset": description_offset,
+                "next_description_offset": end if end < len(description) else None,
+            }
+
+        remaining = min(4096, len(description) - description_offset)
+        low, high = 0, remaining
+        while low < high:
+            middle = (low + high + 1) // 2
+            if model_result_bytes(chunk(middle)) <= MAX_EXCERPT_BYTES:
+                low = middle
+            else:
+                high = middle - 1
+        result = chunk(low)
+        if model_result_bytes(result) > MAX_EXCERPT_BYTES or remaining > 0 and low == 0:
+            raise ValueError("Work item metadata exceeds the model-delivery bound")
+        return result
 
     def updates(
         self, engagement_id: str, item_id: str, *, limit: int = 200
@@ -801,8 +880,11 @@ class WorkService:
 
 WORK_AVAILABLE_INSTRUCTIONS = (
     "Project Work is available. Use work_list to find tasks, work_create to create "
-    "a task, and work_check_in to post an update when appropriate. For a linked "
-    "child project, pass its name as project_name to work_list or work_create."
+    "a task, and work_check_in to post an update when appropriate. Start work_list "
+    "without offset; repeat it with the returned next_offset until next_offset is "
+    "null. For a linked child project, repeat project_name on each page. Use "
+    "work_get with an item_id for the full description; repeat it with each "
+    "next_description_offset until null."
 )
 WORK_ROSTER_INSTRUCTIONS = (
     "Use work_agents to see which conversations are working or waiting in this "
@@ -898,17 +980,27 @@ class WorkBroker:
             raise ValueError("Work is off for this project")
         actor_id = invocation.chat_session_id or invocation.run_id
         if invocation.tool_name == "work_list":
+            request = WorkListRequest.model_validate(invocation.arguments)
             target_id = self.service.agent_project(
                 invocation.engagement_id,
-                invocation.arguments.get("project_name"),
+                request.project_name,
             )
             return ToolExecutionResult(
-                output={
-                    "items": [
-                        item.model_dump(mode="json")
-                        for item in self.service.list(target_id)
-                    ]
-                }
+                output=self.service.agent_list_page(
+                    target_id, offset=request.offset, limit=request.limit
+                )
+            )
+        if invocation.tool_name == "work_get":
+            request = WorkGetRequest.model_validate(invocation.arguments)
+            target_id = self.service.agent_item_project(
+                invocation.engagement_id, request.item_id
+            )
+            return ToolExecutionResult(
+                output=self.service.agent_get_item(
+                    target_id,
+                    request.item_id,
+                    description_offset=request.description_offset,
+                )
             )
         if invocation.tool_name == "work_create":
             target_id = self.service.agent_project(
@@ -966,9 +1058,37 @@ def work_components(
 ) -> RuntimeToolComponents:
     fields = {
         "work_list": (
-            "List this project's Work items, or a linked child project's items by name.",
-            {"project_name": {"type": "string", "minLength": 1, "maxLength": 300}},
+            "List Work summaries. Start without offset, then call again with each returned next_offset until it is null; repeat project_name for a linked child. Use work_get for a full description.",
+            {
+                "project_name": {"type": "string", "minLength": 1, "maxLength": 300},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Use the previous result's next_offset; omit for the first page.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 20,
+                    "description": "Maximum items requested; Core may return fewer to fit the byte bound.",
+                },
+            },
             [],
+        ),
+        "work_get": (
+            "Read one Work item. Start with item_id only, then repeat with each returned next_description_offset as description_offset until it is null. Concatenate description chunks in order.",
+            {
+                "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "description_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Use the previous result's next_description_offset; omit for the first chunk.",
+                },
+            },
+            ["item_id"],
         ),
         "work_create": (
             "Create a Work item. Give request_id for retry safety.",
@@ -1031,7 +1151,7 @@ def work_components(
             output_schema={"type": "object", "additionalProperties": True},
             risk_class=RiskClass.LOCAL_READ,
             idempotency=IdempotencyBehavior.SAFE
-            if name == "work_list"
+            if name in {"work_list", "work_get"}
             else IdempotencyBehavior.KEY_REQUIRED,
             budget_class="artifact_query",
         )
@@ -1046,5 +1166,5 @@ def work_components(
         ),
         workspace=workspace,
         specs=specs,
-        runtime_digest="work-v1",
+        runtime_digest="work-v2",
     )
