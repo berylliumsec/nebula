@@ -12,6 +12,7 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("show flagged chats")?.id).toBe("chat");
     expect(destinationToOpen("open goal resume instruction")?.id).toBe("chat");
     expect(destinationToOpen("open switch chat provider")?.id).toBe("chat");
+    expect(destinationToOpen("open check-in history")?.id).toBe("project-work");
     expect(destinationToOpen("open Knowledge")?.id).toBe("sources");
     expect(destinationToOpen("show storage devices")?.id).toBe("storage");
     expect(destinationToOpen("How do projects work?")).toBeUndefined();

@@ -1123,6 +1123,48 @@ def test_butler_discovers_and_uses_project_work_board(tmp_path):
             change=True,
         )
         assert checked["status"] == "review"
+        setting_matches = await capabilities.search(
+            {"query": "disable Work agent tools"}
+        )
+        assert "nebula.work.set_work_setting" in {
+            item["operation"] for item in setting_matches["matches"]
+        }
+        setting = await capabilities.invoke(
+            {"operation": "nebula.work.work_setting", "arguments": {}},
+            change=False,
+        )
+        assert setting["enabled"] is True
+        setting_schema = await capabilities.describe(
+            {"operation": "nebula.work.set_work_setting"}
+        )
+        assert setting_schema["invoke_with"] == "nebula.capabilities.change"
+        disabled = await capabilities.invoke(
+            {
+                "operation": "nebula.work.set_work_setting",
+                "arguments": {
+                    "enabled": False,
+                    "expected_revision": setting["revision"],
+                },
+            },
+            change=True,
+        )
+        assert disabled["saved"] is True and disabled["enabled"] is False
+        updates = await capabilities.invoke(
+            {
+                "operation": "nebula.work.work_updates",
+                "arguments": {"item_id": item_id},
+            },
+            change=False,
+        )
+        assert checked["update_id"] in {update["id"] for update in updates["updates"]}
+        update = await capabilities.invoke(
+            {
+                "operation": "nebula.work.work_update",
+                "arguments": {"item_id": item_id, "update_id": checked["update_id"]},
+            },
+            change=False,
+        )
+        assert update["update"]["summary"] == "Ready for review"
         with pytest.raises(CapabilityInputError, match="invalid arguments"):
             await capabilities.invoke(
                 {

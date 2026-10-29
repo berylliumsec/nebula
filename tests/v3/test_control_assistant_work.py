@@ -39,6 +39,7 @@ from nebula.v3.domain import (
     RiskClass,
     ScopePolicy,
     WorkItem,
+    WorkUpdate,
 )
 from nebula.v3.runtime_platform import RuntimePlatform, _ControlAssistantScopeBroker
 from nebula.v3.artifacts import ArtifactStore
@@ -1550,6 +1551,146 @@ def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
         if offset is None:
             break
     assert "".join(chunks) == long_description
+
+
+def test_butler_controls_work_agent_access_and_reads_complete_check_in_history(
+    tmp_path,
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    service = WorkService(store)
+    item = service.create(project.id, WorkCreate(title="History"), actor_id="operator")
+    other_item = service.create(
+        other.id, WorkCreate(title="Private"), actor_id="operator"
+    )
+    long_summary = "🔎" * 4_000
+    long_next_step = "🧭" * 2_000
+    long_blocker = "⛔" * 2_000
+    saved = [
+        store.create(
+            WorkUpdate(
+                engagement_id=project.id,
+                item_id=item.id,
+                summary=long_summary if index == 0 else f"Check-in {index}",
+                next_step=long_next_step if index == 0 else None,
+                blocker=long_blocker if index == 0 else None,
+                status="in_progress",
+                actor_kind="operator",
+                actor_id="seed",
+            )
+        )
+        for index in range(205)
+    ]
+    private = store.create(
+        WorkUpdate(
+            engagement_id=other.id,
+            item_id=other_item.id,
+            summary="Private check-in",
+            status="ready",
+            actor_kind="operator",
+            actor_id="seed",
+        )
+    )
+    work = app.state.control_assistant_work
+    for operation in (
+        "work_setting",
+        "set_work_setting",
+        "work_updates",
+        "work_update",
+    ):
+        assert (
+            work.catalog(project.id, f"nebula.work.{operation}")["name"]
+            == f"nebula.work.{operation}"
+        )
+
+    async def invoke(operation, arguments):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {"operation": f"nebula.work.{operation}", "arguments": arguments},
+        )
+
+    async def scenario():
+        setting = await invoke("work_setting", {})
+        assert setting["enabled"] is True
+        with pytest.raises(ValueError, match="project Work setting changed"):
+            await invoke(
+                "set_work_setting",
+                {"enabled": False, "expected_revision": setting["revision"] + 1},
+            )
+        assert store.get(Engagement, project.id).work_enabled is True
+        disabled = await invoke(
+            "set_work_setting",
+            {"enabled": False, "expected_revision": setting["revision"]},
+        )
+        assert disabled["saved"] is True
+        assert disabled["enabled"] is False
+        assert store.get(Engagement, project.id).revision == disabled["revision"]
+        with pytest.raises(ValueError, match="project Work setting changed"):
+            await invoke(
+                "set_work_setting",
+                {"enabled": False, "expected_revision": setting["revision"]},
+            )
+        with pytest.raises(ValueError, match="invalid Work item arguments"):
+            await invoke(
+                "set_work_setting",
+                {"enabled": "false", "expected_revision": disabled["revision"]},
+            )
+        assert service.get(project.id, item.id).id == item.id
+
+        ids = []
+        offset = 0
+        while True:
+            page = await invoke("work_updates", {"item_id": item.id, "offset": offset})
+            assert model_result_bytes(page) <= MAX_EXCERPT_BYTES
+            ids.extend(update["id"] for update in page["updates"])
+            next_offset = page["next_offset"]
+            if next_offset is None:
+                break
+            assert next_offset > offset
+            offset = next_offset
+        assert len(ids) == 205
+        assert set(ids) == {update.id for update in saved}
+        with pytest.raises(NotFoundError):
+            await invoke("work_updates", {"item_id": other_item.id})
+        with pytest.raises(NotFoundError):
+            await invoke("work_update", {"item_id": item.id, "update_id": private.id})
+        with pytest.raises(NotFoundError):
+            await invoke(
+                "work_update", {"item_id": other_item.id, "update_id": saved[0].id}
+            )
+        for field, expected in (
+            ("summary", long_summary),
+            ("next_step", long_next_step),
+            ("blocker", long_blocker),
+        ):
+            chunks = []
+            offset = 0
+            while True:
+                detail = await invoke(
+                    "work_update",
+                    {
+                        "item_id": item.id,
+                        "update_id": saved[0].id,
+                        "field": field,
+                        "content_offset": offset,
+                    },
+                )
+                assert model_result_bytes(detail) <= MAX_EXCERPT_BYTES
+                chunks.append(detail["update"][field])
+                offset = detail["next_content_offset"]
+                if offset is None:
+                    break
+            assert "".join(chunks) == expected
+        with pytest.raises(ValueError, match="outside this check-in field"):
+            await invoke(
+                "work_update",
+                {"item_id": item.id, "update_id": saved[0].id, "content_offset": 4_001},
+            )
+
+    asyncio.run(scenario())
 
 
 def test_chat_follow_up_is_durable_and_project_bound(tmp_path):

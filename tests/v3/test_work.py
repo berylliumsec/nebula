@@ -923,6 +923,21 @@ def test_work_api_auth_scope_and_refresh(tmp_path):
         reloaded.get(f"{root}/{item_id}/updates", headers=auth).json()[0]["summary"]
         == "Search layout is ready"
     )
+    current = store.get(Engagement, project.id)
+    disabled = client.patch(
+        f"{root}/setting",
+        headers=auth,
+        json={"enabled": False, "expected_revision": current.revision},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["work_enabled"] is False
+    stale = client.patch(
+        f"{root}/setting",
+        headers=auth,
+        json={"enabled": True, "expected_revision": current.revision},
+    )
+    assert stale.status_code == 409, stale.text
+    assert store.get(Engagement, project.id).work_enabled is False
     assert (
         reloaded.get("/api/v1/work/updates", headers=auth).json()[0]["item_id"]
         == item_id

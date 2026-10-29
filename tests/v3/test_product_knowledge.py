@@ -215,6 +215,18 @@ def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_work_agent_access_and_history(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    access = search_product_knowledge(
+        "Can Butler disable Work agent tools for a project?"
+    )
+    assert any("nebula.work.set_work_setting" in str(item["text"]) for item in access)
+    history = search_product_knowledge(
+        "How does Butler read older Work check-in history?"
+    )
+    assert any("nebula.work.work_updates" in str(item["text"]) for item in history)
+
+
 def test_product_search_finds_butler_effort_setting(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
