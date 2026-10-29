@@ -4067,7 +4067,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessActivity(undefined);
     if (!preserveTranscript) { setMessages(preview?.messages ?? []); setReplacedMessages([]); }
     setToolCards(preview?.toolCards ?? []);
-    setMobileListOpen(false);
+    // Restoring a URL session can finish after the operator opens the drawer.
+    // Only a deliberate selection should dismiss it.
+    if (updateUrl) setMobileListOpen(false);
     setActivityItems([]);
     setHarnessInteractions([]);
     setPendingResponse(undefined);
