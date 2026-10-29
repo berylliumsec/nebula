@@ -6433,10 +6433,13 @@ test("project execution mode Nebula help answers a Docker host-file question and
 });
 
 test("assistant upgrade control assistant starts project work on production LAN Core", async ({ page }, testInfo) => {
-  test.setTimeout(180_000);
-  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  test.setTimeout(240_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
   let providerId = "";
+  let priorityChatId = "";
+  let priorityChatRevision = 0;
   const requestText = "Start a mission named LAN control mission to inspect this synthetic project.";
+  const priorityRequest = "Pin the Priority fixture chat and give it a blue flag.";
   const preference = "Remember that I want time in Eastern and not UTC.";
   const savedPreference = "The operator prefers times in Eastern Time, not UTC.";
   const stub = await startLocalModelStub({
@@ -6446,6 +6449,18 @@ test("assistant upgrade control assistant starts project work on production LAN 
       const lastUser = messages.map(message => message.role).lastIndexOf("user");
       const userText = messages[lastUser]?.content;
       const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+      if (userText === priorityRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "pin and flag a chat"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chats"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.chats", arguments: {}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chat"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.chat", arguments: {session_id: priorityChatId}}};
+        if (toolReplies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.update_chat"}};
+        if (toolReplies === 6) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.update_chat", arguments: {
+          session_id: priorityChatId, expected_revision: priorityChatRevision, pinned: true, flag_color: "blue",
+        }}};
+        return undefined;
+      }
       if (userText === preference) {
         if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "remember long-term memory preference"}};
         if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.memory.remember"}};
@@ -6491,6 +6506,21 @@ test("assistant upgrade control assistant starts project work on production LAN 
       data: {model: "security-model", expected_revision: provider.revision},
     });
     expect(verified.ok(), await verified.text()).toBe(true);
+    const seedResponse = await api.post("chat/completions", {data: {
+      backend: "provider", provider_id: providerId, model: "security-model", engagement_id: projectId,
+      messages: [{role: "user", content: "Priority fixture"}], include_knowledge: false, stream: false,
+    }});
+    expect(seedResponse.ok(), await seedResponse.text()).toBe(true);
+    priorityChatId = ((await seedResponse.json()) as {session_id: string}).session_id;
+    let settledRevision = 0;
+    await expect.poll(async () => {
+      const saved = await (await api.get(`chat-sessions/${priorityChatId}`)).json() as {revision: number; metadata: {initial_title_state?: string}};
+      settledRevision = saved.revision;
+      return saved.metadata.initial_title_state;
+    }, {timeout: 20_000}).toMatch(/^(generated|failed)$/);
+    const renamed = await api.patch(`chat-sessions/${priorityChatId}`, {data: {title: "Priority fixture", expected_revision: settledRevision}});
+    expect(renamed.ok(), await renamed.text()).toBe(true);
+    priorityChatRevision = ((await renamed.json()) as {revision: number}).revision;
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -6551,6 +6581,15 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await composer.fill(requestText);
     await composer.press("Enter");
     await expect(assistant.getByText("The mission was started in this project. Open Missions to follow its progress.")).toBeVisible({timeout: 45_000});
+    stub.responseContent = "I pinned Priority fixture and set its blue flag.";
+    await composer.fill(priorityRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const saved = await (await api.get(`chat-sessions/${priorityChatId}`)).json() as {metadata: Record<string, unknown>};
+      return {pinned: saved.metadata.pinned, flag_color: saved.metadata.flag_color};
+    }).toEqual({pinned: true, flag_color: "blue"});
+    stub.responseContent = "The mission was started in this project. Open Missions to follow its progress.";
     const controlSession = await (await api.get(`chat/control-assistant/session?engagement_id=${projectId}`)).json() as {id: string};
     await assistant.getByRole("button", {name: "Butler settings"}).click();
     const settings = assistant.getByRole("region", {name: "Butler settings"});
@@ -6565,15 +6604,29 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await expect(settings).toContainText("Saved. Applies to Butler’s next message.");
     await page.reload();
     await openNebulaAssistantFromShell(page);
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await expect(assistant).toBeHidden();
+    const mobileConversations = (page.viewportSize()?.width ?? 1440) <= 760;
+    await page.getByRole("button", {name: mobileConversations ? "Open conversations" : "Show conversations", exact: true}).click();
+    const conversations = page.getByRole("complementary", {name: "Conversations"});
+    const priorityRow = conversations.locator(`[data-session-id="${priorityChatId}"]`);
+    await expect(priorityRow).toBeVisible({timeout: 20_000});
+    await expect(priorityRow.locator(".conversation-pin-marker")).toBeVisible();
+    await expect(priorityRow.locator(".conversation-flag-marker")).toHaveAttribute("data-color", "blue");
+    await conversations.getByRole("button", {name: "Hide conversations"}).click();
+    await openNebulaAssistantFromShell(page);
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Butler settings"}).click();
     await expect(page.getByRole("region", {name: "Butler settings"}).getByRole("combobox", {name: "Butler effort"})).toHaveValue("high");
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Butler settings"}).click();
+    const statusReply = "Butler checked current work status.";
+    stub.responseContent = statusReply;
     const statusRequest = page.waitForRequest(request => request.url().endsWith("/chat/completions")
       && request.method() === "POST" && request.postData()?.includes("Check current work status") === true);
     await page.getByRole("dialog", {name: "Butler"}).getByRole("textbox", {name: "Ask Butler a question"}).fill("Check current work status");
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Send to Butler"}).click();
     await expect(statusRequest.then(request => request.postDataJSON() as {reasoning_effort?: string})).resolves.toMatchObject({reasoning_effort: "high"});
-    await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The mission was started in this project. Open Missions to follow its progress.").last()).toBeVisible({timeout: 45_000});
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(statusReply, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect(assistant.getByRole("textbox", {name: "Ask Butler a question"})).toBeEnabled();
     await assistant.getByRole("button", {name: "More"}).click();
     await memoryToggle.click();
     stub.responseContent = "I saved your preference for Eastern Time.";
