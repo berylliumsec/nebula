@@ -20,13 +20,22 @@ the local Core database.
 | Import | An authenticated batch creates projects, tasks, and one source update per task; a retry returns the same records | Core project, Work item, and update IDs | API and real Core |
 | Group projects | Existing projects can be linked to a parent without overwriting tasks; the Work page nests children, searches names, and shows parent rollups | Core project parent ID | API, component, and real Core browser |
 | Find imported work | The overview pages Work items, uses one active-agent query, and lets the operator search a large project list | Core list routes and UI query | component and browser |
-| Disable Work posting | The gateway refuses Work writes and stops advertising list/create/check-in after a session reconnects; the read-only roster remains available | Core project setting | gateway and API |
+| Agent pages Work | An eligible agent can follow `next_offset` until null; every list result fits the provider model bound, and `work_get`/`work.get` can read a full description in chunks | Core Work records; per-call offset | provider and gateway |
+| Disable Work posting | The gateway refuses Work writes and stops advertising list/get/create/check-in after a session reconnects; the read-only roster remains available | Core project setting | gateway and API |
 
-The built-in session MCP gateway supplies `work.list`, `work.create`, and
+The built-in session MCP gateway supplies `work.list`, `work.get`, `work.create`, and
 `work.check_in` to managed harness agents. Provider-chat agents receive equivalent
 Core-owned tools through their normal tool broker. Both paths use the same Work
 service. A parent agent can pass a directly linked child project's name to
 `work.list` or `work.create`, then check in to an item returned for that child.
+An agent starts `work.list`/`work_list` without `offset`, then passes each returned
+`next_offset` to the next call, repeating `project_name` for a child, until
+`next_offset` is null. A list page contains compact item summaries and a
+description preview. To read an item's complete description, it calls
+`work.get`/`work_get` with `item_id`, then follows `next_description_offset`
+until null. Both reads are bounded to fit a provider result. Offsets describe
+the current newest-first list; when concurrent creation changes that list,
+the agent restarts from offset zero if it needs a consistent fresh view.
 The gateway derives the actor from the active turn and verifies the direct
 parent-child link and both projects' Work settings. Unrelated projects remain
 inaccessible. A parent check-in records the source conversation's project so
