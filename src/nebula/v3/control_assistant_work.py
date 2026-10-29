@@ -334,6 +334,11 @@ UPDATE_CHAT_SCHEMA: dict[str, Any] = {
         "expected_revision": {"type": "integer", "minimum": 1},
         "title": {"type": "string", "minLength": 1, "maxLength": 300},
         "archived": {"type": "boolean"},
+        "pinned": {"type": "boolean"},
+        "flag_color": {
+            "type": ["string", "null"],
+            "enum": [None, "red", "orange", "yellow", "green", "blue", "purple"],
+        },
     },
     "required": ["session_id", "expected_revision"],
 }
@@ -1078,6 +1083,8 @@ class ControlAssistantWork:
                     "goal": self._goal_summary(item.id),
                     "native_harness_goal": self._native_goal(item),
                     "archived": isinstance(item.metadata.get("archived_at"), str),
+                    "pinned": item.metadata.get("pinned") is True,
+                    "flag_color": item.metadata.get("flag_color"),
                     "turn_id": pending[item.id].id if item.id in pending else None,
                     "url": _chat_url(project_id, item.id),
                 }
@@ -1102,6 +1109,42 @@ class ControlAssistantWork:
             "more_missions": len(runs) > 30,
             "attention": attention[:5],
             "more_attention": len(attention) > 5,
+        }
+
+    def chats(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
+        """Page project conversations beyond the bounded overview roster."""
+
+        self._project(project_id)
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        rows = self.store.find_entities(
+            ChatSession,
+            {},
+            engagement_id=project_id,
+            newest_first=True,
+            offset=offset,
+            limit=31,
+        )
+        chats = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "revision": item.revision,
+                "archived": isinstance(item.metadata.get("archived_at"), str),
+                "pinned": item.metadata.get("pinned") is True,
+                "flag_color": item.metadata.get("flag_color"),
+                "url": _chat_url(project_id, item.id),
+            }
+            for item in rows[:30]
+            if item.metadata.get("control_assistant") is not True
+            and item.metadata.get("side_chat") is not True
+            and item.metadata.get("temporary_assistant") is not True
+            and _chat_kind(item) == "main"
+        ]
+        return {
+            "project_id": project_id,
+            "chats": chats,
+            "next_offset": offset + 30 if len(rows) > 30 else None,
         }
 
     async def harness_quota(
@@ -1166,6 +1209,8 @@ class ControlAssistantWork:
             "native_harness_goal": self._native_goal(session),
             "revision": session.revision,
             "archived": isinstance(session.metadata.get("archived_at"), str),
+            "pinned": session.metadata.get("pinned") is True,
+            "flag_color": session.metadata.get("flag_color"),
             "task_plans": [
                 item.model_dump(mode="json")
                 for item in self.store.list_session_entities(
@@ -2128,8 +2173,24 @@ class ControlAssistantWork:
             if type(arguments["archived"]) is not bool:
                 raise ValueError("archived must be true or false")
             body["archived"] = arguments["archived"]
+        if "pinned" in arguments:
+            if type(arguments["pinned"]) is not bool:
+                raise ValueError("pinned must be true or false")
+            body["pinned"] = arguments["pinned"]
+        if "flag_color" in arguments:
+            if arguments["flag_color"] not in (
+                None,
+                "red",
+                "orange",
+                "yellow",
+                "green",
+                "blue",
+                "purple",
+            ):
+                raise ValueError("choose a listed flag color or null to clear it")
+            body["flag_color"] = arguments["flag_color"]
         if len(body) == 1:
-            raise ValueError("provide a title or archived choice")
+            raise ValueError("provide a title, archived state, pin, or flag color")
         await self._request(
             "PATCH", f"/api/v1/chat-sessions/{quote(session.id, safe='')}", body
         )
@@ -2138,6 +2199,8 @@ class ControlAssistantWork:
             "session_id": saved.id,
             "title": saved.title,
             "archived": isinstance(saved.metadata.get("archived_at"), str),
+            "pinned": saved.metadata.get("pinned") is True,
+            "flag_color": saved.metadata.get("flag_color"),
             "revision": saved.revision,
             "url": _chat_url(project_id, saved.id),
         }
@@ -2903,6 +2966,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.chats",
+        "Page this project's saved main conversations, including archived, pinned, and flagged chats. Use next_offset to continue past the first page before concluding a named chat is absent.",
+        PAGE_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.harness_quota",
         "Read one enabled harness's vendor-reported included quota windows and separate credit balances by profile ID from the runtime catalog. Grok and Codex credits may remain usable after included usage is exhausted; unavailable is unknown, not zero. Set refresh true for a new vendor read.",
         HARNESS_QUOTA_SCHEMA,
@@ -3144,7 +3213,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.update_chat",
-        "Rename, archive, or restore one listed assistant chat. Read nebula.work.chat first and pass its revision. Active turns must finish or stop before changing title or archive state.",
+        "Rename, archive, restore, pin, unpin, or flag one listed assistant chat. Use flag_color=null to clear a flag. Read nebula.work.chat first and pass its revision. Active turns must finish or stop before changing title or archive state.",
         UPDATE_CHAT_SCHEMA,
         False,
     ),
@@ -3214,6 +3283,8 @@ async def dispatch_work_tool(
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
         return work.overview(project_id)
+    if name == "nebula.work.chats":
+        return work.chats(project_id, arguments.get("offset", 0))
     if name == "nebula.work.harness_quota":
         return await work.harness_quota(project_id, arguments)
     if name == "nebula.work.chat":

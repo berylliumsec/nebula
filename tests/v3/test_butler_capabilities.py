@@ -1032,6 +1032,55 @@ def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path
     asyncio.run(scenario())
 
 
+def test_butler_discovers_and_uses_chat_priority(tmp_path):
+    store, _, chat, _, capabilities = _capabilities(tmp_path)
+
+    async def scenario():
+        for query, operation in (
+            ("page older chats", "nebula.work.chats"),
+            ("pin and flag a chat", "nebula.work.update_chat"),
+        ):
+            found = await capabilities.search({"query": query})
+            assert operation in {item["operation"] for item in found["matches"]}
+        described = await capabilities.describe(
+            {"operation": "nebula.work.update_chat"}
+        )
+        assert described["invoke_with"] == "nebula.capabilities.change"
+        assert {"pinned", "flag_color"}.issubset(
+            described["input_schema"]["properties"]
+        )
+        saved = await capabilities.invoke(
+            {
+                "operation": "nebula.work.update_chat",
+                "arguments": {
+                    "session_id": chat.id,
+                    "expected_revision": chat.revision,
+                    "pinned": True,
+                    "flag_color": "blue",
+                },
+            },
+            change=True,
+        )
+        assert saved["pinned"] is True
+        assert saved["flag_color"] == "blue"
+        with pytest.raises(CapabilityInputError, match="invalid arguments"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.update_chat",
+                    "arguments": {
+                        "session_id": chat.id,
+                        "expected_revision": saved["revision"],
+                        "flag_color": "magenta",
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+    assert store.get(ChatSession, chat.id).metadata["pinned"] is True
+    assert store.get(ChatSession, chat.id).metadata["flag_color"] == "blue"
+
+
 def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):
     _, _, _, _, capabilities = _capabilities(tmp_path)
     spec = next(

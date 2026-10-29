@@ -1257,6 +1257,122 @@ def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
     assert second["result"] == "an existing retry is already saved in Core"
 
 
+def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    chats = [
+        store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=f"Chat {index}",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        for index in range(34)
+    ]
+    store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            provider_profile_id=profile.id,
+            model="model-a",
+            metadata={"control_assistant": True},
+        )
+    )
+    for excluded_metadata in (
+        {"side_chat": True},
+        {"temporary_assistant": True},
+        {"delegated_from_goal_id": "goal-1"},
+    ):
+        store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Excluded",
+                provider_profile_id=profile.id,
+                model="model-a",
+                metadata=excluded_metadata,
+            )
+        )
+    other_project = store.create(Engagement(name="Other"))
+    other_chat = store.create(
+        ChatSession(
+            engagement_id=other_project.id,
+            title="Other project's private chat",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    work = app.state.control_assistant_work
+    descriptor = work.catalog(project.id, "nebula.work.update_chat")
+    assert {"pinned", "flag_color"}.issubset(descriptor["parameters"]["properties"])
+    assert "pin" in descriptor["description"]
+
+    async def page(offset):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {"operation": "nebula.work.chats", "arguments": {"offset": offset}},
+        )
+
+    first = asyncio.run(page(0))
+    second = asyncio.run(page(first["next_offset"]))
+    assert first["next_offset"] == 30
+    assert second["next_offset"] is None
+    assert {item["id"] for item in first["chats"] + second["chats"]} == {
+        item.id for item in chats
+    }
+    with pytest.raises(ValueError, match="work roster"):
+        work.chat_detail(project.id, other_chat.id)
+
+    target = chats[0]
+
+    async def change(revision, **updates):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {
+                "operation": "nebula.work.update_chat",
+                "arguments": {
+                    "session_id": target.id,
+                    "expected_revision": revision,
+                    **updates,
+                },
+            },
+        )
+
+    pinned = asyncio.run(change(target.revision, pinned=True, flag_color="purple"))
+    assert (pinned["pinned"], pinned["flag_color"]) == (True, "purple")
+    assert (
+        work.chat_detail(project.id, target.id)["pinned"],
+        work.chat_detail(project.id, target.id)["flag_color"],
+    ) == (True, "purple")
+    assert any(
+        item["id"] == target.id and item["pinned"] and item["flag_color"] == "purple"
+        for item in work.chats(project.id, 30)["chats"]
+    )
+    with pytest.raises(ValueError, match="chat changed"):
+        asyncio.run(change(target.revision, pinned=False))
+    cleared = asyncio.run(change(pinned["revision"], pinned=False, flag_color=None))
+    assert (cleared["pinned"], cleared["flag_color"]) == (False, None)
+    assert "pinned" not in store.get(ChatSession, target.id).metadata
+    assert "flag_color" not in store.get(ChatSession, target.id).metadata
+    with pytest.raises(ValueError, match="pinned must be true or false"):
+        asyncio.run(change(cleared["revision"], pinned="yes"))
+    with pytest.raises(ValueError, match="listed flag color"):
+        asyncio.run(change(cleared["revision"], flag_color="magenta"))
+
+
 def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
     store, app, _ = _app(tmp_path)
     selected = store.create(Engagement(name="Selected"))
