@@ -94,8 +94,9 @@ interface WorkspaceContextValue {
   resourceStatus: Record<WorkspaceResource, ResourceStatus>;
   engagements: EngagementSummary[];
   archivedEngagements: EngagementSummary[];
-  deleteArchivedEngagement: (id: string) => Promise<void>;
-  setEngagementArchived: (id: string, archived: boolean) => Promise<string | undefined>;
+  deleteArchivedEngagement: (id: string, expectedRevision?: number) => Promise<void>;
+  setEngagementArchived: (id: string, archived: boolean, expectedRevision?: number) => Promise<string | undefined>;
+  renameEngagementAtRevision: (id: string, name: string, expectedRevision: number) => Promise<EngagementSummary>;
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
   engagement?: EngagementSummary;
@@ -660,16 +661,25 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return created;
   }, [api, coreState]);
 
-  const deleteArchivedEngagement = useCallback(async (id: string) => {
+  const renameEngagementAtRevision = useCallback(async (id: string, name: string, expectedRevision: number) => {
+    if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to rename a project.");
+    const saved = await api.renameEngagementAtRevision(id, name, expectedRevision);
+    const refreshed = await api.listEngagements();
+    setEngagements(refreshed.items);
+    if (id === selectedEngagementId) setEngagement(saved);
+    return saved;
+  }, [api, coreState, selectedEngagementId]);
+
+  const deleteArchivedEngagement = useCallback(async (id: string, expectedRevision?: number) => {
     if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to delete a project.");
-    await api.deleteArchivedEngagement(id);
+    await api.deleteArchivedEngagement(id, expectedRevision);
     const refreshed = await api.listEngagements();
     setEngagements(refreshed.items);
   }, [api, coreState]);
 
-  const setEngagementArchived = useCallback(async (id: string, archived: boolean) => {
+  const setEngagementArchived = useCallback(async (id: string, archived: boolean, expectedRevision?: number) => {
     if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to update a project.");
-    await api.setEngagementArchived(id, archived);
+    await api.setEngagementArchived(id, archived, expectedRevision);
     const refreshed = await api.listEngagements();
     setEngagements(refreshed.items);
     const available = refreshed.items.filter((item) => item.status !== "archived");
@@ -1118,6 +1128,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteProvider,
       selectEngagement,
       createEngagement,
+      renameEngagementAtRevision,
       setEngagementArchived,
       deleteArchivedEngagement,
       addAsset,
@@ -1178,6 +1189,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteProvider,
       selectEngagement,
       createEngagement,
+      renameEngagementAtRevision,
       setEngagementArchived,
       deleteArchivedEngagement,
       addAsset,

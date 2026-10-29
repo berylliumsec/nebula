@@ -86,6 +86,22 @@ describe("settings assistant actions", () => {
     expect(settingClientAction(browser, "other")).toBeUndefined();
     expect(settingClientAction({...browser, receipt: {...browser.receipt, butler_operation: "nebula.work.start_chat"}}, "selected")).toBeUndefined();
   });
+  it("accepts only scoped, typed project lifecycle handoffs", () => {
+    const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "project-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: { butler_operation: "nebula.projects.archive", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "project_archive", project_id: projectId, name: "Fixture", expected_revision: 3} },
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "project_archive", projectId, name: "Fixture", expectedRevision: 3});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "project_archive", project_id: "../other", name: "Fixture", expected_revision: 3}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "project_archive", project_id: projectId, name: "Fixture", expected_revision: 0}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.restore"}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: ""}}}, "selected"))
+      .toEqual({kind: "project_create", name: "New", description: "", clientName: ""});
+  });
   it("recognizes explicit project mode changes without treating questions as commands", () => {
     expect(projectModeChange("open project policy and change from dockermode to host mode"))
       .toEqual({ from: "docker", mode: "host" });

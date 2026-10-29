@@ -6142,21 +6142,35 @@ export class ApiClient {
     }).then(mapAssistantDefaults);
   }
 
-  async deleteArchivedEngagement(id: string): Promise<void> {
+  getProjectLifecycle(id: string): Promise<{ id: string; name: string; status: EngagementSummary["status"]; revision: number }> {
+    return this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}`).then(({ id: projectId, name, status, revision }) => ({ id: projectId, name, status, revision }));
+  }
+
+  async renameEngagementAtRevision(id: string, name: string, expectedRevision: number): Promise<EngagementSummary> {
+    const saved = await this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ changes: { name }, expected_revision: expectedRevision }),
+    });
+    return mapEngagement(saved);
+  }
+
+  async deleteArchivedEngagement(id: string, expectedRevision?: number): Promise<void> {
     const path = `engagements/${encodeURIComponent(id)}`;
     try {
       const current = await this.request<WireEngagement>(path);
       if (current.status !== "archived") throw new Error("Archive the project before deleting it.");
+      if (expectedRevision !== undefined && current.revision !== expectedRevision) throw new Error("Project changed. Read it again before deleting.");
       await this.request<void>(path, { method: "DELETE", headers: { "If-Match": String(current.revision) } });
     } catch (error) {
       // Another device, or a saved delete whose response was lost, already removed it.
-      if (!(error instanceof ApiError && error.status === 404)) throw error;
+      if (!(error instanceof ApiError && error.status === 404 && expectedRevision === undefined)) throw error;
     }
   }
 
-  async setEngagementArchived(id: string, archived: boolean): Promise<EngagementSummary> {
+  async setEngagementArchived(id: string, archived: boolean, expectedRevision?: number): Promise<EngagementSummary> {
     const path = `engagements/${encodeURIComponent(id)}`;
     const current = await this.request<WireEngagement>(path);
+    if (expectedRevision !== undefined && current.revision !== expectedRevision) throw new Error("Project changed. Read it again before changing archive state.");
     if (current.status === (archived ? "archived" : "active")) return mapEngagement(current);
     return mapEngagement(await this.request<WireEngagement>(path, {
       method: "PATCH",

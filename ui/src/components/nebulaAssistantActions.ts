@@ -12,7 +12,10 @@ export type SettingClientAction =
   | { kind: "device_theme"; theme: ThemePreference }
   | { kind: "project_execution_mode"; mode: ProjectMode; from?: ProjectMode }
   | { kind: "project_scope"; changes: Record<string, unknown> }
-  | { kind: "headless_session"; action: "start" | "stop" };
+  | { kind: "headless_session"; action: "start" | "stop" }
+  | { kind: "project_create"; name: string; description: string; clientName: string }
+  | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
+  | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string };
 
 export interface AssistantWorkReceipt { url: string; content: string }
 
@@ -72,6 +75,31 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const action = receipt.client_action;
   if (!action || typeof action !== "object" || Array.isArray(action)) return undefined;
   const value = action as Record<string, unknown>;
+  const projectAction = event.capability === "nebula.capabilities.change"
+    || event.capability === "nebula_capabilities_change"
+    || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (projectAction && operation.startsWith("nebula.projects.")) {
+    const name = value.name;
+    const validName = typeof name === "string" && name.trim().length > 0 && name.length <= 300;
+    if (operation === "nebula.projects.create" && value.kind === "project_create" && validName
+        && typeof value.description === "string" && value.description.length <= 20_000
+        && typeof value.client_name === "string" && value.client_name.length <= 300) {
+      return { kind: "project_create", name, description: value.description, clientName: value.client_name };
+    }
+    const target = typeof value.project_id === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.project_id) ? value.project_id : undefined;
+    const revision = Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1 ? Number(value.expected_revision) : undefined;
+    if (target && revision && validName) {
+      if (operation === "nebula.projects.rename" && value.kind === "project_rename"
+          && typeof value.old_name === "string" && value.old_name.length <= 300) {
+        return { kind: "project_rename", projectId: target, expectedRevision: revision, oldName: value.old_name, name };
+      }
+      const kind = `project_${operation.slice("nebula.projects.".length)}`;
+      if (kind === value.kind && (kind === "project_archive" || kind === "project_restore" || kind === "project_delete")) {
+        return { kind, projectId: target, expectedRevision: revision, name };
+      }
+    }
+    return undefined;
+  }
   const themeTool = operation === "nebula.settings.set_device_theme"
     || /^nebula_settings_set_device_theme_[0-9a-f]{10,}$/.test(operation);
   const openTool = operation === "nebula.settings.open"

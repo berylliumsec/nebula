@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
+import { ApiError } from "../api/client";
 import { isNebulaShell } from "../hooks/useCompactLayout";
 import { startVisiblePoll } from "../api/visiblePoll";
 import { logDiagnostic } from "../diagnostics";
@@ -15,6 +16,7 @@ import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeCon
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
+import { projectSurface } from "../resourceRoutes";
 import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type VoicePauseSeconds } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
@@ -37,6 +39,10 @@ function readActionOutcomes(key: string): Record<string, string> {
     void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.action_outcomes_invalid", message: "The saved assistant action outcomes could not be read.", outcome: "failure", stage: "history", retryable: false, exception: caught });
     return {};
   }
+}
+
+function projectNameKey(name: string): string {
+  return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 const ButlerTranscript = memo(function ButlerTranscript({ messages, api, projectId, sessionId, transcriptRef, onScroll, onOpenSetting, onNavigate, onHide }: {
@@ -70,7 +76,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses } = useWorkspace();
+  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -739,6 +745,87 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `${engagement.name} headless security browser: ${observed.state}${observed.session_id ? ` · session ${observed.session_id}` : ""}.`;
   };
 
+  const applyProjectLifecycle = async (action: Extract<SettingClientAction, { kind: "project_create" | "project_rename" | "project_archive" | "project_restore" | "project_delete" }>): Promise<string> => {
+    if (!api || coreState !== "online") throw new Error("Reconnect to Core before changing a project.");
+    if (action.kind === "project_create") {
+      const matchingProjects = async () => (await api.listEngagements()).items.filter((project) => projectNameKey(project.name) === projectNameKey(action.name));
+      const describeMatches = (matches: Awaited<ReturnType<typeof matchingProjects>>) => matches.slice(0, 3).map((project) => `${project.id} (${project.status})`).join(", ");
+      let existing;
+      try {
+        existing = await matchingProjects();
+      } catch {
+        throw new Error("Core's project list is unavailable. Reconnect and check All projects before asking Butler to create one.");
+      }
+      if (existing.length) throw new Error(`Core already has a project named ${action.name}: ${describeMatches(existing)}. Ask Butler to read it before creating another.`);
+      const created = await createEngagement({ name: action.name, description: action.description, clientName: action.clientName || undefined, hostAccessAcknowledged: false }).catch(async () => {
+        let after;
+        try {
+          after = await matchingProjects();
+        } catch {
+          throw new Error(`Core did not confirm whether ${action.name} was created, and its project list is unavailable. Reconnect and check All projects before retrying.`);
+        }
+        throw new Error(after.length
+          ? `Core did not confirm whether ${action.name} was created. It now lists ${describeMatches(after)}. Ask Butler to read that project before retrying.`
+          : `Core did not confirm whether ${action.name} was created. Check All projects before retrying.`);
+      });
+      const observed = await api.getProjectLifecycle(created.id);
+      if (observed.name !== action.name || observed.status === "archived") throw new Error("Core did not confirm the new project. Check All projects before retrying.");
+      setHidden(true);
+      onNavigate(`${projectSurface(created.id, "workbench")}?view=chat`);
+      return `Created ${observed.name} in Core. Host access still needs operator consent before use.`;
+    }
+    const current = await api.getProjectLifecycle(action.projectId);
+    if (current.revision !== action.expectedRevision || current.name !== (action.kind === "project_rename" ? action.oldName : action.name)) {
+      throw new Error("Project changed. Ask Butler to read it again before retrying.");
+    }
+    if (action.kind === "project_rename") {
+      await renameEngagementAtRevision(action.projectId, action.name, action.expectedRevision);
+      const observed = await api.getProjectLifecycle(action.projectId);
+      if (observed.name !== action.name) throw new Error("Core did not confirm the new project name. Refresh All projects.");
+      return `Renamed ${action.oldName} to ${observed.name} in Core.`;
+    }
+    if (action.kind === "project_delete") {
+      if (current.status !== "archived") throw new Error("Archive the project before permanently deleting it.");
+      const approved = await confirm({
+        title: `Permanently delete ${action.name}?`,
+        message: "This removes the archived project, chats, application model and project records. It cannot be undone. Workspace files, including the linked host folder, will not be deleted. Immutable audit logs and stored artifact files are retained.",
+        confirmLabel: "Delete permanently",
+        tone: "danger",
+      });
+      if (!approved) return `${action.name} was not deleted. No change was saved.`;
+      await deleteArchivedEngagement(action.projectId, action.expectedRevision);
+      try {
+        await api.getProjectLifecycle(action.projectId);
+      } catch (caught) {
+        if (caught instanceof ApiError && caught.status === 404) return `Permanently deleted ${action.name} from Core. Workspace files were kept.`;
+        throw caught;
+      }
+      throw new Error("Core still has this project. Check Archived projects before retrying.");
+    }
+    const archiving = action.kind === "project_archive";
+    if (archiving && current.status === "archived") throw new Error("This project is already archived. Read it again.");
+    if (!archiving && current.status !== "archived") throw new Error("Choose an archived project to restore.");
+    if (archiving) {
+      const approved = await confirm({
+        title: `Remove ${action.name}?`,
+        message: "This archives the project and removes it from your active projects. Files and chat history are kept. Running work continues. You can restore it from Archived projects.",
+        confirmLabel: "Remove project",
+      });
+      if (!approved) return `${action.name} remains active. No change was saved.`;
+    }
+    const wasSelected = engagement?.id === action.projectId;
+    const nextId = await setEngagementArchived(action.projectId, archiving, action.expectedRevision);
+    const observed = await api.getProjectLifecycle(action.projectId);
+    if (observed.status !== (archiving ? "archived" : "active")) throw new Error("Core did not confirm the project status. Refresh All projects.");
+    if (archiving && wasSelected) {
+      setHidden(true);
+      onNavigate(nextId ? `${projectSurface(nextId, "workbench")}?view=chat` : "/projects");
+    }
+    return archiving
+      ? `Archived ${observed.name} in Core. Running work continues; restore it from Archived projects.`
+      : `Restored ${observed.name} in Core. Select it from active projects.`;
+  };
+
   const openSelectedSetting = (entry: SettingCatalogEntry) => {
     onOpenSetting(entry);
     if (entry.target === "butler-oversight") setView("work");
@@ -746,13 +833,18 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   };
 
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
+    if (action.kind === "project_create" || action.kind === "project_rename" || action.kind === "project_archive"
+      || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
     if (action.kind === "project_execution_mode") return applyProjectMode(action);
     if (action.kind === "project_scope") return applyProjectScope(action.changes);
     if (action.kind === "headless_session") return applyHeadlessSession(action.action);
     if (action.kind === "navigate") return openDestination(action.destination);
-    openSelectedSetting(action.setting);
-    return `Opened ${action.setting.label}.`;
+    if (action.kind === "open_setting") {
+      openSelectedSetting(action.setting);
+      return `Opened ${action.setting.label}.`;
+    }
+    throw new Error("Unsupported Butler browser action.");
   };
 
   const openDestination = (destination: AssistantDestination): string => {
