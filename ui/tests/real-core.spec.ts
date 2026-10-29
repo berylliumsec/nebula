@@ -6793,6 +6793,173 @@ test("assistant upgrade control assistant starts project work on production LAN 
   ]);
 });
 
+test("Butler project lifecycle confirms and reads back changes on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  let targetId = "";
+  let targetRevision = 0;
+  const actions = new Map([
+    ["Create the Butler LAN project", "create"],
+    ["Create the uncertain Butler project", "create_uncertain"],
+    ["Rename the Butler LAN project", "rename"],
+    ["Archive the Butler LAN project", "archive"],
+    ["Restore the Butler LAN project", "restore"],
+    ["Permanently delete the Butler LAN project", "delete"],
+  ]);
+  const stub = await startLocalModelStub({responseContent: "I requested the project change on this browser.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const action = actions.get(String(messages[lastUser]?.content ?? ""));
+    if (!action) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: `${action} project`}};
+    if (action === "create" || action === "create_uncertain") {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.projects.create"}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.projects.create", arguments: {
+        name: action === "create" ? "Butler LAN project" : "Butler uncertain project", description: "Disposable lifecycle fixture",
+      }}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.projects.detail"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.projects.detail", arguments: {project_id: targetId}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: `nebula.projects.${action}`}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: `nebula.projects.${action}`, arguments: {
+      project_id: targetId, expected_revision: targetRevision, ...(action === "rename" ? {name: "Butler LAN renamed"} : {}),
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const initial = await api.post("engagements", {data: {name: "Butler lifecycle source", status: "active", metadata: {}}});
+    expect(initial.ok(), await initial.text()).toBe(true);
+    const sourceId = (await initial.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler lifecycle model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), sourceId);
+    await pairRealCoreBrowser(page, core, "Butler lifecycle browser", {requireReady: false});
+    const sourceUrl = `${core.origin}/projects/${sourceId}/workbench?view=chat`;
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (message: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(message);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    const target = async () => {
+      const response = await api.get(`engagements/${targetId}`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const saved = await response.json() as {id: string; name: string; status: string; revision: number};
+      targetRevision = saved.revision;
+      return saved;
+    };
+
+    await send("Create the Butler LAN project");
+    await expect.poll(async () => {
+      const response = await api.get("engagements");
+      expect(response.ok(), await response.text()).toBe(true);
+      const projects = await response.json() as Array<{id: string; name: string}>;
+      targetId = projects.find(item => item.name === "Butler LAN project")?.id ?? "";
+      return projects.filter(item => item.name === "Butler LAN project").length;
+    }, {timeout: 45_000}).toBe(1);
+    await expect(page).toHaveURL(new RegExp(`/projects/${targetId}/workbench`));
+    expect((await target()).status).toBe("draft");
+    const hostPolicy = await api.get(`engagements/${targetId}/automation-policy`);
+    expect(hostPolicy.ok(), await hostPolicy.text()).toBe(true);
+    expect((await hostPolicy.json() as {host_access_acknowledged: boolean}).host_access_acknowledged).toBe(false);
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
+    let browserCreatePosts = 0;
+    await page.route("**/api/v1/engagements", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      browserCreatePosts += 1;
+      if (browserCreatePosts > 1) return route.continue();
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      await route.abort("failed");
+    });
+    await send("Create the uncertain Butler project");
+    await expect(assistant.getByRole("alert")).toContainText("Core did not confirm whether Butler uncertain project was created", {timeout: 45_000});
+    const uncertainCount = async () => {
+      const response = await api.get("engagements");
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as Array<{name: string}>).filter((project) => project.name === "Butler uncertain project").length;
+    };
+    await expect.poll(uncertainCount, {timeout: 45_000}).toBe(1);
+    await send("Create the uncertain Butler project");
+    await expect(assistant.getByRole("alert")).toContainText("Core already has a project named Butler uncertain project", {timeout: 45_000});
+    expect(browserCreatePosts).toBe(1);
+    expect(await uncertainCount()).toBe(1);
+    await page.unroute("**/api/v1/engagements");
+    await send("Rename the Butler LAN project");
+    await expect.poll(async () => (await target()).name, {timeout: 45_000}).toBe("Butler LAN renamed");
+    await page.reload();
+    const openNav = page.getByRole("button", {name: "Open navigation", exact: true});
+    const closeSwitcherAndSidebar = async () => {
+      await page.getByRole("button", {name: "Switch project", exact: true}).click();
+      const scrim = page.getByRole("button", {name: "Close sidebar"});
+      if (await scrim.isVisible()) {
+        await scrim.click({position: {x: (page.viewportSize()?.width ?? 320) - 12, y: 100}});
+        await expect(scrim).toBeHidden();
+      }
+    };
+    if (await openNav.isVisible()) await openNav.click();
+    await page.getByRole("button", {name: "Switch project", exact: true}).click();
+    await expect(page.getByRole("dialog", {name: "Project switcher"}).getByRole("button", {name: "Butler LAN renamed draft", exact: true})).toBeVisible();
+    await closeSwitcherAndSidebar();
+    await openNebulaAssistantFromShell(page);
+
+    await send("Archive the Butler LAN project");
+    const archiveDialog = page.getByRole("dialog", {name: "Remove Butler LAN renamed?"});
+    await expect(archiveDialog).toContainText("Running work continues", {timeout: 45_000});
+    expect((await new AxeBuilder({page}).include(".confirmation-dialog").analyze()).violations).toEqual([]);
+    await archiveDialog.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("Butler LAN renamed remains active. No change was saved.")).toBeVisible();
+    expect((await target()).status).toBe("draft");
+    await send("Archive the Butler LAN project");
+    await archiveDialog.getByRole("button", {name: "Remove project"}).click();
+    await expect.poll(async () => (await target()).status, {timeout: 45_000}).toBe("archived");
+    await page.reload();
+    if (await openNav.isVisible()) await openNav.click();
+    await page.getByRole("button", {name: "Switch project", exact: true}).click();
+    await page.getByRole("button", {name: /^Archived projects/}).click();
+    await expect(page.getByRole("dialog", {name: "Project switcher"}).getByText("Butler LAN renamed")).toBeVisible();
+    await closeSwitcherAndSidebar();
+    await openNebulaAssistantFromShell(page);
+
+    await send("Restore the Butler LAN project");
+    await expect.poll(async () => (await target()).status, {timeout: 45_000}).toBe("active");
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await send("Archive the Butler LAN project");
+    await archiveDialog.getByRole("button", {name: "Remove project"}).click();
+    await expect.poll(async () => (await target()).status, {timeout: 45_000}).toBe("archived");
+    await send("Permanently delete the Butler LAN project");
+    const deleteDialog = page.getByRole("dialog", {name: "Permanently delete Butler LAN renamed?"});
+    await expect(deleteDialog).toContainText("cannot be undone", {timeout: 45_000});
+    await deleteDialog.getByRole("button", {name: "Delete permanently"}).click();
+    await expect.poll(async () => (await api.get(`engagements/${targetId}`)).status(), {timeout: 45_000}).toBe(404);
+    await page.reload();
+    await testInfo.attach("butler-project-lifecycle", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry,
+      assetSha256: build.assets[entry!], steps: ["create", "uncertain create response", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler shows live work and restores it after reload on production LAN Core", async ({ page }, testInfo) => {
   test.setTimeout(150_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
