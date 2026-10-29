@@ -6433,13 +6433,17 @@ test("project execution mode Nebula help answers a Docker host-file question and
 });
 
 test("assistant upgrade control assistant starts project work on production LAN Core", async ({ page }, testInfo) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
   let providerId = "";
   let priorityChatId = "";
   let priorityChatRevision = 0;
+  let workItemId = "";
+  let workItemRevision = 0;
   const requestText = "Start a mission named LAN control mission to inspect this synthetic project.";
   const priorityRequest = "Pin the Priority fixture chat and give it a blue flag.";
+  const createWorkRequest = "Create a ready Work item named LAN Butler task.";
+  const checkWorkRequest = "Post a review check-in on LAN Butler task.";
   const preference = "Remember that I want time in Eastern and not UTC.";
   const savedPreference = "The operator prefers times in Eastern Time, not UTC.";
   const stub = await startLocalModelStub({
@@ -6449,6 +6453,25 @@ test("assistant upgrade control assistant starts project work on production LAN 
       const lastUser = messages.map(message => message.role).lastIndexOf("user");
       const userText = messages[lastUser]?.content;
       const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+      if (userText === createWorkRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "create a Work board item"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.create_work_item"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.create_work_item", arguments: {
+          title: "LAN Butler task", status: "ready", request_id: "lan-butler-task-1",
+        }}};
+        return undefined;
+      }
+      if (userText === checkWorkRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "post a Work item check-in"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_item"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_item", arguments: {item_id: workItemId}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.check_in_work_item"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.check_in_work_item", arguments: {
+          item_id: workItemId, expected_revision: workItemRevision, summary: "Ready for review", status: "review",
+          request_id: "lan-butler-check-1",
+        }}};
+        return undefined;
+      }
       if (userText === priorityRequest) {
         if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "pin and flag a chat"}};
         if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chats"}};
@@ -6589,6 +6612,28 @@ test("assistant upgrade control assistant starts project work on production LAN 
       const saved = await (await api.get(`chat-sessions/${priorityChatId}`)).json() as {metadata: Record<string, unknown>};
       return {pinned: saved.metadata.pinned, flag_color: saved.metadata.flag_color};
     }).toEqual({pinned: true, flag_color: "blue"});
+    stub.responseContent = "I created LAN Butler task on the Work board.";
+    await composer.fill(createWorkRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/work`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const items = await response.json() as Array<{id: string; revision: number; title: string}>;
+      const item = items.find(candidate => candidate.title === "LAN Butler task");
+      workItemId = item?.id ?? "";
+      workItemRevision = item?.revision ?? 0;
+      return items.filter(candidate => candidate.title === "LAN Butler task").length;
+    }).toBe(1);
+    stub.responseContent = "I posted the review check-in on LAN Butler task.";
+    await composer.fill(checkWorkRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/work/${workItemId}`);
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {status: string}).status;
+    }).toBe("review");
     stub.responseContent = "The mission was started in this project. Open Missions to follow its progress.";
     const controlSession = await (await api.get(`chat/control-assistant/session?engagement_id=${projectId}`)).json() as {id: string};
     await assistant.getByRole("button", {name: "Butler settings"}).click();
@@ -6684,6 +6729,14 @@ test("assistant upgrade control assistant starts project work on production LAN 
     else { await savedMissionLink.focus(); await savedMissionLink.press("Enter"); }
     await expect(page).toHaveURL(new RegExp(`view=missions&mission=${savedMissionId}`));
     await expect(page.getByRole("navigation", {name: "Mission history"}).getByRole("button", {name: /LAN control mission/})).toHaveAttribute("aria-current", "true");
+    await page.goto(`${core.origin}/projects/${projectId}/work/${workItemId}`);
+    const boardItem = page.getByRole("complementary", {name: "LAN Butler task"});
+    await expect(boardItem.getByRole("heading", {name: "LAN Butler task"})).toBeVisible();
+    await expect(boardItem.locator(".work-status")).toHaveText("Review");
+    await expect(boardItem.getByText("Ready for review")).toBeVisible();
+    await page.reload();
+    await expect(boardItem.getByRole("heading", {name: "LAN Butler task"})).toBeVisible();
+    await expect(boardItem.locator(".work-status")).toHaveText("Review");
     await testInfo.attach("control-assistant-work", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},

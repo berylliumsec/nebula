@@ -1,10 +1,10 @@
 {
-  "change_digest": "b1ddf43c147c5b99244fe74b2c09c22ba13a56ce16743c68bd07b001f6fa8eed",
-  "reviewed_by": "Codex focused review for Butler chat priority and guidance",
-  "reason": "Two Python cases cover Butler capability discovery, project-scoped chat paging, pin and flag writes, invalid input, stale revisions, and durable read-back. Two product-knowledge cases cover the updated guidance digest and Chroma synchronization. The eight collected real-Core browser profiles exercise the Butler tool journey and saved sidebar state after refresh at desktop, compact, Android-sized Chromium, and iPhone-sized WebKit viewports.",
+  "change_digest": "2dc75af4b69f0f8b60f19199753a525becab8cd88de97cabf5f10be791f34ac4",
+  "reviewed_by": "Codex focused review for Butler chat priority and Work board controls",
+  "reason": "Nine collected Python cases cover prior chat controls, Work model and API compatibility, revision-checked Work edits, idempotent check-ins, bounded Unicode item reads, Butler capability discovery and project isolation, and product-knowledge digest and Chroma synchronization. The eight collected real-Core browser profiles exercise Butler's chat and Work actions and saved UI state after refresh at desktop, compact, Android-sized Chromium, and iPhone-sized WebKit viewports.",
   "exclusions": "No production frontend or native source changed, so no frontend or native tests are selected. Unrelated Python and Playwright journeys are excluded. The browser profiles emulate mobile devices; physical Safari was not available.",
   "expected_tests": {
-    "python": 4,
+    "python": 9,
     "frontend": 0,
     "native": 0,
     "playwright": 8
@@ -15,8 +15,13 @@
   "python_browser": false,
   "python_node": false,
   "python": [
+    "tests/v3/test_work.py::test_work_default_on_and_check_ins_are_durable_and_idempotent",
+    "tests/v3/test_work.py::test_work_item_revision_checks_preserve_edits_and_idempotent_check_ins",
+    "tests/v3/test_work.py::test_work_api_auth_scope_and_refresh",
     "tests/v3/test_control_assistant_work.py::test_butler_discovers_pages_and_saves_chat_priority",
+    "tests/v3/test_control_assistant_work.py::test_butler_manages_project_work_items_with_saved_revisions",
     "tests/v3/test_butler_capabilities.py::test_butler_discovers_and_uses_chat_priority",
+    "tests/v3/test_butler_capabilities.py::test_butler_discovers_and_uses_project_work_board",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
