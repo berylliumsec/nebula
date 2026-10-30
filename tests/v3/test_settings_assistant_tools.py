@@ -70,6 +70,8 @@ def test_catalog_covers_settings_destinations_without_secrets():
     )
     assert notebook_family["discover_with"] == "nebula.capabilities.search"
     assert "nebula.notebook.edit_cell" in notebook_family["operations"]
+    assert "nebula.notebook.restart" in notebook_family["operations"]
+    assert "nebula.notebook.install_package" in notebook_family["operations"]
     assert (
         "Butler conversations"
         in next(item for item in result["destinations"] if item["id"] == "chat")[

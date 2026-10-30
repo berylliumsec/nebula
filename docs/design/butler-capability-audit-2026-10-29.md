@@ -28,8 +28,8 @@ and reads; these counts are not a coverage percentage.
 | Assistant runtimes | List available runtimes; change chat defaults and next-turn Assistant settings; inspect model and quota information | A next-turn setting does not rebind a running turn. Some runtime lifecycle controls remain in the visible settings screens. |
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create, rename, archive, restore, and permanent delete through the requesting browser; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host folder selection and Host consent remain in their visible controls. |
-| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes | Browser file selection and binary upload, directory mutation, terminal lifecycle, and linked-host-folder selection remain gaps. Scheduled Butler has no file actions. |
-| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, Notebook kernel restart and package installation, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
+| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, request browser-owned binary upload and verified download, and create, rename or delete an empty directory against current identities | Terminal lifecycle and linked-host-folder selection remain gaps. Scheduled Butler has no file actions. |
+| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run; read and restart an idle kernel; read or install an exact package with environment read-back; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, Notebook file-index selection, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
 The present gateway is deliberately small: Butler receives
@@ -272,13 +272,21 @@ receipt only after Core read-back.
 | Discover and select | Butler pages project Notebook paths and bounded cell previews; an exact source read does not return an entire 20 MB document | Notebook service and project workspace | Tool and real Core |
 | Create and edit | A missing or revoked Notebook grant fails; creation refuses an existing path; cell writes use the current document revision or source hash, and a stale edit preserves the file | Notebook grant, workspace file and cell hashes | Tool, API and real Core |
 | Execute and interrupt | A saved code cell returns a run ID; Core policy and Host consent are enforced; ordered results and interruption are read from that run | Notebook runtime and Core run store | Tool and real Core |
+| Restart kernel | Butler selects a live idle kernel by ID, restart count and current Notebook file revision; Core acknowledges the restart and reports an incremented count for that same kernel | Notebook worker and project workspace | Tool and production LAN browser |
+| Install package | Butler selects a project Notebook and exact requirement, then Core applies Host or Docker policy and reads the installed distribution and version from that same environment; an uncertain result is inspected before retry | Notebook environment and project policy | Tool and production LAN browser |
 | Refresh and reconnect | The same path, source hash, saved cell and run status appear in Notebook and Butler after reload | Workspace file, Core run store and URL | Production LAN browser |
 | Failure and retry | Permission, stale revision, unavailable runtime and uncertain run effects identify the next safe read; no blind duplicate execution | Core error contract | Tool and real Core |
 
-Kernel restart, package installation and project file-index configuration are separate Notebook
-operator actions. Their network and Host policies must be exercised before
-calling Notebook control complete. Browser keyboard and mobile checks apply to
-the selected Notebook journey, even when Butler's tool routing is server-side.
+Kernel restart requires the current notebook revision, live kernel ID and restart
+count; Core rejects a changed file or worker and increments the count only after
+the worker acknowledges restart. An absent kernel is reported as absent rather
+than restarted. Package installation requires the current notebook revision,
+the live Notebook grant, project Host consent and selected runtime policy. Core
+queries installed distribution metadata in that environment after the command;
+Butler reads it again before claiming a version. An uncertain response requires
+`package_status` before retrying. Project file-index configuration remains a
+separate host-picker workflow. Browser keyboard and mobile checks apply to the
+selected Notebook journey, even when Butler's tool routing is server-side.
 
 ### Chat history rewind contract
 
@@ -345,10 +353,10 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Complete binary upload and directory actions in Workspace, Notebook kernel
-   restart and package installation, and the remaining resource actions in their
-   owning services. Each needs target discovery, optimistic revisions where
-   applicable, and durable read-back.
+2. Complete Notebook file-index selection, terminal lifecycle, linked host folder
+   selection, and the remaining resource actions in their owning services. Each
+   needs target discovery, optimistic revisions where applicable, and observed
+   Core read-back.
 3. Add specialized device and administration handoffs for local file selection,
    pairing, storage enrollment, credentials, release updates and service state.
    Keep one-time values on the requesting device and preserve existing

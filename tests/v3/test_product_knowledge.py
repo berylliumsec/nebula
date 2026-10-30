@@ -269,6 +269,14 @@ def test_product_search_finds_butler_notebook_guidance(monkeypatch):
         and "nebula.notebook.interrupt" in str(item["text"])
         for item in runs
     )
+    resources = search_product_knowledge(
+        "Can Butler restart a notebook kernel and install a Python package safely?"
+    )
+    assert any(
+        "nebula.notebook.restart" in str(item["text"])
+        and "nebula.notebook.package_status" in str(item["text"])
+        for item in resources
+    )
 
 
 def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):

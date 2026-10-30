@@ -379,13 +379,13 @@
       "core_owner": "NotebookService, project package network policy and kernel state",
       "butler": {
         "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
-        "read": "nebula.notebook.search_package and status",
-        "change": "missing: typed package installation and kernel restart with observed-result acceptance"
+        "read": "nebula.notebook.search_package, nebula.notebook.package_status and nebula.notebook.kernel",
+        "change": "nebula.notebook.install_package and nebula.notebook.restart"
       },
       "authority": "Selected project, Notebook grant, Host consent, package network permission and exact kernel target",
-      "observed_result_test": "missing: Butler package installation and kernel restart LAN lifecycle",
-      "result": "Core must report the installed package or restarted kernel state; an uncertain install must be inspected before retry",
-      "status": "gap"
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core",
+      "result": "Core reports the selected environment's installed distribution and version; an idle kernel reports the same ID with an incremented restart count after acknowledgement",
+      "status": "supported"
     },
     {
       "id": "notebook.file_index",

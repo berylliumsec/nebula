@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -200,10 +203,11 @@ def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_
                 )
             )["invoke_with"] == "nebula.capabilities.change"
         for operation in ("restart", "install_package"):
-            with pytest.raises(CapabilityInputError, match="listed operation"):
+            assert (
                 await capabilities.describe(
                     {"operation": f"nebula.notebook.{operation}"}
                 )
+            )["invoke_with"] == "nebula.capabilities.change"
         with pytest.raises(GuidedToolError) as execution_consent:
             await invoke(
                 "execute",
@@ -229,6 +233,148 @@ def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_
             await invoke("search_package", {"path": "policy.ipynb", "name": "colorama"})
         assert network.value.code == "notebook.permission_required"
         assert "network" in str(network.value).lower()
+
+    asyncio.run(scenario())
+
+
+def test_butler_notebook_restarts_only_the_current_idle_kernel(tmp_path):
+    _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
+    notebooks.automation_runtime = SimpleNamespace(
+        project_policy=lambda _: AutomationProjectPolicy(
+            engagement_id=selected.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            network_enabled=False,
+        )
+    )
+
+    async def invoke(name, arguments=None, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
+            change=change,
+        )
+
+    async def scenario():
+        file = await invoke("create", {"path": "restart.ipynb"}, change=True)
+        absent = await invoke("kernel", {"path": "restart.ipynb"})
+        assert absent["state"] == "absent"
+        assert (await notebooks.restart(selected.id, "restart.ipynb"))[
+            "restarted"
+        ] is False
+        commands = []
+
+        async def command(operation):
+            commands.append(operation)
+
+        worker = SimpleNamespace(
+            kernel_id="a" * 32,
+            restart_count=0,
+            active_run=None,
+            process=SimpleNamespace(returncode=None),
+            command=command,
+        )
+        notebooks.workers[(selected.id, "restart.ipynb")] = worker
+        before = await invoke("kernel", {"path": "restart.ipynb"})
+        assert before["notebook_revision"] == file["revision"]
+        arguments = {
+            "path": "restart.ipynb",
+            "expected_notebook_revision": file["revision"],
+            "expected_kernel_id": worker.kernel_id,
+            "expected_restart_count": 0,
+        }
+        with pytest.raises(ValueError, match="changed"):
+            await invoke(
+                "restart", {**arguments, "expected_kernel_id": "b" * 32}, change=True
+            )
+        assert commands == []
+        result = await invoke("restart", arguments, change=True)
+        assert result["restarted"] is True
+        assert result["kernel"]["restart_count"] == 1
+        assert commands == ["restart"]
+        with pytest.raises(ValueError, match="changed|already restarted"):
+            await invoke("restart", arguments, change=True)
+        assert commands == ["restart"]
+        worker.active_run = "active-run"
+        with pytest.raises(GuidedToolError, match="running"):
+            await invoke(
+                "restart", {**arguments, "expected_restart_count": 1}, change=True
+            )
+        assert commands == ["restart"]
+
+    asyncio.run(scenario())
+
+
+def test_butler_notebook_install_reads_selected_environment_and_rejects_stale_file(
+    tmp_path,
+):
+    _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
+    policy = AutomationProjectPolicy(
+        engagement_id=selected.id,
+        execution_mode="host",
+        host_access_acknowledged=True,
+        network_enabled=False,
+    )
+    notebooks.automation_runtime = SimpleNamespace(project_policy=lambda _: policy)
+    installed = False
+    commands = []
+
+    async def environment(_project):
+        return Path(sys.executable), Path("/worker.py"), Path("/fixture/uv")
+
+    async def capture(command, timeout=120):
+        nonlocal installed
+        commands.append((command, timeout))
+        if command[0] == "/fixture/uv":
+            assert "--offline" in command
+            installed = True
+            return "Audited one distribution"
+        return json.dumps(
+            {
+                "installed": installed,
+                "name": "pip",
+                "version": "25.0" if installed else None,
+            }
+        )
+
+    notebooks._host_environment = environment
+    notebooks._capture = capture
+
+    async def invoke(name, arguments=None, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
+            change=change,
+        )
+
+    async def scenario():
+        file = await invoke("create", {"path": "packages.ipynb"}, change=True)
+        status = await invoke(
+            "package_status", {"path": "packages.ipynb", "name": "pip"}
+        )
+        assert status["installed"] is False
+        with pytest.raises(ValueError, match="changed"):
+            await invoke(
+                "install_package",
+                {
+                    "path": "packages.ipynb",
+                    "requirement": "pip==25.0",
+                    "expected_notebook_revision": "0" * 64,
+                },
+                change=True,
+            )
+        assert not installed
+        changed = await invoke(
+            "install_package",
+            {
+                "path": "packages.ipynb",
+                "requirement": "pip==25.0",
+                "expected_notebook_revision": file["revision"],
+            },
+            change=True,
+        )
+        assert changed["package"]["name"] == "pip"
+        assert changed["package"]["version"] == "25.0"
+        assert changed["restart_recommended"] is True
+        assert sum(command[0][0] == "/fixture/uv" for command in commands) == 1
 
     asyncio.run(scenario())
 
