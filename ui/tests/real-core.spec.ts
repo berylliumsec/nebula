@@ -6888,6 +6888,88 @@ test("assistant upgrade Butler rewinds a saved chat on production LAN Core", asy
   ]);
 });
 
+test("assistant upgrade Butler edits a project Notebook on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  let cellId = "";
+  let sourceHash = "";
+  const instruction = "Edit the saved research notebook cell to print 43.";
+  const stub = await startLocalModelStub({responseContent: "The notebook cell was saved in Core.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (messages[lastUser]?.content !== instruction) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "notebook edit cell"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.read"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.read", arguments: {path: "research.ipynb"}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.edit_cell"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.edit_cell", arguments: {
+      path: "research.ipynb", cell_id: cellId, source: "print(43)", cell_type: "code", expected_source_hash: sourceHash,
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler Notebook fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler Notebook model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const created = await api.post(`engagements/${projectId}/notebooks`, {data: {path: "research.ipynb"}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const file = await created.json() as {revision: string};
+    const added = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", source: "print(42)", cell_type: "code", expected_revision: file.revision,
+    }});
+    expect(added.ok(), await added.text()).toBe(true);
+    const savedFile = await added.json() as {cell_id: string; cell_revisions: Record<string, string>};
+    cellId = savedFile.cell_id;
+    sourceHash = savedFile.cell_revisions[cellId];
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler Notebook LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+    await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`);
+      const current = await response.json() as {document: {cells: Array<{source: string}>}};
+      return current.document.cells[0].source;
+    }, {timeout: 45_000}).toBe("print(43)");
+    const stale = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", cell_id: cellId, source: "stale overwrite", cell_type: "code", expected_source_hash: sourceHash,
+    }});
+    expect(stale.status()).toBe(409);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
+    const notebook = page.getByRole("region", {name: "Project notebook"});
+    await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
+    await page.reload();
+    await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
+    expect((await new AxeBuilder({page}).include(".notebook-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-notebook-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId, cellId,
+      result: "Butler saved exact Notebook cell; stale hash refused; Core and refreshed Notebook agree"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("Butler project lifecycle confirms and reads back changes on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(300_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
