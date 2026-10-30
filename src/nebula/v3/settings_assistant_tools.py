@@ -283,13 +283,13 @@ def catalog() -> dict[str, Any]:
                     "nebula.notebook.run",
                     "nebula.notebook.run_event",
                     "nebula.notebook.wait",
-                    "nebula.notebook.kernel",
+                    "nebula.notebook.kernel_status",
                     "nebula.notebook.restart",
-                    "nebula.notebook.package_status",
+                    "nebula.notebook.installed_package",
                     "nebula.notebook.install_package",
                     "nebula.notebook.search_package",
                 ],
-                "effect": "interactive Butler delegates selected-project Notebook actions to Core under the current grant, file revision, runtime policy and Host consent",
+                "effect": "interactive Butler delegates selected-project Notebook actions to Core under the current grant, kernel identity, runtime policy and Host consent",
             }
         ],
         "settings": [
