@@ -273,9 +273,11 @@ proof that every click has been catalogued.
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
 checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 22
 reviewed actions, including explicit export, workspace, Notebook, Library, and
-storage dispositions. Its source inventory contains 498 distinct `api` call
-signatures in production UI TypeScript, of which 37 are linked to those
-reviewed actions; 461 still require action-level review. Direct `api.request`
+storage dispositions. Its source inventory contains 502 distinct `api` call
+signatures in production UI TypeScript, of which 41 are linked to those
+reviewed actions; 461 still require action-level review. The new Workbench bulk
+chat calls map to the existing per-chat archive, priority and deletion actions;
+Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
 calls are keyed by route expression and HTTP verb. The guard fails when a call
 is added, removed, or repeated without refreshing the inventory. It does not
 see calls through other receiver names or UI actions with no API call, so the

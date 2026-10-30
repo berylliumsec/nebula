@@ -5,7 +5,9 @@
       "id": "chat.archive",
       "entry_point": "Conversation menu: Archive or Restore a saved main chat",
       "ui_calls": [
-        "ui/src/pages/SessionsPage.tsx::setChatSessionArchived"
+        "ui/src/pages/SessionsPage.tsx::setChatSessionArchived",
+        "ui/src/pages/chatBulkActions.ts::listChatSessions",
+        "ui/src/pages/chatBulkActions.ts::setChatSessionArchived"
       ],
       "core_owner": "ChatService and chat session metadata",
       "butler": {
@@ -22,7 +24,8 @@
       "id": "chat.priority",
       "entry_point": "Conversation menu: Pin or flag a saved main chat",
       "ui_calls": [
-        "ui/src/pages/SessionsPage.tsx::setChatSessionPriority"
+        "ui/src/pages/SessionsPage.tsx::setChatSessionPriority",
+        "ui/src/pages/chatBulkActions.ts::setChatSessionPriority"
       ],
       "core_owner": "ChatService and chat session metadata",
       "butler": {
@@ -56,7 +59,8 @@
       "id": "chat.delete",
       "entry_point": "Conversation menu: permanently delete a saved main chat",
       "ui_calls": [
-        "ui/src/pages/SessionsPage.tsx::deleteChatSession"
+        "ui/src/pages/SessionsPage.tsx::deleteChatSession",
+        "ui/src/pages/chatBulkActions.ts::deleteChatSession"
       ],
       "core_owner": "ChatService and session dependency guards",
       "butler": {
@@ -2127,6 +2131,22 @@
     },
     {
       "key": "ui/src/pages/WorkPage.tsx::watchWorkChanges",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/chatBulkActions.ts::deleteChatSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/chatBulkActions.ts::listChatSessions",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/chatBulkActions.ts::setChatSessionArchived",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/chatBulkActions.ts::setChatSessionPriority",
       "count": 1
     },
     {

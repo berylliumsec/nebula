@@ -1,13 +1,13 @@
 {
-  "change_digest": "3f8af4e4c2c20b3c8d437542664fe6a2175efe35f24d3e1bb1df11da37479c77",
-  "reviewed_by": "Codex focused review of cumulative Butler control PR plus shared Library handoff",
-  "reason": "Retain prior project lifecycle, chat rewind, Notebook edit, transcript export, product knowledge, registry, and typed-action selections. Cover exact shared Library catalog and revision guards, browser-owned file selection and original-file download, reindex and removal, artifact retention, background exclusion, product-help discovery, and receipt parsing. Four frontend files collect 75 cases for Butler browser handoffs and previous project/export behavior. Eight paired non-loopback LAN Library profiles cover cancellation, authenticated upload, original-byte download, revision guard, read-back, refresh, reconnect, removal, and retained artifact journey in addition to the prior 32 cases.",
-  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend and browser journeys are excluded. Notebook run lifecycle/package installation, workspace files, browser/research data, and other audited operator controls still require separate work. Browser profiles emulate mobile devices; physical Safari and the operating system's final download save location are unavailable. Butler's enabled Knowledge setting may separately supply bounded Library excerpts to the model; the control action sends metadata only. A confirmed Library removal proves the Core item is absent and the original artifact remains; it does not independently prove every downstream index cache is cleared after an index cleanup failure.",
+  "change_digest": "9a310711c660eb4aa6f7aba7c06f7f6ad3034d5a694af1cd39c11217764cccd0",
+  "reviewed_by": "Codex focused review of cumulative Butler control PR and merged bulk chat actions",
+  "reason": "Retain prior project lifecycle, chat rewind, Notebook edit, transcript export, product knowledge, registry, and typed-action selections. Cover exact shared Library catalog and revision guards, browser-owned file selection and original-file download, reindex and removal, artifact retention, background exclusion, product-help discovery, and receipt parsing. Four frontend files collect 75 cases for Butler browser handoffs and previous project/export behavior. Eight paired non-loopback LAN Library profiles cover cancellation, authenticated upload, original-byte download, revision guard, read-back, refresh, reconnect, removal, and retained artifact journey in addition to the prior 32 cases. Integrate upstream bulk chat actions: full-list selection, partial failure and retry, archive/restore, pin/flag, deletion confirmation, destination and product-help discovery, and compact toolbar geometry. Add its four Python, three frontend-file and eight paired LAN browser selections to the reviewed cumulative plan; duplicate Python tests are selected once.",
+  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend and browser journeys are excluded. Notebook run lifecycle/package installation, workspace files, browser/research data, and other audited operator controls still require separate work. Browser profiles emulate mobile devices; physical Safari and the operating system's final download save location are unavailable. Butler's enabled Knowledge setting may separately supply bounded Library excerpts to the model; the control action sends metadata only. A confirmed Library removal proves the Core item is absent and the original artifact remains; it does not independently prove every downstream index cache is cleared after an index cleanup failure. The upstream bulk chat journey is selected at its exact eight profiles; unrelated UI and Core suites remain excluded.",
   "expected_tests": {
-    "python": 30,
-    "frontend": 75,
+    "python": 31,
+    "frontend": 93,
     "native": 0,
-    "playwright": 40
+    "playwright": 48
   },
   "python_versions": [
     "3.12"
@@ -44,13 +44,17 @@
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_operation_missing_from_core_catalog",
     "tests/v3/test_butler_library.py::test_butler_library_pages_metadata_and_refuses_stale_global_change",
     "tests/v3/test_butler_library.py::test_library_api_revision_guard_preserves_item_and_artifact",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_shared_library_confirmation"
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_shared_library_confirmation",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_bulk_chat_actions"
   ],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",
     "ui/src/components/nebulaAssistantActions.test.ts",
     "ui/src/api/projectRemoval.test.ts",
-    "ui/src/pages/chatTranscriptExport.test.ts"
+    "ui/src/pages/chatTranscriptExport.test.ts",
+    "ui/src/pages/chatBulkActions.test.ts",
+    "ui/src/pages/conversationSidebar.test.ts",
+    "ui/src/assistantDestinations.test.ts"
   ],
   "native": [],
   "playwright": [
@@ -93,6 +97,14 @@
     "butler-library/assistant-real-chromium-430",
     "butler-library/assistant-real-webkit-320",
     "butler-library/assistant-real-webkit-390",
-    "butler-library/assistant-real-webkit-430"
+    "butler-library/assistant-real-webkit-430",
+    "bulk-chat-actions/assistant-real-desktop",
+    "bulk-chat-actions/assistant-real-compact",
+    "bulk-chat-actions/assistant-real-chromium-320",
+    "bulk-chat-actions/assistant-real-chromium-390",
+    "bulk-chat-actions/assistant-real-chromium-430",
+    "bulk-chat-actions/assistant-real-webkit-320",
+    "bulk-chat-actions/assistant-real-webkit-390",
+    "bulk-chat-actions/assistant-real-webkit-430"
   ]
 }
