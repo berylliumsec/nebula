@@ -8879,6 +8879,17 @@ def create_app(
     async def interrupt_notebook_run(engagement_id: str, run_id: str) -> NotebookRun:
         return await notebook_service.interrupt(run_id, engagement_id=engagement_id)
 
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/kernel",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def notebook_kernel_state(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+    ) -> dict[str, Any]:
+        return notebook_service.kernel_state(engagement_id, path)
+
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/kernel/restart",
         tags=["notebooks"],
@@ -8886,9 +8897,8 @@ def create_app(
     )
     async def restart_notebook_kernel(
         engagement_id: str, body: NotebookCreateRequest
-    ) -> dict[str, bool]:
-        await notebook_service.restart(engagement_id, body.path)
-        return {"restarted": True}
+    ) -> dict[str, Any]:
+        return await notebook_service.restart(engagement_id, body.path)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages",
@@ -8901,6 +8911,18 @@ def create_app(
         return await notebook_service.install_package(
             engagement_id, body.path, body.requirement
         )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages/installed",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def notebook_package_status(
+        engagement_id: str,
+        path: str = Query(min_length=1, max_length=4096),
+        name: str = Query(min_length=1, max_length=128),
+    ) -> dict[str, Any]:
+        return await notebook_service.package_status(engagement_id, path, name)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages/search",

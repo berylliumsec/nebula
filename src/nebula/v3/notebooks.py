@@ -335,6 +335,8 @@ class NotebookWorkerConnection:
         self.on_event = on_event
         self.mode = mode
         self.policy_revision = policy_revision
+        self.kernel_id = uuid4().hex
+        self.restart_count = 0
         self.ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self.runs: dict[str, asyncio.Future[str]] = {}
         self.requests: dict[str, asyncio.Future[None]] = {}
@@ -900,14 +902,72 @@ class NotebookService:
                 await worker.command("interrupt")
         return self.store.get(NotebookRun, run_id)
 
-    async def restart(self, engagement_id: str, path: str) -> None:
-        self.read(engagement_id, path)
+    def kernel_state(self, engagement_id: str, path: str) -> dict[str, Any]:
+        notebook = self.read(engagement_id, path)
         worker = self.workers.get((engagement_id, path))
-        if worker is None:
-            return
+        if worker is None or worker.process.returncode is not None:
+            return {
+                "path": path,
+                "notebook_revision": notebook["revision"],
+                "state": "absent",
+                "kernel_id": None,
+                "restart_count": None,
+                "active_run": None,
+            }
+        return {
+            "path": path,
+            "notebook_revision": notebook["revision"],
+            "state": "running" if worker.active_run else "idle",
+            "kernel_id": worker.kernel_id,
+            "restart_count": worker.restart_count,
+            "active_run": worker.active_run,
+        }
+
+    async def restart(
+        self,
+        engagement_id: str,
+        path: str,
+        *,
+        expected_notebook_revision: str | None = None,
+        expected_kernel_id: str | None = None,
+        expected_restart_count: int | None = None,
+    ) -> dict[str, Any]:
+        notebook = self.read(engagement_id, path)
+        policy = self.policy(engagement_id)
+        if policy.execution_mode == "host" and not policy.host_access_acknowledged:
+            raise NotebookPermissionRequired(
+                "Acknowledge Host access in Project settings before restarting a kernel"
+            )
+        if (
+            expected_notebook_revision is not None
+            and notebook["revision"] != expected_notebook_revision
+        ):
+            raise NotebookConflict("notebook changed; read it before restarting")
+        worker = self.workers.get((engagement_id, path))
+        if worker is None or worker.process.returncode is not None:
+            if expected_kernel_id is not None:
+                raise NotebookConflict(
+                    "kernel changed or stopped; read its current state"
+                )
+            return {"restarted": False, **self.kernel_state(engagement_id, path)}
+        if expected_kernel_id is not None and worker.kernel_id != expected_kernel_id:
+            raise NotebookConflict("kernel changed; read its current state")
+        if (
+            expected_restart_count is not None
+            and worker.restart_count != expected_restart_count
+        ):
+            raise NotebookConflict(
+                "kernel was already restarted; read its current state"
+            )
         if worker.active_run:
             raise NotebookConflict("cell is running; interrupt it before restarting")
         await worker.command("restart")
+        if self.workers.get((engagement_id, path)) is not worker:
+            raise NotebookConflict(
+                "kernel changed during restart; read its current state"
+            )
+        worker.restart_count += 1
+        return {"restarted": True, **self.kernel_state(engagement_id, path)}
 
     async def _worker(self, engagement_id: str, path: str) -> NotebookWorkerConnection:
         key = (engagement_id, path)
@@ -1129,9 +1189,21 @@ class NotebookService:
         return stdout.decode("utf-8", errors="replace")
 
     async def install_package(
-        self, engagement_id: str, path: str, requirement: str
+        self,
+        engagement_id: str,
+        path: str,
+        requirement: str,
+        *,
+        expected_notebook_revision: str | None = None,
     ) -> dict[str, Any]:
-        self.read(engagement_id, path)
+        notebook = self.read(engagement_id, path)
+        if (
+            expected_notebook_revision is not None
+            and notebook["revision"] != expected_notebook_revision
+        ):
+            raise NotebookConflict(
+                "notebook changed; read it before installing a package"
+            )
         if not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]+\])?(?:==[A-Za-z0-9._+-]+)?",
             requirement,
@@ -1186,12 +1258,74 @@ class NotebookService:
             if not backend.network_enabled:
                 command.insert(-1, "--offline")
         output = await self._capture(command, timeout=300)
+        name = re.split(r"\[|==", requirement, maxsplit=1)[0]
+        observed = await self.package_status(engagement_id, path, name)
+        exact_version = requirement.partition("==")[2]
+        if not observed["installed"] or (
+            exact_version and observed["version"] != exact_version
+        ):
+            raise NotebookRuntimeUnavailable(
+                "package command finished but the selected environment did not report the requested version; inspect package status before retrying"
+            )
         return {
             "requirement": requirement,
             "installed": True,
+            "name": observed["name"],
+            "version": observed["version"],
             "detail": output[-2000:],
             "restart_recommended": True,
         }
+
+    async def package_status(
+        self, engagement_id: str, path: str, name: str
+    ) -> dict[str, Any]:
+        """Read distribution metadata from the selected Notebook environment."""
+
+        self.read(engagement_id, path)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name):
+            raise NotebookError("enter an exact Python package name")
+        policy = self.policy(engagement_id)
+        if policy.execution_mode == "host":
+            if not policy.host_access_acknowledged:
+                raise NotebookPermissionRequired(
+                    "Acknowledge Host access in Project settings before reading packages"
+                )
+            python, _, _ = await self._host_environment(engagement_id)
+            command = [str(python)]
+        else:
+            if self.automation_runtime is None:
+                raise NotebookRuntimeUnavailable("project runtime is unavailable")
+            await self._worker_command(engagement_id, policy)
+            session_id, _ = self._sessions[engagement_id]
+            backend = self.automation_runtime._sessions[session_id].backend
+            assert isinstance(backend, ContainerRuntimeSession)
+            command = [
+                *backend.runner._runtime_argv(),
+                "exec",
+                backend.container_name,
+                "/nebula-notebook-env/bin/python",
+            ]
+        script = (
+            "import importlib.metadata,json,sys\n"
+            "try:\n"
+            " dist=importlib.metadata.distribution(sys.argv[1])\n"
+            " print(json.dumps({'installed':True,'name':dist.metadata['Name'],'version':dist.version}))\n"
+            "except importlib.metadata.PackageNotFoundError:\n"
+            " print(json.dumps({'installed':False,'name':sys.argv[1],'version':None}))\n"
+        )
+        output = await self._capture([*command, "-c", script, name], timeout=60)
+        try:
+            observed = json.loads(output)
+            if (
+                not isinstance(observed, dict)
+                or type(observed.get("installed")) is not bool
+            ):
+                raise ValueError("invalid package status")
+        except (ValueError, TypeError) as exc:
+            raise NotebookRuntimeUnavailable(
+                "selected Notebook environment returned invalid package status"
+            ) from exc
+        return {"path": path, "execution_mode": policy.execution_mode, **observed}
 
     async def search_package(
         self, engagement_id: str, path: str, name: str

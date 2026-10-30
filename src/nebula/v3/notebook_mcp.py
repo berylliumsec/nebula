@@ -126,16 +126,40 @@ TOOLS = (
         False,
     ),
     (
+        "kernel",
+        "Read one selected notebook's live kernel identity, restart count and active run.",
+        _schema({"path": PATH}, "path"),
+        True,
+    ),
+    (
         "restart",
         "Restart an idle notebook kernel.",
-        _schema({"path": PATH}, "path"),
+        _schema(
+            {
+                "path": PATH,
+                "expected_notebook_revision": TEXT,
+                "expected_kernel_id": TEXT,
+                "expected_restart_count": {"type": "integer", "minimum": 0},
+            },
+            "path",
+        ),
         False,
     ),
     (
         "install_package",
         "Install a Python package into this project's selected Host or Docker notebook environment.",
-        _schema({"path": PATH, "requirement": TEXT}, "path", "requirement"),
+        _schema(
+            {"path": PATH, "requirement": TEXT, "expected_notebook_revision": TEXT},
+            "path",
+            "requirement",
+        ),
         False,
+    ),
+    (
+        "package_status",
+        "Read an installed package name and version from the selected project's Notebook environment.",
+        _schema({"path": PATH, "name": TEXT}, "path", "name"),
+        True,
     ),
     (
         "search_package",
@@ -252,8 +276,10 @@ class NotebookMcpTools:
             "edit_cell",
             "execute",
             "recent_runs",
+            "kernel",
             "restart",
             "install_package",
+            "package_status",
             "search_package",
         }
         if name in path_tools:
@@ -342,8 +368,10 @@ class NotebookMcpTools:
                 "edit_cell",
                 "execute",
                 "recent_runs",
+                "kernel",
                 "restart",
                 "install_package",
+                "package_status",
                 "search_package",
             }
             and not path
@@ -397,12 +425,26 @@ class NotebookMcpTools:
                     arguments["run_id"], engagement_id=project_id
                 )
             ).model_dump(mode="json")
+        elif name == "kernel":
+            value = self.notebooks.kernel_state(project_id, path)
         elif name == "restart":
-            await self.notebooks.restart(project_id, path)
-            value = {"restarted": True}
+            value = await self.notebooks.restart(
+                project_id,
+                path,
+                expected_notebook_revision=arguments.get("expected_notebook_revision"),
+                expected_kernel_id=arguments.get("expected_kernel_id"),
+                expected_restart_count=arguments.get("expected_restart_count"),
+            )
         elif name == "install_package":
             value = await self.notebooks.install_package(
-                project_id, path, arguments["requirement"]
+                project_id,
+                path,
+                arguments["requirement"],
+                expected_notebook_revision=arguments.get("expected_notebook_revision"),
+            )
+        elif name == "package_status":
+            value = await self.notebooks.package_status(
+                project_id, path, arguments["name"]
             )
         elif name == "search_package":
             value = await self.notebooks.search_package(

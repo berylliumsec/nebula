@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -17,6 +18,7 @@ _CELL = {"type": "string", "minLength": 1, "maxLength": 200}
 _OFFSET = {"type": "integer", "minimum": 0, "maximum": 1_000_000}
 _REVISION = {"type": "string", "minLength": 1, "maxLength": 128}
 _SOURCE_HASH = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+_KERNEL_ID = {"type": "string", "pattern": "^[0-9a-f]{32}$"}
 
 
 def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
@@ -76,6 +78,30 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
         "run_id",
     ),
     "interrupt": _schema({"run_id": _CELL}, "run_id"),
+    "kernel": _schema({"path": _PATH}, "path"),
+    "restart": _schema(
+        {
+            "path": _PATH,
+            "expected_notebook_revision": _SOURCE_HASH,
+            "expected_kernel_id": _KERNEL_ID,
+            "expected_restart_count": {"type": "integer", "minimum": 0},
+        },
+        "path",
+        "expected_notebook_revision",
+        "expected_kernel_id",
+        "expected_restart_count",
+    ),
+    "package_status": _schema({"path": _PATH, "name": _CELL}, "path", "name"),
+    "install_package": _schema(
+        {
+            "path": _PATH,
+            "requirement": _CELL,
+            "expected_notebook_revision": _SOURCE_HASH,
+        },
+        "path",
+        "requirement",
+        "expected_notebook_revision",
+    ),
     "search_package": _schema({"path": _PATH, "name": _CELL}, "path", "name"),
 }
 
@@ -92,6 +118,10 @@ _DESCRIPTIONS = {
     "run_event": "Read an exact bounded text chunk of one saved Notebook run event.",
     "wait": "Wait briefly for one Core Notebook run, then read its current status and bounded events.",
     "interrupt": "After the operator asks to stop one exact queued or running Notebook run, interrupt it by run ID and read its current Core status. A running worker may acknowledge interruption later.",
+    "kernel": "Read one selected Notebook's current file revision, live kernel identity, restart count and active run. An absent kernel has nothing to restart.",
+    "restart": "Restart one idle kernel after reading its current Notebook revision and kernel identity. Core rejects a changed file or kernel; read the incremented restart count before reporting success.",
+    "package_status": "Read one installed distribution name and version from the selected Project Notebook environment before retrying an uncertain installation.",
+    "install_package": "Install an exact package requirement in the selected Project's Notebook environment after reading its file revision. Project Host consent and network policy apply; Core reads the installed distribution back. Check package_status before retrying an uncertain result.",
     "search_package": "Look up an exact package name through the project's Notebook network policy.",
 }
 
@@ -105,10 +135,12 @@ _READS = frozenset(
         "run",
         "run_event",
         "wait",
+        "kernel",
+        "package_status",
         "search_package",
     }
 )
-_NETWORK_ACTIONS = frozenset({"execute", "search_package"})
+_NETWORK_ACTIONS = frozenset({"execute", "install_package", "search_package"})
 
 
 @dataclass(frozen=True)
@@ -242,6 +274,51 @@ class ButlerNotebook:
             changed = await self._call(name, arguments)
             value = await self._call("run", {"run_id": changed["id"]})
             return self._run_page(value)
+        if name == "restart":
+            before = await self._call("kernel", {"path": arguments["path"]})
+            if before["state"] == "absent":
+                raise ValueError(
+                    "no live kernel exists; run a cell before asking to restart it"
+                )
+            if (
+                before["notebook_revision"] != arguments["expected_notebook_revision"]
+                or before["kernel_id"] != arguments["expected_kernel_id"]
+                or before["restart_count"] != arguments["expected_restart_count"]
+            ):
+                raise ValueError(
+                    "Notebook or kernel changed; read it again before restarting"
+                )
+            await self._call("restart", arguments)
+            observed = await self._call("kernel", {"path": arguments["path"]})
+            if (
+                observed["kernel_id"] != before["kernel_id"]
+                or observed["restart_count"] != before["restart_count"] + 1
+            ):
+                raise ValueError(
+                    "kernel restart result changed before read-back; inspect current kernel state"
+                )
+            return {"restarted": True, "kernel": observed}
+        if name == "install_package":
+            current = await self._call("read", {"path": arguments["path"]})
+            if current["revision"] != arguments["expected_notebook_revision"]:
+                raise ValueError(
+                    "Notebook changed; read it before installing a package"
+                )
+            changed = await self._call("install_package", arguments)
+            name = re.split(r"\[|==", arguments["requirement"], maxsplit=1)[0]
+            observed = await self._call(
+                "package_status", {"path": arguments["path"], "name": name}
+            )
+            if not observed["installed"] or observed["version"] != changed["version"]:
+                raise ValueError(
+                    "package install result changed before read-back; inspect package_status before retrying"
+                )
+            return {
+                "requirement": changed["requirement"],
+                "installed": True,
+                "package": observed,
+                "restart_recommended": changed["restart_recommended"],
+            }
         if name in {"run", "run_event", "wait"}:
             requested = "run" if name == "run_event" else name
             params = {"run_id": arguments["run_id"]}
