@@ -276,6 +276,9 @@ def catalog() -> dict[str, Any]:
                 "discover_with": "nebula.capabilities.search",
                 "operations": [
                     "nebula.notebook.list",
+                    "nebula.notebook.file_index",
+                    "nebula.notebook.choose_file_index",
+                    "nebula.notebook.remove_file_index",
                     "nebula.notebook.read",
                     "nebula.notebook.source",
                     "nebula.notebook.create",

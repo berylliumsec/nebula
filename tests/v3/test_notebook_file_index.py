@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.domain import Engagement
 from nebula.v3.notebook_file_index import FileIndexUnavailable, list_indexed_notebooks
-from nebula.v3.notebooks import NotebookService
+from nebula.v3.notebooks import NotebookConflict, NotebookService
 from nebula.v3.storage import NebulaStore
 
 
@@ -108,6 +108,46 @@ def test_project_prefers_index_then_falls_back_and_removal_persists(
             "fallback.ipynb"
         ]
         assert len(scans) == 2
+
+    asyncio.run(scenario())
+
+
+def test_file_index_revision_guard_preserves_current_selection(tmp_path):
+    store = NebulaStore(tmp_path / "store.db")
+    root = tmp_path / "workspace"
+    root.mkdir()
+    project = store.create(Engagement(name="Revision project", workspace_path=str(root)))
+    service = NotebookService(
+        store=store,
+        workspace_resolver=lambda _: root,
+        automation_runtime=None,
+        data_root=tmp_path / "data",
+    )
+    index = _inventory(tmp_path, root)
+
+    async def scenario():
+        before = service.file_index_status(project.id)
+        assert before["project_revision"] == project.revision
+        with pytest.raises(NotebookConflict, match="project changed"):
+            await service.set_file_index(
+                project.id, str(index), expected_project_revision=project.revision + 1
+            )
+        assert service.file_index_status(project.id)["path"] is None
+        connected = await service.set_file_index(
+            project.id, str(index), expected_project_revision=project.revision
+        )
+        assert connected["path"] == str(index)
+        assert connected["project_revision"] == project.revision + 1
+        with pytest.raises(NotebookConflict, match="project changed"):
+            await service.set_file_index(
+                project.id, None, expected_project_revision=project.revision
+            )
+        assert service.file_index_status(project.id)["path"] == str(index)
+        removed = await service.set_file_index(
+            project.id, None, expected_project_revision=connected["project_revision"]
+        )
+        assert removed["path"] is None
+        assert removed["project_revision"] == connected["project_revision"] + 1
 
     asyncio.run(scenario())
 

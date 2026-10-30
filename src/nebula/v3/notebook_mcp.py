@@ -54,6 +54,21 @@ TOOLS = (
     ),
     ("list", "List Python notebooks in this project workspace.", _schema({}), True),
     (
+        "file_index",
+        "Read the selected project's current Notebook file index and project revision.",
+        _schema({}),
+        True,
+    ),
+    (
+        "remove_file_index",
+        "Remove the selected project's current Notebook file index at its exact project revision.",
+        _schema(
+            {"expected_project_revision": {"type": "integer", "minimum": 1}},
+            "expected_project_revision",
+        ),
+        False,
+    ),
+    (
         "read",
         "Read a notebook, including cell IDs and revisions.",
         _schema({"path": PATH}, "path"),
@@ -382,6 +397,14 @@ class NotebookMcpTools:
             value = self.notebooks.status(project_id)
         elif name == "list":
             value = await self.notebooks.list_async(project_id)
+        elif name == "file_index":
+            value = self.notebooks.file_index_status(project_id)
+        elif name == "remove_file_index":
+            value = await self.notebooks.set_file_index(
+                project_id,
+                None,
+                expected_project_revision=arguments["expected_project_revision"],
+            )
         elif name == "read":
             value = self.notebooks.read(project_id, path)
         elif name == "create":

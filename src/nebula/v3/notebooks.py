@@ -575,6 +575,7 @@ class NotebookService:
         path = engagement.metadata.get("notebook_file_index")
         return {
             "path": path if isinstance(path, str) else None,
+            "project_revision": engagement.revision,
             "state": "fallback"
             if path and engagement_id in self._index_errors
             else (
@@ -587,9 +588,20 @@ class NotebookService:
         }
 
     async def set_file_index(
-        self, engagement_id: str, path: str | None
+        self,
+        engagement_id: str,
+        path: str | None,
+        *,
+        expected_project_revision: int | None = None,
     ) -> dict[str, Any]:
         engagement = self.store.get(Engagement, engagement_id)
+        if (
+            expected_project_revision is not None
+            and engagement.revision != expected_project_revision
+        ):
+            raise NotebookConflict(
+                "project changed; read its current file index before changing it"
+            )
         if path is not None:
             listing = await asyncio.to_thread(
                 list_indexed_notebooks,

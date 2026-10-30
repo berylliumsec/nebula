@@ -19,6 +19,7 @@ _OFFSET = {"type": "integer", "minimum": 0, "maximum": 1_000_000}
 _REVISION = {"type": "string", "minLength": 1, "maxLength": 128}
 _SOURCE_HASH = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
 _KERNEL_ID = {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+_PROJECT_REVISION = {"type": "integer", "minimum": 1}
 
 
 def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
@@ -33,6 +34,15 @@ def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
 _SCHEMAS: dict[str, dict[str, Any]] = {
     "status": _schema({}),
     "list": _schema({"offset": {"type": "integer", "minimum": 0, "maximum": 1000}}),
+    "file_index": _schema({}),
+    "choose_file_index": _schema(
+        {"expected_project_revision": _PROJECT_REVISION},
+        "expected_project_revision",
+    ),
+    "remove_file_index": _schema(
+        {"expected_project_revision": _PROJECT_REVISION},
+        "expected_project_revision",
+    ),
     "read": _schema({"path": _PATH, "offset": _OFFSET}, "path"),
     "source": _schema(
         {"path": _PATH, "cell_id": _CELL, "offset": _OFFSET},
@@ -108,6 +118,9 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
 _DESCRIPTIONS = {
     "status": "Read the selected project's Notebook runtime, grant, and consent state.",
     "list": "Page project Notebook paths before choosing an exact file; no host path is accepted.",
+    "file_index": "Read the selected project's connected Notebook file index, state and project revision before changing it. An index may be incomplete; the project folder still owns Notebook files.",
+    "choose_file_index": "Ask the requesting browser to choose a SQLite index file on the Nebula host at the current project revision. Butler cannot supply an arbitrary host path; the browser checks Core and reports the saved index after selection.",
+    "remove_file_index": "Remove the selected project's current Notebook file index at its exact project revision and read the saved absence back from Core. The project folder remains intact.",
     "read": "Page bounded cell previews and hashes from one project Notebook. Use source for exact cell text.",
     "source": "Read a bounded exact source chunk from one cell after selecting its ID and current hash.",
     "create": "Create one project-relative Notebook; a duplicate path fails without replacing it. Read the saved file afterward.",
@@ -129,6 +142,7 @@ _READS = frozenset(
     {
         "status",
         "list",
+        "file_index",
         "read",
         "source",
         "recent_runs",
@@ -214,6 +228,33 @@ class ButlerNotebook:
         }
 
     async def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name in {"choose_file_index", "remove_file_index"}:
+            before = await self._call("file_index", {})
+            if before["project_revision"] != arguments["expected_project_revision"]:
+                raise ValueError(
+                    "project changed; read its current file index before changing it"
+                )
+            if name == "choose_file_index":
+                return {
+                    "state": "pending_browser_apply",
+                    "client_action": {
+                        "kind": "notebook_choose_file_index",
+                        "project_id": self.project_id,
+                        "expected_project_revision": before["project_revision"],
+                    },
+                }
+            if before["path"] is None:
+                raise ValueError("no file index is connected; read its current state")
+            await self._call("remove_file_index", arguments)
+            observed = await self._call("file_index", {})
+            if (
+                observed["path"] is not None
+                or observed["project_revision"] != before["project_revision"] + 1
+            ):
+                raise ValueError(
+                    "file index removal changed before read-back; inspect its current state"
+                )
+            return {"removed": True, "file_index": observed}
         if name == "list":
             rows = await self._call("list", {})
             offset = arguments.get("offset", 0)
@@ -406,5 +447,6 @@ class ButlerNotebook:
         assert {name for name in _SCHEMAS} - {name for name, *_ in NOTEBOOK_TOOLS} == {
             "source",
             "run_event",
+            "choose_file_index",
         }
         return actions

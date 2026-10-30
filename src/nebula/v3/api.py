@@ -1308,6 +1308,7 @@ class EngagementCreateRequest(Engagement):
 
 class NotebookFileIndexRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
+    expected_project_revision: int | None = Field(default=None, ge=1)
 
 
 class AutomationPolicyUpdateRequest(NebulaModel):
@@ -8725,7 +8726,11 @@ def create_app(
         body: NotebookFileIndexRequest,
     ) -> dict[str, Any]:
         try:
-            return await notebook_service.set_file_index(engagement_id, body.path)
+            return await notebook_service.set_file_index(
+                engagement_id,
+                body.path,
+                expected_project_revision=body.expected_project_revision,
+            )
         except (FileIndexUnavailable, OSError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -8734,8 +8739,15 @@ def create_app(
         tags=["notebooks"],
         dependencies=[Depends(require_auth)],
     )
-    async def remove_notebook_file_index(engagement_id: str) -> dict[str, Any]:
-        return await notebook_service.set_file_index(engagement_id, None)
+    async def remove_notebook_file_index(
+        engagement_id: str,
+        expected_project_revision: int | None = Query(default=None, ge=1),
+    ) -> dict[str, Any]:
+        return await notebook_service.set_file_index(
+            engagement_id,
+            None,
+            expected_project_revision=expected_project_revision,
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks",

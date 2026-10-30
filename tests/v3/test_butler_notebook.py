@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -300,6 +302,76 @@ def test_butler_notebook_restarts_only_the_current_idle_kernel(tmp_path):
                 "restart", {**arguments, "expected_restart_count": 1}, change=True
             )
         assert commands == ["restart"]
+
+    asyncio.run(scenario())
+
+
+def test_butler_notebook_file_index_uses_browser_choice_and_current_project_revision(
+    tmp_path,
+):
+    store, selected, _, notebooks, profile, capabilities = _fixture(tmp_path)
+    index = tmp_path / "inventory.db"
+    with sqlite3.connect(index) as connection:
+        connection.executescript(
+            "CREATE TABLE repositories (id INTEGER PRIMARY KEY, root TEXT UNIQUE, complete INTEGER, pending_files INTEGER, last_reconciled_at TEXT);"
+            "CREATE TABLE files (repository_id INTEGER, path TEXT, size INTEGER, mtime_ns INTEGER);"
+        )
+        connection.execute(
+            "INSERT INTO repositories VALUES (1, ?, 1, 0, ?)",
+            (str(tmp_path / "selected"), datetime.now(timezone.utc).isoformat()),
+        )
+
+    async def invoke(name, arguments=None, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
+            change=change,
+        )
+
+    async def scenario():
+        before = await invoke("file_index")
+        assert before["state"] == "none"
+        revision = before["project_revision"]
+        requested = await invoke(
+            "choose_file_index",
+            {"expected_project_revision": revision},
+            change=True,
+        )
+        assert requested["client_action"] == {
+            "kind": "notebook_choose_file_index",
+            "project_id": selected.id,
+            "expected_project_revision": revision,
+        }
+        assert "path" not in requested["client_action"]
+        assert (await invoke("file_index"))["path"] is None
+        await notebooks.set_file_index(
+            selected.id, str(index), expected_project_revision=revision
+        )
+        connected = await invoke("file_index")
+        assert connected["path"] == str(index)
+        with pytest.raises(ValueError, match="project changed"):
+            await invoke(
+                "remove_file_index",
+                {"expected_project_revision": revision},
+                change=True,
+            )
+        assert (await invoke("file_index"))["path"] == str(index)
+        removed = await invoke(
+            "remove_file_index",
+            {"expected_project_revision": connected["project_revision"]},
+            change=True,
+        )
+        assert removed["file_index"]["path"] is None
+        assert removed["file_index"]["project_revision"] == connected[
+            "project_revision"
+        ] + 1
+        store.update(
+            McpServerProfile,
+            profile.id,
+            {"enabled": False},
+            expected_revision=profile.revision,
+        )
+        with pytest.raises(GuidedToolError, match="revoked"):
+            await invoke("file_index")
 
     asyncio.run(scenario())
 
