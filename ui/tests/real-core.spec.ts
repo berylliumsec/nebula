@@ -5339,7 +5339,8 @@ for (const decision of ["Approve", "Reject"] as const) {
 }
 
 test("stabilization real Core outage retains the conversation and exposes reconnect", async ({page}, testInfo) => {
-  test.setTimeout(70_000);
+  // This journey starts the paired Core twice, once before and once after a hard outage.
+  test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "single");
   await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
