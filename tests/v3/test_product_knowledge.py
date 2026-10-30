@@ -326,6 +326,17 @@ def test_product_search_finds_butler_device_transcript_export(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create a report draft and sign off or export its PDF?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.reports" in text
+    assert "operator" in text.lower()
+    assert "requesting" in text.lower()
+
+
 def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote, urlsplit
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 from fastapi import (
@@ -1595,6 +1595,17 @@ class OperatorProfileActivateRequest(NebulaModel):
 
 class ReportRenderRequest(NebulaModel):
     report_revision: int = Field(ge=1)
+
+
+class ButlerReportDraftRequest(NebulaModel):
+    """A browser-owned draft ID for readback after an uncertain create response."""
+
+    report_id: UUID
+    engagement_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    executive_summary: str = Field(default="", max_length=100000)
+    finding_ids: list[str] = Field(default_factory=list, max_length=500)
+    observation_ids: list[str] = Field(default_factory=list, max_length=500)
 
 
 class DiagnosticsSettingsRequest(NebulaModel):
@@ -7246,6 +7257,27 @@ def create_app(
         request: WritingTransformRequest,
     ) -> WritingTransformResponse:
         return await require_writing_ai_service().transform(request)
+
+    @app.post(
+        f"{API_PREFIX}/reports/butler-drafts",
+        response_model=Report,
+        status_code=201,
+        tags=["reports"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_butler_report_draft(request: ButlerReportDraftRequest) -> Report:
+        # Keep the generic CRUD route's server-managed ID guard. This narrow
+        # contract permits a stable UUID solely for draft-create reconciliation.
+        report = Report(
+            id=str(request.report_id),
+            engagement_id=request.engagement_id,
+            title=request.title,
+            executive_summary=request.executive_summary,
+            finding_ids=request.finding_ids,
+            observation_ids=request.observation_ids,
+        )
+        entity_validator.validate_create(report)
+        return store.create(report)
 
     @app.post(
         f"{API_PREFIX}/reports/{{report_id}}/sign-off",

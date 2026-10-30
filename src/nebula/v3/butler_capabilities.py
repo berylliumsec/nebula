@@ -75,6 +75,11 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.library.download",
         "nebula.library.reindex",
         "nebula.library.remove",
+        "nebula.reports.create",
+        "nebula.reports.update",
+        "nebula.reports.signoff",
+        "nebula.reports.export_pdf",
+        "nebula.reports.export_bundle",
     }
 )
 _BACKGROUND_CHANGES = frozenset(
@@ -143,6 +148,10 @@ _CATEGORIES = (
     {
         "id": "library",
         "description": "Bounded shared Library item discovery and requesting-browser upload, download, reindex or removal",
+    },
+    {
+        "id": "reports",
+        "description": "Selected-project report and source discovery, draft changes, operator signoff handoff, and requesting-device exports",
     },
     {
         "id": "settings",
@@ -231,6 +240,7 @@ class ButlerCapabilities:
             from .butler_chat_export import ButlerChatExport
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
+            from .butler_reports import ButlerReports
             from .butler_workspace import ButlerWorkspace
 
             self._actions.update(
@@ -253,6 +263,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerLibrary(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerReports(store, project_id).actions()
                 }
             )
             if notebooks is not None:
