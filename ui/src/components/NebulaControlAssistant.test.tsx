@@ -951,6 +951,47 @@ describe("NebulaControlAssistant", () => {
     expect(signOffReport).not.toHaveBeenCalled();
   });
 
+  it("asks the requesting browser before deleting an exact draft and confirms the Core result", async () => {
+    const user = userEvent.setup();
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const getReport = vi.fn().mockResolvedValue({id: reportId, engagementId: "project", title: "Synthetic draft",
+      status: "draft", revision: 3});
+    const deleteReport = vi.fn().mockResolvedValue(undefined);
+    const onNavigate = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "report-delete", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Delete draft", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.reports.delete", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "report_delete", project_id: "project", report_id: reportId,
+            expected_revision: 3, title: "Synthetic draft"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I requested deletion."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getReport},
+      coreState: "online", engagement: {id: "project", name: "Project"}, deleteReport,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const ask = async () => {
+      await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Delete the synthetic draft{enter}");
+    };
+    await ask();
+    const first = await screen.findByRole("dialog", {name: "Permanently delete Synthetic draft?"});
+    await user.click(within(first).getByRole("button", {name: "Cancel"}));
+    expect(deleteReport).not.toHaveBeenCalled();
+    expect(await screen.findByText(/was not deleted. No change was saved/)).toBeVisible();
+    await ask();
+    const second = await screen.findByRole("dialog", {name: "Permanently delete Synthetic draft?"});
+    await user.click(within(second).getByRole("button", {name: "Delete report"}));
+    await waitFor(() => expect(deleteReport).toHaveBeenCalledWith(reportId, "project", 3));
+    expect(getReport).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith("/projects/project/reports"));
+  });
+
   it.each([
     { name: "desktop transcript", mobile: false },
     { name: "mobile body", mobile: true },

@@ -81,7 +81,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, ingestLibraryItem, retryResource } = useWorkspace();
+  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -938,7 +938,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `Started a Markdown transcript download for ${observed.title} on this device (${messages.length} saved messages).`;
   };
 
-  const applyReportAction = async (action: Extract<SettingClientAction, {kind: "report_create" | "report_update" | "report_signoff" | "report_export_pdf" | "report_export_bundle"}>): Promise<string> => {
+  const applyReportAction = async (action: Extract<SettingClientAction, {kind: "report_create" | "report_update" | "report_delete" | "report_signoff" | "report_export_pdf" | "report_export_bundle"}>): Promise<string> => {
     if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
       throw new Error("Reconnect to Core and select the original project before asking Butler to use reports again.");
     }
@@ -1018,6 +1018,22 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       return `Started ${ready.name}'s sensitive bundle download on this device.`;
     }
     const report = await currentReport(action.reportId, action.expectedRevision);
+    if (action.kind === "report_delete") {
+      if (report.status === "final") throw new Error("A signed final report cannot be deleted.");
+      if (report.title !== action.title) throw new Error("The report title changed. Ask Butler to read it again before deleting.");
+      const approved = await confirm({
+        title: `Permanently delete ${report.title}?`,
+        message: "This removes the saved draft or review report. Its source findings, notes and evidence remain. A signed final report cannot be deleted.",
+        confirmLabel: "Delete report", tone: "danger",
+      });
+      if (!approved) return `${report.title} was not deleted. No change was saved.`;
+      await currentReport(action.reportId, action.expectedRevision);
+      await deleteReport(report.id, action.projectId, action.expectedRevision);
+      if (!stillSelected()) throw new Error("The selected project changed during deletion. Inspect Reports before retrying.");
+      setHidden(true);
+      onNavigate(resourcePath(action.projectId, "report"));
+      return `Permanently deleted ${report.title} from Core. Its source findings, notes and evidence remain.`;
+    }
     if (action.kind === "report_update") {
       if (report.status === "final") throw new Error("The signed report is immutable. Create a new draft.");
       let saved;
@@ -1479,7 +1495,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         tone: "danger",
       }));
     }
-    if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_signoff"
+    if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_delete" || action.kind === "report_signoff"
         || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
     if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);

@@ -7772,6 +7772,36 @@ export class ApiClient {
     }).then(mapReport);
   }
 
+  async deleteReportAtRevision(id: string, engagementId: string, expectedRevision: number): Promise<void> {
+    const current = await this.getReport(id);
+    if (current.engagementId !== engagementId || current.revision !== expectedRevision) {
+      throw new Error("Report changed or belongs to another project. Read it again before deleting.");
+    }
+    if (current.status === "final") throw new Error("A signed final report cannot be deleted.");
+    let deleteError: unknown;
+    try {
+      await this.request<void>(`reports/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { "If-Match": String(expectedRevision) },
+      });
+    } catch (caught) {
+      // diagnostic-expected: a lost response may follow a committed deletion; read the exact ID.
+      deleteError = caught;
+    }
+    let observed: ReportSummary;
+    try {
+      observed = await this.getReport(id);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) return;
+      throw new Error("Core could not confirm whether the report was deleted. Inspect Reports before retrying.", {cause: caught});
+    }
+    if (observed.engagementId !== engagementId || observed.revision !== expectedRevision) {
+      throw new Error("Report changed during deletion. Read its current revision before retrying.");
+    }
+    if (deleteError) throw deleteError;
+    throw new Error("Core still has this report. Inspect Reports before retrying.");
+  }
+
   signOffReport(
     id: string,
     expectedRevision: number,
