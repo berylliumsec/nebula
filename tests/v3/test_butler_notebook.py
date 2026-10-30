@@ -9,7 +9,12 @@ import pytest
 
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_capabilities import ButlerCapabilities
-from nebula.v3.domain import AutomationProjectPolicy, Engagement, McpServerProfile
+from nebula.v3.domain import (
+    AutomationProjectPolicy,
+    Engagement,
+    McpServerProfile,
+    NotebookRun,
+)
 from nebula.v3.notebook_mcp import NotebookMcpTools
 from nebula.v3.notebooks import NotebookService
 from nebula.v3.storage import NebulaStore
@@ -176,13 +181,41 @@ def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_
         )
 
     async def scenario():
-        await invoke("create", {"path": "policy.ipynb"}, change=True)
+        created = await invoke("create", {"path": "policy.ipynb"}, change=True)
+        saved = await invoke(
+            "edit_cell",
+            {
+                "path": "policy.ipynb",
+                "source": "print(42)",
+                "cell_type": "code",
+                "expected_revision": created["revision"],
+            },
+            change=True,
+        )
         assert (await invoke("status", {}))["consent_required"] is True
-        for operation in ("execute", "interrupt", "restart", "install_package"):
+        for operation in ("execute", "interrupt"):
+            assert (
+                await capabilities.describe(
+                    {"operation": f"nebula.notebook.{operation}"}
+                )
+            )["invoke_with"] == "nebula.capabilities.change"
+        for operation in ("restart", "install_package"):
             with pytest.raises(CapabilityInputError, match="listed operation"):
                 await capabilities.describe(
                     {"operation": f"nebula.notebook.{operation}"}
                 )
+        with pytest.raises(GuidedToolError) as execution_consent:
+            await invoke(
+                "execute",
+                {
+                    "path": "policy.ipynb",
+                    "cell_id": saved["cell_id"],
+                    "expected_source_hash": saved["cells"][0]["source_hash"],
+                },
+                change=True,
+            )
+        assert execution_consent.value.code == "notebook.permission_required"
+        assert (await invoke("recent_runs", {"path": "policy.ipynb"}))["runs"] == []
         assert (
             await capabilities.describe({"operation": "nebula.notebook.search_package"})
         )["invoke_with"] == "nebula.capabilities.read"
@@ -196,5 +229,107 @@ def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_
             await invoke("search_package", {"path": "policy.ipynb", "name": "colorama"})
         assert network.value.code == "notebook.permission_required"
         assert "network" in str(network.value).lower()
+
+    asyncio.run(scenario())
+
+
+def test_butler_notebook_runs_exact_source_and_reads_back_interruption(tmp_path):
+    store, selected, foreign, notebooks, _, capabilities = _fixture(tmp_path)
+    runtime = SimpleNamespace(
+        policy=AutomationProjectPolicy(
+            engagement_id=selected.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            network_enabled=False,
+        )
+    )
+    runtime.project_policy = lambda _: runtime.policy
+    notebooks.automation_runtime = runtime
+
+    async def invoke(name, arguments=None, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
+            change=change,
+        )
+
+    async def scenario():
+        created = await invoke("create", {"path": "exact.ipynb"}, change=True)
+        saved = await invoke(
+            "edit_cell",
+            {
+                "path": "exact.ipynb",
+                "source": "print(42)",
+                "cell_type": "code",
+                "expected_revision": created["revision"],
+            },
+            change=True,
+        )
+        cell_id = saved["cell_id"]
+        source_hash = saved["cells"][0]["source_hash"]
+        assert (await capabilities.describe({"operation": "nebula.notebook.execute"}))[
+            "invoke_with"
+        ] == "nebula.capabilities.change"
+        with pytest.raises(CapabilityInputError, match="invalid arguments"):
+            await invoke(
+                "execute", {"path": "exact.ipynb", "cell_id": cell_id}, change=True
+            )
+        with pytest.raises(GuidedToolError) as stale:
+            await invoke(
+                "execute",
+                {
+                    "path": "exact.ipynb",
+                    "cell_id": cell_id,
+                    "expected_source_hash": "0" * 64,
+                },
+                change=True,
+            )
+        assert stale.value.code == "notebook.conflict"
+        assert (await invoke("recent_runs", {"path": "exact.ipynb"}))["runs"] == []
+
+        preparing = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_worker(*_args):
+            preparing.set()
+            await release.wait()
+            return object()
+
+        notebooks._worker = slow_worker
+        queued = await invoke(
+            "execute",
+            {
+                "path": "exact.ipynb",
+                "cell_id": cell_id,
+                "expected_source_hash": source_hash,
+            },
+            change=True,
+        )
+        run_id = queued["run"]["id"]
+        assert queued["run"]["source_hash"] == source_hash
+        assert queued["run"]["status"] == "queued"
+        assert (await invoke("recent_runs", {"path": "exact.ipynb"}))["runs"][0][
+            "id"
+        ] == run_id
+        await asyncio.wait_for(preparing.wait(), timeout=5)
+        interrupted = await invoke("interrupt", {"run_id": run_id}, change=True)
+        assert interrupted["run"]["status"] == "interrupted"
+        release.set()
+        observed = await invoke("wait", {"run_id": run_id, "timeout": 5})
+        assert observed["run"]["status"] == "interrupted"
+        events = notebooks.run(run_id, engagement_id=selected.id)["events"]
+        assert [event["event_type"] for event in events].count(
+            "notebook.completed"
+        ) == 1
+        foreign_run = store.create(
+            NotebookRun(
+                engagement_id=foreign.id,
+                notebook_path="foreign.ipynb",
+                cell_id="other",
+                source_hash="a" * 64,
+                execution_mode="host",
+            )
+        )
+        with pytest.raises(GuidedToolError):
+            await invoke("run", {"run_id": foreign_run.id})
 
     asyncio.run(scenario())

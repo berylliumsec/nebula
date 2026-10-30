@@ -16,6 +16,7 @@ _PATH = {"type": "string", "minLength": 1, "maxLength": 4096}
 _CELL = {"type": "string", "minLength": 1, "maxLength": 200}
 _OFFSET = {"type": "integer", "minimum": 0, "maximum": 1_000_000}
 _REVISION = {"type": "string", "minLength": 1, "maxLength": 128}
+_SOURCE_HASH = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
 
 
 def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
@@ -50,6 +51,13 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
         "source",
         "cell_type",
     ),
+    "execute": _schema(
+        {"path": _PATH, "cell_id": _CELL, "expected_source_hash": _SOURCE_HASH},
+        "path",
+        "cell_id",
+        "expected_source_hash",
+    ),
+    "recent_runs": _schema({"path": _PATH}, "path"),
     "run": _schema(
         {"run_id": _CELL, "after_sequence": {"type": "integer", "minimum": 0}},
         "run_id",
@@ -67,6 +75,7 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
         {"run_id": _CELL, "timeout": {"type": "number", "minimum": 0, "maximum": 25}},
         "run_id",
     ),
+    "interrupt": _schema({"run_id": _CELL}, "run_id"),
     "search_package": _schema({"path": _PATH, "name": _CELL}, "path", "name"),
 }
 
@@ -77,16 +86,29 @@ _DESCRIPTIONS = {
     "source": "Read a bounded exact source chunk from one cell after selecting its ID and current hash.",
     "create": "Create one project-relative Notebook; a duplicate path fails without replacing it. Read the saved file afterward.",
     "edit_cell": "Add with expected document revision or edit with the current cell source hash. A stale write fails without overwriting the cell.",
+    "execute": "After the operator asks to run a saved code cell, queue the exact current source hash in this project. Read the run ID and wait for Core's result; if the response is uncertain, inspect recent_runs before another execution.",
+    "recent_runs": "Read up to 20 recent run IDs, statuses, and source hashes for one project Notebook before retrying an uncertain execution.",
     "run": "Page ordered Core Notebook run events and current status after an execution or interruption.",
     "run_event": "Read an exact bounded text chunk of one saved Notebook run event.",
     "wait": "Wait briefly for one Core Notebook run, then read its current status and bounded events.",
+    "interrupt": "After the operator asks to stop one exact queued or running Notebook run, interrupt it by run ID and read its current Core status. A running worker may acknowledge interruption later.",
     "search_package": "Look up an exact package name through the project's Notebook network policy.",
 }
 
 _READS = frozenset(
-    {"status", "list", "read", "source", "run", "run_event", "wait", "search_package"}
+    {
+        "status",
+        "list",
+        "read",
+        "source",
+        "recent_runs",
+        "run",
+        "run_event",
+        "wait",
+        "search_package",
+    }
 )
-_NETWORK_ACTIONS = frozenset({"search_package"})
+_NETWORK_ACTIONS = frozenset({"execute", "search_package"})
 
 
 @dataclass(frozen=True)
@@ -199,6 +221,27 @@ class ButlerNotebook:
                 if offset + len(chunk) < len(source)
                 else None,
             }
+        if name == "recent_runs":
+            runs = await self._call("recent_runs", arguments)
+            return {
+                "path": arguments["path"],
+                "runs": [
+                    {
+                        "id": run["id"],
+                        "cell_id": run["cell_id"],
+                        "source_hash": run["source_hash"],
+                        "status": run["status"],
+                        "revision": run["revision"],
+                        "created_at": run.get("created_at"),
+                        "completed_at": run.get("completed_at"),
+                    }
+                    for run in runs[:20]
+                ],
+            }
+        if name in {"execute", "interrupt"}:
+            changed = await self._call(name, arguments)
+            value = await self._call("run", {"run_id": changed["id"]})
+            return self._run_page(value)
         if name in {"run", "run_event", "wait"}:
             requested = "run" if name == "run_event" else name
             params = {"run_id": arguments["run_id"]}

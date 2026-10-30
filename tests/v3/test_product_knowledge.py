@@ -260,6 +260,15 @@ def test_product_search_finds_butler_notebook_guidance(monkeypatch):
         "nebula.notebook" in str(item["text"]) and "Host consent" in str(item["text"])
         for item in matches
     )
+    runs = search_product_knowledge(
+        "How does Butler execute an exact Notebook cell, check uncertain runs and interrupt it?"
+    )
+    assert any(
+        "nebula.notebook.execute" in str(item["text"])
+        and "nebula.notebook.recent_runs" in str(item["text"])
+        and "nebula.notebook.interrupt" in str(item["text"])
+        for item in runs
+    )
 
 
 def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):

@@ -914,6 +914,7 @@ class NotebookCellRequest(NebulaModel):
 class NotebookRunRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
     cell_id: str = Field(min_length=1, max_length=200)
+    expected_source_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class NotebookPackageRequest(NebulaModel):
@@ -8742,7 +8743,12 @@ def create_app(
     async def start_notebook_run(
         engagement_id: str, body: NotebookRunRequest
     ) -> NotebookRun:
-        return await notebook_service.start_run(engagement_id, body.path, body.cell_id)
+        return await notebook_service.start_run(
+            engagement_id,
+            body.path,
+            body.cell_id,
+            expected_source_hash=body.expected_source_hash,
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs",

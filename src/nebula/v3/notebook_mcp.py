@@ -38,6 +38,7 @@ def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
 
 
 TEXT = {"type": "string"}
+SOURCE_HASH = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
 PATH = {
     "type": "string",
     "minLength": 1,
@@ -83,9 +84,19 @@ TOOLS = (
     ),
     (
         "execute",
-        "Queue a saved code cell for execution and return a run ID immediately.",
-        _schema({"path": PATH, "cell_id": TEXT}, "path", "cell_id"),
+        "Queue a saved code cell for execution and return a run ID immediately. An expected source hash prevents running a changed cell.",
+        _schema(
+            {"path": PATH, "cell_id": TEXT, "expected_source_hash": SOURCE_HASH},
+            "path",
+            "cell_id",
+        ),
         False,
+    ),
+    (
+        "recent_runs",
+        "List recent runs for one exact project notebook path before retrying an uncertain execution.",
+        _schema({"path": PATH}, "path"),
+        True,
     ),
     (
         "wait",
@@ -240,6 +251,7 @@ class NotebookMcpTools:
             "create",
             "edit_cell",
             "execute",
+            "recent_runs",
             "restart",
             "install_package",
             "search_package",
@@ -329,6 +341,7 @@ class NotebookMcpTools:
                 "create",
                 "edit_cell",
                 "execute",
+                "recent_runs",
                 "restart",
                 "install_package",
                 "search_package",
@@ -357,8 +370,15 @@ class NotebookMcpTools:
             )
         elif name == "execute":
             value = (
-                await self.notebooks.start_run(project_id, path, arguments["cell_id"])
+                await self.notebooks.start_run(
+                    project_id,
+                    path,
+                    arguments["cell_id"],
+                    expected_source_hash=arguments.get("expected_source_hash"),
+                )
             ).model_dump(mode="json")
+        elif name == "recent_runs":
+            value = self.notebooks.recent_runs(project_id, path)
         elif name == "wait":
             value = await self.notebooks.wait_run(
                 arguments["run_id"],

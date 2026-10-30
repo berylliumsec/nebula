@@ -741,7 +741,12 @@ class NotebookService:
         ][:20]
 
     async def start_run(
-        self, engagement_id: str, path: str, cell_id: str
+        self,
+        engagement_id: str,
+        path: str,
+        cell_id: str,
+        *,
+        expected_source_hash: str | None = None,
     ) -> NotebookRun:
         if engagement_id in self._mode_changes:
             raise NotebookConflict(
@@ -759,12 +764,17 @@ class NotebookService:
         if cell is None or cell.get("cell_type") != "code":
             raise NotebookError("choose a saved code cell")
         source = _cell_source(cell)
+        source_hash = _source_hash(source)
+        if expected_source_hash is not None and source_hash != expected_source_hash:
+            raise NotebookConflict(
+                "saved code cell changed; read its current source hash before executing"
+            )
         run = self.store.create(
             NotebookRun(
                 engagement_id=engagement_id,
                 notebook_path=path,
                 cell_id=cell_id,
-                source_hash=_source_hash(source),
+                source_hash=source_hash,
                 execution_mode=policy.execution_mode,
             )
         )
