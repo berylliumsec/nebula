@@ -502,6 +502,97 @@
       "status": "supported"
     },
     {
+      "id": "report.create",
+      "entry_point": "Butler request or Reports: create a selected-project draft",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::createReport",
+        "ui/src/components/NebulaControlAssistant.tsx::getReport"
+      ],
+      "core_owner": "Core report API, project reference validator and report ID",
+      "butler": {
+        "discover": "nebula.reports.list and nebula.reports.sources",
+        "read": "nebula.reports.detail",
+        "change": "nebula.reports.create"
+      },
+      "authority": "Interactive selected project; fixed create ID and Core read-back; browser retains report URL",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "result": "Exact draft ID, title, sources and summary appear in Core and Reports after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "report.update",
+      "entry_point": "Butler request or Reports: edit and move a non-final draft into review",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::updateReport",
+        "ui/src/components/NebulaControlAssistant.tsx::getReport"
+      ],
+      "core_owner": "Core report API and same-project reference validator",
+      "butler": {
+        "discover": "nebula.reports.list and nebula.reports.sources",
+        "read": "nebula.reports.detail",
+        "change": "nebula.reports.update"
+      },
+      "authority": "Interactive selected project and exact report revision; final reports immutable",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "result": "Saved fields and incremented revision agree in Core and Reports",
+      "status": "supported"
+    },
+    {
+      "id": "report.signoff",
+      "entry_point": "Butler request opens the Reports sign-off form for an exact review report",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getReport",
+        "ui/src/state/WorkspaceContext.tsx::signOffReport"
+      ],
+      "core_owner": "Dedicated Core report sign-off transaction and active operator profile",
+      "butler": {
+        "discover": "nebula.reports.list",
+        "read": "nebula.reports.detail",
+        "change": "nebula.reports.signoff"
+      },
+      "authority": "Browser opens exact revision; operator personally supplies identity and attestation; Butler cannot finalize it",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "result": "Core final record is signed and immutable after operator submits the form",
+      "status": "supported"
+    },
+    {
+      "id": "report.export_pdf",
+      "entry_point": "Butler request or Reports: render and download a saved report PDF",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getReport",
+        "ui/src/components/NebulaControlAssistant.tsx::renderReport",
+        "ui/src/components/NebulaControlAssistant.tsx::downloadReportPdf"
+      ],
+      "core_owner": "Core report render job and exact report revision",
+      "butler": {
+        "discover": "nebula.reports.list",
+        "read": "nebula.reports.detail",
+        "change": "nebula.reports.export_pdf"
+      },
+      "authority": "Interactive selected project, exact revision, browser confirmation and requesting-device download",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "result": "Browser receives a PDF for the saved revision; Butler receives no PDF bytes",
+      "status": "supported"
+    },
+    {
+      "id": "report.export_bundle",
+      "entry_point": "Butler request or Reports: export the sensitive full-project bundle",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
+        "ui/src/components/NebulaControlAssistant.tsx::exportEngagementBundle"
+      ],
+      "core_owner": "Core engagement export service and project revision",
+      "butler": {
+        "discover": "nebula.projects.detail",
+        "read": "nebula.projects.detail",
+        "change": "nebula.reports.export_bundle"
+      },
+      "authority": "Interactive selected project and requesting-browser sensitive-export confirmation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "result": "Browser receives a sensitive ZIP; Butler receives no bundle bytes",
+      "status": "supported"
+    },
+    {
       "id": "storage.enrollment",
       "entry_point": "Storage settings: enroll, rotate or revoke a source",
       "ui_calls": [
@@ -1139,7 +1230,15 @@
       "count": 2
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::downloadReportPdf",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::downloadWorkspaceFile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::exportEngagementBundle",
       "count": 1
     },
     {
@@ -1184,7 +1283,15 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
-      "count": 5
+      "count": 7
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getReport",
+      "count": 4
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getReportRender",
+      "count": 1
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getWorkspaceEntryState",
@@ -1216,6 +1323,10 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::removeNotebookFileIndex",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::renderReport",
       "count": 1
     },
     {

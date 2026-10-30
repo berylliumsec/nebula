@@ -145,6 +145,27 @@ conflicts; an uncertain response requires a fresh Core project search before
 another attempt. This action does not relink an existing project's workspace or
 acknowledge Host command access.
 
+## Branch slice: report drafts, sign-off handoff and exports
+
+Entry point: an operator asks interactive Butler to find, draft, edit, sign off or
+export a selected-project report. Butler pages reports and source findings or
+notes before selecting exact IDs. Core owns report references, status and
+revision; the URL owns the selected report; the browser owns operator attestation
+and device downloads. Butler does not receive PDF or bundle bytes.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Report and source pages reach older records; exact detail reads the current revision and bounded summary; other-project IDs are refused | Core report and source store | Butler tool, real Core |
+| Create and edit | A prepared draft carries a fixed report ID; an uncertain create is reconciled by exact Core ID. Edits require the current report revision and Core validates all same-project references | Core report API and database | Butler tool, component, real Core browser |
+| Sign off | Butler opens the exact review report form at its current revision; only the operator chooses identity and attests; Core's dedicated route finalizes and makes it immutable | Browser form and Core sign-off route | Component, real Core browser |
+| Export | The browser confirms sensitive content, renders the exact report revision or exports the selected project, and starts a local download. Cancellation starts none | Core renderer and export service; browser device | Component, production LAN browser |
+| Refresh and retry | URL and saved report agree after reload; stale revisions fail, and an uncertain write prompts a fresh read before retry | URL, Core revision and browser | Real Core browser |
+
+Stream, interrupt and fork do not apply to a report record or local file
+download. Report deletion and note-transform authoring remain in the visible
+Reports screen and require separate Butler actions. A download start does not
+prove the operating system's final save location.
+
 ## Branch slice: chat transcript export
 
 Entry point: the operator asks interactive Butler to export one saved main chat
