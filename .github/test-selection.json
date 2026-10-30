@@ -1,7 +1,7 @@
 {
-  "change_digest": "dd2eff0d32c142aeba12cc946baf721df8ea86eb71dcc87ffcaa9f9622380227",
+  "change_digest": "5a47787b3b9335c7ce0f139eb8d200f674bd84405ff29c6097d2ae1dd49bc630",
   "reviewed_by": "Codex focused review for Butler project lifecycle, workflow registry, chat rewind, and Notebook control with product discovery",
-  "reason": "The 25 selected Python cases retain the prior 20 project lifecycle, durable retry, product knowledge, registry guard, and chat rewind checks, then add three Notebook cases for bounded cells, stale edits, project scope, live grant revocation, Host consent and network refusal, one settings catalog/destination case, and one product guidance search case. The selected three frontend files still collect 66 browser handoff cases; the existing navigation case now checks the Notebook destination and policy search. The production build runs the registry source guard. Eight paired LAN profiles cover project lifecycle, eight cover chat rewind, and eight cover Butler's Notebook edit through an inert provider, saved Core file, stale hash conflict and refreshed UI. All fixtures use isolated Core data.",
+  "reason": "The 25 selected Python cases retain the prior 20 project lifecycle, durable retry, product knowledge, registry guard, and chat rewind checks, then add three Notebook cases for bounded cells, stale edits, project scope, live grant revocation, Host consent and network refusal with unverified mutations excluded, one settings catalog/destination case, and one product guidance search case. The selected three frontend files still collect 66 browser handoff cases; the existing navigation case now checks the Notebook destination and policy search. The production build runs the registry source guard. Eight paired LAN profiles cover project lifecycle, eight cover chat rewind, and eight cover Butler's Notebook edit through an inert provider, saved Core file, stale hash conflict and refreshed UI. All fixtures use isolated Core data.",
   "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. Notebook package installation, file-index configuration, and run lifecycle still need their own observed-result acceptance before the Notebook area is marked supported. The registry remains an incomplete action map; unreviewed signatures do not imply Butler support. Browser profiles emulate mobile devices; physical Safari is unavailable. Transcript export and other operator-control gaps remain separate work. The name guard applies to Butler keyed creates; unkeyed project creation retains existing semantics.",
   "expected_tests": {
     "python": 25,
@@ -34,7 +34,7 @@
     "tests/v3/test_control_assistant_work.py::test_butler_pages_and_rewinds_main_chat_with_core_readback",
     "tests/v3/test_butler_notebook.py::test_butler_notebook_pages_exact_cells_and_rejects_stale_edits",
     "tests/v3/test_butler_notebook.py::test_butler_notebook_grant_revocation_blocks_next_action",
-    "tests/v3/test_butler_notebook.py::test_butler_notebook_execution_and_package_lookup_respect_core_policy",
+    "tests/v3/test_butler_notebook.py::test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_changes",
     "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
     "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",

@@ -125,7 +125,7 @@ _CATEGORIES = (
     },
     {
         "id": "notebook",
-        "description": "Project-scoped Notebook files, cells, package lookup, and Core run lifecycle under the current Notebook grant",
+        "description": "Project-scoped Notebook files, cells, package lookup, and existing run results under the current Notebook grant",
     },
     {
         "id": "settings",

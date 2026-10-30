@@ -50,7 +50,6 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
         "source",
         "cell_type",
     ),
-    "execute": _schema({"path": _PATH, "cell_id": _CELL}, "path", "cell_id"),
     "run": _schema(
         {"run_id": _CELL, "after_sequence": {"type": "integer", "minimum": 0}},
         "run_id",
@@ -68,17 +67,7 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
         {"run_id": _CELL, "timeout": {"type": "number", "minimum": 0, "maximum": 25}},
         "run_id",
     ),
-    "interrupt": _schema({"run_id": _CELL}, "run_id"),
-    "restart": _schema({"path": _PATH}, "path"),
     "search_package": _schema({"path": _PATH, "name": _CELL}, "path", "name"),
-    "install_package": _schema(
-        {
-            "path": _PATH,
-            "requirement": {"type": "string", "minLength": 1, "maxLength": 500},
-        },
-        "path",
-        "requirement",
-    ),
 }
 
 _DESCRIPTIONS = {
@@ -88,20 +77,16 @@ _DESCRIPTIONS = {
     "source": "Read a bounded exact source chunk from one cell after selecting its ID and current hash.",
     "create": "Create one project-relative Notebook; a duplicate path fails without replacing it. Read the saved file afterward.",
     "edit_cell": "Add with expected document revision or edit with the current cell source hash. A stale write fails without overwriting the cell.",
-    "execute": "Run one saved code cell under the project's Notebook execution and Host consent policy. Return a Core run ID, not a completed result.",
     "run": "Page ordered Core Notebook run events and current status after an execution or interruption.",
     "run_event": "Read an exact bounded text chunk of one saved Notebook run event.",
     "wait": "Wait briefly for one Core Notebook run, then read its current status and bounded events.",
-    "interrupt": "Interrupt one selected project's queued or running Notebook cell and read back its Core status.",
-    "restart": "Restart an idle kernel for one project-relative Notebook under Core policy.",
     "search_package": "Look up an exact package name through the project's Notebook network policy.",
-    "install_package": "Install an explicitly requested Python package through the project's Notebook runtime and network policy; read back the result.",
 }
 
 _READS = frozenset(
     {"status", "list", "read", "source", "run", "run_event", "wait", "search_package"}
 )
-_NETWORK_ACTIONS = frozenset({"execute", "search_package", "install_package"})
+_NETWORK_ACTIONS = frozenset({"search_package"})
 
 
 @dataclass(frozen=True)

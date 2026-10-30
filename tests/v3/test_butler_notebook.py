@@ -154,15 +154,20 @@ def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
     asyncio.run(scenario())
 
 
-def test_butler_notebook_execution_and_package_lookup_respect_core_policy(tmp_path):
+def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_changes(
+    tmp_path,
+):
     _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
-    policy = AutomationProjectPolicy(
-        engagement_id=selected.id,
-        execution_mode="host",
-        host_access_acknowledged=False,
-        network_enabled=False,
+    runtime = SimpleNamespace(
+        policy=AutomationProjectPolicy(
+            engagement_id=selected.id,
+            execution_mode="host",
+            host_access_acknowledged=False,
+            network_enabled=False,
+        )
     )
-    notebooks.automation_runtime = SimpleNamespace(project_policy=lambda _: policy)
+    runtime.project_policy = lambda _: runtime.policy
+    notebooks.automation_runtime = runtime
 
     async def invoke(name, arguments, *, change=False):
         return await capabilities.invoke(
@@ -171,27 +176,25 @@ def test_butler_notebook_execution_and_package_lookup_respect_core_policy(tmp_pa
         )
 
     async def scenario():
-        created = await invoke("create", {"path": "policy.ipynb"}, change=True)
-        saved = await invoke(
-            "edit_cell",
-            {
-                "path": "policy.ipynb",
-                "source": "print(1)",
-                "cell_type": "code",
-                "expected_revision": created["revision"],
-            },
-            change=True,
-        )
+        await invoke("create", {"path": "policy.ipynb"}, change=True)
         assert (await invoke("status", {}))["consent_required"] is True
-        with pytest.raises(GuidedToolError) as execution:
-            await invoke(
-                "execute",
-                {"path": "policy.ipynb", "cell_id": saved["cell_id"]},
-                change=True,
-            )
-        assert execution.value.code == "notebook.permission_required"
-        with pytest.raises(GuidedToolError) as package:
+        for operation in ("execute", "interrupt", "restart", "install_package"):
+            with pytest.raises(CapabilityInputError, match="listed operation"):
+                await capabilities.describe(
+                    {"operation": f"nebula.notebook.{operation}"}
+                )
+        assert (
+            await capabilities.describe({"operation": "nebula.notebook.search_package"})
+        )["invoke_with"] == "nebula.capabilities.read"
+        with pytest.raises(GuidedToolError) as consent:
             await invoke("search_package", {"path": "policy.ipynb", "name": "colorama"})
-        assert package.value.code == "notebook.permission_required"
+        assert consent.value.code == "notebook.permission_required"
+        runtime.policy = runtime.policy.model_copy(
+            update={"host_access_acknowledged": True}
+        )
+        with pytest.raises(GuidedToolError) as network:
+            await invoke("search_package", {"path": "policy.ipynb", "name": "colorama"})
+        assert network.value.code == "notebook.permission_required"
+        assert "network" in str(network.value).lower()
 
     asyncio.run(scenario())

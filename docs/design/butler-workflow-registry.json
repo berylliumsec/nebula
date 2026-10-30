@@ -291,10 +291,10 @@
       "butler": {
         "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
         "read": "nebula.notebook.list, read, source, run, run_event, wait and status",
-        "change": "missing: run, interrupt and package acceptance; typed create, edit_cell, execute, interrupt, restart and package actions are present"
+        "change": "missing: typed execute, interrupt, restart and package installation with observed-result acceptance; create and edit_cell are present"
       },
       "authority": "Selected project, current file revision or source hash, kernel policy and run identity",
-      "observed_result_test": "tests/v3/test_butler_notebook.py and ui/tests/real-core.spec.ts Butler Notebook edit; run, interrupt and package acceptance pending",
+      "observed_result_test": "tests/v3/test_butler_notebook.py and ui/tests/real-core.spec.ts Butler Notebook edit; execution, interruption, restart and package installation acceptance pending",
       "result": "Saved source, run output and interrupt state must be read from Core",
       "status": "gap"
     },
