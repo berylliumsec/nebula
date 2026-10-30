@@ -28,11 +28,13 @@ function Probe() {
     library: value.libraryItems, harnesses: value.harnesses, assets: value.assets,
     run: missions.run, runs: missions.runs, events,
     approvals: value.approvals, evidence: value.evidence, engagement: value.engagement?.id,
+    projects: value.engagements.map((project) => project.id),
     observations: value.observations,
   })}</output>{(["library", "harnesses", "activity", "evidence"] as const).map((resource) =>
     <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}
   <button onClick={() => value.selectEngagement("project-b")}>Select project B</button>
   <button onClick={() => value.selectEngagement("project")}>Select project A</button>
+  <button onClick={() => void value.createEngagement({name: "Created"}, {select: false})}>Create without selection</button>
   <button onClick={() => missions.selectMission("run-2")}>Select mission 2</button>
   <button onClick={value.reconnect}>Retry Core</button>
   <button onClick={() => void value.resolveApproval(value.approvals[0]?.id ?? "", { decision: "approve" }).catch((error: Error) => fixture.errors.push(error.message))}>Approve first</button></>;
@@ -71,6 +73,20 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it("adds a created project without changing the selected project before navigation", async () => {
+    fixture.methods.createEngagement = vi.fn().mockResolvedValue({id: "created", name: "Created", status: "draft"});
+    await mount();
+    expect(state().engagement).toBe("project");
+    const resourceCalls = fixture.methods.listAssets.mock.calls.length;
+
+    fireEvent.click(screen.getByText("Create without selection"));
+    await waitFor(() => expect(state().projects).toContain("created"));
+    expect(state().engagement).toBe("project");
+    expect(state().workspace).toBe("ready");
+    expect(localStorage.getItem("nebula.engagement")).toBe("project");
+    expect(fixture.methods.listAssets).toHaveBeenCalledTimes(resourceCalls);
+  });
+
   it("makes the selected project ready while evidence is still loading", async () => {
     let finishEvidence!: (value: unknown) => void;
     fixture.methods.listEvidence.mockImplementationOnce(() => new Promise((resolve) => { finishEvidence = resolve; }));

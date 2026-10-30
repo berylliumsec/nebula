@@ -121,7 +121,7 @@ interface WorkspaceContextValue {
   setProviderEnabled: (id: string, enabled: boolean, expectedRevision: number) => Promise<ProviderHealth>;
   deleteProvider: (id: string, expectedRevision: number) => Promise<void>;
   selectEngagement: (id: string) => void;
-  createEngagement: (request: EngagementCreateRequest) => Promise<EngagementSummary>;
+  createEngagement: (request: EngagementCreateRequest, options?: { select?: boolean }) => Promise<EngagementSummary>;
   addAsset: (request: AssetCreateRequest) => Promise<AssetSummary>;
   createFinding: (request: FindingCreateRequest) => Promise<FindingSummary>;
   updateFinding: (id: string, request: FindingUpdateRequest) => Promise<FindingSummary>;
@@ -649,15 +649,17 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setCoreError(undefined);
   }, [attempt, engagements, selectedEngagementId]);
 
-  const createEngagement = useCallback(async (request: EngagementCreateRequest) => {
+  const createEngagement = useCallback(async (request: EngagementCreateRequest, options?: { select?: boolean }) => {
     if (coreState !== "online" || !api) {
       throw new Error("Nebula Core must be online to create an engagement.");
     }
     const created = await api.createEngagement(request);
     setEngagements((current) => [created, ...current.filter((item) => item.id !== created.id)]);
-    writeStorage(ENGAGEMENT_STORAGE_KEY, created.id);
-    setSelectedEngagementId(created.id);
-    setWorkspaceState("starting");
+    if (options?.select !== false) {
+      writeStorage(ENGAGEMENT_STORAGE_KEY, created.id);
+      setSelectedEngagementId(created.id);
+      setWorkspaceState("starting");
+    }
     return created;
   }, [api, coreState]);
 
