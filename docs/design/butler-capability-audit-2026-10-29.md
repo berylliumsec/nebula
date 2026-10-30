@@ -135,6 +135,30 @@ request ID fails closed instead of recreating it.
 
 ## Remaining work to reach the product goal
 
+### Notebook control contract
+
+Entry point: an operator asks the interactive Butler to find a notebook in the
+selected project, inspect an exact cell, edit it, or run and interrupt it.
+Core's Notebook service owns the project workspace file, its revision and cell
+hashes, the execution queue and result events. The project's Notebook grant,
+execution mode and Host consent remain Core policy; the Workbench URL owns the
+selected notebook in the browser. Butler must list paths before choosing one,
+read the exact current revision before a write, and report a saved file or run
+receipt only after Core read-back.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Butler pages project Notebook paths and bounded cell previews; an exact source read does not return an entire 20 MB document | Notebook service and project workspace | Tool and real Core |
+| Create and edit | A missing or revoked Notebook grant fails; creation refuses an existing path; cell writes use the current document revision or source hash, and a stale edit preserves the file | Notebook grant, workspace file and cell hashes | Tool, API and real Core |
+| Execute and interrupt | A saved code cell returns a run ID; Core policy and Host consent are enforced; ordered results and interruption are read from that run | Notebook runtime and Core run store | Tool and real Core |
+| Refresh and reconnect | The same path, source hash, saved cell and run status appear in Notebook and Butler after reload | Workspace file, Core run store and URL | Production LAN browser |
+| Failure and retry | Permission, stale revision, unavailable runtime and uncertain run effects identify the next safe read; no blind duplicate execution | Core error contract | Tool and real Core |
+
+Package installation and project file-index configuration are separate Notebook
+operator actions. Their network and Host policies must be exercised before
+calling Notebook control complete. Browser keyboard and mobile checks apply to
+the selected Notebook journey, even when Butler's tool routing is server-side.
+
 ### Chat history rewind contract
 
 Entry point: an operator asks the interactive Butler to edit or retract a saved

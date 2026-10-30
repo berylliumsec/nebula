@@ -53,6 +53,9 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({ ...event, capability: "nebula.navigate.open",
       receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "projects" } } }))
       .toMatchObject({ kind: "navigate", destination: { id: "projects" } });
+    expect(settingClientAction({ ...event, capability: "nebula.navigate.open",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "notebook" } } }))
+      .toMatchObject({ kind: "navigate", destination: { path: "/projects/{project_id}/workbench?view=notebook" } });
     expect(settingClientAction({ ...event, capability: "nebula_navigate_open_1234567890abcdef",
       receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "unlisted" } } })).toBeUndefined();
     expect(settingClientAction({ ...event, capability: "other.tool" })).toBeUndefined();
@@ -135,6 +138,7 @@ describe("settings assistant actions", () => {
     expect(settingToOpen("Please open storage source settings")?.id).toBe("settings.storage");
     expect(settingToOpen("can you bring up model provider settings?")?.id).toBe("settings.providers");
     expect(settingToOpen("open project scope")?.id).toBe("settings.network-scope");
+    expect(settingToOpen("open notebook host consent settings")?.id).toBe("settings.network-scope");
     expect(settingToOpen("What can I change in settings?")).toBeUndefined();
     expect(settingToOpen("open assistant")).toBeUndefined();
     expect(isSettingNavigationRequest("Where can I fix a host file permission error in Docker mode?")).toBe(false);

@@ -289,12 +289,12 @@
       ],
       "core_owner": "NotebookService, notebook file revision, kernel run state",
       "butler": {
-        "discover": "nebula.settings.catalog (Notebook mode only)",
-        "read": "missing: notebook path and cell discovery",
-        "change": "missing: typed notebook actions"
+        "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
+        "read": "nebula.notebook.list, read, source, run, run_event, wait and status",
+        "change": "missing: run, interrupt and package acceptance; typed create, edit_cell, execute, interrupt, restart and package actions are present"
       },
       "authority": "Selected project, current file revision or source hash, kernel policy and run identity",
-      "observed_result_test": "missing: Butler notebook action and LAN cell lifecycle regression",
+      "observed_result_test": "tests/v3/test_butler_notebook.py and ui/tests/real-core.spec.ts Butler Notebook edit; run, interrupt and package acceptance pending",
       "result": "Saved source, run output and interrupt state must be read from Core",
       "status": "gap"
     },

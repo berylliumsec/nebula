@@ -124,6 +124,10 @@ _CATEGORIES = (
         "description": "Interactive operator project discovery, creation, rename, archive, restore, and deletion through the requesting browser",
     },
     {
+        "id": "notebook",
+        "description": "Project-scoped Notebook files, cells, package lookup, and Core run lifecycle under the current Notebook grant",
+    },
+    {
         "id": "settings",
         "description": "Project and next-turn Assistant settings, model choices, and device actions",
     },
@@ -199,6 +203,17 @@ class ButlerCapabilities:
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in ButlerProjects(store).plugins()}
             )
+            if notebooks is not None:
+                from .butler_notebook import ButlerNotebook
+
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerNotebook(
+                            store, notebooks, project_id
+                        ).actions()
+                    }
+                )
         if memory is not None:
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in self._memory_actions()}
@@ -643,9 +658,9 @@ class ButlerCapabilities:
         ]
 
     @staticmethod
-    def _read_only(plugin: AnalysisTool) -> bool:
+    def _read_only(plugin: Any) -> bool:
         return (
-            plugin.spec.risk_class == RiskClass.LOCAL_READ
+            plugin.spec.risk_class in {RiskClass.LOCAL_READ, RiskClass.PASSIVE}
             and plugin.spec.name not in _BROWSER_ACTIONS
         )
 

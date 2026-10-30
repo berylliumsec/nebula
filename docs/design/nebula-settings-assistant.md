@@ -41,6 +41,7 @@ Settings assistant and the complete destination catalog.
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets. In Workbench conversations, chats Butler creates appear below Butler; older recovery chats use their linked Core goal as ownership evidence. Search reveals matching children, and a selected child remains open after reload | Core sessions, goal metadata, turns, queues and runs; URL for selection | Tool unit, component, browser and real Core |
 | Organize conversations | In the Workbench conversation list, the More actions menu can pin a chat above the normal activity groups or set a small red, orange, yellow, green, blue, or purple flag. Butler can page the project chat roster, then use the target's current revision to pin, unpin, set, or clear a flag and read Core's saved result. These choices survive refresh because Core owns them. An archived Butler-created chat moves into Butler's own collapsed Archived section and remains searchable and restorable | Core chat-session metadata; UI owns only expansion state | Core API, Butler tool, component, browser and real Core |
 | Edit a saved conversation message | Interactive Butler can page active message previews with `nebula.work.chat_messages`, then use `nebula.work.rewind_chat` with the selected user message ID and current chat revision after an explicit request. Core retracts that message and later replies in the same chat and reports the saved revision. A replacement is a separate `nebula.work.message_chat` action; Butler must verify that turn separately. Scheduled Butler cannot rewind. The Workbench edit control uses the same Core retraction path | Core transcript, chat revision and harness replay; URL selects the chat | Core API, Butler tool and real Core browser |
+| Edit a project Notebook | Interactive Butler can open the Notebook destination and discover typed `nebula.notebook.*` actions. It pages project paths and cell previews, reads exact source, then creates or edits with a current document revision or cell source hash. Core checks the live Notebook grant and project path before each call. A saved edit is reported after Core read-back; a stale hash preserves the existing cell. Execution and package actions remain subject to Notebook runtime, network and Host consent policy | Core Notebook grant, workspace file, cell hashes and run store; URL selects the Workbench view | Butler tool, Core API and real Core browser for editing; run and package acceptance pending |
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
@@ -63,6 +64,17 @@ still apply. Browser appearance remains device-owned. Uploads and local desktop
 operations remain subject to the capabilities of the active device. An explicit
 operator setting request authorizes the assistant action without a second
 confirmation dialog. A pending browser action is never reported as saved.
+
+The Notebook destination opens the selected project's Workbench Notebook view.
+Project Policy contains execution mode, Host acknowledgement, and package
+network access. The MCP server catalog owns the Notebook grant. Butler's
+capability search and Settings catalog expose the typed Notebook action family;
+the `read` and `change` gateway routes to Core's project-scoped Notebook service.
+Butler must read a file revision or cell hash before a write and read Core again
+before reporting the saved cell. A run ID is a queued execution, so Butler must
+read the run and its ordered events before reporting output. Package downloads
+require the project's network permission; Host consent stays on the operator's
+settings control. Scheduled Butler does not receive these Notebook actions.
 Storage source enrollment stays in the visible Storage settings form because its
 webhook token is shown only once. The settings assistant can discover and open
 that form or navigate to the global Storage dashboard; it does not create or
@@ -114,15 +126,19 @@ For the selected project's Work board, Butler discovers
 check-ins use stable request IDs; edits and check-ins use the current item
 revision. Butler reports the saved Core result and board link. A Work check-in
 does not run or complete an assigned assistant chat.
+
+### Project lifecycle
+
 Interactive Butler also discovers `nebula.projects.list` and
 `nebula.projects.detail` to page the operator's projects, including archived
-ones, and read an exact target revision. Its typed create, rename, archive,
-restore, and delete actions issue a scoped pending browser action. The
-requesting browser uses Core's project routes, checks the target revision and
-reads the saved result before reporting success. Archive and permanent delete
-show the same project-specific confirmations as the project switcher; a
-cancelled dialog saves nothing. Creating through Butler starts with no linked
-host folder and no Host access acknowledgment. A folder and Host consent must
+ones, and read an exact target revision. Archive and permanent delete require
+the same project-specific confirmations as the project switcher. Its typed
+create, rename, archive, restore, and delete actions issue a scoped pending
+browser action. The requesting browser uses Core's project routes, checks the
+target revision and
+reads the saved result before reporting success; a cancelled dialog saves
+nothing. Creating through Butler starts with no linked host folder and no Host
+access acknowledgment. A folder and Host consent must
 be selected through their visible controls. Scheduled Butler cannot discover
 or invoke these interactive project actions. An uncertain create response
 requires a fresh project search before retrying. The requesting browser checks
@@ -135,6 +151,9 @@ changing its details or reusing it after project deletion fails with a conflict.
 Core serializes Butler project names at the write boundary, so concurrent Butler
 receipts cannot create the same normalized name. Other project creation paths
 keep their existing semantics.
+
+### Project Work and goals
+
 For agent access, Butler reads `nebula.work.work_setting` before calling
 `nebula.work.set_work_setting` with the current project revision. The Core
 read-back confirms whether the selected project's built-in agent Work tools

@@ -239,6 +239,17 @@ def test_product_search_finds_butler_chat_rewind_guidance(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_notebook_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does Butler edit a project Notebook cell and check Host consent?"
+    )
+    assert any(
+        "nebula.notebook" in str(item["text"]) and "Host consent" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

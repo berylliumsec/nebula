@@ -44,7 +44,7 @@ from nebula.v3.settings_assistant_tools import (
 
 def test_catalog_covers_settings_destinations_without_secrets():
     result = catalog()
-    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 21
+    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 22
     assert {item["id"] for item in result["destinations"]} == {
         item["id"] for item in APP_DESTINATIONS
     }
@@ -59,6 +59,17 @@ def test_catalog_covers_settings_destinations_without_secrets():
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"
     )
+    assert (
+        next(item for item in result["destinations"] if item["id"] == "notebook")[
+            "path"
+        ]
+        == "/projects/{project_id}/workbench?view=notebook"
+    )
+    notebook_family = next(
+        item for item in result["capability_families"] if item["id"] == "notebook"
+    )
+    assert notebook_family["discover_with"] == "nebula.capabilities.search"
+    assert "nebula.notebook.edit_cell" in notebook_family["operations"]
     assert (
         "Butler conversations"
         in next(item for item in result["destinations"] if item["id"] == "chat")[

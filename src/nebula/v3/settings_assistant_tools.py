@@ -270,6 +270,28 @@ def catalog() -> dict[str, Any]:
                 "effect": "save one listed default model in Core",
             },
         ],
+        "capability_families": [
+            {
+                "id": "notebook",
+                "discover_with": "nebula.capabilities.search",
+                "operations": [
+                    "nebula.notebook.list",
+                    "nebula.notebook.read",
+                    "nebula.notebook.source",
+                    "nebula.notebook.create",
+                    "nebula.notebook.edit_cell",
+                    "nebula.notebook.execute",
+                    "nebula.notebook.run",
+                    "nebula.notebook.run_event",
+                    "nebula.notebook.wait",
+                    "nebula.notebook.interrupt",
+                    "nebula.notebook.restart",
+                    "nebula.notebook.search_package",
+                    "nebula.notebook.install_package",
+                ],
+                "effect": "interactive Butler delegates selected-project Notebook actions to Core under the current grant, file revision, runtime policy and Host consent",
+            }
+        ],
         "settings": [
             {
                 "id": identifier,

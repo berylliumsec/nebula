@@ -1,0 +1,197 @@
+"""Interactive Butler Notebook actions keep Core's project and grant boundaries."""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.butler_capabilities import ButlerCapabilities
+from nebula.v3.domain import AutomationProjectPolicy, Engagement, McpServerProfile
+from nebula.v3.notebook_mcp import NotebookMcpTools
+from nebula.v3.notebooks import NotebookService
+from nebula.v3.storage import NebulaStore
+from nebula.v3.tools import CapabilityInputError, GuidedToolError
+
+
+def _fixture(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    root = tmp_path / "selected"
+    root.mkdir()
+    foreign_root = tmp_path / "foreign"
+    foreign_root.mkdir()
+    selected = store.create(Engagement(name="Selected", workspace_path=str(root)))
+    foreign = store.create(Engagement(name="Foreign", workspace_path=str(foreign_root)))
+    notebooks = NotebookService(
+        store=store,
+        workspace_resolver=lambda project_id: (
+            root if project_id == selected.id else foreign_root
+        ),
+        automation_runtime=None,
+        data_root=tmp_path / "runtime",
+    )
+    profile = NotebookMcpTools(store, notebooks).register_profile(selected.id)
+    capabilities = ButlerCapabilities(
+        store,
+        ArtifactStore(tmp_path / "artifacts"),
+        selected.id,
+        notebooks=notebooks,
+    )
+    return store, selected, foreign, notebooks, profile, capabilities
+
+
+def test_butler_notebook_pages_exact_cells_and_rejects_stale_edits(tmp_path):
+    store, selected, foreign, notebooks, _, capabilities = _fixture(tmp_path)
+
+    async def invoke(name, arguments=None, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
+            change=change,
+        )
+
+    async def scenario():
+        found = await capabilities.search({"query": "notebook cell"})
+        assert any(
+            row["operation"] == "nebula.notebook.edit_cell" for row in found["matches"]
+        )
+        assert (await capabilities.describe({"operation": "nebula.notebook.read"}))[
+            "invoke_with"
+        ] == "nebula.capabilities.read"
+        assert (await capabilities.describe({"operation": "nebula.notebook.create"}))[
+            "invoke_with"
+        ] == "nebula.capabilities.change"
+        created = await invoke("create", {"path": "research.ipynb"}, change=True)
+        assert created["path"] == "research.ipynb"
+        assert created["total_cells"] == 0
+        with pytest.raises(Exception, match="already exists"):
+            await invoke("create", {"path": "research.ipynb"}, change=True)
+        revision = created["revision"]
+        for index in range(22):
+            saved = await invoke(
+                "edit_cell",
+                {
+                    "path": "research.ipynb",
+                    "source": "x" * 12_100 if index == 0 else f"print({index})",
+                    "cell_type": "code",
+                    "expected_revision": revision,
+                },
+                change=True,
+            )
+            revision = saved["revision"]
+        listed = await invoke("list")
+        assert [row["path"] for row in listed["notebooks"]] == ["research.ipynb"]
+        await notebooks.create(foreign.id, "foreign.ipynb")
+        assert "foreign.ipynb" not in [
+            row["path"] for row in (await invoke("list"))["notebooks"]
+        ]
+        first = await invoke("read", {"path": "research.ipynb"})
+        assert first["total_cells"] == 22
+        assert len(first["cells"]) == 20
+        assert first["next_offset"] == 20
+        last = await invoke("read", {"path": "research.ipynb", "offset": 20})
+        assert len(last["cells"]) == 2
+        assert last["next_offset"] is None
+        cell_id = first["cells"][0]["id"]
+        source = await invoke("source", {"path": "research.ipynb", "cell_id": cell_id})
+        assert len(source["source"]) == 12_000
+        assert source["next_offset"] == 12_000
+        assert (
+            await invoke(
+                "source",
+                {"path": "research.ipynb", "cell_id": cell_id, "offset": 12_000},
+            )
+        )["source"] == "x" * 100
+        with pytest.raises(Exception, match="changed"):
+            await invoke(
+                "edit_cell",
+                {
+                    "path": "research.ipynb",
+                    "cell_id": cell_id,
+                    "source": "overwritten",
+                    "cell_type": "code",
+                    "expected_source_hash": "0" * 64,
+                },
+                change=True,
+            )
+        assert (await invoke("source", {"path": "research.ipynb", "cell_id": cell_id}))[
+            "source"
+        ] == "x" * 12_000
+        with pytest.raises(CapabilityInputError, match="invalid arguments"):
+            await invoke("read", {"path": "../foreign/foreign.ipynb", "extra": True})
+        with pytest.raises(Exception, match="project-relative|escapes"):
+            await invoke("read", {"path": "../foreign/foreign.ipynb"})
+
+    asyncio.run(scenario())
+
+
+def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
+    store, selected, _, _, profile, capabilities = _fixture(tmp_path)
+
+    async def scenario():
+        assert (
+            await capabilities.invoke(
+                {"operation": "nebula.notebook.list", "arguments": {}}, change=False
+            )
+        )["notebooks"] == []
+        store.update(
+            McpServerProfile,
+            profile.id,
+            {"enabled": False},
+            expected_revision=profile.revision,
+        )
+        with pytest.raises(GuidedToolError, match="revoked"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.notebook.create",
+                    "arguments": {"path": "blocked.ipynb"},
+                },
+                change=True,
+            )
+        assert not (tmp_path / "selected" / "blocked.ipynb").exists()
+
+    asyncio.run(scenario())
+
+
+def test_butler_notebook_execution_and_package_lookup_respect_core_policy(tmp_path):
+    _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
+    policy = AutomationProjectPolicy(
+        engagement_id=selected.id,
+        execution_mode="host",
+        host_access_acknowledged=False,
+        network_enabled=False,
+    )
+    notebooks.automation_runtime = SimpleNamespace(project_policy=lambda _: policy)
+
+    async def invoke(name, arguments, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments},
+            change=change,
+        )
+
+    async def scenario():
+        created = await invoke("create", {"path": "policy.ipynb"}, change=True)
+        saved = await invoke(
+            "edit_cell",
+            {
+                "path": "policy.ipynb",
+                "source": "print(1)",
+                "cell_type": "code",
+                "expected_revision": created["revision"],
+            },
+            change=True,
+        )
+        assert (await invoke("status", {}))["consent_required"] is True
+        with pytest.raises(GuidedToolError) as execution:
+            await invoke(
+                "execute",
+                {"path": "policy.ipynb", "cell_id": saved["cell_id"]},
+                change=True,
+            )
+        assert execution.value.code == "notebook.permission_required"
+        with pytest.raises(GuidedToolError) as package:
+            await invoke("search_package", {"path": "policy.ipynb", "name": "colorama"})
+        assert package.value.code == "notebook.permission_required"
+
+    asyncio.run(scenario())

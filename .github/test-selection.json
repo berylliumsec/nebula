@@ -1,13 +1,13 @@
 {
-  "change_digest": "ff6b5e0526a55d58754bfae6e291e5058de95d047f8a7bac70058604e6cafd8a",
-  "reviewed_by": "Codex focused review for Butler project lifecycle, workflow registry, and chat rewind",
-  "reason": "The 20 collected Python cases retain the prior 15 project lifecycle, durable retry, product knowledge, Chroma, and registry guard checks, and add the exact chat rewind API, bounded Work page and readback, interactive Butler discovery/use, background exclusion, and product-guidance search cases. The previously selected three frontend files still collect 66 cases for the project browser handoff and source guard; no UI component implementation changed in this rewind slice. The production build runs the registry guard as prebuild. Eight existing paired LAN profiles cover project lifecycle, and eight new profiles cover Butler's exact-message rewind, stale revision refusal, durable retraction, refreshed transcript, and production asset identity. The new browser test uses an inert local model stub and isolated Core data.",
-  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. The registry remains an incomplete action map; unreviewed signatures do not imply Butler support. Browser profiles emulate mobile devices; physical Safari is unavailable. Transcript export and other operator-control gaps remain separate work. The name guard applies to Butler keyed creates; unkeyed project creation retains existing semantics.",
+  "change_digest": "dd2eff0d32c142aeba12cc946baf721df8ea86eb71dcc87ffcaa9f9622380227",
+  "reviewed_by": "Codex focused review for Butler project lifecycle, workflow registry, chat rewind, and Notebook control with product discovery",
+  "reason": "The 25 selected Python cases retain the prior 20 project lifecycle, durable retry, product knowledge, registry guard, and chat rewind checks, then add three Notebook cases for bounded cells, stale edits, project scope, live grant revocation, Host consent and network refusal, one settings catalog/destination case, and one product guidance search case. The selected three frontend files still collect 66 browser handoff cases; the existing navigation case now checks the Notebook destination and policy search. The production build runs the registry source guard. Eight paired LAN profiles cover project lifecycle, eight cover chat rewind, and eight cover Butler's Notebook edit through an inert provider, saved Core file, stale hash conflict and refreshed UI. All fixtures use isolated Core data.",
+  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. Notebook package installation, file-index configuration, and run lifecycle still need their own observed-result acceptance before the Notebook area is marked supported. The registry remains an incomplete action map; unreviewed signatures do not imply Butler support. Browser profiles emulate mobile devices; physical Safari is unavailable. Transcript export and other operator-control gaps remain separate work. The name guard applies to Butler keyed creates; unkeyed project creation retains existing semantics.",
   "expected_tests": {
-    "python": 20,
+    "python": 25,
     "frontend": 66,
     "native": 0,
-    "playwright": 16
+    "playwright": 24
   },
   "python_versions": [
     "3.12"
@@ -23,6 +23,7 @@
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_project_lifecycle_and_confirmation",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_chat_rewind_guidance",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_notebook_guidance",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
     "tests/v3/test_setup.py::test_project_create_request_is_atomic_retry_safe_and_retained_after_delete",
     "tests/v3/test_setup.py::test_concurrent_project_create_retries_share_one_project",
@@ -31,6 +32,10 @@
     "tests/v3/test_api.py::test_project_create_request_id_replays_exact_core_result",
     "tests/v3/test_chat_api.py::test_chat_session_rewind_edits_in_place_without_forking",
     "tests/v3/test_control_assistant_work.py::test_butler_pages_and_rewinds_main_chat_with_core_readback",
+    "tests/v3/test_butler_notebook.py::test_butler_notebook_pages_exact_cells_and_rejects_stale_edits",
+    "tests/v3/test_butler_notebook.py::test_butler_notebook_grant_revocation_blocks_next_action",
+    "tests/v3/test_butler_notebook.py::test_butler_notebook_execution_and_package_lookup_respect_core_policy",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
     "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_unsupported_action_marked_supported",
@@ -58,6 +63,14 @@
     "butler-chat-rewind/assistant-real-chromium-430",
     "butler-chat-rewind/assistant-real-webkit-320",
     "butler-chat-rewind/assistant-real-webkit-390",
-    "butler-chat-rewind/assistant-real-webkit-430"
+    "butler-chat-rewind/assistant-real-webkit-430",
+    "butler-notebook/assistant-real-desktop",
+    "butler-notebook/assistant-real-compact",
+    "butler-notebook/assistant-real-chromium-320",
+    "butler-notebook/assistant-real-chromium-390",
+    "butler-notebook/assistant-real-chromium-430",
+    "butler-notebook/assistant-real-webkit-320",
+    "butler-notebook/assistant-real-webkit-390",
+    "butler-notebook/assistant-real-webkit-430"
   ]
 }

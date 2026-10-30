@@ -16,6 +16,7 @@
   {"id":"missions","label":"Missions","path":"/projects/{project_id}/workbench?view=missions","aliases":["missions","agents","agent missions"]},
   {"id":"activity","label":"Activity","path":"/projects/{project_id}/workbench?view=activity","aliases":["activity","activity log","execution history"]},
   {"id":"files","label":"Files","path":"/projects/{project_id}/workbench?view=workspace","aliases":["files","workspace files","file browser"]},
+  {"id":"notebook","label":"Notebook","path":"/projects/{project_id}/workbench?view=notebook","aliases":["notebook","project notebook","python notebook","notebook cells","run notebook cell","edit notebook cell"]},
   {"id":"notes","label":"Notes","path":"/projects/{project_id}/workbench?view=notes","aliases":["notes","project notes"]},
   {"id":"library","label":"Library","path":"/library","aliases":["library","shared library","documents library"]},
   {"id":"storage","label":"Storage","path":"/storage","aliases":["storage","storage dashboard","storage devices","storage incidents","disk capacity"]},
