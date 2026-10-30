@@ -7025,6 +7025,150 @@ test("assistant upgrade Butler adds, downloads, reindexes and removes one shared
   ]);
 });
 
+test("assistant upgrade Butler drafts, signs and exports a report on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const prompts = {
+    create: "Create the synthetic Butler report draft.",
+    update: "Move the synthetic Butler report into review with a summary.",
+    signoff: "Open sign-off for the synthetic Butler report.",
+    pdf: "Export the synthetic Butler report PDF.",
+    bundle: "Export the synthetic engagement bundle.",
+  };
+  let reportId = "";
+  let reportRevision = 0;
+  let projectId = "";
+  let projectRevision = 0;
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm the report action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = String(messages[lastUser]?.content ?? "");
+    const action = Object.entries(prompts).find(([, instruction]) => prompt.startsWith(instruction))?.[0];
+    if (!action) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const operation = action === "create" ? "nebula.reports.create"
+      : action === "update" ? "nebula.reports.update"
+      : action === "signoff" ? "nebula.reports.signoff"
+      : action === "pdf" ? "nebula.reports.export_pdf" : "nebula.reports.export_bundle";
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: `${action} project report`}};
+    if (action === "create") {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation,
+        arguments: {title: "Synthetic Butler assessment", executive_summary: "Draft summary"}}};
+      return undefined;
+    }
+    if (action === "bundle") {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.projects.detail"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.projects.detail", arguments: {project_id: projectId}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation,
+        arguments: {expected_project_revision: projectRevision}}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.list"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.list", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.detail"}};
+    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.detail", arguments: {report_id: reportId}}};
+    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation}};
+    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation,
+      arguments: {report_id: reportId, expected_revision: reportRevision,
+        ...(action === "update" ? {status: "review", executive_summary: "Reviewed synthetic evidence."} : {})}}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler report fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string; revision: number};
+    projectId = project.id;
+    projectRevision = project.revision;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler report model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler report LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/reports`);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (instruction: string) => {
+      if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts.create);
+    await expect.poll(async () => {
+      const rows = await (await api.get(`reports?engagement_id=${projectId}`)).json() as Array<{id: string}>;
+      reportId = rows[0]?.id ?? "";
+      return rows.length;
+    }, {timeout: 45_000}).toBe(1);
+    const created = await (await api.get(`reports/${reportId}`)).json() as {id: string; revision: number; executive_summary: string; status: string};
+    reportRevision = created.revision;
+    expect(created).toMatchObject({id: reportId, status: "draft", executive_summary: "Draft summary"});
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${reportId}$`));
+    await expect(page.getByRole("textbox", {name: "Report title"})).toHaveValue("Synthetic Butler assessment");
+    await send(prompts.update);
+    await expect(assistant.getByText(/Saved Synthetic Butler assessment in Core as review/)).toBeVisible({timeout: 45_000});
+    const reviewed = await (await api.get(`reports/${reportId}`)).json() as {revision: number; status: string; executive_summary: string};
+    reportRevision = reviewed.revision;
+    expect(reviewed.status).toBe("review");
+    expect(reviewed.executive_summary).toBe("Reviewed synthetic evidence.");
+    await send(prompts.signoff);
+    const signoff = page.getByRole("dialog", {name: "Sign off final report"});
+    await expect(signoff).toBeVisible({timeout: 45_000});
+    expect((await (await api.get(`reports/${reportId}`)).json() as {status: string}).status).toBe("review");
+    await signoff.getByRole("textbox", {name: "Your display name"}).fill("Synthetic operator");
+    await signoff.getByRole("button", {name: "Sign off report"}).click();
+    await expect(signoff).toBeHidden({timeout: 45_000});
+    const final = await (await api.get(`reports/${reportId}`)).json() as {revision: number; status: string; signed_off_by: string};
+    reportRevision = final.revision;
+    expect(final.status).toBe("final");
+    expect(final.signed_off_by).toBeTruthy();
+    await page.reload();
+    await expect(page.getByText(/Final · read-only/)).toBeVisible();
+    await send(prompts.pdf);
+    await expect(page.getByRole("dialog", {name: "Export Synthetic Butler assessment as PDF?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(/was not exported. No download started/)).toBeVisible();
+    await send(prompts.pdf);
+    await expect(page.getByRole("dialog", {name: "Export Synthetic Butler assessment as PDF?"})).toBeVisible({timeout: 45_000});
+    const pdfStarted = page.waitForEvent("download");
+    await page.getByRole("dialog", {name: "Export Synthetic Butler assessment as PDF?"})
+      .getByRole("button", {name: "Export PDF", exact: true}).click();
+    const pdf = await pdfStarted;
+    expect(pdf.suggestedFilename()).toBe("Synthetic-Butler-assessment.pdf");
+    expect((await readFile((await pdf.path())!)).subarray(0, 4).toString()).toBe("%PDF");
+    await send(prompts.bundle);
+    await expect(page.getByRole("dialog", {name: "Export Butler report fixture's sensitive bundle?"})).toBeVisible({timeout: 45_000});
+    const bundleStarted = page.waitForEvent("download");
+    await page.getByRole("dialog", {name: "Export Butler report fixture's sensitive bundle?"})
+      .getByRole("button", {name: "Export bundle", exact: true}).click();
+    const bundle = await bundleStarted;
+    expect(bundle.suggestedFilename()).toBe("Butler-report-fixture.nebula.zip");
+    expect((await readFile((await bundle.path())!)).subarray(0, 2).toString()).toBe("PK");
+    expect((await (await api.get(`reports/${reportId}`)).json() as {revision: number}).revision).toBe(reportRevision);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-report-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      reportId, revision: reportRevision,
+      result: "Butler draft and edit read back from Core; operator attested final report; cancelled PDF started no download; PDF and sensitive bundle downloaded on requesting browser"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler exports a saved chat on the requesting LAN browser", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
