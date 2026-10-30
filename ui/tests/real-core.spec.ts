@@ -6888,9 +6888,11 @@ test("assistant upgrade Butler rewinds a saved chat on production LAN Core", asy
   ]);
 });
 
-test("assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core", async ({page}, testInfo) => {
-  test.setTimeout(180_000);
+test("assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const addInstruction = "Add a file to the shared Library.";
+  const downloadInstruction = "Download the shared Library note.";
   const reindexInstruction = "Reindex the shared Library note.";
   const removeInstruction = "Remove the shared Library note.";
   const fileMarker = "Synthetic shared Library note. No commands or private data.";
@@ -6904,19 +6906,27 @@ test("assistant upgrade Butler reindexes and removes one shared Library item on 
     const lastUser = messages.map(message => message.role).lastIndexOf("user");
     const prompt = messages[lastUser]?.content;
     if (typeof prompt !== "string") return undefined;
+    const add = prompt.startsWith(addInstruction);
+    const download = prompt.startsWith(downloadInstruction);
     const reindex = prompt.startsWith(reindexInstruction);
     const remove = prompt.startsWith(removeInstruction);
-    if (!reindex && !remove) return undefined;
+    if (!add && !download && !reindex && !remove) return undefined;
     if (JSON.stringify(messages).includes(fileMarker)) modelSawKnowledgeExcerpt = true;
     if (JSON.stringify(messages.filter(message => message.role === "tool")).includes(fileMarker)) modelSawToolFile = true;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
-    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "shared Library item reindex remove"}};
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: add ? "add file to shared Library" : "shared Library item download reindex remove"}};
+    if (add) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.add"}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.library.add", arguments: {}}};
+      return undefined;
+    }
     if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.list"}};
     if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.library.list", arguments: {}}};
     if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.detail"}};
     if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.library.detail", arguments: {item_id: itemId}}};
-    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: reindex ? "nebula.library.reindex" : "nebula.library.remove"}};
-    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation: reindex ? "nebula.library.reindex" : "nebula.library.remove",
+    const operation = download ? "nebula.library.download" : reindex ? "nebula.library.reindex" : "nebula.library.remove";
+    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation}};
+    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation,
       arguments: {item_id: itemId, expected_revision: itemRevision}}};
     return undefined;
   }});
@@ -6935,12 +6945,6 @@ test("assistant upgrade Butler reindexes and removes one shared Library item on 
     const provider = await createdProvider.json() as {id: string; revision: number};
     const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
     expect(verified.ok(), await verified.text()).toBe(true);
-    const createdItem = await api.post("library/items/ingest", {data: {filename: "butler-shared-note.txt", content_base64: content.toString("base64")}});
-    expect(createdItem.ok(), await createdItem.text()).toBe(true);
-    const original = await createdItem.json() as {id: string; revision: number; artifact_id: string; status: string};
-    itemId = original.id;
-    itemRevision = original.revision;
-    expect(original.status).toBe("ready");
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -6954,6 +6958,30 @@ test("assistant upgrade Butler reindexes and removes one shared Library item on 
       await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
       await assistant.getByRole("button", {name: "Send to Butler"}).click();
     };
+    await send(addInstruction);
+    await expect(assistant.getByRole("region", {name: "Add to shared Library"})).toBeVisible({timeout: 45_000});
+    await assistant.getByLabel("Choose shared Library file").setInputFiles({name: "butler-shared-note.txt", mimeType: "text/plain", buffer: content});
+    await page.getByRole("dialog", {name: "Add butler-shared-note.txt to the shared Library?"}).getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("butler-shared-note.txt was not added to the shared Library.")).toBeVisible();
+    expect(await (await api.get("library/items")).json()).toEqual([]);
+    await send(addInstruction);
+    await expect(assistant.getByRole("region", {name: "Add to shared Library"})).toBeVisible({timeout: 45_000});
+    await assistant.getByLabel("Choose shared Library file").setInputFiles({name: "butler-shared-note.txt", mimeType: "text/plain", buffer: content});
+    await page.getByRole("dialog", {name: "Add butler-shared-note.txt to the shared Library?"}).getByRole("button", {name: "Add shared file"}).click();
+    await expect(assistant.getByText("Added butler-shared-note.txt to Core's shared Library. It is available to every project.")).toBeVisible({timeout: 45_000});
+    const [original] = await (await api.get("library/items")).json() as Array<{id: string; revision: number; artifact_id: string; status: string}>;
+    expect(original?.status).toBe("ready");
+    itemId = original.id;
+    itemRevision = original.revision;
+    await send(downloadInstruction);
+    await expect(page.getByRole("dialog", {name: "Download butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Download original"}).click();
+    const downloaded = await downloading;
+    expect(downloaded.suggestedFilename()).toBe("butler-shared-note.txt");
+    expect(await readFile(await downloaded.path())).toEqual(content);
+    await expect(assistant.getByText("Started a download of butler-shared-note.txt's original file on this device.")).toBeVisible();
+    expect((await (await api.get(`library/items/${itemId}`)).json() as {revision: number}).revision).toBe(itemRevision);
     await send(reindexInstruction);
     await expect(page.getByRole("heading", {name: "Reindex butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
     await page.getByRole("button", {name: "Cancel"}).click();
@@ -6989,7 +7017,7 @@ test("assistant upgrade Butler reindexes and removes one shared Library item on 
     await testInfo.attach("butler-library-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], itemId, sourceRevision: original.revision,
       reindexedRevision: reindexed.revision, knowledgeExcerptObserved: modelSawKnowledgeExcerpt,
-      result: "cancel left Core unchanged; reindex and removal confirmed on requesting browser; stale mutation rejected; artifact retained; action tool did not return file text"}), contentType: "application/json"});
+      result: "cancel left Core unchanged; browser-owned upload and original-file download; reindex and removal confirmed; stale mutation rejected; artifact retained; action tool did not return file text"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
