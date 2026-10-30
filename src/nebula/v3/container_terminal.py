@@ -25,7 +25,7 @@ from time import monotonic
 from typing import AsyncIterator, Callable, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator
 
 from .domain import (
     AutomationProjectPolicy,
@@ -311,6 +311,22 @@ class ContainerTerminalRecoveryListResponse(NebulaModel):
     sessions: list[ContainerTerminalRecoveredSession] = Field(default_factory=list)
 
 
+class ContainerTerminalSessionSummary(NebulaModel):
+    session_id: str
+    created_at: datetime
+    state: Literal["pending", "claimed", "launching", "running", "stopping"]
+    attached: bool
+
+
+class ContainerTerminalSessionList(NebulaModel):
+    engagement_id: str
+    sessions: list[ContainerTerminalSessionSummary] = Field(default_factory=list)
+
+
+class ContainerTerminalCloseRequest(NebulaModel):
+    expected_created_at: AwareDatetime
+
+
 class ContainerTerminalCapacity(NebulaModel):
     active_sessions: int = Field(ge=0)
     available_sessions: int = Field(ge=0)
@@ -566,6 +582,58 @@ class ContainerTerminalService:
                     *self._finishing_sessions.values(),
                 )
             )
+
+    async def list_sessions(self, engagement_id: str) -> ContainerTerminalSessionList:
+        """Read one Project's live sessions without issuing WebSocket tickets."""
+
+        self.store.get(Engagement, engagement_id)
+        await self._finish_expired_reconnects(engagement_id)
+        async with self._lock:
+            sessions = [
+                ContainerTerminalSessionSummary(
+                    session_id=session.id,
+                    created_at=session.created_at,
+                    state=(
+                        "stopping"
+                        if session.id in self._finishing_sessions
+                        else session.state
+                    ),
+                    attached=session.attachment is not None,
+                )
+                for session in (
+                    *self._sessions.values(),
+                    *self._finishing_sessions.values(),
+                )
+                if session.request.engagement_id == engagement_id
+            ]
+        sessions.sort(key=lambda item: (item.created_at, item.session_id))
+        return ContainerTerminalSessionList(
+            engagement_id=engagement_id, sessions=sessions
+        )
+
+    async def close_project_session(
+        self, engagement_id: str, session_id: str, expected_created_at: datetime
+    ) -> ContainerTerminalSessionList:
+        """Stop only the exact session previously read in this Project."""
+
+        self.store.get(Engagement, engagement_id)
+        async with self._lock:
+            session = self._sessions.get(session_id) or self._finishing_sessions.get(
+                session_id
+            )
+            if session is None or session.request.engagement_id != engagement_id:
+                raise ContainerTerminalError(
+                    "terminal_not_found",
+                    "terminal session was not found in this Project",
+                    status_code=404,
+                )
+            if session.created_at != expected_created_at:
+                raise ContainerTerminalError(
+                    "terminal_changed",
+                    "terminal session changed; read its current identity before stopping it",
+                )
+        await self.close(session_id)
+        return await self.list_sessions(engagement_id)
 
     async def capacity(self) -> ContainerTerminalCapacity:
         async with self._lock:

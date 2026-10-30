@@ -337,6 +337,18 @@ def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypa
     assert "requesting" in text.lower()
 
 
+def test_product_search_finds_butler_terminal_stop_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler list terminal sessions and stop a project terminal?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.terminal.list" in text
+    assert "nebula.terminal.stop" in text
+    assert "WebSocket ticket" in text
+    assert "requesting browser" in text
+
+
 def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

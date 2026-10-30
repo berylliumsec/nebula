@@ -35,6 +35,7 @@ from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
 
 if TYPE_CHECKING:
+    from .container_terminal import ContainerTerminalService
     from .workspace import WorkspaceService
 
 
@@ -80,6 +81,7 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.reports.signoff",
         "nebula.reports.export_pdf",
         "nebula.reports.export_bundle",
+        "nebula.terminal.stop",
     }
 )
 _BACKGROUND_CHANGES = frozenset(
@@ -154,6 +156,10 @@ _CATEGORIES = (
         "description": "Selected-project report and source discovery, draft changes, operator signoff handoff, and requesting-device exports",
     },
     {
+        "id": "terminal",
+        "description": "Selected-project live terminal discovery and confirmed stop through the requesting browser",
+    },
+    {
         "id": "settings",
         "description": "Project and next-turn Assistant settings, model choices, and device actions",
     },
@@ -206,6 +212,7 @@ class ButlerCapabilities:
         settings_api: Any = None,
         notebooks: Any = None,
         workspace: WorkspaceService | None = None,
+        container_terminals: ContainerTerminalService | None = None,
         work: Any = None,
         memory: Any = None,
         operator_message: str = "",
@@ -241,6 +248,7 @@ class ButlerCapabilities:
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
             from .butler_reports import ButlerReports
+            from .butler_terminal import ButlerTerminal
             from .butler_workspace import ButlerWorkspace
 
             self._actions.update(
@@ -271,6 +279,15 @@ class ButlerCapabilities:
                     for plugin in ButlerReports(store, project_id).actions()
                 }
             )
+            if container_terminals is not None:
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerTerminal(
+                            container_terminals, project_id
+                        ).actions()
+                    }
+                )
             if notebooks is not None:
                 from .butler_notebook import ButlerNotebook
 

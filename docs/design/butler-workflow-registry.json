@@ -331,21 +331,40 @@
       "status": "supported"
     },
     {
-      "id": "workspace.relink_and_terminal",
-      "entry_point": "Existing project or Workbench: relink a host folder and manage terminal sessions",
+      "id": "workspace.relink",
+      "entry_point": "Existing project: relink a host folder",
       "ui_calls": [
-        "ui/src/components/ContainerTerminalPanel.tsx::terminalCommandHistoryStatus"
+        "ui/src/components/HostFolderPicker.tsx::listHostWorkspaceFolders"
       ],
-      "core_owner": "Project linked-host-folder policy and terminal session service",
+      "core_owner": "Project linked-host-folder policy",
       "butler": {
         "discover": "nebula.navigate.open",
         "read": "nebula.workspace.list shows selected workspace entries only",
-        "change": "missing: existing-project relink and terminal lifecycle controls"
+        "change": "missing: existing-project relink control"
       },
-      "authority": "Host folder consent and exact terminal session identity with Core read-back",
-      "observed_result_test": "missing: Butler existing-project relink and terminal LAN journey",
-      "result": "Core and Workbench must agree on selected folder and live terminal state",
+      "authority": "Host folder consent and exact project revision with Core read-back",
+      "observed_result_test": "missing: Butler existing-project relink LAN journey",
+      "result": "Core and Workbench must agree on selected folder",
       "status": "gap"
+    },
+    {
+      "id": "terminal.lifecycle",
+      "entry_point": "Workbench Terminal or Butler: inspect and stop one live terminal in the selected project",
+      "ui_calls": [
+        "ui/src/components/ContainerTerminalPanel.tsx::recoverContainerTerminals",
+        "ui/src/components/butlerTerminalStop.ts::listProjectContainerTerminals",
+        "ui/src/components/butlerTerminalStop.ts::closeProjectContainerTerminal"
+      ],
+      "core_owner": "ContainerTerminalService and project-scoped terminal API",
+      "butler": {
+        "discover": "nebula.navigate.open and nebula.terminal.list",
+        "read": "nebula.terminal.list returns ticket-free live session identity",
+        "change": "nebula.terminal.stop asks the requesting browser to confirm an exact stop"
+      },
+      "authority": "Interactive Butler, selected project, exact session ID and creation time, browser confirmation, conditional Core stop and read-back",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stops a selected project terminal on production LAN Core",
+      "result": "Core lists the exact terminal before stop and no longer lists it after the browser confirms; cancellation leaves it active",
+      "status": "supported"
     },
     {
       "id": "notebook.cells",
@@ -1891,6 +1910,14 @@
     },
     {
       "key": "ui/src/components/assistantSettingsMutations.ts::request::GET path",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerTerminalStop.ts::closeProjectContainerTerminal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerTerminalStop.ts::listProjectContainerTerminals",
       "count": 2
     },
     {
