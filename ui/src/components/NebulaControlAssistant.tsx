@@ -1471,9 +1471,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         throw new Error("Reconnect to Core and select the original Project before stopping its terminal.");
       }
       return applyButlerTerminalStop(api, action, () => activeImageProject.current, async (session) => confirm({
-        title: `Stop terminal ${session.sessionId.slice(0, 8)}?`,
-        message: "This stops the live terminal and ends running commands. Packages installed only in its container will be lost. Project workspace files remain.",
-        confirmLabel: "Stop terminal",
+        title: `${session.state === "stopping" ? "Retry stopping" : "Stop"} terminal ${session.sessionId.slice(0, 8)}?`,
+        message: session.state === "stopping"
+          ? "Core could not verify this terminal's earlier removal. Retry the exact container cleanup and read its result."
+          : "This stops the live terminal and ends running commands. Packages installed only in its container will be lost. Project workspace files remain.",
+        confirmLabel: session.state === "stopping" ? "Retry stop" : "Stop terminal",
         tone: "danger",
       }));
     }

@@ -1047,6 +1047,7 @@ class SandboxTerminalProcess:
     runner: "ContainerSandboxRunner"
     egress_lease: EgressLease | None = None
     _closed: bool = False
+    _container_removed: bool = False
     _close_lock: asyncio.Lock | None = None
 
     def __post_init__(self) -> None:
@@ -1147,6 +1148,14 @@ class SandboxTerminalProcess:
         assert self._close_lock is not None
         async with self._close_lock:
             if self._closed:
+                if not self._container_removed:
+                    await self.runner._force_remove(
+                        self.container_name, require_removed=True
+                    )
+                    self._container_removed = True
+                if self.egress_lease is not None:
+                    await self.egress_lease.close()
+                    self.egress_lease = None
                 return
             self._closed = True
             try:
@@ -1205,23 +1214,28 @@ class SandboxTerminalProcess:
                                 pass
                         await self.process.wait()
             finally:
-                await self.runner._force_remove(self.container_name)
                 try:
-                    if self.egress_lease is not None:
-                        await self.egress_lease.close()
-                        self.egress_lease = None
+                    await self.runner._force_remove(
+                        self.container_name, require_removed=True
+                    )
+                    self._container_removed = True
                 finally:
                     try:
-                        os.close(self.master_fd)
-                    except OSError as caught_error:
-                        record_caught_exception(
-                            "sandbox",
-                            "sandbox.sandbox.caught_failure_015",
-                            "A handled sandbox operation raised an exception.",
-                            caught_error,
-                            stage="sandbox",
-                        )
-                        pass
+                        if self.egress_lease is not None:
+                            await self.egress_lease.close()
+                            self.egress_lease = None
+                    finally:
+                        try:
+                            os.close(self.master_fd)
+                        except OSError as caught_error:
+                            record_caught_exception(
+                                "sandbox",
+                                "sandbox.sandbox.caught_failure_015",
+                                "A handled sandbox operation raised an exception.",
+                                caught_error,
+                                stage="sandbox",
+                            )
+                            pass
 
 
 async def _wait_for_fd(file_descriptor: int, *, writable: bool) -> None:
@@ -2251,9 +2265,15 @@ class ContainerSandboxRunner(SandboxRunner):
             if lease is not None:
                 await lease.close()
 
-    async def _force_remove(self, container_name: str) -> None:
+    async def _force_remove(
+        self, container_name: str, *, require_removed: bool = False
+    ) -> None:
         if not self.runtime or self.profile is None:
+            if require_removed:
+                raise SandboxUnavailable("terminal container removal has no runtime")
             return
+        cleanup: asyncio.subprocess.Process | None = None
+        cleanup_error: OSError | asyncio.TimeoutError | None = None
         try:
             cleanup = await asyncio.create_subprocess_exec(
                 *self._runtime_argv(),
@@ -2264,8 +2284,11 @@ class ContainerSandboxRunner(SandboxRunner):
                 stderr=asyncio.subprocess.DEVNULL,
                 env=_runtime_environment(),
             )
-            await asyncio.wait_for(cleanup.wait(), timeout=10)
+            await asyncio.wait_for(
+                cleanup.wait(), timeout=30 if require_removed else 10
+            )
         except (OSError, asyncio.TimeoutError) as caught_error:
+            cleanup_error = caught_error
             record_caught_exception(
                 "sandbox",
                 "sandbox.sandbox.caught_failure_025",
@@ -2273,7 +2296,28 @@ class ContainerSandboxRunner(SandboxRunner):
                 caught_error,
                 stage="sandbox",
             )
+            if cleanup is not None and cleanup.returncode is None:
+                try:
+                    cleanup.kill()
+                except ProcessLookupError:
+                    pass
+                await cleanup.wait()
+            if not require_removed:
+                return
+        if not require_removed:
             return
+        try:
+            names, _stderr, return_code = await self._capture(
+                "ps", "--all", "--format", "{{.Names}}"
+            )
+        except (OSError, asyncio.TimeoutError, SandboxError) as exc:
+            raise SandboxUnavailable(
+                "terminal container removal could not be verified"
+            ) from exc
+        if return_code != 0 or container_name in names.splitlines():
+            raise SandboxUnavailable(
+                "terminal container remains after removal was requested"
+            ) from cleanup_error
 
 
 @dataclass(frozen=True)

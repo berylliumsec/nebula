@@ -441,6 +441,51 @@ async def test_project_session_listing_and_conditional_close_keep_tickets_privat
 
 
 @async_test
+async def test_project_terminal_cleanup_failure_stays_visible_until_retry(
+    tmp_path, monkeypatch
+):
+    _store, project, runner, _platform, service = continuity_fixture(tmp_path)
+    started, _attachment = await start_controllable_terminal(service, project)
+    process = runner.processes[0]
+    original_close = process.close
+    attempts = 0
+
+    async def fail_first_cleanup():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("runtime did not verify container removal")
+        await original_close()
+
+    monkeypatch.setattr(process, "close", fail_first_cleanup)
+    identity = (await service.list_sessions(project.id)).sessions[0].created_at
+    with pytest.raises(ContainerTerminalError) as failed:
+        await service.close_project_session(project.id, started.session_id, identity)
+    assert failed.value.code == "terminal_cleanup_failed"
+    assert failed.value.status_code == 503
+    listed = await service.list_sessions(project.id)
+    assert [item.state for item in listed.sessions] == ["stopping"]
+    assert (await service.capacity()).active_sessions == 1
+
+    stop = await ButlerTerminal(service, project.id).stop(
+        {
+            "session_id": started.session_id,
+            "expected_created_at": listed.model_dump(mode="json")["sessions"][0][
+                "created_at"
+            ],
+        }
+    )
+    assert stop["state"] == "pending_browser_apply"
+    observed = await service.close_project_session(
+        project.id, started.session_id, identity
+    )
+    assert observed.sessions == []
+    assert process.closed == 1
+    assert attempts == 2
+    assert (await service.capacity()).active_sessions == 0
+
+
+@async_test
 async def test_butler_terminal_stop_is_exact_browser_handoff(tmp_path):
     store, project, _runner, _platform, service = continuity_fixture(tmp_path)
     started, _attachment = await start_controllable_terminal(service, project)
@@ -482,9 +527,7 @@ async def test_butler_terminal_stop_is_exact_browser_handoff(tmp_path):
         container_terminals=service,
     )
     matches = await gateway.search({"query": "stop terminal"})
-    assert any(
-        row["operation"] == "nebula.terminal.stop" for row in matches["matches"]
-    )
+    assert any(row["operation"] == "nebula.terminal.stop" for row in matches["matches"])
     assert (await gateway.describe({"operation": "nebula.terminal.stop"}))[
         "invoke_with"
     ] == "nebula.capabilities.change"

@@ -26,7 +26,7 @@ export async function applyButlerTerminalStop(
     throw new Error("The selected Project changed. Ask Butler to list terminals again.");
   }
   const session = current.sessions.find((item) => item.sessionId === action.sessionId);
-  if (!session || session.createdAt !== action.expectedCreatedAt || session.state === "stopping") {
+  if (!session || session.createdAt !== action.expectedCreatedAt) {
     throw new Error("This terminal changed or stopped. Ask Butler to list terminals again.");
   }
   if (!(await confirm(session))) return "Stop cancelled; Core was not asked to close this terminal.";

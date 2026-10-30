@@ -74,6 +74,22 @@ describe("Butler terminal stop", () => {
     expect(api.listProjectContainerTerminals).toHaveBeenCalledTimes(2);
   });
 
+  it("retries a terminal whose earlier removal Core could not verify", async () => {
+    const stopping: TerminalSessionList = {
+      engagementId: projectId,
+      sessions: [{...active.sessions[0], state: "stopping"}],
+    };
+    const api: TerminalStopApi = {
+      listProjectContainerTerminals: vi.fn().mockResolvedValueOnce(stopping).mockResolvedValueOnce(empty),
+      closeProjectContainerTerminal: vi.fn().mockResolvedValue(empty),
+    };
+    const confirm = vi.fn().mockResolvedValue(true);
+    await expect(applyButlerTerminalStop(api, action, () => projectId, confirm))
+      .resolves.toContain("Stopped terminal");
+    expect(confirm).toHaveBeenCalledWith(stopping.sessions[0]);
+    expect(api.closeProjectContainerTerminal).toHaveBeenCalledWith(projectId, sessionId, createdAt);
+  });
+
   it("does not claim success after an uncertain stop or a stale readback", async () => {
     const api: TerminalStopApi = {
       listProjectContainerTerminals: vi.fn().mockResolvedValue(active),

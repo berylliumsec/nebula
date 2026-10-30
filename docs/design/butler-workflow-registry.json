@@ -362,7 +362,7 @@
         "change": "nebula.terminal.stop asks the requesting browser to confirm an exact stop"
       },
       "authority": "Interactive Butler, selected project, exact session ID and creation time, browser confirmation, conditional Core stop and read-back",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stops a selected project terminal on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stops a selected project terminal on paired LAN Core",
       "result": "Core lists the exact terminal before stop and no longer lists it after the browser confirms; cancellation leaves it active",
       "status": "supported"
     },

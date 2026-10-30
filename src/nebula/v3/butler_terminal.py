@@ -44,8 +44,6 @@ class ButlerTerminal:
         )
         if target is None:
             raise ValueError("terminal is no longer active in the selected Project")
-        if target.state == "stopping":
-            raise ValueError("terminal is already stopping; read its state again")
         created_at = target.model_dump(mode="json")["created_at"]
         if created_at != arguments["expected_created_at"]:
             raise ValueError("terminal changed; read its current identity first")
@@ -82,9 +80,10 @@ class ButlerTerminal:
                     name="nebula.terminal.stop",
                     description=(
                         "Ask the requesting browser to confirm stopping one exact live "
-                        "Project terminal. Running commands and installed container "
-                        "packages will be lost; Project workspace files remain. The "
-                        "browser rechecks Core state before stopping and reads it back."
+                        "Project terminal, or retry removal when Core reports it as "
+                        "stopping. Running commands and installed container packages "
+                        "will be lost; Project workspace files remain. The browser "
+                        "rechecks Core state before stopping and reads it back."
                     ),
                     input_schema=_STOP,
                     output_schema={"type": "object", "additionalProperties": True},

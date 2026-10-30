@@ -381,6 +381,7 @@ class _TerminalReservation:
     parser: Osc633CommandParser = field(default_factory=Osc633CommandParser)
     parser_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     finished: asyncio.Event = field(default_factory=asyncio.Event)
+    cleanup_error: Exception | None = None
     replay: deque["ContainerTerminalOutput"] = field(default_factory=deque)
     replay_bytes: int = 0
     next_sequence: int = 1
@@ -633,6 +634,12 @@ class ContainerTerminalService:
                     "terminal session changed; read its current identity before stopping it",
                 )
         await self.close(session_id)
+        if session.cleanup_error is not None:
+            raise ContainerTerminalError(
+                "terminal_cleanup_failed",
+                "terminal container removal could not be verified; retry this stop",
+                status_code=503,
+            )
         return await self.list_sessions(engagement_id)
 
     async def capacity(self) -> ContainerTerminalCapacity:
@@ -1405,6 +1412,7 @@ class ContainerTerminalService:
         tasks: list[asyncio.Task[None]] = []
         unfinished_capture = None
         finishing_waiter: asyncio.Event | None = None
+        finishing: _TerminalReservation | None = None
         async with self._lock:
             session = self._sessions.pop(session_id, None)
             if session is None:
@@ -1438,6 +1446,17 @@ class ContainerTerminalService:
                     session.attachment.terminal_finishing = True
         if finishing_waiter is not None:
             await finishing_waiter.wait()
+            assert finishing is not None
+            if finishing.cleanup_error is not None and finishing.process is not None:
+                try:
+                    await finishing.process.close()
+                except Exception as exc:
+                    finishing.cleanup_error = exc
+                else:
+                    finishing.cleanup_error = None
+                    async with self._lock:
+                        if self._finishing_sessions.get(session_id) is finishing:
+                            self._finishing_sessions.pop(session_id, None)
             return
         assert session is not None
         if tasks:
@@ -1477,8 +1496,9 @@ class ContainerTerminalService:
                 stage="container_terminal",
             )
             cleanup_error = exc
-        if cleanup_error is not None and detail is None:
-            detail = f"terminal cleanup reported: {type(cleanup_error).__name__}"
+        if cleanup_error is not None:
+            if detail is None:
+                detail = f"terminal cleanup reported: {type(cleanup_error).__name__}"
             error_code = error_code or "cleanup_failed"
         if session.audit_task is not None:
             if unfinished_capture is not None:
@@ -1495,7 +1515,9 @@ class ContainerTerminalService:
         elif unfinished_capture is not None:
             await self._persist_capture(session, unfinished_capture)
         async with self._lock:
-            self._finishing_sessions.pop(session_id, None)
+            session.cleanup_error = cleanup_error
+            if cleanup_error is None:
+                self._finishing_sessions.pop(session_id, None)
             session.finished.set()
         if session.attachment is not None:
             session.attachment.terminal_event = ContainerTerminalExit(
