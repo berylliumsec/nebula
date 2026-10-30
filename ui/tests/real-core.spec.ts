@@ -7126,18 +7126,26 @@ test("assistant upgrade Butler exports a saved chat on the requesting LAN browse
 });
 
 test("assistant upgrade Butler manages a workspace text file on production LAN Core", async ({page}, testInfo) => {
-  test.setTimeout(300_000);
+  test.setTimeout(360_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
   const original = "Butler original text\n";
   const revised = "Butler revised text\n";
   const originalHash = createHash("sha256").update(original).digest("hex");
   const revisedHash = createHash("sha256").update(revised).digest("hex");
+  const binary = Buffer.from([0, 255, 42, 1]);
+  const binaryHash = createHash("sha256").update(binary).digest("hex");
+  let rootIdentity = "";
+  let folderIdentity = "";
   const prompts = {
     create: "Create a workspace text file named research.txt.",
     edit: "Replace research.txt with the revised text.",
     rename: "Rename research.txt to final.txt.",
     download: "Download final.txt to this browser.",
     delete: "Delete final.txt from the workspace.",
+    createFolder: "Create a workspace folder named captures.",
+    uploadBinary: "Ask this browser to upload a binary file into captures.",
+    renameFolder: "Rename captures to archive.",
+    deleteFolder: "Delete the empty archive folder.",
   };
   const stub = await startLocalModelStub({responseContent: "I checked the workspace action in Core.", toolCall: body => {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
@@ -7165,6 +7173,27 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
     ][replies];
     if (instruction === prompts.download) return [
       describe("nebula.workspace.download_file"), change("nebula.workspace.download_file", {path: "final.txt"}),
+    ][replies];
+    if (instruction === prompts.createFolder) return [
+      {name: "nebula_capabilities_search", arguments: {query: "workspace create directory"}},
+      read("nebula.workspace.list", {}),
+      describe("nebula.workspace.create_directory"),
+      change("nebula.workspace.create_directory", {path: "captures", expected_parent_identity: rootIdentity}),
+    ][replies];
+    if (instruction === prompts.uploadBinary) return [
+      read("nebula.workspace.list", {path: "captures"}),
+      describe("nebula.workspace.upload_from_device"),
+      change("nebula.workspace.upload_from_device", {directory: "captures", expected_directory_identity: folderIdentity}),
+    ][replies];
+    if (instruction === prompts.renameFolder) return [
+      read("nebula.workspace.list", {path: "captures"}),
+      describe("nebula.workspace.rename_directory"),
+      change("nebula.workspace.rename_directory", {path: "captures", new_name: "archive", expected_entry_identity: folderIdentity}),
+    ][replies];
+    if (instruction === prompts.deleteFolder) return [
+      read("nebula.workspace.list", {path: "archive"}),
+      describe("nebula.workspace.delete_directory"),
+      change("nebula.workspace.delete_directory", {path: "archive", expected_entry_identity: folderIdentity}),
     ][replies];
     return [
       read("nebula.workspace.read", {path: "final.txt"}), describe("nebula.workspace.delete_file"),
@@ -7234,6 +7263,48 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
     await awaitReply();
     await expect(assistant.getByText(/Core no longer serves the file/)).toBeVisible();
     expect((await api.get(`engagements/${projectId}/workspace/download?path=final.txt`)).status()).toBe(404);
+    const rootState = await api.get(`engagements/${projectId}/workspace/entry?path=`);
+    expect(rootState.ok(), await rootState.text()).toBe(true);
+    rootIdentity = (await rootState.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.createFolder);
+    const folder = await api.get(`engagements/${projectId}/workspace/entry?path=captures`);
+    expect(folder.ok(), await folder.text()).toBe(true);
+    folderIdentity = (await folder.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.uploadBinary);
+    await expect(assistant.getByRole("region", {name: "Upload to project workspace"})).toBeVisible();
+    await assistant.getByRole("region", {name: "Upload to project workspace"}).getByRole("button", {name: "Cancel"}).click();
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=captures/sample.bin`)).status()).toBe(404);
+    await send(prompts.uploadBinary);
+    await assistant.locator('input[aria-label="Choose project workspace file"]').setInputFiles({
+      name: "sample.bin", mimeType: "application/octet-stream", buffer: binary,
+    });
+    await expect(assistant.getByText(/Uploaded \/workspace\/captures\/sample.bin in Core/)).toBeVisible({timeout: 30_000});
+    const fileState = await api.get(`engagements/${projectId}/workspace/entry?path=captures/sample.bin`);
+    expect(fileState.ok(), await fileState.text()).toBe(true);
+    expect(await fileState.json()).toMatchObject({kind: "file", size: binary.length, sha256: binaryHash});
+    expect(await (await api.get(`engagements/${projectId}/workspace/download?path=captures/sample.bin`)).body()).toEqual(binary);
+    const afterUpload = await api.get(`engagements/${projectId}/workspace/entry?path=captures`);
+    folderIdentity = (await afterUpload.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.renameFolder);
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=captures`)).status()).toBe(404);
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=archive/sample.bin`)).status()).toBe(200);
+    const removedBinary = await api.delete(`engagements/${projectId}/workspace/entry?path=archive/sample.bin`, {
+      headers: {"If-Match": binaryHash},
+    });
+    expect(removedBinary.ok(), await removedBinary.text()).toBe(true);
+    const emptyFolder = await api.get(`engagements/${projectId}/workspace/entry?path=archive`);
+    folderIdentity = (await emptyFolder.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.deleteFolder, false);
+    const folderDialog = page.getByRole("dialog", {name: "Delete archive?"});
+    await expect(folderDialog).toBeVisible();
+    await folderDialog.getByRole("button", {name: "Cancel"}).click();
+    await awaitReply();
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=archive`)).status()).toBe(200);
+    await send(prompts.deleteFolder, false);
+    await expect(folderDialog).toBeVisible();
+    await folderDialog.getByRole("button", {name: "Delete folder"}).click();
+    await awaitReply();
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=archive`)).status()).toBe(404);
     await page.reload();
     await openNebulaAssistantFromShell(page);
     const restoredButler = page.getByRole("dialog", {name: "Butler"});
@@ -7252,7 +7323,7 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-workspace-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId,
-      result: "Butler created, replaced and renamed Core text; downloaded verified bytes; cancellation preserved file; confirmed delete and refresh cleared it"}), contentType: "application/json"});
+      result: "Butler created, replaced and renamed Core text; downloaded verified bytes; browser selected binary bytes, Core confirmed SHA-256; folder create, rename and confirmed empty delete read back; cancellations preserved state; refresh cleared deleted entries"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
