@@ -7697,7 +7697,24 @@ export class ApiClient {
     );
   }
 
+  getReport(id: string, signal?: AbortSignal): Promise<ReportSummary> {
+    return this.request<WireReport>(`reports/${encodeURIComponent(id)}`, { signal }).then(mapReport);
+  }
+
   createReport(body: ReportCreateRequest): Promise<ReportSummary> {
+    if (body.reportId) {
+      return this.request<WireReport>("reports/butler-drafts", {
+        method: "POST",
+        body: JSON.stringify({
+          report_id: body.reportId,
+          engagement_id: body.engagementId,
+          title: body.title.trim(),
+          executive_summary: body.executiveSummary ?? "",
+          finding_ids: body.findingIds ?? [],
+          observation_ids: body.observationIds ?? [],
+        }),
+      }).then(mapReport);
+    }
     return this.request<WireReport>("reports", {
       method: "POST",
       body: JSON.stringify({

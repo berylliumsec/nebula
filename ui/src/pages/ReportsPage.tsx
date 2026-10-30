@@ -8,7 +8,7 @@ import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { resourcePath } from "../resourceRoutes";
 import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
 
@@ -34,6 +34,7 @@ function downloadBlob(filename: string, content: Blob): void {
 
 export function ReportsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { resourceId } = useParams();
   const confirm = useConfirmation();
   const {
@@ -315,6 +316,20 @@ export function ReportsPage() {
     setSignoffOpen(true);
   };
 
+  useEffect(() => {
+    const requestedRevision = new URLSearchParams(location.search).get("butler_signoff");
+    if (!requestedRevision || !selected || selected.id !== resourceId) return;
+    navigate(resourcePath(engagement?.id, "report", selected.id), { replace: true });
+    if (requestedRevision !== String(selected.revision) || selected.status !== "review" || dirty) {
+      setError("This report changed before sign-off. Read its current revision and review it again.");
+      return;
+    }
+    setSignoffName(activeOperator?.displayName ?? "");
+    setAttestation("I reviewed this report and approve it as the final record.");
+    setError(undefined);
+    setSignoffOpen(true);
+  }, [activeOperator?.displayName, dirty, engagement?.id, location.search, navigate, resourceId, selected]);
+
   const completeSignoff = async (event: FormEvent) => {
     event.preventDefault();
     if (!selected || selected.status !== "review") return;
@@ -338,12 +353,12 @@ export function ReportsPage() {
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {missingResourceId && <div className="workspace-state-banner degraded" role="alert"><span><strong>Report unavailable</strong><small>The linked report was deleted, is inaccessible, or belongs to another project.</small></span><button className="button quiet" type="button" onClick={() => navigate(resourcePath(engagement?.id, "report"))}>Return to reports</button></div>}
       {!selected ? <StandardEmptyState className="report-empty-state" icon={<FileText size={28} />} title="Create your first report" explanation="Turn verified findings and evidence into a reviewable deliverable." primaryAction={<button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={15} /> New report</button>} /> : <div className="report-layout">
-        <aside className="panel report-outline">
+        <aside className="panel report-outline" aria-label="Report list">
           <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>
           <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" title={report.title} key={report.id} onClick={() => void selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
           <footer><span>Persisted by Core</span><strong>{reports.length}</strong></footer>
         </aside>
-        <section className="panel report-editor" aria-readonly={readOnly || undefined}>
+        <section className="panel report-editor">
           <header className="report-editor-toolbar"><div><label>Status<select value={status} disabled={readOnly} onChange={(event) => setField(setStatus, event.target.value)}><option value="draft">Draft</option><option value="review">In review</option><option value="final" disabled>Final · signed</option></select></label></div><span>{readOnly ? `Final · read-only · revision ${selected.revision}` : saving ? "Saving…" : dirty ? "Unsaved changes" : `Saved · revision ${selected.revision}`}</span></header>
           <div className="report-form">
             {readOnly && <p className="provider-dialog-note" role="status">This final report is an immutable signed record. Export remains available; create a new draft to make changes.</p>}
@@ -370,7 +385,7 @@ export function ReportsPage() {
             <footer><span>{linkedFindings.length} finding{linkedFindings.length === 1 ? "" : "s"} · {linkedObservations.length} note section{linkedObservations.length === 1 ? "" : "s"}</span><button className="button primary" type="button" disabled={readOnly || !dirty || saving || !title.trim()} onClick={() => void save()}><Save size={15} /> {readOnly ? "Final report" : saving ? "Saving…" : "Save report"}</button></footer>
           </div>
         </section>
-        <aside className="panel report-review">
+        <aside className="panel report-review" aria-label="Report review and export">
           <header><h2>{selected.status === "review" ? "Sign off & export" : "Export"}</h2><p>{dirty ? "Save this revision before exporting. PDF output is always rendered from the persisted record." : `PDF output uses saved revision ${selected.revision}.`}</p></header>
           {engagement && <ResourceRelationsPanel resource={{ projectId: engagement.id, kind: "report", id: selected.id, revision: selected.revision }} actionAdapters={{ download: exportPdf }} />}
           <ul><li className={summary.trim() ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Executive summary</strong><small>{summary.trim() ? "Present" : "Needs content"}</small></span></li><li className={linkedFindings.length ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Finding coverage</strong><small>{linkedFindings.length} included</small></span></li></ul>

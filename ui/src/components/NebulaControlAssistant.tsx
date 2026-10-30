@@ -17,7 +17,7 @@ import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeCon
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
-import { projectSurface } from "../resourceRoutes";
+import { projectSurface, resourcePath } from "../resourceRoutes";
 import { sha256BlobHex, sha256Hex } from "../sha256";
 import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
 import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type VoicePauseSeconds } from "../api/types";
@@ -80,7 +80,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, ingestLibraryItem, retryResource } = useWorkspace();
+  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, ingestLibraryItem, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -937,6 +937,142 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `Started a Markdown transcript download for ${observed.title} on this device (${messages.length} saved messages).`;
   };
 
+  const applyReportAction = async (action: Extract<SettingClientAction, {kind: "report_create" | "report_update" | "report_signoff" | "report_export_pdf" | "report_export_bundle"}>): Promise<string> => {
+    if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before asking Butler to use reports again.");
+    }
+    const stillSelected = () => activeImageProject.current === action.projectId;
+    const sameCreate = (report: Awaited<ReturnType<typeof api.getReport>>) => action.kind === "report_create"
+      && report.engagementId === action.projectId && report.id === action.reportId
+      && report.title === action.title && report.status === "draft"
+      && report.executiveSummary === action.executiveSummary
+      && JSON.stringify(report.findingIds) === JSON.stringify(action.findingIds)
+      && JSON.stringify(report.observationIds) === JSON.stringify(action.observationIds);
+    const currentReport = async (reportId: string, revision: number) => {
+      const report = await api.getReport(reportId);
+      if (!stillSelected() || report.engagementId !== action.projectId || report.revision !== revision) {
+        throw new Error("The selected report changed. Ask Butler to read its current revision before retrying.");
+      }
+      return report;
+    };
+    if (action.kind === "report_create") {
+      let observed;
+      try {
+        observed = await api.getReport(action.reportId);
+      } catch (caught) {
+        if (!(caught instanceof ApiError) || caught.status !== 404) throw caught;
+      }
+      if (!observed) {
+        let createError: unknown;
+        try {
+          await createReport({engagementId: action.projectId, reportId: action.reportId,
+            title: action.title, executiveSummary: action.executiveSummary,
+            findingIds: action.findingIds, observationIds: action.observationIds});
+        } catch (caught) {
+          createError = caught;
+          // A lost response may follow a committed write. Read the fixed ID before retrying.
+        }
+        try {
+          observed = await api.getReport(action.reportId);
+        } catch {
+          if (createError instanceof ApiError && createError.status >= 400 && createError.status < 500 && createError.status !== 409) {
+            throw createError;
+          }
+          throw new Error("Core did not confirm report creation. Inspect Reports before asking Butler to create it again.");
+        }
+      }
+      if (!stillSelected() || !sameCreate(observed)) {
+        throw new Error("Core did not confirm the exact draft. Inspect Reports before asking Butler to retry.");
+      }
+      await retryResource("reports");
+      setHidden(true);
+      onNavigate(resourcePath(action.projectId, "report", observed.id));
+      return `Created ${observed.title} as a Core draft at revision ${observed.revision}.`;
+    }
+    if (action.kind === "report_export_bundle") {
+      const before = await api.getProjectLifecycle(action.projectId);
+      if (before.revision !== action.expectedProjectRevision) {
+        throw new Error("The project changed. Ask Butler to read its current revision before exporting.");
+      }
+      const approved = await confirm({
+        title: `Export ${before.name}'s sensitive bundle?`,
+        message: "The bundle contains unredacted evidence, raw execution output, retained selected-tool terminal results, metadata-only terminal records, PDFs and audit records. Scratch workspace files are excluded. Store and share it as sensitive data.",
+        confirmLabel: "Export bundle", tone: "danger",
+      });
+      if (!approved) return `${before.name}'s bundle was not exported. No download started.`;
+      const ready = await api.getProjectLifecycle(action.projectId);
+      if (!stillSelected() || ready.revision !== action.expectedProjectRevision) {
+        throw new Error("The project changed during confirmation. Ask Butler to read it again.");
+      }
+      const bundle = await api.exportEngagementBundle(action.projectId);
+      if (!stillSelected()) throw new Error("The selected project changed during export. Inspect Reports before retrying.");
+      const filename = `${ready.name.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "nebula-project"}.nebula.zip`;
+      const url = URL.createObjectURL(bundle);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = filename; anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      return `Started ${ready.name}'s sensitive bundle download on this device.`;
+    }
+    const report = await currentReport(action.reportId, action.expectedRevision);
+    if (action.kind === "report_update") {
+      if (report.status === "final") throw new Error("The signed report is immutable. Create a new draft.");
+      let saved;
+      try {
+        saved = await updateReport(action.reportId, {
+          expectedRevision: action.expectedRevision,
+          ...(action.title !== undefined ? {title: action.title} : {}),
+          ...(action.status !== undefined ? {status: action.status} : {}),
+          ...(action.executiveSummary !== undefined ? {executiveSummary: action.executiveSummary} : {}),
+          ...(action.findingIds !== undefined ? {findingIds: action.findingIds} : {}),
+          ...(action.observationIds !== undefined ? {observationIds: action.observationIds} : {}),
+        });
+      } catch {
+        throw new Error("Core did not confirm the report edit. Read the exact report before asking Butler to retry; it may already be saved.");
+      }
+      const observed = await api.getReport(action.reportId);
+      if (!stillSelected() || observed.engagementId !== action.projectId || observed.revision !== saved.revision
+          || observed.revision !== action.expectedRevision + 1
+          || (action.title !== undefined && observed.title !== action.title)
+          || (action.status !== undefined && observed.status !== action.status)
+          || (action.executiveSummary !== undefined && observed.executiveSummary !== action.executiveSummary)
+          || (action.findingIds !== undefined && JSON.stringify(observed.findingIds) !== JSON.stringify(action.findingIds))
+          || (action.observationIds !== undefined && JSON.stringify(observed.observationIds) !== JSON.stringify(action.observationIds))) {
+        throw new Error("Core did not confirm the exact report edit. Read the report before asking Butler to retry.");
+      }
+      await retryResource("reports");
+      return `Saved ${observed.title} in Core as ${observed.status} at revision ${observed.revision}. [Open report](${resourcePath(action.projectId, "report", observed.id)})`;
+    }
+    if (action.kind === "report_signoff") {
+      if (report.status !== "review") throw new Error("Save the report in review before requesting sign-off.");
+      setHidden(true);
+      onNavigate(`${resourcePath(action.projectId, "report", report.id)}?butler_signoff=${report.revision}`);
+      return `Opened ${report.title}'s sign-off form. The operator must review and attest; Core has not finalized it yet.`;
+    }
+    const approved = await confirm({
+      title: `Export ${report.title} as PDF?`,
+      message: "This saved report may contain sensitive findings and evidence. The PDF will download to this device; Butler will not receive its bytes.",
+      confirmLabel: "Export PDF",
+    });
+    if (!approved) return `${report.title} was not exported. No download started.`;
+    await currentReport(action.reportId, action.expectedRevision);
+    let render = await api.renderReport(action.reportId, action.expectedRevision);
+    for (let attempt = 0; attempt < 150 && (render.status === "queued" || render.status === "rendering"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      render = await api.getReportRender(render.id);
+    }
+    if (render.status !== "completed" || render.reportId !== report.id || render.reportRevision !== report.revision) {
+      throw new Error(render.errorDetail ?? "Core did not complete the selected report PDF render. Inspect Reports before retrying.");
+    }
+    const pdf = await api.downloadReportPdf(render.id);
+    await currentReport(action.reportId, action.expectedRevision);
+    const filename = `${report.title.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "nebula-report"}.pdf`;
+    const url = URL.createObjectURL(pdf);
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = filename; anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    return `Started ${report.title} PDF download for saved revision ${report.revision} on this device${render.warnings.length ? `; Core warned: ${render.warnings.join(" ")}` : ""}.`;
+  };
+
   const applyWorkspaceDelete = async (action: Extract<SettingClientAction, {kind: "workspace_delete"}>): Promise<string> => {
     if (!api || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
       throw new Error("Select the original project and ask Butler to delete the file again.");
@@ -1326,6 +1462,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   };
 
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
+    if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_signoff"
+        || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
     if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "chat_export") return applyChatExport(action);

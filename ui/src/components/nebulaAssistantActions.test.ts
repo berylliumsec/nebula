@@ -127,6 +127,39 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "other", session_id: sessionId, expected_revision: 5}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "selected", session_id: "../other", expected_revision: 5}}}, "selected")).toBeUndefined();
   });
+  it("accepts only scoped report drafts, current revisions and device handoffs", () => {
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const findingId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const createAction = {kind: "report_create", project_id: "selected", report_id: reportId,
+      title: "Assessment", executive_summary: "Summary", finding_ids: [findingId], observation_ids: []};
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "report-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending browser action", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.reports.create", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: createAction},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "report_create", projectId: "selected",
+      reportId, title: "Assessment", executiveSummary: "Summary", findingIds: [findingId], observationIds: []});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...createAction,
+      project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...createAction,
+      finding_ids: ["../foreign"]}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.update",
+      client_action: {kind: "report_update", project_id: "selected", report_id: reportId,
+        expected_revision: 3, status: "review", executive_summary: "Saved"}}}, "selected"))
+      .toEqual({kind: "report_update", projectId: "selected", reportId, expectedRevision: 3,
+        status: "review", executiveSummary: "Saved"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.update",
+      client_action: {kind: "report_update", project_id: "selected", report_id: reportId,
+        expected_revision: 3, status: "final"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff",
+      client_action: {kind: "report_signoff", project_id: "selected", report_id: reportId, expected_revision: 3}}}, "selected"))
+      .toEqual({kind: "report_signoff", projectId: "selected", reportId, expectedRevision: 3});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.export_bundle",
+      client_action: {kind: "report_export_bundle", project_id: "selected", expected_project_revision: 2}}}, "selected"))
+      .toEqual({kind: "report_export_bundle", projectId: "selected", expectedProjectRevision: 2});
+  });
   it("accepts only scoped workspace file actions with exact paths and hashes", () => {
     const hash = "a".repeat(64);
     const event: ChatStreamEvent = {
@@ -267,6 +300,8 @@ describe("settings assistant actions", () => {
     expect(settingToOpen("What can I change in settings?")).toBeUndefined();
     expect(settingToOpen("open assistant")).toBeUndefined();
     expect(isSettingNavigationRequest("Where can I fix a host file permission error in Docker mode?")).toBe(false);
+    expect(isSettingNavigationRequest("Open sign-off for the synthetic Butler report.")).toBe(false);
+    expect(settingToOpen("Open sign-off for the synthetic Butler report.")).toBeUndefined();
     expect(settingToOpen("Why can't my assistant edit a host file in Docker mode?")).toBeUndefined();
   });
 

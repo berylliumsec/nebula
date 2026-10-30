@@ -71,6 +71,25 @@ describe("report editor", () => {
     workspace.reports = [report("report-1", "Perimeter assessment")];
   });
 
+  it("opens Butler's exact review revision for operator attestation and refuses stale links", async () => {
+    workspace.reports = [report("report-1", "Perimeter assessment", {status: "review", revision: 3})];
+    renderReports("/projects/project-1/reports/report-1?butler_signoff=3");
+    const dialog = await screen.findByRole("dialog", {name: "Sign off final report"});
+    expect(within(dialog).getByRole("textbox", {name: "Attestation"})).toHaveValue("I reviewed this report and approve it as the final record.");
+    expect(workspace.signOffReport).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Router path")).toHaveTextContent("/projects/project-1/reports/report-1");
+    const user = userEvent.setup();
+    await user.click(within(dialog).getByRole("button", {name: "Cancel"}));
+    expect(screen.queryByRole("dialog", {name: "Sign off final report"})).not.toBeInTheDocument();
+  });
+
+  it("does not open operator sign-off for a stale Butler revision", async () => {
+    workspace.reports = [report("report-1", "Perimeter assessment", {status: "review", revision: 4})];
+    renderReports("/projects/project-1/reports/report-1?butler_signoff=3");
+    expect(await screen.findByRole("alert")).toHaveTextContent("report changed before sign-off");
+    expect(screen.queryByRole("dialog", {name: "Sign off final report"})).not.toBeInTheDocument();
+  });
+
   it("keeps keystrokes typed while a save is in flight and leaves them unsaved", async () => {
     let resolve!: (value: ReportSummary) => void;
     workspace.updateReport.mockImplementation(() => new Promise<ReportSummary>((resolveSave) => { resolve = resolveSave; }));

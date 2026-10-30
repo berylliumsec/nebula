@@ -24,7 +24,11 @@ export type SettingClientAction =
   | { kind: "workspace_delete_directory"; projectId: string; path: string; expectedEntryIdentity: string }
   | { kind: "notebook_index_connect" | "notebook_index_remove"; projectId: string; expectedProjectRevision: number }
   | { kind: "library_add"; projectId: string }
-  | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
+  | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string }
+  | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
+  | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
+  | { kind: "report_signoff" | "report_export_pdf"; projectId: string; reportId: string; expectedRevision: number }
+  | { kind: "report_export_bundle"; projectId: string; expectedProjectRevision: number };
 
 export interface AssistantWorkReceipt { url: string; content: string }
 
@@ -36,6 +40,14 @@ function validWorkspacePath(value: unknown): value is string {
 
 function validWorkspaceDirectory(value: unknown): value is string {
   return value === "" || validWorkspacePath(value);
+}
+
+const uuidPattern = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
+
+function validReportReferences(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= 500
+    && value.every((item) => typeof item === "string" && uuidPattern.test(item))
+    && new Set(value).size === value.length;
 }
 
 function butlerGatewayOperation(event: Extract<ChatStreamEvent, {type: "tool_completed"}>, projectId?: string): string | undefined {
@@ -97,6 +109,46 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId
+      && operation.startsWith("nebula.reports.")) {
+    const reportId = typeof value.report_id === "string" && uuidPattern.test(value.report_id) ? value.report_id : undefined;
+    const revision = Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+      ? Number(value.expected_revision) : undefined;
+    if (operation === "nebula.reports.export_bundle" && value.kind === "report_export_bundle"
+        && Number.isInteger(value.expected_project_revision) && Number(value.expected_project_revision) >= 1) {
+      return {kind: "report_export_bundle", projectId, expectedProjectRevision: Number(value.expected_project_revision)};
+    }
+    if (!reportId) return undefined;
+    if (operation === "nebula.reports.create" && value.kind === "report_create"
+        && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500
+        && typeof value.executive_summary === "string" && value.executive_summary.length <= 100_000
+        && validReportReferences(value.finding_ids) && validReportReferences(value.observation_ids)) {
+      return {kind: "report_create", projectId, reportId, title: value.title,
+        executiveSummary: value.executive_summary, findingIds: value.finding_ids, observationIds: value.observation_ids};
+    }
+    if (operation === "nebula.reports.update" && value.kind === "report_update" && revision) {
+      const changes = ["title", "status", "executive_summary", "finding_ids", "observation_ids"]
+        .filter((field) => Object.hasOwn(value, field));
+      if (!changes.length || (value.title !== undefined && (typeof value.title !== "string" || !value.title.trim() || value.title.length > 500))
+          || (value.status !== undefined && value.status !== "draft" && value.status !== "review")
+          || (value.executive_summary !== undefined && (typeof value.executive_summary !== "string" || value.executive_summary.length > 100_000))
+          || (value.finding_ids !== undefined && !validReportReferences(value.finding_ids))
+          || (value.observation_ids !== undefined && !validReportReferences(value.observation_ids))) return undefined;
+      return {kind: "report_update", projectId, reportId, expectedRevision: revision,
+        ...(value.title !== undefined ? {title: value.title as string} : {}),
+        ...(value.status !== undefined ? {status: value.status as "draft" | "review"} : {}),
+        ...(value.executive_summary !== undefined ? {executiveSummary: value.executive_summary as string} : {}),
+        ...(value.finding_ids !== undefined ? {findingIds: value.finding_ids as string[]} : {}),
+        ...(value.observation_ids !== undefined ? {observationIds: value.observation_ids as string[]} : {})};
+    }
+    if (revision && operation === "nebula.reports.signoff" && value.kind === "report_signoff") {
+      return {kind: "report_signoff", projectId, reportId, expectedRevision: revision};
+    }
+    if (revision && operation === "nebula.reports.export_pdf" && value.kind === "report_export_pdf") {
+      return {kind: "report_export_pdf", projectId, reportId, expectedRevision: revision};
+    }
+    return undefined;
+  }
   if (projectAction && operation === "nebula.chats.export" && value.kind === "chat_export"
       && typeof projectId === "string" && value.project_id === projectId
       && typeof value.session_id === "string"
@@ -240,6 +292,10 @@ export function isSettingNavigationRequest(prompt: string): boolean {
   // A question about a failure needs an explanation grounded in Core state,
   // even when it also contains a word such as "where" or "find".
   if (/\b(?:why|how|cannot|cant|doesnt|failed|failure|error|troubleshoot|unable|permission|not working)\b/.test(text)) return false;
+  // An action on another resource may mention Butler incidentally. Let the
+  // model handle it unless the operator explicitly asked for settings.
+  if (!/\b(?:setting|settings|controls)\b/.test(text)
+      && /\b(?:reports?|sign off|exports?|downloads?|archive|delete|create|edit|save|run)\b/.test(text)) return false;
   return /^(?:(?:please|can you|could you|would you)\s+)?(?:open|show|bring up|take me to|go to|find|locate|where|which setting)\b/.test(text)
     || /\b(?:where|which setting|setting for|controls for|page for)\b/.test(text);
 }

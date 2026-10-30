@@ -1247,6 +1247,7 @@ export interface ReportSummary {
 
 export interface ReportCreateRequest {
   engagementId: Identifier;
+  reportId?: Identifier;
   title: string;
   status?: string;
   executiveSummary?: string;

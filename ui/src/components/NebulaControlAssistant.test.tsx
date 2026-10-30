@@ -880,6 +880,71 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it("creates a Butler draft with a fixed ID and waits for exact Core readback before navigation", async () => {
+    const user = userEvent.setup();
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const saved = {id: reportId, engagementId: "project", title: "Synthetic report", status: "draft",
+      executiveSummary: "Current summary", findingIds: [], observationIds: [], revision: 1};
+    const getReport = vi.fn().mockRejectedValueOnce(new ApiError("Missing", 404)).mockResolvedValue(saved);
+    const createReport = vi.fn().mockResolvedValue(saved);
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const onNavigate = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "report-create", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Create draft", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.reports.create", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "report_create", project_id: "project", report_id: reportId, title: "Synthetic report",
+            executive_summary: "Current summary", finding_ids: [], observation_ids: []}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I requested the draft."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getReport},
+      coreState: "online", engagement: {id: "project", name: "Project"}, createReport, retryResource,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Create a report{enter}");
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/project/reports/${reportId}`));
+    expect(createReport).toHaveBeenCalledWith({engagementId: "project", reportId, title: "Synthetic report",
+      executiveSummary: "Current summary", findingIds: [], observationIds: []});
+    expect(getReport).toHaveBeenCalledTimes(2);
+    expect(retryResource).toHaveBeenCalledWith("reports");
+  });
+
+  it("opens the saved review revision for human sign-off without signing for the operator", async () => {
+    const user = userEvent.setup();
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const getReport = vi.fn().mockResolvedValue({id: reportId, engagementId: "project", title: "Synthetic report",
+      status: "review", revision: 3});
+    const onNavigate = vi.fn();
+    const signOffReport = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "report-signoff", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Open signoff", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.reports.signoff", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "report_signoff", project_id: "project", report_id: reportId, expected_revision: 3}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "Please review before signing."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getReport},
+      coreState: "online", engagement: {id: "project", name: "Project"}, signOffReport,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Open sign-off for the synthetic Butler report{enter}");
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/project/reports/${reportId}?butler_signoff=3`));
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(signOffReport).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "desktop transcript", mobile: false },
     { name: "mobile body", mobile: true },
