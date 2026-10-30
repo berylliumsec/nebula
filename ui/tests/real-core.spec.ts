@@ -7260,24 +7260,46 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
   ]);
 });
 
-test("assistant upgrade Butler edits a project Notebook on production LAN Core", async ({page}, testInfo) => {
-  test.setTimeout(180_000);
-  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+test("assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  const repository = path.resolve(import.meta.dirname, "../..");
+  const runtimeDir = path.join(repository, "ui/src-tauri/resources/notebook-runtime");
+  if (!existsSync(path.join(runtimeDir, "nebula-notebook-runtime.json"))) {
+    const stage = spawnSync("python3", ["scripts/stage_notebook_runtime.py", runtimeDir, "--target", "x86_64-unknown-linux-gnu"], {cwd: repository, encoding: "utf8", timeout: 120_000});
+    expect(stage.status, stage.stderr).toBe(0);
+  }
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000,
+    env: {NEBULA_NOTEBOOK_RUNTIME_DIR: runtimeDir, PATH: "/usr/bin:/bin"}});
   let cellId = "";
   let sourceHash = "";
-  const instruction = "Edit the saved research notebook cell to print 43.";
-  const stub = await startLocalModelStub({responseContent: "The notebook cell was saved in Core.", toolCall: body => {
+  let runId = "";
+  const editInstruction = "Edit the saved research notebook cell to print 43.";
+  const runInstruction = "Run the exact saved research notebook cell.";
+  const interruptInstruction = "Interrupt the current research notebook run.";
+  const stub = await startLocalModelStub({responseContent: "I checked Core's Notebook state.", toolCall: body => {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
     const lastUser = messages.map(message => message.role).lastIndexOf("user");
-    if (messages[lastUser]?.content !== instruction) return undefined;
+    const instruction = messages[lastUser]?.content;
+    if (instruction !== editInstruction && instruction !== runInstruction && instruction !== interruptInstruction) return undefined;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
-    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "notebook edit cell"}};
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: instruction === editInstruction ? "notebook edit cell" : instruction === runInstruction ? "notebook execute cell" : "notebook interrupt run"}};
+    if (instruction === interruptInstruction) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.run"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.run", arguments: {run_id: runId}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.interrupt"}};
+      if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.interrupt", arguments: {run_id: runId}}};
+      return undefined;
+    }
     if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.read"}};
     if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.read", arguments: {path: "research.ipynb"}}};
-    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.edit_cell"}};
-    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.edit_cell", arguments: {
-      path: "research.ipynb", cell_id: cellId, source: "print(43)", cell_type: "code", expected_source_hash: sourceHash,
-    }}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: instruction === editInstruction ? "nebula.notebook.edit_cell" : "nebula.notebook.execute"}};
+    if (replies === 4) return instruction === editInstruction
+      ? {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.edit_cell", arguments: {
+        path: "research.ipynb", cell_id: cellId, source: "print(43)", cell_type: "code", expected_source_hash: sourceHash,
+      }}}
+      : {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.execute", arguments: {
+        path: "research.ipynb", cell_id: cellId, expected_source_hash: sourceHash,
+      }}};
     return undefined;
   }});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
@@ -7285,6 +7307,13 @@ test("assistant upgrade Butler edits a project Notebook on production LAN Core",
     const createdProject = await api.post("engagements", {data: {name: "Butler Notebook fixture", status: "active", metadata: {}}});
     expect(createdProject.ok(), await createdProject.text()).toBe(true);
     const projectId = (await createdProject.json() as {id: string}).id;
+    const policy = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as Record<string, unknown>;
+    const consent = await api.put(`engagements/${projectId}/automation-policy`, {data: {
+      execution_mode: "host", host_access_acknowledged: true, approval_policy: policy.approval_policy,
+      network_enabled: false, runner_profile_id: policy.runner_profile_id, vpn_profile_id: policy.vpn_profile_id,
+      max_timeout_ms: policy.max_timeout_ms, expected_revision: policy.revision,
+    }});
+    expect(consent.ok(), await consent.text()).toBe(true);
     const createdProvider = await api.post("providers", {data: {
       name: "Butler Notebook model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
       is_local: true, model_allowlist: ["security-model"],
@@ -7314,8 +7343,13 @@ test("assistant upgrade Butler edits a project Notebook on production LAN Core",
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
-    await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
-    await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    const send = async (text: string) => {
+      const button = assistant.getByRole("button", {name: "Send to Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(text);
+      await expect(button).toBeEnabled({timeout: 45_000});
+      await button.click();
+    };
+    await send(editInstruction);
     await expect.poll(async () => {
       const response = await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`);
       const current = await response.json() as {document: {cells: Array<{source: string}>}};
@@ -7325,16 +7359,59 @@ test("assistant upgrade Butler edits a project Notebook on production LAN Core",
       path: "research.ipynb", cell_id: cellId, source: "stale overwrite", cell_type: "code", expected_source_hash: sourceHash,
     }});
     expect(stale.status()).toBe(409);
+    const edited = await (await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`)).json() as {cell_revisions: Record<string, string>};
+    const oldHash = sourceHash;
+    sourceHash = edited.cell_revisions[cellId];
+    const staleRun = await api.post(`engagements/${projectId}/notebooks/runs`, {data: {
+      path: "research.ipynb", cell_id: cellId, expected_source_hash: oldHash,
+    }});
+    expect(staleRun.status()).toBe(409);
+    expect(await (await api.get(`engagements/${projectId}/notebooks/runs?path=research.ipynb`)).json()).toEqual([]);
+    await send(runInstruction);
+    await expect.poll(async () => {
+      const runs = await (await api.get(`engagements/${projectId}/notebooks/runs?path=research.ipynb`)).json() as Array<{id: string; source_hash: string; status: string}>;
+      const matching = runs.find(run => run.source_hash === sourceHash);
+      if (matching) runId = matching.id;
+      return matching?.status;
+    }, {timeout: 90_000}).toBe("succeeded");
+    const completed = await (await api.get(`engagements/${projectId}/notebooks/runs/${runId}`)).json() as {run: {source_hash: string}; events: Array<{event_type: string; payload: unknown}>};
+    expect(completed.run.source_hash).toBe(sourceHash);
+    expect(completed.events.some(event => event.event_type === "notebook.output" && JSON.stringify(event.payload).includes("43"))).toBe(true);
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
     const notebook = page.getByRole("region", {name: "Project notebook"});
     await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
+    await expect(notebook.locator(".notebook-outputs").getByText("43", {exact: false})).toBeVisible();
     await page.reload();
     await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
+    await expect(notebook.locator(".notebook-outputs").getByText("43", {exact: false})).toBeVisible();
+    const longCell = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", cell_id: cellId, source: "import time\ntime.sleep(30)", cell_type: "code", expected_source_hash: sourceHash,
+    }});
+    expect(longCell.ok(), await longCell.text()).toBe(true);
+    sourceHash = (await longCell.json() as {cell_revisions: Record<string, string>}).cell_revisions[cellId];
+    await openNebulaAssistantFromShell(page);
+    await send(runInstruction);
+    const completedRunId = runId;
+    await expect.poll(async () => {
+      const runs = await (await api.get(`engagements/${projectId}/notebooks/runs?path=research.ipynb`)).json() as Array<{id: string; source_hash: string; status: string}>;
+      const matching = runs.find(run => run.id !== completedRunId && run.source_hash === sourceHash);
+      if (matching) runId = matching.id;
+      return matching?.status;
+    }, {timeout: 90_000}).toBe("running");
+    await send(interruptInstruction);
+    await expect.poll(async () => {
+      const run = await (await api.get(`engagements/${projectId}/notebooks/runs/${runId}`)).json() as {run: {status: string}};
+      return run.run.status;
+    }, {timeout: 45_000}).toBe("interrupted");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
+    await expect(notebook.getByText("interrupted", {exact: true})).toBeVisible();
+    await page.reload();
+    await expect(notebook.getByText("interrupted", {exact: true})).toBeVisible();
     expect((await new AxeBuilder({page}).include(".notebook-panel").analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-notebook-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
-      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId, cellId,
-      result: "Butler saved exact Notebook cell; stale hash refused; Core and refreshed Notebook agree"}), contentType: "application/json"});
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId, cellId, completedRunId, interruptedRunId: runId,
+      result: "Butler saved an exact cell, ran its current hash with ordered Core output, refused a stale hash, interrupted one exact run, and refreshed Notebook agreed"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
