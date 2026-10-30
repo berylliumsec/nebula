@@ -8884,11 +8884,8 @@ def create_app(
         tags=["notebooks"],
         dependencies=[Depends(require_auth)],
     )
-    async def notebook_kernel_state(
-        engagement_id: str,
-        path: str = Query(min_length=1, max_length=4096),
-    ) -> dict[str, Any]:
-        return notebook_service.kernel_state(engagement_id, path)
+    async def notebook_kernel_status(engagement_id: str, path: str) -> dict[str, Any]:
+        return notebook_service.kernel_status(engagement_id, path)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/kernel/restart",
@@ -8917,12 +8914,10 @@ def create_app(
         tags=["notebooks"],
         dependencies=[Depends(require_auth)],
     )
-    async def notebook_package_status(
-        engagement_id: str,
-        path: str = Query(min_length=1, max_length=4096),
-        name: str = Query(min_length=1, max_length=128),
+    async def installed_notebook_package(
+        engagement_id: str, path: str, name: str
     ) -> dict[str, Any]:
-        return await notebook_service.package_status(engagement_id, path, name)
+        return await notebook_service.installed_package(engagement_id, path, name)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages/search",

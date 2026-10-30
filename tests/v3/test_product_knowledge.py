@@ -270,11 +270,12 @@ def test_product_search_finds_butler_notebook_guidance(monkeypatch):
         for item in runs
     )
     resources = search_product_knowledge(
-        "Can Butler restart a notebook kernel and install a Python package safely?"
+        "Can Butler install an exact Notebook package and restart the current kernel?"
     )
     assert any(
-        "nebula.notebook.restart" in str(item["text"])
-        and "nebula.notebook.package_status" in str(item["text"])
+        "installed_package" in str(item["text"])
+        and "kernel_status" in str(item["text"])
+        and "name==version" in str(item["text"])
         for item in resources
     )
 

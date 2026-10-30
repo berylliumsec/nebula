@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +17,7 @@ from nebula.v3.domain import (
     NotebookRun,
 )
 from nebula.v3.notebook_mcp import NotebookMcpTools
+from nebula.v3 import notebooks as notebooks_module
 from nebula.v3.notebooks import NotebookService
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError, GuidedToolError
@@ -208,6 +207,12 @@ def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_
                     {"operation": f"nebula.notebook.{operation}"}
                 )
             )["invoke_with"] == "nebula.capabilities.change"
+        for operation in ("kernel_status", "installed_package"):
+            assert (
+                await capabilities.describe(
+                    {"operation": f"nebula.notebook.{operation}"}
+                )
+            )["invoke_with"] == "nebula.capabilities.read"
         with pytest.raises(GuidedToolError) as execution_consent:
             await invoke(
                 "execute",
@@ -237,144 +242,271 @@ def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_
     asyncio.run(scenario())
 
 
-def test_butler_notebook_restarts_only_the_current_idle_kernel(tmp_path):
+def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kernel(
+    tmp_path,
+):
+    store, selected, _, notebooks, profile, capabilities = _fixture(tmp_path)
+    runtime = SimpleNamespace(
+        policy=AutomationProjectPolicy(
+            engagement_id=selected.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+        )
+    )
+    runtime.project_policy = lambda _: runtime.policy
+    notebooks.automation_runtime = runtime
+    commands: list[str] = []
+
+    async def command(operation: str) -> None:
+        commands.append(operation)
+
+    async def invoke(name, arguments, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments},
+            change=change,
+        )
+
+    async def scenario():
+        await invoke("create", {"path": "kernel.ipynb"}, change=True)
+        mcp = NotebookMcpTools(store, notebooks)
+        absent = await mcp.call_tool(selected.id, "restart", {"path": "kernel.ipynb"})
+        assert absent["structuredContent"]["restarted"] is False
+        assert absent["structuredContent"]["state"] == "absent"
+        with pytest.raises(GuidedToolError, match="absent"):
+            await invoke(
+                "restart",
+                {
+                    "path": "kernel.ipynb",
+                    "expected_instance_id": "a" * 32,
+                    "expected_generation": 1,
+                },
+                change=True,
+            )
+        worker = SimpleNamespace(
+            process=SimpleNamespace(returncode=None),
+            instance_id="a" * 32,
+            generation=1,
+            restart_uncertain=False,
+            active_run=None,
+            policy_revision=runtime.policy.revision,
+            command=command,
+        )
+        notebooks.workers[(selected.id, "kernel.ipynb")] = worker
+        notebooks._package_changes.add(selected.id)
+        with pytest.raises(GuidedToolError, match="packages are changing"):
+            await invoke(
+                "restart",
+                {
+                    "path": "kernel.ipynb",
+                    "expected_instance_id": worker.instance_id,
+                    "expected_generation": 1,
+                },
+                change=True,
+            )
+        notebooks._package_changes.discard(selected.id)
+        current = await invoke("kernel_status", {"path": "kernel.ipynb"})
+        assert current["state"] == "idle"
+        assert current["instance_id"] == worker.instance_id
+        with pytest.raises(GuidedToolError, match="identity changed"):
+            await invoke(
+                "restart",
+                {
+                    "path": "kernel.ipynb",
+                    "expected_instance_id": worker.instance_id,
+                    "expected_generation": 2,
+                },
+                change=True,
+            )
+        queued = store.create(
+            NotebookRun(
+                engagement_id=selected.id,
+                notebook_path="kernel.ipynb",
+                cell_id="cell",
+                source_hash="a" * 64,
+                execution_mode="host",
+            )
+        )
+        with pytest.raises(GuidedToolError, match="running or queued"):
+            await invoke(
+                "restart",
+                {
+                    "path": "kernel.ipynb",
+                    "expected_instance_id": worker.instance_id,
+                    "expected_generation": 1,
+                },
+                change=True,
+            )
+        store.update(
+            NotebookRun,
+            queued.id,
+            {"status": "interrupted"},
+            expected_revision=queued.revision,
+        )
+        restarted = await invoke(
+            "restart",
+            {
+                "path": "kernel.ipynb",
+                "expected_instance_id": worker.instance_id,
+                "expected_generation": 1,
+            },
+            change=True,
+        )
+        assert restarted["restarted"] is True
+        assert restarted["previous_generation"] == 1
+        assert restarted["generation"] == 2
+        assert commands == ["restart"]
+        with pytest.raises(GuidedToolError, match="identity changed"):
+            await invoke(
+                "restart",
+                {
+                    "path": "kernel.ipynb",
+                    "expected_instance_id": worker.instance_id,
+                    "expected_generation": 1,
+                },
+                change=True,
+            )
+        store.update(
+            McpServerProfile,
+            profile.id,
+            {"enabled": False},
+            expected_revision=store.get(McpServerProfile, profile.id).revision,
+        )
+        with pytest.raises(GuidedToolError, match="revoked"):
+            await invoke("kernel_status", {"path": "kernel.ipynb"})
+
+    asyncio.run(scenario())
+
+
+def test_butler_notebook_package_install_requires_pin_and_observed_version(tmp_path):
     _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
-    notebooks.automation_runtime = SimpleNamespace(
-        project_policy=lambda _: AutomationProjectPolicy(
+    runtime = SimpleNamespace(
+        policy=AutomationProjectPolicy(
             engagement_id=selected.id,
             execution_mode="host",
             host_access_acknowledged=True,
             network_enabled=False,
         )
     )
+    runtime.project_policy = lambda _: runtime.policy
+    notebooks.automation_runtime = runtime
+    observed_versions: list[str | None] = [None, "1.0.0"]
+    commands: list[list[str]] = []
 
-    async def invoke(name, arguments=None, *, change=False):
+    async def installed_package(_project: str, _path: str, name: str):
+        version = observed_versions.pop(0)
+        return {"name": name, "installed": version is not None, "version": version}
+
+    async def environment(_project: str):
+        return tmp_path / "python", tmp_path / "worker", tmp_path / "uv"
+
+    async def capture(command: list[str], timeout: float = 120):
+        commands.append(command)
+        return "Installed fixture"
+
+    notebooks.installed_package = installed_package
+    notebooks._host_environment = environment
+    notebooks._capture = capture
+
+    async def invoke(name, arguments, *, change=False):
         return await capabilities.invoke(
-            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments},
             change=change,
         )
 
     async def scenario():
-        file = await invoke("create", {"path": "restart.ipynb"}, change=True)
-        absent = await invoke("kernel", {"path": "restart.ipynb"})
-        assert absent["state"] == "absent"
-        assert (await notebooks.restart(selected.id, "restart.ipynb"))[
-            "restarted"
-        ] is False
-        commands = []
-
-        async def command(operation):
-            commands.append(operation)
-
-        worker = SimpleNamespace(
-            kernel_id="a" * 32,
-            restart_count=0,
-            active_run=None,
-            process=SimpleNamespace(returncode=None),
-            command=command,
+        await invoke("create", {"path": "packages.ipynb"}, change=True)
+        notebooks._restarting.add((selected.id, "packages.ipynb"))
+        with pytest.raises(GuidedToolError, match="kernel is restarting"):
+            await invoke(
+                "install_package",
+                {"path": "packages.ipynb", "requirement": "nebula-fixture==1.0.0"},
+                change=True,
+            )
+        notebooks._restarting.discard((selected.id, "packages.ipynb"))
+        with pytest.raises(CapabilityInputError, match="invalid arguments"):
+            await invoke(
+                "install_package",
+                {"path": "packages.ipynb", "requirement": "nebula-fixture"},
+                change=True,
+            )
+        installed = await invoke(
+            "install_package",
+            {"path": "packages.ipynb", "requirement": "nebula-fixture==1.0.0"},
+            change=True,
         )
-        notebooks.workers[(selected.id, "restart.ipynb")] = worker
-        before = await invoke("kernel", {"path": "restart.ipynb"})
-        assert before["notebook_revision"] == file["revision"]
-        arguments = {
-            "path": "restart.ipynb",
-            "expected_notebook_revision": file["revision"],
-            "expected_kernel_id": worker.kernel_id,
-            "expected_restart_count": 0,
-        }
-        with pytest.raises(ValueError, match="changed"):
+        assert installed["installed"] is True
+        assert installed["version"] == "1.0.0"
+        assert installed["already_present"] is False
+        assert commands[0][-2:] == ["--offline", "nebula-fixture==1.0.0"]
+        observed_versions.append("1.0.0")
+        repeated = await invoke(
+            "install_package",
+            {"path": "packages.ipynb", "requirement": "nebula-fixture==1.0.0"},
+            change=True,
+        )
+        assert repeated["already_present"] is True
+        assert len(commands) == 1
+        observed_versions.extend(["1.0.0", "2.0.0"])
+        with pytest.raises(GuidedToolError, match="version differs"):
             await invoke(
-                "restart", {**arguments, "expected_kernel_id": "b" * 32}, change=True
+                "install_package",
+                {"path": "packages.ipynb", "requirement": "nebula-fixture==3.0.0"},
+                change=True,
             )
-        assert commands == []
-        result = await invoke("restart", arguments, change=True)
-        assert result["restarted"] is True
-        assert result["kernel"]["restart_count"] == 1
-        assert commands == ["restart"]
-        with pytest.raises(ValueError, match="changed|already restarted"):
-            await invoke("restart", arguments, change=True)
-        assert commands == ["restart"]
-        worker.active_run = "active-run"
-        with pytest.raises(GuidedToolError, match="running"):
-            await invoke(
-                "restart", {**arguments, "expected_restart_count": 1}, change=True
-            )
-        assert commands == ["restart"]
+        assert len(commands) == 2
 
     asyncio.run(scenario())
 
 
-def test_butler_notebook_install_reads_selected_environment_and_rejects_stale_file(
-    tmp_path,
+def test_docker_package_read_is_unknown_until_persisted_environment_is_mounted(
+    tmp_path, monkeypatch
 ):
-    _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
+    _, selected, _, notebooks, _, _ = _fixture(tmp_path)
     policy = AutomationProjectPolicy(
         engagement_id=selected.id,
-        execution_mode="host",
-        host_access_acknowledged=True,
+        execution_mode="docker",
         network_enabled=False,
     )
-    notebooks.automation_runtime = SimpleNamespace(project_policy=lambda _: policy)
-    installed = False
-    commands = []
+    backend = SimpleNamespace(
+        runner=SimpleNamespace(_runtime_argv=lambda: ["docker"]),
+        container_name="synthetic-notebook-container",
+        network_enabled=False,
+    )
+    runtime = SimpleNamespace(
+        policy=policy,
+        _sessions={"renewed": SimpleNamespace(backend=backend)},
+    )
+    runtime.project_policy = lambda _: runtime.policy
+    notebooks.automation_runtime = runtime
+    monkeypatch.setattr(notebooks_module, "ContainerRuntimeSession", SimpleNamespace)
+    commands: list[list[str]] = []
 
-    async def environment(_project):
-        return Path(sys.executable), Path("/worker.py"), Path("/fixture/uv")
+    async def renew_session(project_id: str, current_policy: AutomationProjectPolicy):
+        notebooks._sessions[project_id] = ("renewed", current_policy.revision)
+        return ["synthetic-worker"]
 
-    async def capture(command, timeout=120):
-        nonlocal installed
-        commands.append((command, timeout))
-        if command[0] == "/fixture/uv":
-            assert "--offline" in command
-            installed = True
-            return "Audited one distribution"
-        return json.dumps(
-            {
-                "installed": installed,
-                "name": "pip",
-                "version": "25.0" if installed else None,
-            }
-        )
+    async def capture(command: list[str], timeout: float = 120):
+        commands.append(command)
+        assert "pip" not in command, "an installed exact pin must not be reinstalled"
+        return json.dumps({"installed": True, "version": "1.0.0"})
 
-    notebooks._host_environment = environment
+    notebooks._worker_command = renew_session
     notebooks._capture = capture
 
-    async def invoke(name, arguments=None, *, change=False):
-        return await capabilities.invoke(
-            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
-            change=change,
-        )
-
     async def scenario():
-        file = await invoke("create", {"path": "packages.ipynb"}, change=True)
-        status = await invoke(
-            "package_status", {"path": "packages.ipynb", "name": "pip"}
+        await notebooks.create(selected.id, "persisted.ipynb")
+        before = await notebooks.installed_package(
+            selected.id, "persisted.ipynb", "nebula-fixture"
         )
-        assert status["installed"] is False
-        with pytest.raises(ValueError, match="changed"):
-            await invoke(
-                "install_package",
-                {
-                    "path": "packages.ipynb",
-                    "requirement": "pip==25.0",
-                    "expected_notebook_revision": "0" * 64,
-                },
-                change=True,
-            )
-        assert not installed
-        changed = await invoke(
-            "install_package",
-            {
-                "path": "packages.ipynb",
-                "requirement": "pip==25.0",
-                "expected_notebook_revision": file["revision"],
-            },
-            change=True,
+        assert before["installed"] is None
+        assert before["environment_ready"] is False
+        result = await notebooks.install_package(
+            selected.id, "persisted.ipynb", "nebula-fixture==1.0.0"
         )
-        assert changed["package"]["name"] == "pip"
-        assert changed["package"]["version"] == "25.0"
-        assert changed["restart_recommended"] is True
-        assert sum(command[0][0] == "/fixture/uv" for command in commands) == 1
+        assert result["already_present"] is True
+        assert result["version"] == "1.0.0"
+        assert len(commands) == 1
+        assert commands[0][-1] == "nebula-fixture"
 
     asyncio.run(scenario())
 
