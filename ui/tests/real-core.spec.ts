@@ -7352,14 +7352,26 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
   const interruptInstruction = "Interrupt the current research notebook run.";
   const restartInstruction = "Restart the current research notebook kernel.";
   const installInstruction = "Install ipykernel in the project Notebook environment.";
+  const chooseIndexInstruction = "Choose a host file index for this project Notebook.";
+  const removeIndexInstruction = "Remove the current Notebook file index.";
+  let fileIndexRevision = 0;
   const stub = await startLocalModelStub({responseContent: "I checked Core's Notebook state.", toolCall: body => {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
     const lastUser = messages.map(message => message.role).lastIndexOf("user");
     const instruction = messages[lastUser]?.content;
     if (instruction !== editInstruction && instruction !== runInstruction && instruction !== interruptInstruction
-        && instruction !== restartInstruction && instruction !== installInstruction) return undefined;
+        && instruction !== restartInstruction && instruction !== installInstruction
+        && instruction !== chooseIndexInstruction && instruction !== removeIndexInstruction) return undefined;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
-    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: instruction === editInstruction ? "notebook edit cell" : instruction === runInstruction ? "notebook execute cell" : instruction === restartInstruction ? "notebook restart kernel" : instruction === installInstruction ? "notebook install package" : "notebook interrupt run"}};
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: instruction === editInstruction ? "notebook edit cell" : instruction === runInstruction ? "notebook execute cell" : instruction === restartInstruction ? "notebook restart kernel" : instruction === installInstruction ? "notebook install package" : instruction === chooseIndexInstruction ? "notebook choose file index" : instruction === removeIndexInstruction ? "notebook remove file index" : "notebook interrupt run"}};
+    if (instruction === chooseIndexInstruction || instruction === removeIndexInstruction) {
+      const operation = instruction === chooseIndexInstruction ? "nebula.notebook.choose_file_index" : "nebula.notebook.remove_file_index";
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.file_index"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.file_index", arguments: {}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation, arguments: {expected_project_revision: fileIndexRevision}}};
+      return undefined;
+    }
     if (instruction === restartInstruction) {
       if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.kernel"}};
       if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.kernel", arguments: {path: "research.ipynb"}}};
@@ -7401,7 +7413,9 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
   }});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   await withOwnedCleanup(async () => {
-    const createdProject = await api.post("engagements", {data: {name: "Butler Notebook fixture", status: "active", metadata: {}}});
+    const workspace = path.join(core.dataDir, "notebook-project");
+    await mkdir(workspace);
+    const createdProject = await api.post("engagements", {data: {name: "Butler Notebook fixture", status: "active", workspace_path: workspace, metadata: {}}});
     expect(createdProject.ok(), await createdProject.text()).toBe(true);
     const projectId = (await createdProject.json() as {id: string}).id;
     const policy = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as Record<string, unknown>;
@@ -7431,6 +7445,15 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
     const savedFile = await added.json() as {cell_id: string; cell_revisions: Record<string, string>};
     cellId = savedFile.cell_id;
     sourceHash = savedFile.cell_revisions[cellId];
+    await writeFile(path.join(workspace, "scan-only.ipynb"), JSON.stringify({nbformat: 4, nbformat_minor: 5, metadata: {}, cells: []}));
+    const indexPath = path.join(core.dataDir, "notebook-inventory.db");
+    const indexCreated = spawnSync("python3", ["-c", `import datetime, sqlite3, sys
+db, root = sys.argv[1:]
+with sqlite3.connect(db) as connection:
+ connection.executescript('CREATE TABLE repositories (id INTEGER PRIMARY KEY, root TEXT UNIQUE, complete INTEGER, pending_files INTEGER, last_reconciled_at TEXT); CREATE TABLE files (repository_id INTEGER, path TEXT, size INTEGER, mtime_ns INTEGER);')
+ connection.execute('INSERT INTO repositories VALUES (1, ?, 1, 0, ?)', (root, datetime.datetime.now(datetime.timezone.utc).isoformat()))
+ connection.execute("INSERT INTO files VALUES (1, 'research.ipynb', 12, 1000000000)")`, indexPath, workspace], {encoding: "utf8"});
+    expect(indexCreated.status, indexCreated.stderr).toBe(0);
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -7516,8 +7539,54 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
     }, {timeout: 30_000}).toBe(true);
     const packageAfter = await (await api.get(`engagements/${projectId}/notebooks/packages/installed?path=research.ipynb&name=ipykernel`)).json() as {name: string; installed: boolean; version: string | null};
     expect(packageAfter).toMatchObject({installed: true, version: packageBefore.version});
+    const indexBefore = await (await api.get(`engagements/${projectId}/notebooks/file-index`)).json() as {path: string | null; state: string; project_revision: number};
+    expect(indexBefore.path).toBeNull();
+    fileIndexRevision = indexBefore.project_revision;
+    await send(chooseIndexInstruction);
+    const indexHandoff = assistant.getByRole("region", {name: "Choose Notebook file index"});
+    await expect(indexHandoff).toBeVisible({timeout: 45_000});
+    await indexHandoff.getByRole("button", {name: "Cancel"}).click();
+    await expect(indexHandoff).toHaveCount(0);
+    expect((await (await api.get(`engagements/${projectId}/notebooks/file-index`)).json() as {path: string | null}).path).toBeNull();
+    await send(chooseIndexInstruction);
+    await expect(indexHandoff).toBeVisible({timeout: 45_000});
+    await indexHandoff.getByRole("button", {name: "Browse index files"}).click();
+    const hostPicker = page.getByRole("dialog", {name: "Choose file index"});
+    await expect(hostPicker).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".host-folder-dialog").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    for (let step = 0; step < 16; step += 1) {
+      const current = await hostPicker.locator(".host-folder-location code").textContent();
+      if (current === "/") break;
+      await hostPicker.getByRole("button", {name: "Up one level"}).click();
+      await expect(hostPicker.locator(".host-folder-location code")).toHaveText(path.dirname(current!));
+    }
+    await expect(hostPicker.locator(".host-folder-location code")).toHaveText("/");
+    for (const segment of path.dirname(indexPath).split(path.sep).filter(Boolean)) {
+      await hostPicker.getByRole("button", {name: segment, exact: true}).click();
+    }
+    await hostPicker.getByRole("button", {name: path.basename(indexPath), exact: true}).click();
+    await expect(indexHandoff).toHaveCount(0, {timeout: 45_000});
+    const connectedIndex = await (await api.get(`engagements/${projectId}/notebooks/file-index`)).json() as {path: string | null; state: string; project_revision: number};
+    expect(connectedIndex).toMatchObject({path: indexPath, state: "connected", project_revision: indexBefore.project_revision + 1});
+    expect((await (await api.get(`engagements/${projectId}/notebooks?refresh=true`)).json() as Array<{path: string}>).map(item => item.path)).toEqual(["research.ipynb"]);
+    const staleIndex = await api.delete(`engagements/${projectId}/notebooks/file-index?expected_project_revision=${indexBefore.project_revision}`);
+    expect(staleIndex.status()).toBe(409);
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
     const notebook = page.getByRole("region", {name: "Project notebook"});
+    await notebook.locator("summary", {hasText: "File index"}).click();
+    await expect(notebook.getByText("File index connected")).toBeVisible();
+    await expect(notebook.getByRole("combobox", {name: "Notebook"})).not.toContainText("scan-only.ipynb");
+    await page.reload();
+    await notebook.locator("summary", {hasText: "File index"}).click();
+    await expect(notebook.getByText("File index connected")).toBeVisible();
+    await openNebulaAssistantFromShell(page);
+    fileIndexRevision = connectedIndex.project_revision;
+    await send(removeIndexInstruction);
+    await expect.poll(async () => (await (await api.get(`engagements/${projectId}/notebooks/file-index`)).json() as {path: string | null}).path, {timeout: 45_000}).toBeNull();
+    expect((await (await api.get(`engagements/${projectId}/notebooks?refresh=true`)).json() as Array<{path: string}>).map(item => item.path)).toContain("scan-only.ipynb");
+    await page.reload();
+    await expect(notebook.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
     await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
     await expect(notebook.locator(".notebook-outputs").getByText("43", {exact: false})).toBeVisible();
     await page.reload();
@@ -7550,8 +7619,8 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-notebook-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId, cellId, completedRunId, interruptedRunId: runId,
-      kernelId, restartCount, packageName: packageAfter.name, packageVersion: packageAfter.version,
-      result: "Butler saved an exact cell, ran its current hash with ordered Core output, restarted an idle kernel with Core count read-back, installed an offline package with Core environment read-back, refused a stale source hash, interrupted one exact run, and refreshed Notebook agreed"}), contentType: "application/json"});
+      kernelId, restartCount, packageName: packageAfter.name, packageVersion: packageAfter.version, indexPath,
+      result: "Butler saved an exact cell, ran its current hash with ordered Core output, restarted an idle kernel with Core count read-back, installed an offline package with Core environment read-back, chose a host file index with browser selection and project revision, refused stale removal, removed the index with Core read-back, interrupted one exact run, and refreshed Notebook agreed"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
