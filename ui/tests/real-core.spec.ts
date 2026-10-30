@@ -5382,6 +5382,113 @@ test("stabilization real Core outage retains the conversation and exposes reconn
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
+test("assistant upgrade Butler stops a selected project terminal on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  let sessionId = "";
+  let createdAt = "";
+  let modelSawTicket = false;
+  const prompts = ["Stop this project terminal after checking it.", "Stop this project terminal now."];
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm this terminal stop.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const content = String(messages[lastUser]?.content ?? "");
+    if (!prompts.some(prompt => content === prompt || content.startsWith(`${prompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))) return undefined;
+    if (JSON.stringify(messages).includes("websocket_ticket")) modelSawTicket = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    return [
+      {name: "nebula_capabilities_search", arguments: {query: "stop terminal session"}},
+      {name: "nebula_capabilities_describe", arguments: {operation: "nebula.terminal.list"}},
+      {name: "nebula_capabilities_read", arguments: {operation: "nebula.terminal.list", arguments: {}}},
+      {name: "nebula_capabilities_describe", arguments: {operation: "nebula.terminal.stop"}},
+      {name: "nebula_capabilities_change", arguments: {operation: "nebula.terminal.stop", arguments: {
+        session_id: sessionId, expected_created_at: createdAt,
+      }}},
+    ][replies];
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler terminal fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler terminal model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    let setupResponse = await api.post("setup/runtime/refresh");
+    expect(setupResponse.ok(), await setupResponse.text()).toBe(true);
+    let setup = await setupResponse.json() as any;
+    if (!setup.terminal.runner_profile_id) {
+      const candidate = setup.terminal.candidates.find((item: any) => item.healthy && item.candidate_id && item.runtime === "podman");
+      expect(candidate, setup.terminal.detail).toBeTruthy();
+      setupResponse = await api.post("setup/runtime/select", {data: {candidate_id: candidate.candidate_id}});
+      expect(setupResponse.ok(), await setupResponse.text()).toBe(true);
+      setup = (await setupResponse.json()).setup;
+    }
+    if (setup.terminal.image_preparation.phase !== "ready") {
+      const prepared = await api.post("setup/image/prepare", {data: {project_id: projectId}});
+      expect(prepared.ok(), await prepared.text()).toBe(true);
+      await expect.poll(async () => {
+        setup = await (await api.get("setup/status")).json();
+        if (setup.terminal.image_preparation.phase === "error") throw new Error(setup.terminal.image_preparation.detail);
+        return setup.terminal.image_preparation.phase;
+      }, {timeout: 90_000, intervals: [500, 1_000]}).toBe("ready");
+    }
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler terminal LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=terminal`);
+    const terminalPath = `engagements/${projectId}/container-terminals`;
+    await expect.poll(async () => {
+      const response = await api.get(terminalPath);
+      const current = await response.json() as {sessions: Array<{session_id: string; created_at: string; state: string}>};
+      const running = current.sessions.find(session => session.state === "running");
+      sessionId = running?.session_id ?? "";
+      createdAt = running?.created_at ?? "";
+      return running?.state;
+    }, {timeout: 90_000, intervals: [500, 1_000]}).toBe("running");
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts[0]);
+    const stopDialog = page.getByRole("dialog", {name: new RegExp(`Stop terminal ${sessionId.slice(0, 8)}`)});
+    await expect(stopDialog).toBeVisible({timeout: 45_000});
+    await stopDialog.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(/Stop cancelled; Core was not asked/)).toBeVisible();
+    expect((await (await api.get(terminalPath)).json() as {sessions: Array<{session_id: string}>}).sessions.map(item => item.session_id)).toContain(sessionId);
+    await send(prompts[1]);
+    await expect(stopDialog).toBeVisible({timeout: 45_000});
+    await stopDialog.getByRole("button", {name: "Stop terminal", exact: true}).click();
+    await expect(assistant.getByText(new RegExp(`Stopped terminal ${sessionId.slice(0, 8)}`))).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => (await (await api.get(terminalPath)).json() as {sessions: Array<{session_id: string}>}).sessions.length).toBe(0);
+    expect(modelSawTicket).toBe(false);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await page.reload();
+    expect((await (await api.get(terminalPath)).json() as {sessions: Array<{session_id: string}>}).sessions).toEqual([]);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-terminal-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      sessionId, result: "Running container listed without a ticket; cancellation retained it; confirmed browser action stopped it; Core readback and refresh show absence"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "two_requests", "restart_waiting", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress", "late_response_switch"] as const) {
   test(`assistant upgrade stabilization failure ${scenario} does not replay work`, async ({page}, testInfo) => {
     test.setTimeout(120_000);
