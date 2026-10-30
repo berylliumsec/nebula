@@ -10,7 +10,7 @@ import re
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable, Protocol
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator, ValidationError
@@ -156,6 +156,18 @@ _SEARCH_FILLER = frozenset(
 )
 
 
+class _ButlerAction(Protocol):
+    """Fields shared by broker plugins and Core-owned Butler actions."""
+
+    @property
+    def spec(self) -> ToolSpec: ...
+
+    @property
+    def _handler(
+        self,
+    ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]: ...
+
+
 class ButlerCapabilities:
     """Validated gateway to the selected project's existing Core actions."""
 
@@ -185,7 +197,7 @@ class ButlerCapabilities:
         self._operator_turn_id = operator_turn_id
         self._background_case_id = background_case_id
         self._work = work
-        self._actions = {
+        self._actions: dict[str, _ButlerAction] = {
             plugin.spec.name: plugin
             for plugin in provider_plugins(
                 store,
@@ -658,13 +670,13 @@ class ButlerCapabilities:
         ]
 
     @staticmethod
-    def _read_only(plugin: Any) -> bool:
+    def _read_only(plugin: _ButlerAction) -> bool:
         return (
             plugin.spec.risk_class in {RiskClass.LOCAL_READ, RiskClass.PASSIVE}
             and plugin.spec.name not in _BROWSER_ACTIONS
         )
 
-    def _description(self, plugin: AnalysisTool) -> str:
+    def _description(self, plugin: _ButlerAction) -> str:
         description = plugin.spec.description
         if self._background_case_id is None:
             return description
@@ -695,7 +707,7 @@ class ButlerCapabilities:
             )
         )
 
-    def _input_schema(self, plugin: AnalysisTool) -> dict[str, Any]:
+    def _input_schema(self, plugin: _ButlerAction) -> dict[str, Any]:
         schema = plugin.spec.input_schema
         if (
             self._background_case_id is None
@@ -746,7 +758,7 @@ class ButlerCapabilities:
                 ],
                 "hint": "Search for the requested action, then describe its exact fields.",
             }
-        ranked: list[tuple[int, str, AnalysisTool]] = []
+        ranked: list[tuple[int, str, _ButlerAction]] = []
         for name, plugin in self._actions.items():
             title = name.lower()
             description = self._description(plugin).lower()
