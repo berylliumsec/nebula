@@ -31,6 +31,7 @@ import { ButlerOversight } from "./ButlerOversight";
 import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
 import { HostFolderPicker } from "./HostFolderPicker";
 import { applyButlerTerminalStop } from "./butlerTerminalStop";
+import { MAX_EVIDENCE_BYTES, uploadButlerEvidence } from "./butlerEvidenceUpload";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
 import styles from "./NebulaControlAssistant.module.css";
@@ -81,7 +82,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
+  const { activeOperator, api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -97,6 +98,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [uploadingImage, setUploadingImage] = useState(false);
   const [pendingLibraryAdd, setPendingLibraryAdd] = useState<Extract<SettingClientAction, {kind: "library_add"}>>();
   const [uploadingLibrary, setUploadingLibrary] = useState(false);
+  const [pendingEvidenceUpload, setPendingEvidenceUpload] = useState<(Extract<SettingClientAction, {kind: "evidence_upload"}> & {sourceMessageId?: string})>();
+  const [uploadingEvidence, setUploadingEvidence] = useState(false);
   const [pendingWorkspaceUpload, setPendingWorkspaceUpload] = useState<Extract<SettingClientAction, {kind: "workspace_upload"}>>();
   const [uploadingWorkspace, setUploadingWorkspace] = useState(false);
   const [pendingNotebookIndex, setPendingNotebookIndex] = useState<(Extract<SettingClientAction, {kind: "notebook_index_connect" | "notebook_index_remove"}> & {sourceMessageId?: string})>();
@@ -144,6 +147,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const input = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const libraryInput = useRef<HTMLInputElement>(null);
+  const evidenceInput = useRef<HTMLInputElement>(null);
+  const evidenceUploadAbort = useRef<AbortController | undefined>(undefined);
   const workspaceInput = useRef<HTMLInputElement>(null);
   const workspaceUploadAbort = useRef<AbortController | undefined>(undefined);
   const activeImageProject = useRef(engagement?.id);
@@ -227,7 +232,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return { session, config };
   };
 
-  useEffect(() => () => { abort.current?.abort(); workspaceUploadAbort.current?.abort(); }, [engagement?.id]);
+  useEffect(() => () => { abort.current?.abort(); workspaceUploadAbort.current?.abort(); evidenceUploadAbort.current?.abort(); }, [engagement?.id]);
 
   useEffect(() => {
     setSessionId(undefined);
@@ -246,6 +251,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setUploadingImage(false);
     setPendingLibraryAdd(undefined);
     setUploadingLibrary(false);
+    evidenceUploadAbort.current?.abort();
+    setPendingEvidenceUpload(undefined);
+    setUploadingEvidence(false);
     workspaceUploadAbort.current?.abort();
     setPendingWorkspaceUpload(undefined);
     setUploadingWorkspace(false);
@@ -1481,6 +1489,73 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
   };
 
+  const applyEvidenceUpload = async (action: Extract<SettingClientAction, {kind: "evidence_upload"}>): Promise<string> => {
+    if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before adding evidence.");
+    }
+    setPendingEvidenceUpload(action);
+    setView("chat");
+    return "Choose a file on this device in Butler's evidence control. Core will save an immutable artifact in the selected project and read back its hash and links.";
+  };
+
+  const uploadEvidenceFile = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    const action = pendingEvidenceUpload;
+    if (!file || !action) return;
+    if (file.size > MAX_EVIDENCE_BYTES) {
+      setError(`${file.name} exceeds the 25 MB evidence limit. Choose a smaller file.`);
+      return;
+    }
+    if (!api || coreState !== "online" || !action.sourceMessageId || activeImageProject.current !== action.projectId) {
+      setError("Reconnect to Core and select the original project before choosing evidence again.");
+      return;
+    }
+    setError("");
+    try {
+      const [findings, assets] = await Promise.all([
+        action.findingId ? api.listFindings(action.projectId) : undefined,
+        action.assetIds.length ? api.listAssets(action.projectId) : undefined,
+      ]);
+      const finding = action.findingId ? findings?.items.find((item) => item.id === action.findingId) : undefined;
+      if (action.findingId && !finding) throw new Error("The selected finding is no longer in this project. Ask Butler to list findings again.");
+      const linkedAssets = action.assetIds.map((id) => assets?.items.find((item) => item.id === id));
+      if (linkedAssets.some((item) => !item)) throw new Error("A selected asset is no longer in this project. Ask Butler to list assets again.");
+      if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to prepare the upload again.");
+      const links = [finding ? `finding ${finding.title}` : "", linkedAssets.length ? `${linkedAssets.length} asset${linkedAssets.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+      const approved = await confirm({
+        title: `Store ${file.name} as evidence?`,
+        message: `This device will send ${file.name} to Core as immutable evidence${links ? ` linked to ${links}` : ""}. Butler will receive the saved hash and record, not the file bytes.`,
+        confirmLabel: "Store evidence",
+      });
+      if (!approved) {
+        setPendingEvidenceUpload(undefined);
+        appendBrowserActionOutcome(action, "No evidence file was uploaded.");
+        return;
+      }
+      if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to prepare the upload again.");
+      const controller = new AbortController();
+      evidenceUploadAbort.current = controller;
+      setUploadingEvidence(true);
+      const observed = await uploadButlerEvidence(api, action, file, () => activeImageProject.current, activeOperator?.id, controller.signal);
+      await retryResource("evidence");
+      setPendingEvidenceUpload(undefined);
+      appendBrowserActionOutcome(action, `Stored ${observed.title} as evidence in Core. Its ${file.size} bytes match SHA-256 ${observed.sha256}; the saved links were verified.`);
+    } catch (caught) {
+      void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.evidence_upload_failed",
+        message: "Butler could not confirm the evidence upload.", outcome: "failure", stage: "evidence-upload", retryable: true, exception: caught});
+      setPendingEvidenceUpload(undefined);
+      const detail = caught instanceof Error ? caught.message : "Core did not confirm the evidence upload.";
+      setError(detail);
+      if (activeImageProject.current === action.projectId) {
+        appendBrowserActionOutcome(action, `${detail} Inspect Evidence before choosing the file again; Core may already have saved it.`);
+      }
+    } finally {
+      evidenceUploadAbort.current = undefined;
+      setUploadingEvidence(false);
+    }
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
     if (action.kind === "terminal_stop") {
       if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
@@ -1498,6 +1573,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_delete" || action.kind === "report_signoff"
         || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
+    if (action.kind === "evidence_upload") return applyEvidenceUpload(action);
     if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "chat_export") return applyChatExport(action);
     if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
@@ -1781,6 +1857,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const workReceipts: { url: string; content: string }[] = [];
     let notebookIndexConnectRequested = false;
     let linkedProjectRequested = false;
+    let evidenceUploadRequested = false;
     let actionQueue = Promise.resolve();
     try {
       const result = await api.streamChat({
@@ -1821,6 +1898,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           appliedCallIds.add(event.toolCallId);
           if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
           if (action.kind === "project_create_linked") linkedProjectRequested = true;
+          if (action.kind === "evidence_upload") evidenceUploadRequested = true;
           actionQueue = actionQueue.then(async () => {
             if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
           });
@@ -1857,6 +1935,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           setPendingLinkedProject((current) => current?.sourceProjectId === engagement.id && result.message!.id
             ? {...current, sourceMessageId: result.message!.id} : undefined);
           if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
+        }
+        if (evidenceUploadRequested) {
+          setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
+            ? {...current, sourceMessageId: result.message!.id} : undefined);
+          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
         }
         setPendingImages([]);
         if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
@@ -1947,6 +2030,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const applied = new Set<string>();
     let notebookIndexConnectRequested = false;
     let linkedProjectRequested = false;
+    let evidenceUploadRequested = false;
     let actionQueue = Promise.resolve();
     setMessages((current) => [...current, { role: "user", content: prompt }]);
     const result = await api.streamChat({
@@ -1982,6 +2066,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         applied.add(event.toolCallId);
         if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
         if (action.kind === "project_create_linked") linkedProjectRequested = true;
+        if (action.kind === "evidence_upload") evidenceUploadRequested = true;
         actionQueue = actionQueue.then(async () => { confirmations.push(await applyClientAction(action)); });
       }
       const receipt = assistantWorkReceipt(event, engagement.id);
@@ -2006,6 +2091,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setPendingLinkedProject((current) => current?.sourceProjectId === engagement.id && result.message!.id
         ? {...current, sourceMessageId: result.message!.id} : undefined);
       if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
+    }
+    if (evidenceUploadRequested) {
+      setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
+        ? {...current, sourceMessageId: result.message!.id} : undefined);
+      if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
     }
     confirmations.push(...workReceipts.filter(({ url }) => !result.message!.content.includes(url)).map(({ content }) => content));
     if (result.message.id && confirmations.length && actionOutcomesKey) {
@@ -2150,6 +2240,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <button className="button quiet" type="button" disabled={uploadingLibrary || coreState !== "online"} onClick={() => libraryInput.current?.click()}><Upload size={16} aria-hidden="true" />{uploadingLibrary ? "Adding…" : "Choose file"}</button>
         <button className="button quiet" type="button" disabled={uploadingLibrary} onClick={() => { setPendingLibraryAdd(undefined); setMessages((current) => [...current, {role: "assistant", content: "No file was added to the shared Library."}]); }}>Cancel</button>
       </div>
+    </section>}
+    {pendingEvidenceUpload && pendingEvidenceUpload.projectId === engagement?.id && pendingEvidenceUpload.sourceMessageId && <section className={styles.libraryHandoff} aria-label="Add project evidence">
+      <div><strong>Add project evidence</strong><small>Choose a file from this device. Core will save an immutable artifact and verify its hash and links.</small></div>
+      <input ref={evidenceInput} type="file" hidden aria-label="Choose project evidence file" onChange={(event) => void uploadEvidenceFile(event)} />
+      <div className={styles.libraryHandoffActions}>
+        <button className="button quiet" type="button" disabled={uploadingEvidence || coreState !== "online"} onClick={() => evidenceInput.current?.click()}><Upload size={16} aria-hidden="true" />{uploadingEvidence ? "Storing…" : "Choose file"}</button>
+        <button className="button quiet" type="button" disabled={uploadingEvidence} onClick={() => {appendBrowserActionOutcome(pendingEvidenceUpload, "No evidence file was uploaded."); setPendingEvidenceUpload(undefined);}}>Cancel</button>
+      </div>
+      {uploadingEvidence && <span role="status">Checking the saved evidence in Core…</span>}
     </section>}
     {pendingWorkspaceUpload && pendingWorkspaceUpload.projectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Upload to project workspace">
       <div><strong>Upload to project workspace</strong><small>Choose a file on this device for /workspace/{pendingWorkspaceUpload.directory}. Core will confirm the saved bytes.</small></div>

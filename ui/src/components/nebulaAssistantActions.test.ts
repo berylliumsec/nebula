@@ -145,6 +145,31 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, expected_created_at: "2026-10-30T20:30:00"}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff"}}, "selected")).toBeUndefined();
   });
+  it("accepts only selected-project evidence uploads with bounded links", () => {
+    const findingId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const assetId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const action = {kind: "evidence_upload", project_id: "selected", title: "Proof",
+      description: "Synthetic file", evidence_type: "operator_upload", finding_id: findingId, asset_ids: [assetId]};
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "evidence-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending browser action", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.evidence.upload_from_device", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: action},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "evidence_upload", projectId: "selected",
+      title: "Proof", description: "Synthetic file", evidenceType: "operator_upload",
+      findingId, assetIds: [assetId]});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.add"}}, "selected")).toBeUndefined();
+    for (const invalid of [
+      {...action, project_id: "other"},
+      {...action, finding_id: "../foreign"},
+      {...action, asset_ids: [assetId, assetId]},
+      {...action, evidence_type: "unlisted"},
+    ]) {
+      expect(settingClientAction({...event, receipt: {...event.receipt, client_action: invalid}}, "selected")).toBeUndefined();
+    }
+  });
   it("accepts only scoped report drafts, current revisions and device handoffs", () => {
     const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const findingId = "70d5a305-6f30-4270-b27d-2322d7385fbf";

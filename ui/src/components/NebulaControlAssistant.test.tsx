@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ChatStreamEvent } from "../api/types";
 import { ApiError } from "../api/client";
+import { sha256Hex } from "../sha256";
 import { ThemeProvider } from "../state/ThemeContext";
 import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
@@ -1540,6 +1541,73 @@ describe("NebulaControlAssistant", () => {
     expect(retryResource).toHaveBeenCalledWith("library");
     expect(screen.queryByRole("region", {name: "Add to shared Library"})).not.toBeInTheDocument();
   });
+
+  it("keeps Butler evidence bytes on the requesting device until confirmation and Core readback", async () => {
+    const user = userEvent.setup();
+    const findingId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const assetId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const bytes = new TextEncoder().encode("Synthetic evidence\n");
+    const hash = sha256Hex(bytes);
+    const record = {id: "evidence-1", engagementId: "project", evidenceType: "operator_upload",
+      title: "Synthetic proof", description: "Fixture", artifactId: "artifact-1",
+      findingId, assetIds: [assetId], sha256: hash, metadata: {filename: "proof.txt", size: bytes.length}};
+    const uploadEvidence = vi.fn().mockResolvedValue(record);
+    const getEvidence = vi.fn().mockResolvedValue(record);
+    const listEvidence = vi.fn().mockResolvedValue({items: [record]});
+    const listFindings = vi.fn().mockResolvedValue({items: [{id: findingId, title: "Selected finding", evidenceIds: [record.id]}]});
+    const listAssets = vi.fn().mockResolvedValue({items: [{id: assetId, name: "Selected asset"}]});
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    let calls = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      calls += 1;
+      onEvent({type: "tool_completed", turnId: `turn-${calls}`, toolCallId: `evidence-call-${calls}`,
+        capability: "nebula.capabilities.change", status: "complete", summary: "Pending browser action",
+        evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.evidence.upload_from_device", butler_project_id: "project",
+          state: "pending_browser_apply", client_action: {kind: "evidence_upload", project_id: "project",
+            title: "Synthetic proof", description: "Fixture", evidence_type: "operator_upload",
+            finding_id: findingId, asset_ids: [assetId]}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: `evidence-reply-${calls}`, role: "assistant", content: "Choose a file on this device."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, uploadEvidence,
+        getEvidence, listEvidence, listFindings, listAssets},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [], retryResource,
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Add synthetic evidence{enter}");
+    const handoff = await screen.findByRole("region", {name: "Add project evidence"});
+    await user.click(within(handoff).getByRole("button", {name: "Cancel"}));
+    expect(uploadEvidence).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem("nebula.control-assistant.session.project.action-outcomes") ?? "{}")["evidence-reply-1"])
+      .toContain("No evidence file was uploaded.");
+    await user.type(composer, "Add synthetic evidence{enter}");
+    await screen.findByRole("region", {name: "Add project evidence"});
+    const file = new File([Uint8Array.from(bytes).buffer as ArrayBuffer], "proof.txt", {type: "text/plain"});
+    Object.defineProperty(file, "stream", {value: () => new ReadableStream<Uint8Array>({
+      start(controller) {controller.enqueue(bytes); controller.close();},
+    })});
+    Object.defineProperty(file, "arrayBuffer", {value: async () => bytes.slice().buffer});
+    fireEvent.change(screen.getByLabelText("Choose project evidence file"), {target: {files: [file]}});
+    const confirmation = await screen.findByRole("dialog", {name: "Store proof.txt as evidence?"});
+    expect(confirmation).toHaveTextContent("Selected finding");
+    expect(uploadEvidence).not.toHaveBeenCalled();
+    await user.click(within(confirmation).getByRole("button", {name: "Store evidence"}));
+    await waitFor(() => expect(uploadEvidence).toHaveBeenCalledWith(expect.objectContaining({
+      engagementId: "project", filename: "proof.txt", contentBase64: btoa("Synthetic evidence\n"),
+      findingId, assetIds: [assetId],
+    }), expect.any(AbortSignal)));
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("evidence"));
+    expect(await screen.findByText(new RegExp(`Stored Synthetic proof as evidence in Core.*${hash}`))).toBeVisible();
+    expect(JSON.parse(localStorage.getItem("nebula.control-assistant.session.project.action-outcomes") ?? "{}")["evidence-reply-2"])
+      .toContain(hash);
+  }, 20_000);
 
   it("downloads a shared Library artifact only after confirmation and stable Core readback", async () => {
     const user = userEvent.setup();

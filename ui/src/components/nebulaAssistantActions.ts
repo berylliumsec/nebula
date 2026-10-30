@@ -24,6 +24,7 @@ export type SettingClientAction =
   | { kind: "workspace_delete_directory"; projectId: string; path: string; expectedEntryIdentity: string }
   | { kind: "notebook_index_connect" | "notebook_index_remove"; projectId: string; expectedProjectRevision: number }
   | { kind: "library_add"; projectId: string }
+  | { kind: "evidence_upload"; projectId: string; title?: string; description: string; evidenceType: string; findingId?: string; assetIds: string[] }
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string }
   | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
   | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
@@ -207,6 +208,20 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   if (projectAction && operation === "nebula.library.add" && value.kind === "library_add"
       && typeof projectId === "string" && value.project_id === projectId) {
     return {kind: "library_add", projectId};
+  }
+  if (projectAction && operation === "nebula.evidence.upload_from_device" && value.kind === "evidence_upload"
+      && typeof projectId === "string" && value.project_id === projectId
+      && (value.title === null || typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500)
+      && typeof value.description === "string" && value.description.length <= 20_000
+      && typeof value.evidence_type === "string"
+      && ["operator_upload", "scanner_output", "http_exchange", "certificate", "image", "other"].includes(value.evidence_type)
+      && (value.finding_id === null || typeof value.finding_id === "string" && uuidPattern.test(value.finding_id))
+      && Array.isArray(value.asset_ids) && value.asset_ids.length <= 500
+      && value.asset_ids.every((id) => typeof id === "string" && uuidPattern.test(id))
+      && new Set(value.asset_ids).size === value.asset_ids.length) {
+    return {kind: "evidence_upload", projectId, title: value.title ?? undefined,
+      description: value.description, evidenceType: value.evidence_type,
+      findingId: value.finding_id ?? undefined, assetIds: value.asset_ids};
   }
   const libraryKind = operation === "nebula.library.download" ? "library_download"
     : operation === "nebula.library.reindex" ? "library_reindex"

@@ -7661,6 +7661,10 @@ export class ApiClient {
     );
   }
 
+  getEvidence(id: string): Promise<EvidenceSummary> {
+    return this.request<WireEvidence>(`evidence/${encodeURIComponent(id)}`).then(mapEvidence);
+  }
+
   uploadEvidence(
     body: EvidenceUploadRequest,
     signal?: AbortSignal,
