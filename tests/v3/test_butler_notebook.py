@@ -162,7 +162,7 @@ def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
 
 
 def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(tmp_path):
-    store, selected, _, _, profile, capabilities = _fixture(tmp_path)
+    store, selected, _, notebooks, profile, capabilities = _fixture(tmp_path)
 
     async def invoke(name, arguments=None, *, change=False):
         return await capabilities.invoke(
@@ -221,6 +221,18 @@ def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(tmp_pat
             {"metadata": {"notebook_file_index": "/private/host/inventory.db"}},
             expected_revision=selected.revision,
         )
+        notebooks._index_errors[selected.id] = (
+            "Cannot read /private/host/inventory.db on the Nebula host"
+        )
+        direct = await NotebookMcpTools(store, notebooks).call_tool(
+            selected.id, "file_index_status", {}
+        )
+        assert direct["structuredContent"] == {
+            "configured": True,
+            "state": "fallback",
+            "project_revision": changed.revision,
+        }
+        assert "/private/host" not in json.dumps(direct)
         with pytest.raises(ValueError, match="Project changed"):
             await invoke(
                 "connect_file_index",
@@ -230,7 +242,7 @@ def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(tmp_pat
         status = await invoke("file_index_status")
         assert status == {
             "configured": True,
-            "state": "connected",
+            "state": "fallback",
             "project_revision": changed.revision,
             "butler_operation": "nebula.notebook.file_index_status",
             "butler_project_id": selected.id,

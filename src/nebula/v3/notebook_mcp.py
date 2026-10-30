@@ -54,7 +54,7 @@ TOOLS = (
     ),
     (
         "file_index_status",
-        "Read the current project file-index selection and revision.",
+        "Read whether the current project has a file index and its revision without a host path.",
         _schema({}),
         True,
     ),
@@ -382,7 +382,12 @@ class NotebookMcpTools:
         if name == "status":
             value = self.notebooks.status(project_id)
         elif name == "file_index_status":
-            value = self.notebooks.file_index_status(project_id)
+            status = self.notebooks.file_index_status(project_id)
+            value = {
+                "configured": isinstance(status["path"], str),
+                "state": status["state"],
+                "project_revision": status["project_revision"],
+            }
         elif name == "list":
             value = await self.notebooks.list_async(project_id)
         elif name == "read":

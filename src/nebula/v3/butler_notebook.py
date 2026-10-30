@@ -236,14 +236,10 @@ class ButlerNotebook:
         if name in {"file_index_status", "connect_file_index", "remove_file_index"}:
             status = await self._call("file_index_status", {})
             if name == "file_index_status":
-                return {
-                    "configured": isinstance(status.get("path"), str),
-                    "state": status["state"],
-                    "project_revision": status["project_revision"],
-                }
+                return status
             if status["project_revision"] != arguments["expected_project_revision"]:
                 raise ValueError("Project changed; read file_index_status again")
-            if name == "remove_file_index" and not status.get("path"):
+            if name == "remove_file_index" and not status["configured"]:
                 raise ValueError(
                     "No file index is selected; read file_index_status again"
                 )
