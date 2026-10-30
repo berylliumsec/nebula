@@ -20,7 +20,7 @@ test("saved workspace failure retains identity and queue stays inside composer",
   if (!info.project.use.hasTouch) await page.locator(".chat-composer").hover();
   await queue.locator("summary").click();
   await page.getByRole("button", { name: "Show activity", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Work summary" }).getByText("Workspace search", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: /^Work summary for reply / }).getByText("Workspace search", { exact: true })).toBeVisible();
   await expect(page.locator(".activity-ledger li")).toHaveCount(1);
   const failure = page.locator(".activity-ledger-audit li.status-failed .activity-ledger-entry-content > details");
   await expect(failure).not.toHaveAttribute("open");

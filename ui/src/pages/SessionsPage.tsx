@@ -800,6 +800,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   const activityNode = message.role === "assistant" && activityLedger ? <ActivityLedger
         key="activity-ledger"
         compact
+        regionLabel={`Work summary for reply ${message.sequence ?? message.id}`}
         latestUpdate={latestHarnessCommentary}
         progress={progressContent ? {
           headline: message.state === "streaming" ? waitingLabel ?? activityLedger.currentAction ?? "Working on your request" : undefined,

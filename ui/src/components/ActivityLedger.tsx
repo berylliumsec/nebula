@@ -65,6 +65,7 @@ export function ActivityLedger({
   historyPending = false,
   progress,
   latestUpdate,
+  regionLabel,
 }: {
   model: ActivityLedgerViewModel;
   renderEntryDetails?: (entry: ActivityLedgerEntry) => ReactNode;
@@ -75,6 +76,8 @@ export function ActivityLedger({
   historyPending?: boolean;
   /** Most recent public harness commentary; the complete event remains in activity. */
   latestUpdate?: string;
+  /** Distinguish repeated transcript landmarks while keeping the visible title stable. */
+  regionLabel?: string;
   /** The provider's visible prose while it calls tools, retained as work history. */
   progress?: {
     headline?: string;
@@ -107,7 +110,7 @@ export function ActivityLedger({
   const meaningful = Boolean(progress) || model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || Boolean(entry.sourceItem?.streams.commentary?.trim()) || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" || ["attention", "failed", "cancelled"].includes(entry.status));
   if (compact && model.status === "complete" && !meaningful && !historyPending && !model.artifactCount && !model.attentionCount) return null;
   return (
-    <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}${progress ? " has-progress" : ""}`} aria-label={model.title}>
+    <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}${progress ? " has-progress" : ""}`} aria-label={regionLabel ?? model.title}>
       {!compact && <header className="activity-ledger-header">
         <span className={`activity-ledger-state ${statusClass(model.status)}`} aria-hidden="true" />
         <strong>{model.title}</strong>
