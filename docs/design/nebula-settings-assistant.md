@@ -126,8 +126,14 @@ be selected through their visible controls. Scheduled Butler cannot discover
 or invoke these interactive project actions. An uncertain create response
 requires a fresh project search before retrying. The requesting browser checks
 all project names before creation and refuses a sequential retry if Core saved
-the first request, including when that project is archived. Concurrent browsers
-still need durable Core idempotency to guarantee a single creation.
+the first request, including when that project is archived. Each Butler create
+receipt carries a UUID retry ID to Core. Core saves the ID, operator identity,
+request fingerprint, and project ID in the same transaction as the project,
+default scope, and Host policy. Reapplying that receipt returns the same project;
+changing its details or reusing it after project deletion fails with a conflict.
+Core serializes Butler project names at the write boundary, so concurrent Butler
+receipts cannot create the same normalized name. Other project creation paths
+keep their existing semantics.
 For agent access, Butler reads `nebula.work.work_setting` before calling
 `nebula.work.set_work_setting` with the current project revision. The Core
 read-back confirms whether the selected project's built-in agent Work tools

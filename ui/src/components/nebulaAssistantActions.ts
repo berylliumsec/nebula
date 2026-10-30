@@ -13,7 +13,7 @@ export type SettingClientAction =
   | { kind: "project_execution_mode"; mode: ProjectMode; from?: ProjectMode }
   | { kind: "project_scope"; changes: Record<string, unknown> }
   | { kind: "headless_session"; action: "start" | "stop" }
-  | { kind: "project_create"; name: string; description: string; clientName: string }
+  | { kind: "project_create"; name: string; description: string; clientName: string; requestId: string }
   | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
   | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string };
 
@@ -83,8 +83,9 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     const validName = typeof name === "string" && name.trim().length > 0 && name.length <= 300;
     if (operation === "nebula.projects.create" && value.kind === "project_create" && validName
         && typeof value.description === "string" && value.description.length <= 20_000
-        && typeof value.client_name === "string" && value.client_name.length <= 300) {
-      return { kind: "project_create", name, description: value.description, clientName: value.client_name };
+        && typeof value.client_name === "string" && value.client_name.length <= 300
+        && typeof value.request_id === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.request_id)) {
+      return { kind: "project_create", name, description: value.description, clientName: value.client_name, requestId: value.request_id };
     }
     const target = typeof value.project_id === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.project_id) ? value.project_id : undefined;
     const revision = Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1 ? Number(value.expected_revision) : undefined;

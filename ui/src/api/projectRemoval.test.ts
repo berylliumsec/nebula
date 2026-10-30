@@ -1,6 +1,18 @@
 import { expect, it, vi } from "vitest";
 import { ApiClient } from "./client";
 
+it("passes Butler's project-create retry ID to Core", async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    id: "project-1", name: "Project", status: "draft", revision: 1, metadata: {},
+  }), {status: 201}));
+  const api = new ApiClient({baseUrl: "http://localhost:8765", fetch: fetchMock});
+  await api.createEngagement({name: "Project", requestId: "same-action"});
+  const [, init] = fetchMock.mock.calls[0];
+  expect(JSON.parse(String(init?.body))).toMatchObject({
+    name: "Project", request_id: "same-action", host_access_acknowledged: false,
+  });
+});
+
 it.each([true, false])("saves project archive=%s with Core's revision contract", async (archived) => {
   const original = { id: "project/1", name: "Project", status: "paused", revision: 7, metadata: {} };
   const fetchMock = vi.fn<typeof fetch>()

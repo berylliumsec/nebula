@@ -6189,6 +6189,7 @@ export class ApiClient {
         tags: body.tags ?? [],
         workspace_path: body.workspacePath?.trim() || null,
         host_access_acknowledged: body.hostAccessAcknowledged === true,
+        request_id: body.requestId ?? null,
         metadata: {},
       }),
     }).then(mapEngagement);

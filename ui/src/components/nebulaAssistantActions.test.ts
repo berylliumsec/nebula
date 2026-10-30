@@ -99,8 +99,10 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "project_archive", project_id: "../other", name: "Fixture", expected_revision: 3}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "project_archive", project_id: projectId, name: "Fixture", expected_revision: 0}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.restore"}}, "selected")).toBeUndefined();
-    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: ""}}}, "selected"))
-      .toEqual({kind: "project_create", name: "New", description: "", clientName: ""});
+    const requestId = "70790d17-cd62-450a-b73b-28684e410300";
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: "", request_id: requestId}}}, "selected"))
+      .toEqual({kind: "project_create", name: "New", description: "", clientName: "", requestId});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: ""}}}, "selected")).toBeUndefined();
   });
   it("recognizes explicit project mode changes without treating questions as commands", () => {
     expect(projectModeChange("open project policy and change from dockermode to host mode"))

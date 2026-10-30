@@ -757,7 +757,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         throw new Error("Core's project list is unavailable. Reconnect and check All projects before asking Butler to create one.");
       }
       if (existing.length) throw new Error(`Core already has a project named ${action.name}: ${describeMatches(existing)}. Ask Butler to read it before creating another.`);
-      const created = await createEngagement({ name: action.name, description: action.description, clientName: action.clientName || undefined, hostAccessAcknowledged: false }).catch(async () => {
+      const created = await createEngagement({ name: action.name, description: action.description, clientName: action.clientName || undefined, hostAccessAcknowledged: false, requestId: action.requestId }).catch(async () => {
         let after;
         try {
           after = await matchingProjects();

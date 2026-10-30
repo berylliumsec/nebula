@@ -1090,7 +1090,7 @@ describe("NebulaControlAssistant", () => {
       onEvent({ type: "tool_completed", turnId: "turn", toolCallId: "create-call", capability: "nebula.capabilities.change",
         status: "complete", summary: "Pending browser creation", evidenceIds: [], artifacts: [], step: 0,
         receipt: {butler_operation: "nebula.projects.create", butler_project_id: projectId,
-          state: "pending_browser_apply", client_action: {kind: "project_create", name: "Same name", description: "", client_name: ""}} });
+          state: "pending_browser_apply", client_action: {kind: "project_create", name: "Same name", description: "", client_name: "", request_id: "e02b1f22-7a31-4810-b912-16300357494c"}} });
       return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
         message: {role: "assistant", content: "I requested project creation."}};
     });

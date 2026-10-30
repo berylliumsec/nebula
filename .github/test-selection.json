@@ -1,15 +1,17 @@
 {
-  "change_digest": "37c431ab615c6afc82cbc4d42c7917f0d5dfac5e18e513997811083d11b1a786",
-  "reviewed_by": "Codex focused review for Butler interactive project lifecycle and existing Work gateway",
-  "reason": "Six selected Python cases cover interactive project discovery, paging, exact revisions, background exclusion, an existing Work action, current product-index digest, discoverable guidance, and Chroma source-digest sync. Sixty-five frontend cases cover scoped action receipts, project archive confirmation and Core readback, create preflight refusal for archived name matches and failed list reads, and the project API revision contract. Eight paired real-Core browser profiles exercise create, dropped-response create retry, rename, archive cancellation, archive, restore, and permanent delete through Butler at a non-loopback LAN origin with a production bundle, inert model, and synthetic projects.",
-  "exclusions": "No native source changed, so no native tests are selected. SideNav and unrelated Python, frontend, and Playwright journeys are excluded; the new real-Core journey checks the visible project switcher. Browser profiles emulate mobile devices; physical Safari is unavailable.",
+  "change_digest": "11919891256255472343981d8e419acaa674b6203af571390c6b00ac1ae6e12d",
+  "reviewed_by": "Codex focused review for Butler project-create durable retry receipt, name race guard, and existing project lifecycle journey",
+  "reason": "Eleven collected Python cases cover Butler project action discovery, Core project-create receipt replay, changed-payload and deleted-target conflicts, two concurrent create races, legacy Host consent, and packaged product guidance with Chroma source-digest sync. Sixty-six listed frontend cases cover the typed receipt, request-ID API body, preflight failures, archive confirmation, and Core readback. Eight paired browser profiles run the selected Butler project lifecycle against disposable authenticated LAN Core and a production bundle; the journey now verifies a lost response, exact Core receipt replay, and conflicts for changed details and a separate same-name request.",
+  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. Browser profiles emulate mobile devices; physical Safari is unavailable. The name guard applies to Butler keyed creates; unkeyed project creation retains its existing semantics.",
   "expected_tests": {
-    "python": 6,
-    "frontend": 65,
+    "python": 11,
+    "frontend": 66,
     "native": 0,
     "playwright": 8
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [
@@ -18,7 +20,12 @@
     "tests/v3/test_butler_capabilities.py::test_butler_discovers_and_uses_project_work_board",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_project_lifecycle_and_confirmation",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_setup.py::test_project_create_request_is_atomic_retry_safe_and_retained_after_delete",
+    "tests/v3/test_setup.py::test_concurrent_project_create_retries_share_one_project",
+    "tests/v3/test_setup.py::test_concurrent_butler_creates_cannot_reuse_project_name",
+    "tests/v3/test_api.py::test_project_creation_records_explicit_host_consent_without_persisting_request_field",
+    "tests/v3/test_api.py::test_project_create_request_id_replays_exact_core_result"
   ],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",
