@@ -9398,10 +9398,11 @@ export class ApiClient {
   deleteWorkspaceEntry(
     engagementId: string,
     path: string,
+    expectedSha256?: string,
   ): Promise<{ path: string }> {
     return this.request<{ path: string }>(
       `engagements/${encodeURIComponent(engagementId)}/workspace/entry?path=${encodeURIComponent(path)}`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: expectedSha256 ? {"If-Match": expectedSha256} : undefined },
     );
   }
 

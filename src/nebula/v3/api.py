@@ -2725,9 +2725,13 @@ def create_app(
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
         tool_platform.bind_control_assistant_work(control_assistant_work)
         tool_platform.bind_butler_memory(butler_memory_service)
+        if workspaces is not None:
+            tool_platform.bind_workspace_service(workspaces)
     harness_runtime.bind_settings_assistant_api(settings_assistant_api)
     harness_runtime.bind_control_assistant_work(control_assistant_work)
     harness_runtime.bind_butler_memory(butler_memory_service)
+    if workspaces is not None:
+        harness_runtime.bind_workspace_service(workspaces)
     app.state.store = store
     app.state.butler_oversight = butler_oversight
     app.state.butler_authority = butler_authority
@@ -7116,9 +7120,17 @@ def create_app(
     async def delete_workspace_entry(
         engagement_id: str,
         path: str = Query(min_length=1, max_length=4096),
+        if_match: str | None = Header(
+            default=None,
+            alias="If-Match",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
     ) -> WorkspaceMutationResult:
         return await asyncio.to_thread(
-            require_workspace_service().delete, engagement_id, path
+            require_workspace_service().delete,
+            engagement_id,
+            path,
+            expected_sha256=if_match,
         )
 
     @app.post(
