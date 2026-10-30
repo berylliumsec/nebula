@@ -1244,6 +1244,68 @@ describe("NebulaControlAssistant", () => {
     expect(getWorkspaceEntryState).toHaveBeenCalledWith("project", "captures/sample.bin");
   });
 
+  it("lets the requesting browser choose and remove a Notebook index with Core revision readback", async () => {
+    const user = userEvent.setup();
+    let status = {path: null as string | null, state: "none", detail: null, project_revision: 4};
+    const notebookFileIndex = vi.fn(async () => ({...status}));
+    const setNotebookFileIndex = vi.fn(async (_project: string, path: string, expected: number) => {
+      expect(expected).toBe(status.project_revision);
+      status = {path, state: "connected", detail: null, project_revision: status.project_revision + 1};
+      return {...status};
+    });
+    const removeNotebookFileIndex = vi.fn(async (_project: string, expected: number) => {
+      expect(expected).toBe(status.project_revision);
+      status = {path: null, state: "none", detail: null, project_revision: status.project_revision + 1};
+      return {...status};
+    });
+    const listHostWorkspaceFolders = vi.fn(async () => ({path: "/indexes", parent: "/", directories: [],
+      files: [{name: "inventory.db", path: "/indexes/inventory.db"}], truncated: false}));
+    let calls = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      const remove = ++calls === 3;
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `index-${calls}`,
+        capability: "nebula.capabilities.change", status: "complete", summary: "Pending on browser",
+        evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: remove ? "nebula.notebook.remove_file_index" : "nebula.notebook.connect_file_index",
+          butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: remove ? "notebook_index_remove" : "notebook_index_connect",
+            project_id: "project", expected_project_revision: status.project_revision}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: `index-reply-${calls}`, role: "assistant", content: "The requesting browser owns the host index choice."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, notebookFileIndex,
+        setNotebookFileIndex, removeNotebookFileIndex, listHostWorkspaceFolders},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    fireEvent.change(composer, {target: {value: "Connect an index"}});
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    const handoff = await screen.findByRole("region", {name: "Connect Notebook file index"});
+    await user.click(within(handoff).getByRole("button", {name: "Cancel"}));
+    expect(setNotebookFileIndex).not.toHaveBeenCalled();
+    fireEvent.change(composer, {target: {value: "Connect an index"}});
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    await user.click(within(await screen.findByRole("region", {name: "Connect Notebook file index"}))
+      .getByRole("button", {name: "Browse index files"}));
+    await user.click(await screen.findByRole("button", {name: "inventory.db"}));
+    await waitFor(() => expect(setNotebookFileIndex).toHaveBeenCalledWith("project", "/indexes/inventory.db", 4));
+    expect(await screen.findByText("Connected the selected host file index in Core. Notebook discovery now uses it.")).toBeVisible();
+    expect(JSON.parse(localStorage.getItem("nebula.control-assistant.session.project.action-outcomes") ?? "{}")["index-reply-2"])
+      .toContain("Connected the selected host file index in Core");
+    fireEvent.change(composer, {target: {value: "Remove the index"}});
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    await user.click(await screen.findByRole("button", {name: "Remove index"}));
+    await waitFor(() => expect(removeNotebookFileIndex).toHaveBeenCalledWith("project", 5));
+    expect(await screen.findByText(/The host index file remains on disk/)).toBeVisible();
+    expect(notebookFileIndex).toHaveBeenCalled();
+  });
+
   it("confirms an exact shared Library reindex, rereads Core, and refreshes the Library", async () => {
     const user = userEvent.setup();
     const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";

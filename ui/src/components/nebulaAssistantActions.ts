@@ -21,6 +21,7 @@ export type SettingClientAction =
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
   | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
   | { kind: "workspace_delete_directory"; projectId: string; path: string; expectedEntryIdentity: string }
+  | { kind: "notebook_index_connect" | "notebook_index_remove"; projectId: string; expectedProjectRevision: number }
   | { kind: "library_add"; projectId: string }
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
 
@@ -115,6 +116,12 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     }
   }
   if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    const indexKind = operation === "nebula.notebook.connect_file_index" ? "notebook_index_connect"
+      : operation === "nebula.notebook.remove_file_index" ? "notebook_index_remove" : undefined;
+    if (indexKind && value.kind === indexKind && Number.isInteger(value.expected_project_revision)
+        && Number(value.expected_project_revision) >= 1) {
+      return {kind: indexKind, projectId, expectedProjectRevision: Number(value.expected_project_revision)};
+    }
     if (operation === "nebula.workspace.upload_from_device" && value.kind === "workspace_upload"
         && validWorkspaceDirectory(value.directory)
         && typeof value.expected_directory_identity === "string"

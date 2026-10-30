@@ -171,6 +171,35 @@ describe("settings assistant actions", () => {
       projectId: "selected", path: "captures", expectedEntryIdentity: identity});
   });
 
+  it("accepts revision-bound Notebook index handoffs without a model-supplied host path", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "index-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.notebook.connect_file_index", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "notebook_index_connect", project_id: "selected",
+          expected_project_revision: 4}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "notebook_index_connect",
+      projectId: "selected", expectedProjectRevision: 4});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "notebook_index_connect", project_id: "other", expected_project_revision: 4,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "notebook_index_connect", project_id: "selected", expected_project_revision: 0,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "notebook_index_connect", project_id: "selected", expected_project_revision: 4, path: "/private/index.db",
+    }}}, "selected")).toEqual({kind: "notebook_index_connect", projectId: "selected", expectedProjectRevision: 4});
+    const removal: ChatStreamEvent = {...event, receipt: {...event.receipt,
+      butler_operation: "nebula.notebook.remove_file_index",
+      client_action: {kind: "notebook_index_remove", project_id: "selected", expected_project_revision: 4}}};
+    expect(settingClientAction(removal, "selected")).toEqual({kind: "notebook_index_remove",
+      projectId: "selected", expectedProjectRevision: 4});
+    expect(settingClientAction({...removal, receipt: {...removal.receipt,
+      butler_operation: "nebula.notebook.connect_file_index"}}, "selected")).toBeUndefined();
+  });
+
   it("accepts only exact shared Library actions for the requesting project", () => {
     const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const event: ChatStreamEvent = {

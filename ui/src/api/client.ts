@@ -6959,12 +6959,13 @@ export class ApiClient {
     return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`);
   }
 
-  setNotebookFileIndex(projectId: string, path: string): Promise<import("./types").NotebookFileIndexStatus> {
-    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "PUT", body: JSON.stringify({path})});
+  setNotebookFileIndex(projectId: string, path: string, expectedProjectRevision?: number): Promise<import("./types").NotebookFileIndexStatus> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "PUT", body: JSON.stringify({path, expected_project_revision: expectedProjectRevision})});
   }
 
-  removeNotebookFileIndex(projectId: string): Promise<import("./types").NotebookFileIndexStatus> {
-    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "DELETE"});
+  removeNotebookFileIndex(projectId: string, expectedProjectRevision?: number): Promise<import("./types").NotebookFileIndexStatus> {
+    const query = expectedProjectRevision === undefined ? "" : `?expected_project_revision=${encodeURIComponent(expectedProjectRevision)}`;
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index${query}`, {method: "DELETE"});
   }
 
   createNotebook(projectId: string, path: string): Promise<import("./types").NotebookFile> {
