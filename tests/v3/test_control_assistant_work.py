@@ -7,7 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
-from nebula.v3.chat import ChatCompletionRequest, ChatRequestMessage
+from nebula.v3.chat import (
+    ChatCompletionRequest,
+    ChatHistoryConflict,
+    ChatRequestMessage,
+)
 from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES
 from nebula.v3.control_assistant_work import WORK_TOOLS, dispatch_work_tool
 from nebula.v3.domain import (
@@ -316,6 +320,140 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
         "main",
         "goal_child",
     }
+
+
+def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Research",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    messages = [
+        store.create(
+            ChatMessage(
+                engagement_id=selected.id,
+                session_id=session.id,
+                sequence=index,
+                role=ChatRole.USER if index % 2 else ChatRole.ASSISTANT,
+                content=f"Message {index} " + ("x" * 520 if index == 5 else "body"),
+                metadata={"retracted_at": "2026-01-01T00:00:00Z"} if index == 4 else {},
+            )
+        )
+        for index in range(1, 36)
+    ]
+    foreign = store.create(
+        ChatSession(
+            engagement_id=other.id,
+            title="Foreign",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    foreign_message = store.create(
+        ChatMessage(
+            engagement_id=other.id,
+            session_id=foreign.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Foreign text",
+        )
+    )
+    child = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Delegated child",
+            provider_profile_id=profile.id,
+            model="model-a",
+            parent_session_id=session.id,
+            metadata={"delegated_from_goal_id": "parent-goal"},
+        )
+    )
+    work = app.state.control_assistant_work
+    assert work.catalog(selected.id, "nebula.work.chat_messages")["read_only"] is True
+    assert work.catalog(selected.id, "nebula.work.rewind_chat")["read_only"] is False
+    first = work.chat_messages(selected.id, {"session_id": session.id})
+    assert len(first["messages"]) == 30
+    assert all(item["id"] != messages[3].id for item in first["messages"])
+    second = work.chat_messages(
+        selected.id,
+        {
+            "session_id": session.id,
+            "before_message_id": first["next_before_message_id"],
+        },
+    )
+    assert [item["id"] for item in second["messages"]] == [
+        item.id for item in messages[:5] if item.id != messages[3].id
+    ]
+    assert second["next_before_message_id"] is None
+    assert (
+        next(item for item in second["messages"] if item["id"] == messages[4].id)[
+            "content_truncated"
+        ]
+        is True
+    )
+    with pytest.raises(ValueError, match="work roster"):
+        work.chat_messages(selected.id, {"session_id": foreign.id})
+    with pytest.raises(ValueError, match="child goal chat"):
+        work.chat_messages(selected.id, {"session_id": child.id})
+    with pytest.raises(ChatHistoryConflict, match="cursor does not belong"):
+        work.chat_messages(
+            selected.id,
+            {"session_id": session.id, "before_message_id": foreign_message.id},
+        )
+
+    async def rewind(arguments):
+        return await dispatch_work_tool(
+            work, selected.id, "nebula.work.rewind_chat", arguments
+        )
+
+    base = {
+        "session_id": session.id,
+        "expected_revision": first["revision"],
+        "before_message_id": messages[4].id,
+    }
+    with pytest.raises(ValueError, match="active user message"):
+        asyncio.run(rewind({**base, "before_message_id": messages[5].id}))
+    with pytest.raises(ValueError, match="active user message"):
+        asyncio.run(rewind({**base, "before_message_id": foreign_message.id}))
+    with pytest.raises(ValueError, match="chat changed"):
+        asyncio.run(rewind({**base, "expected_revision": session.revision + 1}))
+    with pytest.raises(ValueError, match="child goal chat"):
+        asyncio.run(rewind({**base, "session_id": child.id}))
+    assert (
+        len(work.chat_messages(selected.id, {"session_id": session.id})["messages"])
+        == 30
+    )
+
+    changed = asyncio.run(rewind(base))
+    assert changed["session_id"] == session.id
+    assert changed["revision"] > session.revision
+    assert changed["active_message_count"] == 3
+    assert changed["retracted_message_count"] == 31
+    assert changed["retracted_from_message_id"] == messages[4].id
+    assert [item.id for item in work.chat.session_messages(session.id)] == [
+        item.id for item in messages[:3]
+    ]
+    assert work.chat_detail(selected.id, session.id)["revision"] == changed["revision"]
+    assert (
+        store.get(ChatMessage, messages[4].id).metadata["retracted_reason"]
+        == "operator_edit"
+    )
+    with pytest.raises(ValueError, match="chat changed"):
+        asyncio.run(rewind(base))
 
 
 def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):

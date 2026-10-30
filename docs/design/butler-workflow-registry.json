@@ -95,13 +95,13 @@
       "core_owner": "ChatService, replaced messages, and harness rewind",
       "butler": {
         "discover": "nebula.work.chats",
-        "read": "nebula.work.chat (recent messages only)",
-        "change": "missing"
+        "read": "nebula.work.chat_messages",
+        "change": "nebula.work.rewind_chat"
       },
-      "authority": "Selected project, exact user message, current revision, idle turn; replacement needs explicit confirmation",
-      "observed_result_test": "missing: Butler rewind and real-Core replay regression",
-      "result": "Retained and replaced messages, harness state, and new turn must agree after reconnect",
-      "status": "gap"
+      "authority": "Explicit operator instruction, selected project, exact active user message, current revision, idle turn; replacement is separate",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler rewinds a saved chat on production LAN Core",
+      "result": "Same chat ID, retained prefix, retracted suffix, and saved revision agree after refresh",
+      "status": "supported"
     },
     {
       "id": "chat.export",

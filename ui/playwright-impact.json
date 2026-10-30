@@ -62,6 +62,7 @@
     {"name": "nebula-theme-command", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/nebulaAssistantActions.ts"], "areas": ["nebula-theme-command"]},
     {"name": "settings-assistant-full-control", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/assistantSettingsMutations.ts", "src/nebula/v3/settings_assistant_api.py", "src/nebula/v3/settings_assistant_tools.py", "src/nebula/v3/agent_security_tools.py"], "areas": ["settings-assistant-full-control"]},
     {"name": "control-assistant-work", "patterns": ["src/nebula/v3/control_assistant_work.py", "src/nebula/v3/settings_assistant_tools.py", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["control-assistant-work"]},
+    {"name": "butler-chat-rewind", "patterns": ["src/nebula/v3/chat.py", "src/nebula/v3/control_assistant_work.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["butler-chat-rewind"]},
     {"name": "butler-project-lifecycle", "patterns": ["src/nebula/v3/butler_projects.py", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-project-lifecycle"]},
     {"name": "butler-timeline", "patterns": ["src/nebula/v3/butler_timeline.py"], "areas": ["butler-timeline"]},
     {"name": "butler-context", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/state/WorkbenchDraftContext.tsx", "ui/src/components/selection/SelectionActionsProvider.tsx"], "areas": ["butler-context"]},
@@ -220,6 +221,16 @@
       {"area":"butler-project-lifecycle","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-project-lifecycle","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-project-lifecycle","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-chat-rewind": [
+      {"area":"butler-chat-rewind","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-timeline": [
       {"area":"butler-timeline","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler briefs named agent evidence on production LAN Core","runtime":"real-core","shard":"1/1"},

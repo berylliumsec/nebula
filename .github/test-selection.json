@@ -1,13 +1,13 @@
 {
-  "change_digest": "2ac7af56e78e1130230f1f44c32b3cf280033bcfe178dddae81f516d1fc245f1",
-  "reviewed_by": "Codex focused review for Butler project lifecycle plus workflow registry source guard",
-  "reason": "Fifteen collected Python cases retain the 11 Butler project lifecycle, durable retry, knowledge-index and Chroma checks and add four Node-backed registry checks: current UI call inventory, detected call drift, rejection of false supported status, and refusal of invented Core catalog operations. Sixty-six listed frontend cases remain selected for the project lifecycle candidate. The frontend production build now runs the source guard as prebuild and is required in CI. Eight paired browser profiles retain the authenticated production-LAN Butler project journey. The registry/docs slice changes no runtime workflow; its own checks are source-level. The Python CI install condition now includes the selected registry test file, so its Node-backed checks receive the UI TypeScript dev dependency before test execution; the previous CI job proved Node was present but the dependency install was skipped. The selected 15 Python checks and frontend build directly verify this setup repair on a fresh runner.",
-  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. The registry scans calls on the variable named api and is explicitly an incomplete action map; unreviewed signatures do not imply Butler support. Browser profiles emulate mobile devices; physical Safari is unavailable. The name guard applies to Butler keyed creates; unkeyed project creation retains existing semantics. The CI workflow change only widens dependency installation for this exact selected Python file; it does not change product runtime or require unrelated browser journeys.",
+  "change_digest": "ff6b5e0526a55d58754bfae6e291e5058de95d047f8a7bac70058604e6cafd8a",
+  "reviewed_by": "Codex focused review for Butler project lifecycle, workflow registry, and chat rewind",
+  "reason": "The 20 collected Python cases retain the prior 15 project lifecycle, durable retry, product knowledge, Chroma, and registry guard checks, and add the exact chat rewind API, bounded Work page and readback, interactive Butler discovery/use, background exclusion, and product-guidance search cases. The previously selected three frontend files still collect 66 cases for the project browser handoff and source guard; no UI component implementation changed in this rewind slice. The production build runs the registry guard as prebuild. Eight existing paired LAN profiles cover project lifecycle, and eight new profiles cover Butler's exact-message rewind, stale revision refusal, durable retraction, refreshed transcript, and production asset identity. The new browser test uses an inert local model stub and isolated Core data.",
+  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. The registry remains an incomplete action map; unreviewed signatures do not imply Butler support. Browser profiles emulate mobile devices; physical Safari is unavailable. Transcript export and other operator-control gaps remain separate work. The name guard applies to Butler keyed creates; unkeyed project creation retains existing semantics.",
   "expected_tests": {
-    "python": 15,
+    "python": 20,
     "frontend": 66,
     "native": 0,
-    "playwright": 8
+    "playwright": 16
   },
   "python_versions": [
     "3.12"
@@ -18,14 +18,19 @@
     "tests/v3/test_butler_capabilities.py::test_interactive_butler_prepares_project_lifecycle_with_exact_revisions",
     "tests/v3/test_butler_capabilities.py::test_scheduled_butler_cannot_discover_interactive_project_mutations",
     "tests/v3/test_butler_capabilities.py::test_butler_discovers_and_uses_project_work_board",
+    "tests/v3/test_butler_capabilities.py::test_interactive_butler_discovers_and_uses_chat_rewind",
+    "tests/v3/test_butler_capabilities.py::test_background_act_excludes_browser_and_child_chat_changes",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_project_lifecycle_and_confirmation",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_chat_rewind_guidance",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
     "tests/v3/test_setup.py::test_project_create_request_is_atomic_retry_safe_and_retained_after_delete",
     "tests/v3/test_setup.py::test_concurrent_project_create_retries_share_one_project",
     "tests/v3/test_setup.py::test_concurrent_butler_creates_cannot_reuse_project_name",
     "tests/v3/test_api.py::test_project_creation_records_explicit_host_consent_without_persisting_request_field",
     "tests/v3/test_api.py::test_project_create_request_id_replays_exact_core_result",
+    "tests/v3/test_chat_api.py::test_chat_session_rewind_edits_in_place_without_forking",
+    "tests/v3/test_control_assistant_work.py::test_butler_pages_and_rewinds_main_chat_with_core_readback",
     "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_unsupported_action_marked_supported",
@@ -45,6 +50,14 @@
     "butler-project-lifecycle/assistant-real-chromium-430",
     "butler-project-lifecycle/assistant-real-webkit-320",
     "butler-project-lifecycle/assistant-real-webkit-390",
-    "butler-project-lifecycle/assistant-real-webkit-430"
+    "butler-project-lifecycle/assistant-real-webkit-430",
+    "butler-chat-rewind/assistant-real-desktop",
+    "butler-chat-rewind/assistant-real-compact",
+    "butler-chat-rewind/assistant-real-chromium-320",
+    "butler-chat-rewind/assistant-real-chromium-390",
+    "butler-chat-rewind/assistant-real-chromium-430",
+    "butler-chat-rewind/assistant-real-webkit-320",
+    "butler-chat-rewind/assistant-real-webkit-390",
+    "butler-chat-rewind/assistant-real-webkit-430"
   ]
 }

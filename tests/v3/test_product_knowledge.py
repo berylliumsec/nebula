@@ -227,6 +227,18 @@ def test_product_search_finds_butler_work_agent_access_and_history(monkeypatch):
     assert any("nebula.work.work_updates" in str(item["text"]) for item in history)
 
 
+def test_product_search_finds_butler_chat_rewind_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler rewind an older chat message and send a replacement?"
+    )
+    assert any(
+        "nebula.work.chat_messages" in str(item["text"])
+        and "nebula.work.rewind_chat" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

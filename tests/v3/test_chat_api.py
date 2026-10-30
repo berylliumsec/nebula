@@ -718,10 +718,31 @@ def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatc
         == 409
     )
 
+    current = client.get(f"/api/v1/chat-sessions/{session_id}", headers=_auth()).json()
+    stale = client.post(
+        f"/api/v1/chat/sessions/{session_id}/rewind",
+        headers=_auth(),
+        json={
+            "before_message_id": messages[2]["id"],
+            "expected_revision": current["revision"] + 1,
+        },
+    )
+    assert stale.status_code == 409
+    assert "current revision" in stale.text
+    assert [
+        item["id"]
+        for item in client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        ).json()
+    ] == [item["id"] for item in messages]
+
     rewind = client.post(
         f"/api/v1/chat/sessions/{session_id}/rewind",
         headers=_auth(),
-        json={"before_message_id": messages[2]["id"]},
+        json={
+            "before_message_id": messages[2]["id"],
+            "expected_revision": current["revision"],
+        },
     )
     assert rewind.status_code == 200, rewind.text
     body = rewind.json()
@@ -743,6 +764,17 @@ def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatc
     ).json()
     assert [item["id"] for item in everything] == [item["id"] for item in messages]
     assert everything[2]["metadata"]["retracted_reason"] == "operator_edit"
+    assert (
+        client.post(
+            f"/api/v1/chat/sessions/{session_id}/rewind",
+            headers=_auth(),
+            json={
+                "before_message_id": messages[2]["id"],
+                "expected_revision": current["revision"],
+            },
+        ).status_code
+        == 409
+    )
     assert (
         everything[2]["metadata"]["retraction_id"]
         == everything[3]["metadata"]["retraction_id"]

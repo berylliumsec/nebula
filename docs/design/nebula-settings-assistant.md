@@ -40,6 +40,7 @@ Settings assistant and the complete destination catalog.
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets. In Workbench conversations, chats Butler creates appear below Butler; older recovery chats use their linked Core goal as ownership evidence. Search reveals matching children, and a selected child remains open after reload | Core sessions, goal metadata, turns, queues and runs; URL for selection | Tool unit, component, browser and real Core |
 | Organize conversations | In the Workbench conversation list, the More actions menu can pin a chat above the normal activity groups or set a small red, orange, yellow, green, blue, or purple flag. Butler can page the project chat roster, then use the target's current revision to pin, unpin, set, or clear a flag and read Core's saved result. These choices survive refresh because Core owns them. An archived Butler-created chat moves into Butler's own collapsed Archived section and remains searchable and restorable | Core chat-session metadata; UI owns only expansion state | Core API, Butler tool, component, browser and real Core |
+| Edit a saved conversation message | Interactive Butler can page active message previews with `nebula.work.chat_messages`, then use `nebula.work.rewind_chat` with the selected user message ID and current chat revision after an explicit request. Core retracts that message and later replies in the same chat and reports the saved revision. A replacement is a separate `nebula.work.message_chat` action; Butler must verify that turn separately. Scheduled Butler cannot rewind. The Workbench edit control uses the same Core retraction path | Core transcript, chat revision and harness replay; URL selects the chat | Core API, Butler tool and real Core browser |
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
@@ -196,6 +197,12 @@ A requested chat follow-up is saved to Core's durable queue. Live steering is
 available only for an active harness chat or harness mission. A provider chat
 can receive a queued next message; a provider mission cannot be live-steered.
 Starting work reports its saved ID and current state, never a completed result.
+For an older saved message, Butler pages `nebula.work.chat_messages` using
+`next_before_message_id` and selects the exact active user message. A stale
+revision, active response, other project's chat, or replaced message prevents a
+rewind. On success, the same chat ID remains and Core records which messages
+were retracted. A subsequent replacement turn must be observed independently;
+rewind alone does not mean an agent answered the edited prompt.
 The existing Settings controls remain available. Browser and notes mutation
 tools are separate future work; this slice does not grant them.
 The packaged app destination list covers the All projects page, the selected

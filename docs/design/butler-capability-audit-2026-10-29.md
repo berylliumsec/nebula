@@ -135,6 +135,30 @@ request ID fails closed instead of recreating it.
 
 ## Remaining work to reach the product goal
 
+### Chat history rewind contract
+
+Entry point: an operator asks the interactive Butler to edit or retract a saved
+user message in a selected project's main conversation. Butler pages the active
+transcript to find the exact message, shows its target and consequences, and
+rewinds only after an explicit operator instruction. Sending replacement text is
+a separate turn and must be reported separately. Core owns the chat revision,
+messages, retraction history, harness session and pending activity; the URL owns
+the selected conversation. Butler's page is a bounded read, not an export.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Butler can find the action and page active user/assistant messages past its recent-chat summary to select one saved user message ID | Core capability catalog and transcript | Tool test |
+| Mutate | Core refuses a stale chat revision, non-user or retracted target, cross-project or private child chat, and a chat with an active response; a successful rewind retracts the selected user message and every later active message in one transaction | Core chat service and revision | API and tool tests, real Core |
+| Read back | The chat ID stays fixed; active transcript and saved retraction history agree with the result, and a harness chat gets a fresh replay session | Core database and harness runtime | API and tool tests, real Core |
+| Refresh and reconnect | The same active transcript and revision reappear in Butler and the conversation after refresh | Core database and URL | Real Core browser |
+| Failure and retry | A conflict leaves history unchanged and tells Butler to reread; a second call with the old revision cannot retract a newly selected message | Core conflict contract | API and tool tests |
+
+Creating a new chat, forking, exporting, streaming, and deleting are separate
+journeys. Scheduled Butler can read the bounded page but cannot rewind history;
+its Act authority does not turn a retrospective edit into a background repair.
+The browser's existing edit control continues to use the same Core route without
+a caller revision until its own edit journey is separately changed.
+
 ### Workflow registry contract
 
 The operator journey is to ask Butler to find and perform an action that is

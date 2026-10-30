@@ -28,6 +28,8 @@ from nebula.v3.domain import (
     AssistantDefaults,
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
+    ChatMessage,
+    ChatRole,
     ChatSession,
     Engagement,
     ProviderProfile,
@@ -145,6 +147,70 @@ def _scheduled_capabilities(tmp_path):
         background_runtime_local=True,
     )
     return store, project, chat, foreign_chat, policy, case, scheduled
+
+
+def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
+    store, selected, chat, _, capabilities = _capabilities(tmp_path)
+    first = store.create(
+        ChatMessage(
+            engagement_id=selected.id,
+            session_id=chat.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Original question",
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=selected.id,
+            session_id=chat.id,
+            sequence=2,
+            role=ChatRole.ASSISTANT,
+            content="Original answer",
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "rewind chat"})
+        assert any(
+            row["operation"] == "nebula.work.rewind_chat" for row in found["matches"]
+        )
+        description = await capabilities.describe(
+            {"operation": "nebula.work.rewind_chat"}
+        )
+        assert description["invoke_with"] == "nebula.capabilities.change"
+        page = await capabilities.invoke(
+            {
+                "operation": "nebula.work.chat_messages",
+                "arguments": {"session_id": chat.id},
+            },
+            change=False,
+        )
+        assert page["messages"][0]["id"] == first.id
+        changed = await capabilities.invoke(
+            {
+                "operation": "nebula.work.rewind_chat",
+                "arguments": {
+                    "session_id": chat.id,
+                    "expected_revision": page["revision"],
+                    "before_message_id": first.id,
+                },
+            },
+            change=True,
+        )
+        assert changed["retracted_message_count"] == 2
+        assert changed["revision"] > page["revision"]
+        assert (
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.chat_messages",
+                    "arguments": {"session_id": chat.id},
+                },
+                change=False,
+            )
+        )["messages"] == []
+
+    asyncio.run(scenario())
 
 
 def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_path):
@@ -1515,6 +1581,11 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
     async def scenario():
         with pytest.raises(CapabilityInputError, match="listed operation"):
             await background.describe({"operation": "nebula.settings.set_device_theme"})
+        with pytest.raises(CapabilityInputError, match="listed operation"):
+            await background.describe({"operation": "nebula.work.rewind_chat"})
+        assert (await background.describe({"operation": "nebula.work.chat_messages"}))[
+            "invoke_with"
+        ] == "nebula.capabilities.read"
         assert (await background.describe({"operation": "nebula.work.delete_chat"}))[
             "invoke_with"
         ] == "nebula.capabilities.change"
