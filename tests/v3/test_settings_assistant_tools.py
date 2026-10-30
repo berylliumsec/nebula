@@ -70,6 +70,9 @@ def test_catalog_covers_settings_destinations_without_secrets():
     )
     assert notebook_family["discover_with"] == "nebula.capabilities.search"
     assert "nebula.notebook.edit_cell" in notebook_family["operations"]
+    assert "nebula.notebook.file_index_status" in notebook_family["operations"]
+    assert "nebula.notebook.connect_file_index" in notebook_family["operations"]
+    assert "nebula.notebook.remove_file_index" in notebook_family["operations"]
     assert "nebula.notebook.kernel_status" in notebook_family["operations"]
     assert "nebula.notebook.restart" in notebook_family["operations"]
     assert "nebula.notebook.installed_package" in notebook_family["operations"]

@@ -43,6 +43,15 @@ def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
 
 _SCHEMAS: dict[str, dict[str, Any]] = {
     "status": _schema({}),
+    "file_index_status": _schema({}),
+    "connect_file_index": _schema(
+        {"expected_project_revision": {"type": "integer", "minimum": 1}},
+        "expected_project_revision",
+    ),
+    "remove_file_index": _schema(
+        {"expected_project_revision": {"type": "integer", "minimum": 1}},
+        "expected_project_revision",
+    ),
     "list": _schema({"offset": {"type": "integer", "minimum": 0, "maximum": 1000}}),
     "read": _schema({"path": _PATH, "offset": _OFFSET}, "path"),
     "source": _schema(
@@ -113,6 +122,9 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
 
 _DESCRIPTIONS = {
     "status": "Read the selected project's Notebook runtime, grant, and consent state.",
+    "file_index_status": "Read whether this project has a host file index and its current project revision. The host path stays on the requesting device.",
+    "connect_file_index": "After an operator request, ask the requesting browser to choose a host SQLite file index for this project at the current revision. The browser checks Core's saved selection; no host path is sent to Butler.",
+    "remove_file_index": "After an operator request, ask the requesting browser to remove this project's current file-index selection at the current revision. Core read-back must show no selected index; the index file is retained.",
     "list": "Page project Notebook paths before choosing an exact file; no host path is accepted.",
     "read": "Page bounded cell previews and hashes from one project Notebook. Use source for exact cell text.",
     "source": "Read a bounded exact source chunk from one cell after selecting its ID and current hash.",
@@ -134,6 +146,7 @@ _DESCRIPTIONS = {
 _READS = frozenset(
     {
         "status",
+        "file_index_status",
         "list",
         "read",
         "source",
@@ -220,6 +233,30 @@ class ButlerNotebook:
         }
 
     async def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name in {"file_index_status", "connect_file_index", "remove_file_index"}:
+            status = await self._call("file_index_status", {})
+            if name == "file_index_status":
+                return {
+                    "configured": isinstance(status.get("path"), str),
+                    "state": status["state"],
+                    "project_revision": status["project_revision"],
+                }
+            if status["project_revision"] != arguments["expected_project_revision"]:
+                raise ValueError("Project changed; read file_index_status again")
+            if name == "remove_file_index" and not status.get("path"):
+                raise ValueError(
+                    "No file index is selected; read file_index_status again"
+                )
+            return {
+                "state": "pending_browser_apply",
+                "client_action": {
+                    "kind": "notebook_index_connect"
+                    if name == "connect_file_index"
+                    else "notebook_index_remove",
+                    "project_id": self.project_id,
+                    "expected_project_revision": status["project_revision"],
+                },
+            }
         if name == "list":
             rows = await self._call("list", {})
             offset = arguments.get("offset", 0)
@@ -369,5 +406,7 @@ class ButlerNotebook:
         assert {name for name in _SCHEMAS} - {name for name, *_ in NOTEBOOK_TOOLS} == {
             "source",
             "run_event",
+            "connect_file_index",
+            "remove_file_index",
         }
         return actions

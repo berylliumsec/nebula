@@ -161,6 +161,99 @@ def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
     asyncio.run(scenario())
 
 
+def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(tmp_path):
+    store, selected, _, _, profile, capabilities = _fixture(tmp_path)
+
+    async def invoke(name, arguments=None, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notebook.{name}", "arguments": arguments or {}},
+            change=change,
+        )
+
+    async def scenario():
+        found = await capabilities.search({"query": "connect notebook file index"})
+        assert any(
+            row["operation"] == "nebula.notebook.connect_file_index"
+            for row in found["matches"]
+        )
+        assert (
+            await capabilities.describe(
+                {"operation": "nebula.notebook.file_index_status"}
+            )
+        )["invoke_with"] == "nebula.capabilities.read"
+        assert (
+            await capabilities.describe(
+                {"operation": "nebula.notebook.connect_file_index"}
+            )
+        )["invoke_with"] == "nebula.capabilities.change"
+        initial = await invoke("file_index_status")
+        assert initial == {
+            "configured": False,
+            "state": "none",
+            "project_revision": selected.revision,
+            "butler_operation": "nebula.notebook.file_index_status",
+            "butler_project_id": selected.id,
+        }
+        with pytest.raises(ValueError, match="No file index"):
+            await invoke(
+                "remove_file_index",
+                {"expected_project_revision": selected.revision},
+                change=True,
+            )
+        pending = await invoke(
+            "connect_file_index",
+            {"expected_project_revision": selected.revision},
+            change=True,
+        )
+        assert pending == {
+            "state": "pending_browser_apply",
+            "client_action": {
+                "kind": "notebook_index_connect",
+                "project_id": selected.id,
+                "expected_project_revision": selected.revision,
+            },
+            "butler_operation": "nebula.notebook.connect_file_index",
+            "butler_project_id": selected.id,
+        }
+        changed = store.update(
+            Engagement,
+            selected.id,
+            {"metadata": {"notebook_file_index": "/private/host/inventory.db"}},
+            expected_revision=selected.revision,
+        )
+        with pytest.raises(ValueError, match="Project changed"):
+            await invoke(
+                "connect_file_index",
+                {"expected_project_revision": selected.revision},
+                change=True,
+            )
+        status = await invoke("file_index_status")
+        assert status == {
+            "configured": True,
+            "state": "connected",
+            "project_revision": changed.revision,
+            "butler_operation": "nebula.notebook.file_index_status",
+            "butler_project_id": selected.id,
+        }
+        removal = await invoke(
+            "remove_file_index",
+            {"expected_project_revision": changed.revision},
+            change=True,
+        )
+        assert removal["client_action"]["kind"] == "notebook_index_remove"
+        assert "/private/host" not in json.dumps([status, pending, removal])
+        store.update(
+            McpServerProfile,
+            profile.id,
+            {"enabled": False},
+            expected_revision=profile.revision,
+        )
+        with pytest.raises(GuidedToolError, match="revoked"):
+            await invoke("file_index_status")
+
+    asyncio.run(scenario())
+
+
 def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_changes(
     tmp_path,
 ):

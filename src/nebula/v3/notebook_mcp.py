@@ -52,6 +52,12 @@ TOOLS = (
         _schema({}),
         True,
     ),
+    (
+        "file_index_status",
+        "Read the current project file-index selection and revision.",
+        _schema({}),
+        True,
+    ),
     ("list", "List Python notebooks in this project workspace.", _schema({}), True),
     (
         "read",
@@ -375,6 +381,8 @@ class NotebookMcpTools:
         value: Any
         if name == "status":
             value = self.notebooks.status(project_id)
+        elif name == "file_index_status":
+            value = self.notebooks.file_index_status(project_id)
         elif name == "list":
             value = await self.notebooks.list_async(project_id)
         elif name == "read":
