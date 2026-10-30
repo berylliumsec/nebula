@@ -38,14 +38,16 @@ it("looks up a package name in the project's runtime before installation", async
   expect(await screen.findByText(/Array computing/)).toBeVisible();
 });
 
-it("reports when Restart finds no live kernel instead of claiming variables were cleared", async () => {
+it("reports when restart found no active kernel instead of claiming variables were cleared", async () => {
   const user = userEvent.setup();
-  api.restartNotebookKernel.mockResolvedValue({restarted: false});
+  api.restartNotebookKernel.mockResolvedValueOnce({restarted: false, state: "absent"});
   render(<NotebookPanel api={api as unknown as ApiClient} projectId="p" active path="quick.ipynb" onPathChange={vi.fn()} onProjectSettings={vi.fn()} />);
   await screen.findByRole("textbox", {name: "code cell editor"});
   await user.click(screen.getByRole("button", {name: "Restart"}));
-  await waitFor(() => expect(api.restartNotebookKernel).toHaveBeenCalledWith("p", "quick.ipynb"));
-  expect(await screen.findByText("No kernel was running; the next cell starts a fresh one.")).toBeVisible();
+  expect(await screen.findByRole("status")).toHaveTextContent("No active kernel; one will start when you run a cell.");
+  expect(screen.getByRole("status")).not.toHaveTextContent("variables were cleared");
+  await user.click(screen.getByRole("button", {name: "Restart"}));
+  expect(await screen.findByRole("status")).toHaveTextContent("Kernel restarted; variables were cleared.");
 });
 
 it("saves a changed cell before queueing execution", async () => {
