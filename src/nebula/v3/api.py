@@ -1089,6 +1089,7 @@ class ChatSessionForkRequest(NebulaModel):
 
 class ChatSessionRewindRequest(NebulaModel):
     before_message_id: str = Field(min_length=1, max_length=200)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class ChatSessionRewind(NebulaModel):
@@ -12397,7 +12398,9 @@ def create_app(
         """Retract an operator message and its replies without leaving the chat."""
 
         session, retained, replaced = chat_service().rewind_session(
-            session_id, before_message_id=request.before_message_id
+            session_id,
+            before_message_id=request.before_message_id,
+            expected_revision=request.expected_revision,
         )
         # Subagents the edited exchange started stop instead of working on
         # and reporting into the conversation that replaced it.

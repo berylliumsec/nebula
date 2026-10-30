@@ -70,6 +70,7 @@ from .domain import (
     ScopePolicy,
     Task,
     ToolCallOrigin,
+    message_is_replaced,
 )
 from .harnesses import HarnessRuntimeService, _session_native_capabilities
 from .mcp import usable_mcp_tools
@@ -343,6 +344,25 @@ UPDATE_CHAT_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["session_id", "expected_revision"],
+}
+CHAT_MESSAGES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "before_message_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["session_id"],
+}
+REWIND_CHAT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "before_message_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["session_id", "expected_revision", "before_message_id"],
 }
 FORK_CHAT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1507,6 +1527,41 @@ class ControlAssistantWork:
             ],
         }
 
+    def chat_messages(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Page active transcript previews to choose an exact saved user message."""
+
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        cursor = arguments.get("before_message_id")
+        if cursor is not None:
+            cursor = _text(cursor, "before_message_id", 200)
+        page = self.chat.session_messages_page(
+            session.id, limit=30, before_message_id=cursor
+        )
+        active = [
+            item
+            for item in page
+            if item.role in {ChatRole.USER, ChatRole.ASSISTANT}
+            and not message_is_replaced(item)
+        ]
+        return {
+            "session_id": session.id,
+            "revision": session.revision,
+            "url": _chat_url(project_id, session.id),
+            "messages": [
+                {
+                    "id": item.id,
+                    "sequence": item.sequence,
+                    "role": item.role.value,
+                    "content_preview": item.content[:500],
+                    "content_truncated": len(item.content) > 500,
+                }
+                for item in active
+            ],
+            "next_before_message_id": page[0].id if len(page) == 30 else None,
+        }
+
     def _goal_summary(self, session_id: str) -> dict[str, Any] | None:
         try:
             goal = self.goals.read(session_id)
@@ -2457,6 +2512,45 @@ class ControlAssistantWork:
             "url": _chat_url(project_id, saved.id),
         }
 
+    async def rewind_chat(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        revision = arguments.get("expected_revision")
+        if type(revision) is not int or revision < 1:
+            raise ValueError("read the chat and pass its current revision")
+        if session.revision != revision:
+            raise ValueError("chat changed; read its current revision before rewinding")
+        message_id = _text(arguments.get("before_message_id"), "before_message_id", 200)
+        try:
+            target = self.store.get(ChatMessage, message_id)
+        except NotFoundError as exc:
+            raise ValueError("choose an active user message from this chat") from exc
+        if (
+            target.session_id != session.id
+            or target.role != ChatRole.USER
+            or message_is_replaced(target)
+        ):
+            raise ValueError("choose an active user message from this chat")
+        result = await self._request(
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/rewind",
+            {"before_message_id": message_id, "expected_revision": revision},
+        )
+        saved = self._messageable_chat(project_id, session.id)
+        retracted = self.store.get(ChatMessage, message_id)
+        if not message_is_replaced(retracted):
+            raise RuntimeError("Core did not save the requested message retraction")
+        return {
+            "session_id": saved.id,
+            "revision": saved.revision,
+            "url": _chat_url(project_id, saved.id),
+            "retracted_from_message_id": message_id,
+            "active_message_count": len(result["messages"]),
+            "retracted_message_count": len(result["replaced"]),
+            "result": "history retracted in Core; sending replacement text is a separate action",
+        }
+
     async def fork_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -3290,6 +3384,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.chat_messages",
+        "Page active user and assistant message previews in one listed main chat. Use next_before_message_id to find an older exact user message before a rewind; retracted messages are omitted.",
+        CHAT_MESSAGES_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.timeline",
         "Read a named Assistant and its delegated agents over the last hours from saved Core evidence. Accept session_id from overview or agent title; ambiguous names return choices. Page with next_cursor until has_more is false before a thorough brief. Report observed actions, repeated attempts, blockers, evidence and next steps; treat agent reports as claims and quiet gaps as unknown, not proof of wasted time.",
         TIMELINE_SCHEMA,
@@ -3524,6 +3624,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.rewind_chat",
+        "Retract one exact saved user message and every later message in the same main chat after explicit operator instruction. Read nebula.work.chat_messages and pass its current revision. Core refuses active responses and stale revisions. Sending edited text is a separate nebula.work.message_chat action; verify each result separately. Interactive Butler only.",
+        REWIND_CHAT_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.fork_chat",
         "Fork a listed assistant chat through one saved message after explicit operator instruction. Read the chat for its revision and message ID first; the new chat shares project files but has its own transcript and runtime session.",
         FORK_CHAT_SCHEMA,
@@ -3591,6 +3697,8 @@ async def dispatch_work_tool(
         return work.overview(project_id)
     if name == "nebula.work.chats":
         return work.chats(project_id, arguments.get("offset", 0))
+    if name == "nebula.work.chat_messages":
+        return work.chat_messages(project_id, arguments)
     if name == "nebula.work.work_items":
         return work.work_items(project_id, arguments.get("offset", 0))
     if name == "nebula.work.work_item":
@@ -3691,6 +3799,8 @@ async def dispatch_work_tool(
         return await work.answer_question(project_id, arguments)
     if name == "nebula.work.update_chat":
         return await work.update_chat(project_id, arguments)
+    if name == "nebula.work.rewind_chat":
+        return await work.rewind_chat(project_id, arguments)
     if name == "nebula.work.fork_chat":
         return await work.fork_chat(project_id, arguments)
     if name == "nebula.work.delete_chat":
