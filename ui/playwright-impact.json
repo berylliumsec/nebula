@@ -429,8 +429,13 @@
       {"area":"notebook-file-index","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file: file index connects from a host file and survives reload","runtime":"mock","shard":"1/1"},
       {"area":"notebook-file-index","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file: file index connects from a host file and survives reload","runtime":"mock","shard":"1/1"},
       {"area":"notebook-file-index","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
       {"area":"notebook-file-index","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
-      {"area":"notebook-file-index","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"}
+      {"area":"notebook-file-index","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"}
     ],
     "notebooks": [
       {"area":"notebooks","project":"desktop","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file$","runtime":"mock","shard":"1/1"},

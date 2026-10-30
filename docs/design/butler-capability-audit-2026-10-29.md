@@ -339,8 +339,8 @@ proof that every click has been catalogued.
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
 checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 27
 reviewed actions, including explicit export, workspace, Notebook, Library, and
-storage dispositions. Its source inventory contains 507 distinct `api` call
-signatures in production UI TypeScript, of which 58 are linked to those
+storage dispositions. Its source inventory contains 510 distinct `api` call
+signatures in production UI TypeScript, of which 61 are linked to those
 reviewed actions; 449 still require action-level review. The new Workbench bulk
 chat calls map to the existing per-chat archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
