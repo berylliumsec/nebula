@@ -11902,6 +11902,134 @@ test("production side chat branches and resumes from its parent conversation", a
     await stopRealCore(core);
   }
 });
+test("assistant upgrade Butler connects and removes a Notebook file index on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  let revision = 0;
+  const connectPrompt = "Connect a file index to this project's Notebook.";
+  const removePrompt = "Remove this project's Notebook file index setting.";
+  const stub = await startLocalModelStub({responseContent: "I checked the Notebook file-index request in Core.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = messages[lastUser]?.content;
+    const instruction = typeof prompt === "string" && (prompt === connectPrompt || prompt.startsWith(`${connectPrompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))
+      ? connectPrompt : typeof prompt === "string" && (prompt === removePrompt || prompt.startsWith(`${removePrompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))
+        ? removePrompt : undefined;
+    if (!instruction) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "notebook file index"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.file_index_status"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.file_index_status", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: instruction === connectPrompt ? "nebula.notebook.connect_file_index" : "nebula.notebook.remove_file_index"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {
+      operation: instruction === connectPrompt ? "nebula.notebook.connect_file_index" : "nebula.notebook.remove_file_index",
+      arguments: {expected_project_revision: revision},
+    }};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const workspace = path.join(core.dataDir, "indexed-project");
+    await mkdir(workspace);
+    const notebook = JSON.stringify({nbformat: 4, nbformat_minor: 5, metadata: {}, cells: []});
+    await writeFile(path.join(workspace, "indexed.ipynb"), notebook);
+    await writeFile(path.join(workspace, "scan-only.ipynb"), notebook);
+    const index = path.join(core.dataDir, "inventory.db");
+    const create = spawnSync("python3", ["-c", `import datetime, sqlite3, sys\ndb, root = sys.argv[1:]\nwith sqlite3.connect(db) as connection:\n connection.executescript('CREATE TABLE repositories (id INTEGER PRIMARY KEY, root TEXT UNIQUE, complete INTEGER, pending_files INTEGER, last_reconciled_at TEXT); CREATE TABLE files (repository_id INTEGER, path TEXT, size INTEGER, mtime_ns INTEGER);')\n connection.execute('INSERT INTO repositories VALUES (1, ?, 1, 0, ?)', (root, datetime.datetime.now(datetime.timezone.utc).isoformat()))\n connection.execute("INSERT INTO files VALUES (1, 'indexed.ipynb', 12, 1000000000)")`, index, workspace], {encoding: "utf8"});
+    expect(create.status, create.stderr).toBe(0);
+    const projectResponse = await api.post("engagements", {data: {name: "Butler indexed project", workspace_path: workspace}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string; revision: number};
+    revision = project.revision;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler file-index model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Butler index LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      const button = assistant.getByRole("button", {name: "Send to Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await expect(button).toBeEnabled({timeout: 30_000});
+      await button.click();
+    };
+    await send(connectPrompt);
+    const handoff = assistant.getByRole("region", {name: "Connect Notebook file index"});
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    await handoff.getByRole("button", {name: "Cancel"}).click();
+    expect((await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null}).path).toBeNull();
+    await send(connectPrompt);
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    await handoff.getByRole("button", {name: "Browse index files"}).click();
+    const picker = page.getByRole("dialog", {name: "Choose file index"});
+    await expect(picker.locator(".host-folder-location code")).toHaveText(/^\//);
+    for (let i = 0; i < 6; i++) {
+      const current = await picker.locator(".host-folder-location code").textContent();
+      if (current === "/") break;
+      await picker.getByRole("button", {name: "Up one level"}).click();
+      await expect(picker.locator(".host-folder-location code")).toHaveText(path.dirname(current!));
+    }
+    await picker.getByRole("button", {name: "tmp", exact: true}).click();
+    await picker.getByRole("button", {name: path.basename(core.dataDir)}).click();
+    await picker.getByRole("button", {name: "inventory.db"}).click();
+    await expect(assistant.getByText("Connected the selected host file index in Core. Notebook discovery now uses it.")).toBeVisible({timeout: 30_000});
+    let status = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; state: string; project_revision: number};
+    expect(status).toMatchObject({path: index, state: "connected"});
+    expect(status.project_revision).toBeGreaterThan(revision);
+    revision = status.project_revision;
+    expect(stub.requests.some(request => JSON.stringify(request).includes(index))).toBe(false);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(assistant.getByText("Connected the selected host file index in Core. Notebook discovery now uses it.")).toBeVisible();
+    await assistant.getByRole("button", {name: "Close Butler"}).click();
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notebook&notebook=indexed.ipynb`);
+    const panel = page.getByRole("region", {name: "Project notebook"});
+    await expect(panel.getByRole("combobox", {name: "Notebook"})).not.toContainText("scan-only.ipynb");
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    await send(removePrompt);
+    const confirm = page.getByRole("dialog", {name: "Remove Notebook file index?"});
+    await expect(confirm).toBeVisible({timeout: 45_000});
+    await confirm.getByRole("button", {name: "Cancel"}).click();
+    expect((await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null}).path).toBe(index);
+    await send(removePrompt);
+    await expect(confirm).toBeVisible({timeout: 45_000});
+    await confirm.getByRole("button", {name: "Remove index"}).click();
+    await expect(assistant.getByText("Removed the selected project's Notebook file-index setting in Core. The host index file remains on disk.")).toBeVisible({timeout: 30_000});
+    status = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; state: string; project_revision: number};
+    expect(status).toMatchObject({path: null, state: "none"});
+    expect(status.project_revision).toBeGreaterThan(revision);
+    expect(existsSync(index)).toBe(true);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await assistant.getByRole("button", {name: "Close Butler"}).click();
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notebook&notebook=indexed.ipynb`);
+    await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
+    expect((await new AxeBuilder({page}).include(".notebook-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-file-index-lan", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId: project.id,
+      result: "Butler requested private browser index selection and confirmed Core state; cancellation retained selection; removal retained host file; Notebook discovery followed state after refresh"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("notebook real Core uses a supplied file index on LAN", async ({page}) => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
