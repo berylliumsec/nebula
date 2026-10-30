@@ -7629,13 +7629,16 @@ with sqlite3.connect(db) as connection:
 });
 
 test("Butler project lifecycle confirms and reads back changes on production LAN Core", async ({page}, testInfo) => {
-  test.setTimeout(300_000);
+  test.setTimeout(360_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const linkedFolder = await mkdtemp(path.join(homedir(), ".nebula-butler-linked-"));
+  await writeFile(path.join(linkedFolder, "linked-marker.txt"), "synthetic linked workspace\n");
   let targetId = "";
   let targetRevision = 0;
   const actions = new Map([
     ["Create the Butler LAN project", "create"],
     ["Create the uncertain Butler project", "create_uncertain"],
+    ["Create a linked Butler project", "create_linked"],
     ["Rename the Butler LAN project", "rename"],
     ["Archive the Butler LAN project", "archive"],
     ["Restore the Butler LAN project", "restore"],
@@ -7648,10 +7651,11 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
     if (!action) return undefined;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
     if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: `${action} project`}};
-    if (action === "create" || action === "create_uncertain") {
-      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.projects.create"}};
-      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.projects.create", arguments: {
-        name: action === "create" ? "Butler LAN project" : "Butler uncertain project", description: "Disposable lifecycle fixture",
+    if (action === "create" || action === "create_uncertain" || action === "create_linked") {
+      const operation = action === "create_linked" ? "nebula.projects.create_linked" : "nebula.projects.create";
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation, arguments: {
+        name: action === "create" ? "Butler LAN project" : action === "create_linked" ? "Butler linked project" : "Butler uncertain project", description: "Disposable lifecycle fixture",
       }}};
       return undefined;
     }
@@ -7699,6 +7703,41 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
       targetRevision = saved.revision;
       return saved;
     };
+
+    await send("Create a linked Butler project");
+    const linkedHandoff = assistant.getByRole("region", {name: "Choose linked project folder"});
+    await expect(linkedHandoff).toBeVisible({timeout: 45_000});
+    await linkedHandoff.getByRole("button", {name: "Cancel"}).click();
+    await expect(linkedHandoff).toBeHidden();
+    const projectRows = async () => {
+      const response = await api.get("engagements");
+      expect(response.ok(), await response.text()).toBe(true);
+      return await response.json() as Array<{id: string; name: string}>;
+    };
+    expect((await projectRows()).filter(row => row.name === "Butler linked project")).toHaveLength(0);
+    await send("Create a linked Butler project");
+    await expect(linkedHandoff).toBeVisible({timeout: 45_000});
+    await linkedHandoff.getByRole("button", {name: "Browse folders"}).click();
+    const picker = page.getByRole("dialog", {name: "Choose project folder"});
+    await expect(picker).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".host-folder-dialog").analyze()).violations).toEqual([]);
+    await picker.getByRole("button", {name: path.basename(linkedFolder), exact: true}).click();
+    await expect(picker.getByText(linkedFolder, {exact: true})).toBeVisible();
+    await picker.getByRole("button", {name: "Select folder"}).click();
+    await expect.poll(async () => (await projectRows()).filter(row => row.name === "Butler linked project").length, {timeout: 45_000}).toBe(1);
+    const linkedProjectId = (await projectRows()).find(row => row.name === "Butler linked project")!.id;
+    const linkedResponse = await api.get(`engagements/${linkedProjectId}`);
+    expect(linkedResponse.ok(), await linkedResponse.text()).toBe(true);
+    expect((await linkedResponse.json() as {workspace_path: string}).workspace_path).toBe(linkedFolder);
+    const linkedPolicy = await api.get(`engagements/${linkedProjectId}/automation-policy`);
+    expect(linkedPolicy.ok(), await linkedPolicy.text()).toBe(true);
+    expect((await linkedPolicy.json() as {host_access_acknowledged: boolean}).host_access_acknowledged).toBe(false);
+    await expect(page).toHaveURL(new RegExp(`/projects/${linkedProjectId}/workbench`));
+    await page.reload();
+    await clickWorkbenchTab(page, "Workspace files");
+    await expect(page.getByText("linked-marker.txt", {exact: true})).toBeVisible();
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
 
     await send("Create the Butler LAN project");
     await expect.poll(async () => {
@@ -7801,11 +7840,12 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
     await expect.poll(async () => (await api.get(`engagements/${targetId}`)).status(), {timeout: 45_000}).toBe(404);
     await page.reload();
     await testInfo.attach("butler-project-lifecycle", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry,
-      assetSha256: build.assets[entry!], steps: ["create", "uncertain create response", "Core retry receipt readback", "changed-key conflict", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
+      assetSha256: build.assets[entry!], linkedFolder, steps: ["linked create cancellation", "host picker and linked create", "Core workspace and Host consent readback", "linked Files after refresh", "create", "uncertain create response", "Core retry receipt readback", "changed-key conflict", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "linked host fixture", dispose: () => rm(linkedFolder, {recursive: true, force: true})},
   ]);
 });
 
