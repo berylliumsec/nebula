@@ -292,6 +292,19 @@ def test_product_search_finds_butler_device_transcript_export(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler edit and download a project workspace file?"
+    )
+    assert any(
+        "nebula.workspace.list" in str(item["text"])
+        and "nebula.workspace.download_file" in str(item["text"])
+        and "file picker" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_shared_library_confirmation(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

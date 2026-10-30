@@ -226,6 +226,7 @@ class WorkspaceResetStatus(NebulaModel):
 class WorkspaceRenameRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
     new_name: str = Field(min_length=1, max_length=255)
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("new_name")
     @classmethod
@@ -1158,7 +1159,9 @@ class WorkspaceService:
                             try:
                                 file_descriptor = os.open(
                                     entry.name,
-                                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                                    os.O_RDONLY
+                                    | getattr(os, "O_NOFOLLOW", 0)
+                                    | getattr(os, "O_NONBLOCK", 0),
                                     dir_fd=descriptor,
                                 )
                                 opened = os.fstat(file_descriptor)
@@ -1528,23 +1531,7 @@ class WorkspaceService:
                         status_code=409,
                     )
                 if expected_sha256 is not None:
-                    current = hashlib.sha256()
-                    current_descriptor = os.open(
-                        relative[-1],
-                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                        dir_fd=parent,
-                    )
-                    try:
-                        while payload := os.read(current_descriptor, 64 * 1024):
-                            current.update(payload)
-                    finally:
-                        os.close(current_descriptor)
-                    if not hmac.compare_digest(current.hexdigest(), expected_sha256):
-                        raise ExecutionServiceError(
-                            "workspace_file_changed",
-                            "workspace file changed after it was opened",
-                            status_code=412,
-                        )
+                    self._require_file_hash(parent, relative[-1], expected_sha256)
                 replaced = True
             elif expected_sha256 is not None:
                 raise ExecutionServiceError(
@@ -1739,6 +1726,8 @@ class WorkspaceService:
         parent = self._open_directory(engagement_id, relative[:-1])
         try:
             os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+            if request.expected_sha256 is not None:
+                self._require_file_hash(parent, relative[-1], request.expected_sha256)
             try:
                 os.stat(request.new_name, dir_fd=parent, follow_symlinks=False)
             except (
@@ -1770,12 +1759,16 @@ class WorkspaceService:
         self._record_mutation(engagement_id, "renamed", result)
         return result
 
-    def delete(self, engagement_id: str, path: str) -> WorkspaceMutationResult:
+    def delete(
+        self, engagement_id: str, path: str, *, expected_sha256: str | None = None
+    ) -> WorkspaceMutationResult:
         self.store.get(Engagement, engagement_id)
         relative = _relative_parts(path, require_value=True)
         parent = self._open_directory(engagement_id, relative[:-1])
         try:
             metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+            if expected_sha256 is not None:
+                self._require_file_hash(parent, relative[-1], expected_sha256)
             if stat.S_ISDIR(metadata.st_mode):
                 try:
                     os.rmdir(relative[-1], dir_fd=parent)
@@ -1801,6 +1794,62 @@ class WorkspaceService:
         result = WorkspaceMutationResult(engagement_id=engagement_id, path=path)
         self._record_mutation(engagement_id, "deleted", result)
         return result
+
+    @staticmethod
+    def _require_file_hash(parent: int, name: str, expected_sha256: str) -> None:
+        """Reject a stale regular-file mutation before touching its directory entry."""
+
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=parent,
+            )
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ExecutionServiceError(
+                    "workspace_path_invalid",
+                    "a symlink cannot be changed with a file hash",
+                    status_code=422,
+                ) from exc
+            raise
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise ExecutionServiceError(
+                    "workspace_path_invalid",
+                    "the selected entry is not a regular file",
+                    status_code=422,
+                )
+            digest = hashlib.sha256()
+            while chunk := os.read(descriptor, 64 * 1024):
+                digest.update(chunk)
+            after = os.fstat(descriptor)
+            selected = os.stat(name, dir_fd=parent, follow_symlinks=False)
+
+            def identity(row: os.stat_result) -> tuple[int, int, int, int, int]:
+                return (
+                    row.st_dev,
+                    row.st_ino,
+                    row.st_size,
+                    row.st_mtime_ns,
+                    row.st_ctime_ns,
+                )
+
+            if (
+                identity(before) != identity(after)
+                or identity(after) != identity(selected)
+                or not hmac.compare_digest(digest.hexdigest(), expected_sha256)
+            ):
+                raise ExecutionServiceError(
+                    "workspace_file_changed",
+                    "workspace file changed after it was read",
+                    status_code=412,
+                )
+        finally:
+            os.close(descriptor)
 
     def _record_mutation(
         self, engagement_id: str, action: str, result: WorkspaceMutationResult
@@ -1859,7 +1908,9 @@ class WorkspaceService:
         try:
             descriptor = os.open(
                 parts[-1],
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
                 dir_fd=parent,
             )
         except OSError as exc:

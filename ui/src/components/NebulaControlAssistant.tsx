@@ -18,6 +18,7 @@ import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import { projectSurface } from "../resourceRoutes";
+import { sha256Hex } from "../sha256";
 import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
 import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type VoicePauseSeconds } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
@@ -870,6 +871,50 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `Started a Markdown transcript download for ${observed.title} on this device (${messages.length} saved messages).`;
   };
 
+  const applyWorkspaceDelete = async (action: Extract<SettingClientAction, {kind: "workspace_delete"}>): Promise<string> => {
+    if (!api || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Select the original project and ask Butler to delete the file again.");
+    }
+    const name = action.path.split("/").at(-1) ?? action.path;
+    const approved = await confirm({
+      title: `Delete ${name}?`,
+      message: "This removes the scratch workspace entry. Promoted evidence remains unchanged.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!approved) return `${action.path} was not deleted.`;
+    if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to select the file again.");
+    await api.deleteWorkspaceEntry(action.projectId, action.path, action.expectedSha256);
+    try {
+      await api.previewWorkspaceFile(action.projectId, action.path);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return `Deleted ${action.path} from the project workspace. Core no longer serves the file.`;
+      throw error;
+    }
+    throw new Error("Core still serves the file after deletion. Refresh Files and inspect its current state.");
+  };
+
+  const applyWorkspaceDownload = async (action: Extract<SettingClientAction, {kind: "workspace_download"}>): Promise<string> => {
+    if (!api || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Select the original project and ask Butler to download the file again.");
+    }
+    const blob = await api.downloadWorkspaceFile(action.projectId, action.path);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (activeImageProject.current !== action.projectId || bytes.length !== action.size || sha256Hex(bytes) !== action.expectedSha256) {
+      throw new Error("The file changed before download. Ask Butler to read the current file and try again.");
+    }
+    const url = URL.createObjectURL(blob);
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = action.path.split("/").at(-1) ?? "workspace-file";
+      anchor.click();
+    } finally {
+      globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    return `Started a download of ${action.path} on this device (${bytes.length} bytes).`;
+  };
+
   const applyLibraryAction = async (action: Extract<SettingClientAction, {kind: "library_download" | "library_reindex" | "library_remove"}>): Promise<string> => {
     if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
       throw new Error("Reconnect to Core and select the original project before changing the shared Library.");
@@ -1014,6 +1059,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "library_add") return applyLibraryAdd(action);
     if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "chat_export") return applyChatExport(action);
+    if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
+    if (action.kind === "workspace_download") return applyWorkspaceDownload(action);
     if (action.kind === "project_create" || action.kind === "project_rename" || action.kind === "project_archive"
       || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);

@@ -69,6 +69,7 @@ from .settings_assistant_api import SettingsAssistantApi
 
 if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents
+    from .workspace import WorkspaceService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -364,6 +365,7 @@ class RuntimePlatform:
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
         self.butler_memory: Any = None
+        self.workspace_service: WorkspaceService | None = None
 
     def bind_settings_assistant_api(self, gateway: SettingsAssistantApi) -> None:
         self.settings_assistant_api = gateway
@@ -373,6 +375,11 @@ class RuntimePlatform:
 
     def bind_butler_memory(self, memory: Any) -> None:
         self.butler_memory = memory
+
+    def bind_workspace_service(self, service: WorkspaceService) -> None:
+        if service.store is not self.store:
+            raise ValueError("workspace service must use the runtime platform store")
+        self.workspace_service = service
 
     def bind_mcp_service(self, service: McpProbeService) -> None:
         if service.store is not self.store:
@@ -434,6 +441,7 @@ class RuntimePlatform:
                 if self.mcp_service is not None
                 and self.mcp_service.notebook_tools is not None
                 else None,
+                workspace=self.workspace_service,
             ).plugins():
                 registry.register(plugin)
                 privileged_names.add(plugin.spec.name)

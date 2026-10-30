@@ -1127,6 +1127,64 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it("confirms Butler file deletion and verifies the requesting-device download", async () => {
+    const user = userEvent.setup();
+    const content = "Saved workspace text\n";
+    const {sha256Hex} = await import("../sha256");
+    const hash = sha256Hex(content);
+    const deleteWorkspaceEntry = vi.fn().mockResolvedValue({path: "notes/research.txt"});
+    const previewWorkspaceFile = vi.fn().mockRejectedValue(new ApiError("Missing", 404));
+    const blob = new Blob([content], {type: "text/plain"});
+    Object.defineProperty(blob, "arrayBuffer", {value: vi.fn().mockResolvedValue(new TextEncoder().encode(content).buffer)});
+    const downloadWorkspaceFile = vi.fn().mockResolvedValue(blob);
+    const createObjectURL = vi.fn().mockReturnValue("blob:butler-workspace");
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: createObjectURL});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    let requestCount = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      const isDownload = requestCount++ === 2;
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `file-${requestCount}`,
+        capability: "nebula.capabilities.change", status: "complete", summary: "Pending on browser",
+        evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: isDownload ? "nebula.workspace.download_file" : "nebula.workspace.delete_file",
+          butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: isDownload ? "workspace_download" : "workspace_delete", project_id: "project",
+            path: "notes/research.txt", expected_sha256: hash, ...(isDownload ? {size: content.length} : {})}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I requested the file action."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, deleteWorkspaceEntry,
+        previewWorkspaceFile, downloadWorkspaceFile},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", {name: "Open Butler"}));
+      const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+      await user.type(composer, "Delete the research file{enter}");
+      await user.click(await screen.findByRole("button", {name: "Cancel"}));
+      await waitFor(() => expect(screen.getByText("notes/research.txt was not deleted.")).toBeVisible());
+      expect(deleteWorkspaceEntry).not.toHaveBeenCalled();
+      await user.type(composer, "Delete the research file{enter}");
+      await user.click(await screen.findByRole("button", {name: "Delete"}));
+      await waitFor(() => expect(deleteWorkspaceEntry).toHaveBeenCalledWith("project", "notes/research.txt", hash));
+      await waitFor(() => expect(screen.getByText(/Core no longer serves the file/)).toBeVisible());
+      expect(previewWorkspaceFile).toHaveBeenCalledWith("project", "notes/research.txt");
+      await user.type(composer, "Download the research file{enter}");
+      await waitFor(() => expect(downloadWorkspaceFile).toHaveBeenCalledWith("project", "notes/research.txt"));
+      await waitFor(() => expect(screen.getByText(/Started a download of notes\/research.txt/)).toBeVisible());
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect(anchorClick).toHaveBeenCalledOnce();
+    } finally {
+      anchorClick.mockRestore();
+    }
+  });
+
   it("confirms an exact shared Library reindex, rereads Core, and refreshes the Library", async () => {
     const user = userEvent.setup();
     const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";

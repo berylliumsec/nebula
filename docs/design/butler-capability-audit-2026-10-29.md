@@ -28,7 +28,7 @@ and reads; these counts are not a coverage percentage.
 | Assistant runtimes | List available runtimes; change chat defaults and next-turn Assistant settings; inspect model and quota information | A next-turn setting does not rebind a running turn. Some runtime lifecycle controls remain in the visible settings screens. |
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create, rename, archive, restore, and permanent delete through the requesting browser; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host folder selection and Host consent remain in their visible controls. |
-| Workspace, Code and terminals | Give a configured main agent a task in its project workspace; with a verified tool-capable provider, use the existing project-scoped `workspace.find`, `workspace.search`, and `workspace.read` tools for bounded file inspection | Butler has no typed file create, edit, rename, delete, or device download journey and no terminal lifecycle action. Linked-host-folder selection is device/host owned. |
+| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes | Browser file selection and binary upload, directory mutation, terminal lifecycle, and linked-host-folder selection remain gaps. Scheduled Butler has no file actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells and create or edit a cell with Core read-back; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, Notebook run lifecycle and package installation, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
@@ -164,6 +164,38 @@ compact Chromium, Android Chromium 320/390/430 px, and iPhone WebKit
 never received the synthetic transcript marker; a refresh showed Butler's
 reported device action. Physical Safari and the operating system's final save
 location were unavailable to this automated run.
+
+## Branch slice: workspace file control
+
+Entry point: an operator asks interactive Butler to find, inspect, create, edit,
+rename, delete, or download a file in the selected project workspace. Core's
+workspace service owns path containment, linked-folder behavior, exact bytes,
+mutation preconditions, and durable operation events. The URL owns the selected
+project; the requesting browser owns local downloads and file picker input.
+Butler must list paths before selecting a target and must use a full-file SHA-256
+from a current read before replacing, renaming, or deleting a regular file.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Butler pages directory entries and reads bounded UTF-8 text with the full-file hash; symlinks, FIFOs and other-project paths are refused | Workspace service and selected project | Tool and real Core |
+| Create and replace | Create refuses an existing destination; replace requires the current hash, writes atomically, and reports a matching Core read-back | Workspace file and Core upload precondition | Tool, API, real Core |
+| Rename and delete | A stale hash cannot rename or remove a regular file; delete needs the same explicit confirmation as Files, and both actions check the saved path afterward | Workspace service and requesting browser | Tool, component, real Core |
+| Download | Only the requesting browser receives file bytes and starts the local download; a changed or wrong-project target fails before the browser reports success | Core download and browser device | Component and production LAN browser |
+| Refresh and retry | Files and Code show the Core result after reload; an uncertain write is reconciled by reading the exact path and hash before another attempt | Workspace file, URL, browser state | Real-Core browser |
+
+Binary upload still requires the device file picker. Directory mutation, terminal
+lifecycle, and linked host folder selection require separate controls and evidence.
+Streaming and fork do not apply to one file operation. A browser download event
+proves the transfer started, not the operating system's final save location.
+
+The selected 13 Python and 63 frontend cases passed. A disposable paired LAN
+Core served the production bundle for the workspace journey in desktop and
+compact Chromium, Android Chromium 320/390/430 px, and iPhone WebKit
+320/390/430 px emulation. The browser downloaded the exact synthetic bytes,
+cancelled one deletion, confirmed another, and restored Butler's result after
+refresh. Physical Safari and the operating system's final save location were
+not observed. The file-hash check is a Core precondition before mutation;
+external terminal writes are outside the workspace API's serialization.
 
 ## Control contracts and remaining work to reach the product goal
 

@@ -17,10 +17,18 @@ export type SettingClientAction =
   | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
   | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string }
   | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
+  | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
+  | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
   | { kind: "library_add"; projectId: string }
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
 
 export interface AssistantWorkReceipt { url: string; content: string }
+
+function validWorkspacePath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 4096
+    && !value.startsWith("/") && !value.includes("\\") && !value.includes("\0")
+    && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
 
 function butlerGatewayOperation(event: Extract<ChatStreamEvent, {type: "tool_completed"}>, projectId?: string): string | undefined {
   const gateway = event.capability === "nebula.capabilities.change"
@@ -87,6 +95,18 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
       && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.session_id)
       && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1) {
     return {kind: "chat_export", projectId, sessionId: value.session_id, expectedRevision: Number(value.expected_revision)};
+  }
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId
+      && validWorkspacePath(value.path) && typeof value.expected_sha256 === "string"
+      && /^[0-9a-f]{64}$/.test(value.expected_sha256)) {
+    if (operation === "nebula.workspace.delete_file" && value.kind === "workspace_delete") {
+      return {kind: "workspace_delete", projectId, path: value.path, expectedSha256: value.expected_sha256};
+    }
+    if (operation === "nebula.workspace.download_file" && value.kind === "workspace_download"
+        && Number.isSafeInteger(value.size) && Number(value.size) >= 0) {
+      return {kind: "workspace_download", projectId, path: value.path,
+        expectedSha256: value.expected_sha256, size: Number(value.size)};
+    }
   }
   if (projectAction && operation === "nebula.library.add" && value.kind === "library_add"
       && typeof projectId === "string" && value.project_id === projectId) {

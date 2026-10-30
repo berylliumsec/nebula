@@ -10,7 +10,7 @@ import re
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator, ValidationError
@@ -33,6 +33,9 @@ from .domain import (
 )
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
+
+if TYPE_CHECKING:
+    from .workspace import WorkspaceService
 
 
 _SEARCH_SCHEMA: dict[str, Any] = {
@@ -67,6 +70,7 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.set_project_scope",
         "nebula.settings.headless_session",
         "nebula.chats.export",
+        "nebula.workspace.download_file",
         "nebula.library.add",
         "nebula.library.download",
         "nebula.library.reindex",
@@ -133,6 +137,10 @@ _CATEGORIES = (
         "description": "Project-scoped Notebook files, cells, package lookup, and existing run results under the current Notebook grant",
     },
     {
+        "id": "workspace",
+        "description": "Selected-project file listing, bounded text reads, hash-checked changes, and requesting-device downloads",
+    },
+    {
         "id": "library",
         "description": "Bounded shared Library item discovery and requesting-browser upload, download, reindex or removal",
     },
@@ -188,6 +196,7 @@ class ButlerCapabilities:
         *,
         settings_api: Any = None,
         notebooks: Any = None,
+        workspace: WorkspaceService | None = None,
         work: Any = None,
         memory: Any = None,
         operator_message: str = "",
@@ -222,6 +231,7 @@ class ButlerCapabilities:
             from .butler_chat_export import ButlerChatExport
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
+            from .butler_workspace import ButlerWorkspace
 
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in ButlerProjects(store).plugins()}
@@ -232,6 +242,13 @@ class ButlerCapabilities:
                     for plugin in ButlerChatExport(store, project_id).actions()
                 }
             )
+            if workspace is not None:
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerWorkspace(workspace, project_id).actions()
+                    }
+                )
             self._actions.update(
                 {
                     plugin.spec.name: plugin

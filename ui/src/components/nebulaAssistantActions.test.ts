@@ -121,6 +121,31 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "other", session_id: sessionId, expected_revision: 5}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "selected", session_id: "../other", expected_revision: 5}}}, "selected")).toBeUndefined();
   });
+  it("accepts only scoped workspace file actions with exact paths and hashes", () => {
+    const hash = "a".repeat(64);
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "workspace-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.workspace.download_file", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "workspace_download", project_id: "selected",
+          path: "notes/research.txt", expected_sha256: hash, size: 12}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "workspace_download", projectId: "selected",
+      path: "notes/research.txt", expectedSha256: hash, size: 12});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_download", project_id: "selected", path: "../escape", expected_sha256: hash, size: 12,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_download", project_id: "selected", path: "notes/research.txt", expected_sha256: "bad", size: 12,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt,
+      butler_operation: "nebula.workspace.delete_file", client_action: {kind: "workspace_delete",
+        project_id: "selected", path: "notes/research.txt", expected_sha256: hash},
+    }}, "selected")).toEqual({kind: "workspace_delete", projectId: "selected",
+      path: "notes/research.txt", expectedSha256: hash});
+  });
+
   it("accepts only exact shared Library actions for the requesting project", () => {
     const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const event: ChatStreamEvent = {

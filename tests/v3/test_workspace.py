@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import signal
 import shutil
 import subprocess
 
@@ -22,9 +23,11 @@ from nebula.v3.domain import (
     RunnerIsolation,
     RunnerRuntime,
 )
+from nebula.v3.executions import ExecutionServiceError
 from nebula.v3.storage import NebulaStore
 from nebula.v3.workspace import (
     MAX_PREVIEW_BYTES,
+    WorkspaceRenameRequest,
     WorkspaceResetRequest,
     WorkspaceService,
 )
@@ -623,6 +626,102 @@ def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
         "workspace.renamed",
         "workspace.deleted",
     }
+
+
+def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    source = root / "draft.txt"
+    source.write_text("first draft")
+    original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    endpoint = f"/api/v1/engagements/{engagement.id}/workspace/entry"
+
+    with client:
+        stale_rename = client.patch(
+            endpoint,
+            headers=AUTH,
+            json={
+                "path": "draft.txt",
+                "new_name": "final.txt",
+                "expected_sha256": "a" * 64,
+            },
+        )
+        assert stale_rename.status_code == 412
+        assert source.read_text() == "first draft"
+        renamed = client.patch(
+            endpoint,
+            headers=AUTH,
+            json={
+                "path": "draft.txt",
+                "new_name": "final.txt",
+                "expected_sha256": original_hash,
+            },
+        )
+        assert renamed.status_code == 200
+        target = root / "final.txt"
+        target.write_text("second draft")
+        stale_delete = client.delete(
+            endpoint,
+            headers={**AUTH, "If-Match": original_hash},
+            params={"path": "final.txt"},
+        )
+        assert stale_delete.status_code == 412
+        assert target.read_text() == "second draft"
+        current_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+        deleted = client.delete(
+            endpoint,
+            headers={**AUTH, "If-Match": current_hash},
+            params={"path": "final.txt"},
+        )
+        assert deleted.status_code == 200
+        assert not target.exists()
+        (root / "folder").mkdir()
+        directory = client.delete(
+            endpoint,
+            headers={**AUTH, "If-Match": "a" * 64},
+            params={"path": "folder"},
+        )
+        assert directory.status_code == 422
+        assert (root / "folder").is_dir()
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(signal, "setitimer"),
+    reason="FIFO and bounded synchronous-open regression requires POSIX signals",
+)
+def test_workspace_file_actions_reject_fifo_without_blocking(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    pipe = platform.workspace_for(engagement.id) / "pipe"
+    os.mkfifo(pipe)
+
+    def timeout(_signum, _frame):
+        raise TimeoutError("workspace file action blocked on a FIFO")
+
+    def reject_within_deadline(action):
+        previous_handler = signal.signal(signal.SIGALRM, timeout)
+        previous_timer = signal.setitimer(signal.ITIMER_REAL, 2.0)
+        try:
+            with pytest.raises(ExecutionServiceError) as error:
+                action()
+            assert error.value.status_code == 422
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+
+    reject_within_deadline(lambda: workspace.download(engagement.id, "pipe"))
+    reject_within_deadline(
+        lambda: workspace.rename(
+            engagement.id,
+            WorkspaceRenameRequest(
+                path="pipe", new_name="renamed", expected_sha256="a" * 64
+            ),
+        )
+    )
+    reject_within_deadline(
+        lambda: workspace.delete(engagement.id, "pipe", expected_sha256="a" * 64)
+    )
+    assert pipe.exists()
 
 
 def test_reset_refuses_a_queued_execution(tmp_path):

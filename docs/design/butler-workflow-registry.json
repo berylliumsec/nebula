@@ -264,24 +264,47 @@
       "status": "supported"
     },
     {
-      "id": "workspace.files",
-      "entry_point": "Files or Code: upload, rename, delete or download a workspace file",
+      "id": "workspace.text_files",
+      "entry_point": "Files or Code: create, edit, rename, delete or download a regular text file in the selected project workspace",
       "ui_calls": [
         "ui/src/components/WorkspacePanel.tsx::uploadWorkspaceFile",
         "ui/src/components/WorkspacePanel.tsx::renameWorkspaceEntry",
         "ui/src/components/WorkspacePanel.tsx::deleteWorkspaceEntry",
         "ui/src/components/WorkspacePanel.tsx::downloadWorkspaceFile",
-        "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile"
+        "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile",
+        "ui/src/components/NebulaControlAssistant.tsx::deleteWorkspaceEntry",
+        "ui/src/components/NebulaControlAssistant.tsx::downloadWorkspaceFile",
+        "ui/src/components/NebulaControlAssistant.tsx::previewWorkspaceFile"
       ],
       "core_owner": "WorkspaceService and linked-folder policy",
       "butler": {
-        "discover": "nebula.navigate.open",
-        "read": "missing: bounded file discovery and preview",
-        "change": "missing: typed file actions"
+        "discover": "nebula.navigate.open and nebula.workspace.list",
+        "read": "nebula.workspace.list and nebula.workspace.read",
+        "change": "nebula.workspace.create_text, nebula.workspace.replace_text, nebula.workspace.rename_file, nebula.workspace.delete_file, nebula.workspace.download_file"
       },
-      "authority": "Selected project, path containment, host-folder ownership, exact file revision or content hash; local picker and download stay on browser",
-      "observed_result_test": "missing: Butler workspace action and LAN file lifecycle regression",
-      "result": "Saved bytes, path and conflict state must be read from Core; local file picker remains device-owned",
+      "authority": "Selected project, contained regular-file path, current full-file SHA-256 for replace, rename and delete; requesting browser confirms delete and owns local download",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages a workspace text file on production LAN Core",
+      "result": "Created, replaced and renamed bytes are read from Core; confirmed deletion is absent from Core; local download starts only after browser SHA-256 verification",
+      "status": "supported"
+    },
+    {
+      "id": "workspace.device_and_directory",
+      "entry_point": "Files or Code: choose a local binary file, change directories or linked host folder, or control a terminal",
+      "ui_calls": [
+        "ui/src/components/WorkspacePanel.tsx::uploadWorkspaceFile",
+        "ui/src/components/WorkspacePanel.tsx::renameWorkspaceEntry",
+        "ui/src/components/WorkspacePanel.tsx::deleteWorkspaceEntry",
+        "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile"
+      ],
+      "core_owner": "WorkspaceService, browser file picker, linked-folder policy and terminal session",
+      "butler": {
+        "discover": "nebula.navigate.open",
+        "read": "nebula.workspace.list for visible entries",
+        "change": "missing: typed binary upload, directory mutation, linked-folder selection and terminal lifecycle controls"
+      },
+      "authority": "Selected project plus device or host consent, path containment, exact revision and observed session or file result",
+      "observed_result_test": "missing: Butler device upload, directory, linked-folder and terminal LAN journeys",
+      "result": "The browser or host selects local files and linked folders; Core must report saved bytes, paths and terminal state",
       "status": "gap"
     },
     {

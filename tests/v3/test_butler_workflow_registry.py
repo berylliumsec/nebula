@@ -43,7 +43,11 @@ def test_registry_rejects_new_ui_api_call_without_review(tmp_path: Path) -> None
 
 def test_registry_rejects_unsupported_action_marked_supported(tmp_path: Path) -> None:
     inventory = json.loads(REGISTRY.read_text())
-    gap = next(row for row in inventory["actions"] if row["id"] == "workspace.files")
+    gap = next(
+        row
+        for row in inventory["actions"]
+        if row["id"] == "workspace.device_and_directory"
+    )
     gap["status"] = "supported"
     gap["butler"]["change"] = "missing"
     candidate = tmp_path / "false-support.json"
