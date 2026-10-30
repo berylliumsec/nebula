@@ -116,7 +116,9 @@ def test_file_index_revision_guard_preserves_current_selection(tmp_path):
     store = NebulaStore(tmp_path / "store.db")
     root = tmp_path / "workspace"
     root.mkdir()
-    project = store.create(Engagement(name="Revision project", workspace_path=str(root)))
+    project = store.create(
+        Engagement(name="Revision project", workspace_path=str(root))
+    )
     service = NotebookService(
         store=store,
         workspace_resolver=lambda _: root,

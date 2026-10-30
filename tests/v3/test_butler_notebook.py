@@ -361,9 +361,10 @@ def test_butler_notebook_file_index_uses_browser_choice_and_current_project_revi
             change=True,
         )
         assert removed["file_index"]["path"] is None
-        assert removed["file_index"]["project_revision"] == connected[
-            "project_revision"
-        ] + 1
+        assert (
+            removed["file_index"]["project_revision"]
+            == connected["project_revision"] + 1
+        )
         store.update(
             McpServerProfile,
             profile.id,
