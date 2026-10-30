@@ -79,8 +79,8 @@ Butler calls `nebula.notebook.execute` with the current source hash, reads the
 returned run ID from Core, then waits or pages ordered events before reporting
 the result. If the execution response is uncertain, it calls
 `nebula.notebook.recent_runs` for that path and hash before any retry.
-`nebula.notebook.interrupt` targets one exact run ID and is read back from Core. Package
-lookup requires the project's network permission, while installation and
+`nebula.notebook.interrupt` targets one exact run ID and is read back from Core.
+Package lookup requires the project's network permission, while installation and
 kernel restart remain outside the catalog. Host consent stays on the operator's
 settings control. Scheduled Butler does not receive these Notebook actions.
 Storage source enrollment stays in the visible Storage settings form because its

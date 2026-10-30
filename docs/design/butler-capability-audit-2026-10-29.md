@@ -325,9 +325,10 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Add bounded workspace, Notebook kernel restart and package installation, and resource
-   actions in their owning services. Each needs target discovery, optimistic
-   revisions where applicable, and durable read-back.
+2. Complete binary upload and directory actions in Workspace, Notebook kernel
+   restart and package installation, and the remaining resource actions in their
+   owning services. Each needs target discovery, optimistic revisions where
+   applicable, and durable read-back.
 3. Add specialized device and administration handoffs for local file selection,
    pairing, storage enrollment, credentials, release updates and service state.
    Keep one-time values on the requesting device and preserve existing
