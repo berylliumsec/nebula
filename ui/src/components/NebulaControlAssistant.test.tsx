@@ -880,13 +880,18 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
-  it("creates a Butler draft with a fixed ID and waits for exact Core readback before navigation", async () => {
+  it.each([
+    {response: "confirmed", lostResponse: false},
+    {response: "lost after Core saved the draft", lostResponse: true},
+  ])("creates a Butler draft after a $response response and waits for exact Core readback before navigation", async ({lostResponse}) => {
     const user = userEvent.setup();
     const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const saved = {id: reportId, engagementId: "project", title: "Synthetic report", status: "draft",
       executiveSummary: "Current summary", findingIds: [], observationIds: [], revision: 1};
     const getReport = vi.fn().mockRejectedValueOnce(new ApiError("Missing", 404)).mockResolvedValue(saved);
-    const createReport = vi.fn().mockResolvedValue(saved);
+    const createReport = lostResponse
+      ? vi.fn().mockRejectedValue(new Error("The create response was lost after Core saved the draft"))
+      : vi.fn().mockResolvedValue(saved);
     const retryResource = vi.fn().mockResolvedValue(undefined);
     const onNavigate = vi.fn();
     const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
@@ -911,6 +916,7 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/project/reports/${reportId}`));
     expect(createReport).toHaveBeenCalledWith({engagementId: "project", reportId, title: "Synthetic report",
       executiveSummary: "Current summary", findingIds: [], observationIds: []});
+    expect(createReport).toHaveBeenCalledTimes(1);
     expect(getReport).toHaveBeenCalledTimes(2);
     expect(retryResource).toHaveBeenCalledWith("reports");
   });

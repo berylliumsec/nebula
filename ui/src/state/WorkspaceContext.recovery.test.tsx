@@ -211,9 +211,14 @@ describe("workspace resource recovery", () => {
   });
 
   it("keeps health polling armed after an offline retry fails", async () => {
+    let finishRuns!: (value: unknown) => void;
+    fixture.methods.listRuns.mockImplementationOnce(() => new Promise((resolve) => { finishRuns = resolve; }));
     await mount();
+    await waitFor(() => expect(fixture.methods.listRuns).toHaveBeenCalledTimes(1));
     act(() => window.dispatchEvent(new Event("offline")));
     await waitFor(() => expect(state().workspace).toBe("failed"));
+    await act(async () => finishRuns({ items: [run()] }));
+    expect(state().workspace).toBe("failed");
     fixture.methods.health.mockRejectedValueOnce(new Error("Core remains offline"));
     fireEvent.click(screen.getByText("Retry Core"));
     await waitFor(() => expect(state().workspace).toBe("failed"));

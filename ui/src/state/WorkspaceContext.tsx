@@ -398,7 +398,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             nextApi.listKnowledgeSources(nextEngagement.id, controller.signal),
             nextApi.listReports(nextEngagement.id, controller.signal),
           ]);
-          if (!active) return;
+          // A browser outage can arrive while project collections are loading.
+          // Keep the observed connection loss until a successful health check
+          // starts a fresh bootstrap.
+          if (!active || connectionLost.current) return;
           const labels = ["activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"];
           detailResults.forEach((result, index) => {
             if (result.status === "rejected") loadErrors.push(labels[index]);

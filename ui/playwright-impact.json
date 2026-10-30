@@ -881,7 +881,10 @@
     "core-connection-resilience": [
       {"area":"core-connection-resilience","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
       {"area":"core-connection-resilience","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
-      {"area":"core-connection-resilience","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"}
+      {"area":"core-connection-resilience","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core outage retains the conversation and exposes reconnect","runtime":"real-core","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core outage retains the conversation and exposes reconnect","runtime":"real-core","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core outage retains the conversation and exposes reconnect","runtime":"real-core","shard":"1/1"}
     ],
     "host-startup-default": [
       {"area":"host-startup-default","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
