@@ -309,22 +309,81 @@
     },
     {
       "id": "notebook.cells",
-      "entry_point": "Notebook panel: create notebook, edit cell, run or interrupt it",
+      "entry_point": "Notebook panel: create a project notebook and save an exact cell",
       "ui_calls": [
         "ui/src/components/NotebookPanel.tsx::createNotebook",
-        "ui/src/components/NotebookPanel.tsx::saveNotebookCell",
-        "ui/src/components/NotebookPanel.tsx::runNotebookCell",
-        "ui/src/components/NotebookPanel.tsx::interruptNotebookRun"
+        "ui/src/components/NotebookPanel.tsx::listNotebooks",
+        "ui/src/components/NotebookPanel.tsx::readNotebook",
+        "ui/src/components/NotebookPanel.tsx::saveNotebookCell"
       ],
-      "core_owner": "NotebookService, notebook file revision, kernel run state",
+      "core_owner": "NotebookService, project workspace file and cell revisions",
       "butler": {
         "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
-        "read": "nebula.notebook.list, read, source, run, run_event, wait and status",
-        "change": "missing: typed execute, interrupt, restart and package installation with observed-result acceptance; create and edit_cell are present"
+        "read": "nebula.notebook.list, read, source and status",
+        "change": "nebula.notebook.create and nebula.notebook.edit_cell"
       },
-      "authority": "Selected project, current file revision or source hash, kernel policy and run identity",
-      "observed_result_test": "tests/v3/test_butler_notebook.py and ui/tests/real-core.spec.ts Butler Notebook edit; execution, interruption, restart and package installation acceptance pending",
-      "result": "Saved source, run output and interrupt state must be read from Core",
+      "authority": "Selected project, Notebook grant, current document revision or cell source hash",
+      "observed_result_test": "tests/v3/test_butler_notebook.py::test_butler_notebook_pages_exact_cells_and_rejects_stale_edits",
+      "result": "Core read-back confirms the saved source; a stale hash leaves the file unchanged",
+      "status": "supported"
+    },
+    {
+      "id": "notebook.runs",
+      "entry_point": "Notebook panel: execute a saved code cell and interrupt one exact run",
+      "ui_calls": [
+        "ui/src/components/NotebookPanel.tsx::runNotebookCell",
+        "ui/src/components/NotebookPanel.tsx::interruptNotebookRun",
+        "ui/src/components/NotebookPanel.tsx::listNotebookRuns",
+        "ui/src/components/NotebookPanel.tsx::readNotebookRun",
+        "ui/src/components/NotebookPanel.tsx::watchNotebookRun"
+      ],
+      "core_owner": "NotebookService, project execution policy, run store and ordered events",
+      "butler": {
+        "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
+        "read": "nebula.notebook.recent_runs, run, run_event, wait and status",
+        "change": "nebula.notebook.execute and nebula.notebook.interrupt"
+      },
+      "authority": "Selected project, Notebook grant, Host consent, current cell source hash and exact run ID",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core",
+      "result": "Core records the exact source hash, output and interruption; the refreshed Notebook displays the same state",
+      "status": "supported"
+    },
+    {
+      "id": "notebook.resources",
+      "entry_point": "Notebook panel: search for or install a package and restart its kernel",
+      "ui_calls": [
+        "ui/src/components/NotebookPanel.tsx::searchNotebookPackage",
+        "ui/src/components/NotebookPanel.tsx::installNotebookPackage",
+        "ui/src/components/NotebookPanel.tsx::restartNotebookKernel"
+      ],
+      "core_owner": "NotebookService, project package network policy and kernel state",
+      "butler": {
+        "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
+        "read": "nebula.notebook.search_package and status",
+        "change": "missing: typed package installation and kernel restart with observed-result acceptance"
+      },
+      "authority": "Selected project, Notebook grant, Host consent, package network permission and exact kernel target",
+      "observed_result_test": "missing: Butler package installation and kernel restart LAN lifecycle",
+      "result": "Core must report the installed package or restarted kernel state; an uncertain install must be inspected before retry",
+      "status": "gap"
+    },
+    {
+      "id": "notebook.file_index",
+      "entry_point": "Notebook file-index settings: connect, inspect or remove a host file index",
+      "ui_calls": [
+        "ui/src/components/NotebookFileIndexSettings.tsx::notebookFileIndex",
+        "ui/src/components/NotebookFileIndexSettings.tsx::setNotebookFileIndex",
+        "ui/src/components/NotebookFileIndexSettings.tsx::removeNotebookFileIndex"
+      ],
+      "core_owner": "Notebook file-index service and linked host path policy",
+      "butler": {
+        "discover": "nebula.navigate.open (Notebook destination)",
+        "read": "missing: bounded project file-index status and source-path discovery",
+        "change": "missing: typed connect and remove file-index actions"
+      },
+      "authority": "Selected project, linked host path containment and current file-index revision",
+      "observed_result_test": "missing: Butler file-index LAN lifecycle",
+      "result": "Core must read back the selected index and removal without disclosing unrelated host files",
       "status": "gap"
     },
     {

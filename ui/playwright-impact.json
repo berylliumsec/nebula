@@ -267,14 +267,14 @@
       {"area":"butler-chat-rewind","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-notebook": [
-      {"area":"butler-notebook","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"butler-notebook","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"butler-notebook","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"butler-notebook","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"butler-notebook","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"butler-notebook","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"butler-notebook","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
-      {"area":"butler-notebook","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"}
+      {"area":"butler-notebook","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-timeline": [
       {"area":"butler-timeline","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler briefs named agent evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
