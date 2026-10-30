@@ -27,8 +27,8 @@ and reads; these counts are not a coverage percentage.
 | Butler memory | List and search visible preferences and lessons; save a quoted memory; edit or forget one on operator request with its current revision | Memory is context with provenance, not authority to change another project or certify a result. |
 | Assistant runtimes | List available runtimes; change chat defaults and next-turn Assistant settings; inspect model and quota information | A next-turn setting does not rebind a running turn. Some runtime lifecycle controls remain in the visible settings screens. |
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
-| Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create, rename, archive, restore, and permanent delete through the requesting browser; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host folder selection and Host consent remain in their visible controls. |
-| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, request browser-owned binary upload and verified download, and create, rename or delete an empty directory against current identities | Terminal lifecycle and linked-host-folder selection remain gaps. Scheduled Butler has no file actions. |
+| Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host consent remains in its visible control; relinking an existing project remains a gap. |
+| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, request browser-owned binary upload and verified download, and create, rename or delete an empty directory against current identities | Terminal lifecycle and existing-project host-folder relinking remain gaps. Scheduled Butler has no file actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run; read and restart an idle kernel; read or install an exact package with environment read-back; choose or remove a host SQLite file index through the requesting browser and Core project revision; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
@@ -132,6 +132,27 @@ matches. Core's durable receipt and transaction-level name guard protect Butler
 creates when two browsers pass the preflight together. Other project creation
 paths retain their existing name semantics. A retry of a deleted project's
 request ID fails closed instead of recreating it.
+
+### Branch extension: create a project with a linked host folder
+
+Entry point: an operator asks interactive Butler to create a new project using
+an existing folder on the Nebula host. Butler prepares one durable create request
+without receiving a host path. The paired browser opens the same host folder
+picker used by the project switcher; Core owns folder resolution, the new
+project, its default scope and Host policy. The browser owns the temporary
+folder choice and current project selection. This action does not relink an
+existing project's workspace or move files.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Butler finds the linked-project action; the operator browses a real host folder, with cancellation leaving no project | Core catalog and browser host picker | Tool, component, paired LAN browser |
+| Create | The browser checks duplicate names and submits the chosen folder with one request ID; Core resolves the folder, creates the project and policies atomically, and refuses a changed retry | Core project create receipt and host filesystem | API and paired LAN browser |
+| Read back | Core's exact project has the resolved linked path and pending Host consent; Files and Code resolve the same project workspace after navigation and refresh | Core project, workspace and URL | Paired LAN browser |
+| Failure and retry | An unavailable folder or uncertain create response requires inspecting Core projects before retry; no second project is silently created | Core error and retry receipt | API and paired LAN browser |
+
+Terminal streaming, interruption, fork, and deletion are separate workflows.
+Selecting a folder does not acknowledge Host command access. A later operator
+consent remains required before Host execution.
 
 ## Branch slice: chat transcript export
 
@@ -335,11 +356,11 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 27
-reviewed actions, including explicit export, workspace, Notebook, Library, and
-storage dispositions. Its source inventory contains 510 distinct `api` call
-signatures in production UI TypeScript, of which 61 are linked to those
-reviewed actions; 449 still require action-level review. The new Workbench bulk
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 28
+reviewed actions, including explicit export, workspace, Notebook, Library,
+linked-project creation, and storage dispositions. Its source inventory contains
+510 distinct `api` call signatures in production UI TypeScript, of which 64
+are linked to those reviewed actions; 446 still require action-level review. The new Workbench bulk
 chat calls map to the existing per-chat archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
 calls are keyed by route expression and HTTP verb. The guard fails when a call
@@ -357,7 +378,7 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Complete terminal lifecycle, linked host folder selection, and the remaining
+2. Complete terminal lifecycle, existing-project linked host folder relinking, and the remaining
    resource actions in their owning services. Each
    needs target discovery, optimistic revisions where applicable, and observed
    Core read-back.

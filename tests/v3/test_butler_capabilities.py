@@ -298,6 +298,17 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
         assert create["client_action"]["kind"] == "project_create"
         assert create["client_action"]["name"] == "New project"
         assert create["client_action"]["request_id"]
+        linked = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.create_linked",
+                "arguments": {"name": "Linked project"},
+            },
+            change=True,
+        )
+        assert linked["client_action"]["kind"] == "project_create_linked"
+        assert linked["client_action"]["name"] == "Linked project"
+        assert linked["client_action"]["request_id"]
+        assert "workspace_path" not in linked["client_action"]
         assert len(store.list_entities(Engagement, limit=1000)) == 53
         archived = store.update(
             Engagement,
@@ -431,6 +442,14 @@ def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path
         with pytest.raises(CapabilityInputError, match="listed operation"):
             await capabilities.invoke(
                 {"operation": "nebula.projects.archive", "arguments": {}}, change=True
+            )
+        with pytest.raises(CapabilityInputError, match="listed operation"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.projects.create_linked",
+                    "arguments": {"name": "No"},
+                },
+                change=True,
             )
 
     asyncio.run(scenario())

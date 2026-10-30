@@ -144,6 +144,26 @@
       "status": "supported"
     },
     {
+      "id": "project.create_linked",
+      "entry_point": "Butler request: create a new project using a folder selected on the Nebula host",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::createEngagement",
+        "ui/src/components/HostFolderPicker.tsx::listHostWorkspaceFolders",
+        "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
+        "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy"
+      ],
+      "core_owner": "Core project create receipt, host folder resolution, default scope and Host policy",
+      "butler": {
+        "discover": "nebula.projects.list and nebula.projects.create_linked",
+        "read": "nebula.projects.detail",
+        "change": "nebula.projects.create_linked"
+      },
+      "authority": "Interactive browser chooses the host folder; model supplies no path; Core saves one request ID and Host consent remains pending",
+      "observed_result_test": "ui/tests/real-core.spec.ts::Butler project lifecycle confirms and reads back changes on production LAN Core",
+      "result": "Core's saved workspace path and pending Host policy agree with Files after refresh",
+      "status": "supported"
+    },
+    {
       "id": "project.rename",
       "entry_point": "Project switcher or Butler request: rename a project",
       "ui_calls": [
@@ -311,8 +331,8 @@
       "status": "supported"
     },
     {
-      "id": "workspace.linked_folder_and_terminal",
-      "entry_point": "Project setup or Workbench: link a host folder and manage terminal sessions",
+      "id": "workspace.relink_and_terminal",
+      "entry_point": "Existing project or Workbench: relink a host folder and manage terminal sessions",
       "ui_calls": [
         "ui/src/components/ContainerTerminalPanel.tsx::terminalCommandHistoryStatus"
       ],
@@ -320,10 +340,10 @@
       "butler": {
         "discover": "nebula.navigate.open",
         "read": "nebula.workspace.list shows selected workspace entries only",
-        "change": "missing: linked host folder selection and terminal lifecycle controls"
+        "change": "missing: existing-project relink and terminal lifecycle controls"
       },
       "authority": "Host folder consent and exact terminal session identity with Core read-back",
-      "observed_result_test": "missing: Butler linked-folder and terminal LAN journey",
+      "observed_result_test": "missing: Butler existing-project relink and terminal LAN journey",
       "result": "Core and Workbench must agree on selected folder and live terminal state",
       "status": "gap"
     },
@@ -1128,7 +1148,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getButlerVoiceSettings",

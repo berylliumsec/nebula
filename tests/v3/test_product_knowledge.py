@@ -303,6 +303,14 @@ def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypa
         and "same transaction" in str(item["text"])
         for item in retry
     )
+    linked = search_product_knowledge(
+        "Can Butler create a linked project using a Nebula host folder?"
+    )
+    assert any(
+        "nebula.projects.create_linked" in str(item["text"])
+        and "host folder picker" in str(item["text"])
+        for item in linked
+    )
 
 
 def test_product_search_finds_butler_device_transcript_export(monkeypatch):
