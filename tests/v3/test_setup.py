@@ -18,7 +18,7 @@ from sqlalchemy import create_engine
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.database import BootstrapStateRow, Database
+from nebula.v3.database import BootstrapStateRow, Database, ProjectCreateRequestRow
 from nebula.v3.domain import (
     AutomationProjectPolicy,
     Engagement,
@@ -41,7 +41,7 @@ from nebula.v3.setup import (
     bootstrap_scratch_project,
     create_engagement_with_default_scope,
 )
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.runtime_platform import (
     KALI_RUNTIME_METADATA_SCHEMA,
     RuntimePlatform,
@@ -139,6 +139,105 @@ def test_new_project_records_explicit_host_access_in_same_transaction(tmp_path):
         "project_creation_operator_acknowledgement"
     )
     assert store.get(Engagement, created.id) == created
+
+
+def test_project_create_request_is_atomic_retry_safe_and_retained_after_delete(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "project-retry.db")
+    first = create_engagement_with_default_scope(
+        store,
+        Engagement(name="Retry project"),
+        actor_id="operator-a",
+        request_id="request-one",
+    )
+    replay = create_engagement_with_default_scope(
+        store,
+        Engagement(name="Retry project"),
+        actor_id="operator-a",
+        request_id="request-one",
+    )
+    assert replay == first
+    assert store.count(Engagement) == 1
+    assert len(store.list_entities(ScopePolicy, engagement_id=first.id)) == 1
+    assert (
+        len(store.list_entities(AutomationProjectPolicy, engagement_id=first.id)) == 1
+    )
+    with store.database.session() as session:
+        receipt = session.get(ProjectCreateRequestRow, ("operator-a", "request-one"))
+        assert receipt is not None and receipt.engagement_id == first.id
+
+    with pytest.raises(ConflictError, match="different project details"):
+        create_engagement_with_default_scope(
+            store,
+            Engagement(name="Changed details"),
+            actor_id="operator-a",
+            request_id="request-one",
+        )
+    with pytest.raises(ConflictError, match="project name already exists"):
+        create_engagement_with_default_scope(
+            store,
+            Engagement(name="  RETRY   project  "),
+            actor_id="operator-a",
+            request_id="request-two",
+        )
+    other_actor = create_engagement_with_default_scope(
+        store,
+        Engagement(name="Different project"),
+        actor_id="operator-b",
+        request_id="request-one",
+    )
+    assert other_actor.id != first.id
+
+    store.delete(Engagement, first.id, expected_revision=first.revision)
+    with pytest.raises(ConflictError, match="since been deleted"):
+        create_engagement_with_default_scope(
+            store,
+            Engagement(name="Retry project"),
+            actor_id="operator-a",
+            request_id="request-one",
+        )
+
+
+def test_concurrent_project_create_retries_share_one_project(tmp_path):
+    store = NebulaStore(tmp_path / "project-race.db")
+
+    def create(_index: int) -> Engagement:
+        return create_engagement_with_default_scope(
+            store,
+            Engagement(name="Concurrent project"),
+            actor_id="operator-a",
+            request_id="same-request",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        projects = list(pool.map(create, range(2)))
+    assert projects[0].id == projects[1].id
+    assert store.count(Engagement) == 1
+
+
+def test_concurrent_butler_creates_cannot_reuse_project_name(tmp_path):
+    store = NebulaStore(tmp_path / "project-name-race.db")
+
+    def create(index: int) -> str:
+        try:
+            created = create_engagement_with_default_scope(
+                store,
+                Engagement(
+                    name="  Concurrent   project  " if index else "Concurrent project"
+                ),
+                actor_id="operator-a",
+                request_id=f"request-{index}",
+            )
+            return created.id
+        except ConflictError as exc:
+            assert "project name already exists" in str(exc)
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(create, range(2)))
+    assert results.count("conflict") == 1
+    assert store.count(Engagement) == 1
 
 
 def test_import_content_arriving_before_first_launch_suppresses_scratch(tmp_path):

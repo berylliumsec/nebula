@@ -1504,6 +1504,31 @@ def test_project_creation_records_explicit_host_consent_without_persisting_reque
     )
 
 
+def test_project_create_request_id_replays_exact_core_result(api):
+    client, store, _ = api
+    body = {
+        "name": "Idempotent project",
+        "description": "Original request",
+        "request_id": "request-one",
+    }
+    first = client.post("/api/v1/engagements", headers=_auth(), json=body)
+    replay = client.post("/api/v1/engagements", headers=_auth(), json=body)
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert "request_id" not in first.json()
+    assert (
+        len([p for p in store.list_entities(Engagement) if p.name == body["name"]]) == 1
+    )
+
+    conflict = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={**body, "description": "Different request"},
+    )
+    assert conflict.status_code == 409
+
+
 def test_typed_crud_revision_and_overview(api):
     client, store, _ = api
     created = client.post(

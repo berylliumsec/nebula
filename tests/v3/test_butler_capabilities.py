@@ -231,6 +231,7 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
         )
         assert create["client_action"]["kind"] == "project_create"
         assert create["client_action"]["name"] == "New project"
+        assert create["client_action"]["request_id"]
         assert len(store.list_entities(Engagement, limit=1000)) == 53
         archived = store.update(
             Engagement,

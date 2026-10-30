@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from .domain import Engagement, EngagementStatus, RiskClass
 from .storage import NebulaStore
@@ -104,6 +105,7 @@ class ButlerProjects:
                 "name": name,
                 "description": arguments.get("description", ""),
                 "client_name": arguments.get("client_name", ""),
+                "request_id": str(uuid4()),
             }
         )
 
@@ -185,7 +187,7 @@ class ButlerProjects:
             ),
             (
                 "nebula.projects.create",
-                "Ask the requesting browser to create a project after explicit operator instruction. No host folder is linked and Host access remains unacknowledged; the browser reports the saved Core result. Inspect the project list after an uncertain response before retrying.",
+                "Ask the requesting browser to create a project after explicit operator instruction. The action carries one durable retry ID. No host folder is linked and Host access remains unacknowledged; the browser reports the saved Core result. Inspect the project list after an uncertain response before retrying.",
                 _CREATE,
                 RiskClass.WORKSPACE_WRITE,
                 self.create,

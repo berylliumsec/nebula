@@ -1296,9 +1296,10 @@ class ApprovalDecisionRequest(NebulaModel):
 
 
 class EngagementCreateRequest(Engagement):
-    """Creation-only consent; this field is never persisted on the project."""
+    """Creation-only consent and retry key; neither is persisted on the project."""
 
     host_access_acknowledged: bool = False
+    request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class NotebookFileIndexRequest(NebulaModel):
@@ -15229,10 +15230,14 @@ def _register_crud_routes(
                     f"cannot set server-managed fields: {sorted(protected)}"
                 )
             host_access_acknowledged = False
+            project_request_id = None
             if isinstance(entity, EngagementCreateRequest):
                 host_access_acknowledged = entity.host_access_acknowledged
+                project_request_id = entity.request_id
                 entity = Engagement.model_validate(
-                    entity.model_dump(exclude={"host_access_acknowledged"})
+                    entity.model_dump(
+                        exclude={"host_access_acknowledged", "request_id"}
+                    )
                 )
             if isinstance(entity, ProviderProfile):
                 entity = entity.model_copy(
@@ -15263,6 +15268,8 @@ def _register_crud_routes(
                     store,
                     entity,
                     host_access_acknowledged=host_access_acknowledged,
+                    actor_id=actor_id(),
+                    request_id=project_request_id,
                 )
                 if isinstance(entity, Engagement)
                 else relation_service.create_legacy_entity(entity)

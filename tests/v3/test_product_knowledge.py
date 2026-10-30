@@ -237,6 +237,12 @@ def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypa
         and "confirmations" in str(item["text"])
         for item in matches
     )
+    retry = search_product_knowledge("Butler create receipt retry ID")
+    assert any(
+        "request fingerprint" in str(item["text"])
+        and "same transaction" in str(item["text"])
+        for item in retry
+    )
 
 
 def test_product_search_finds_butler_effort_setting(monkeypatch):
