@@ -1,10 +1,10 @@
 {
-  "change_digest": "11919891256255472343981d8e419acaa674b6203af571390c6b00ac1ae6e12d",
-  "reviewed_by": "Codex focused review for Butler project-create durable retry receipt, name race guard, and existing project lifecycle journey",
-  "reason": "Eleven collected Python cases cover Butler project action discovery, Core project-create receipt replay, changed-payload and deleted-target conflicts, two concurrent create races, legacy Host consent, and packaged product guidance with Chroma source-digest sync. Sixty-six listed frontend cases cover the typed receipt, request-ID API body, preflight failures, archive confirmation, and Core readback. Eight paired browser profiles run the selected Butler project lifecycle against disposable authenticated LAN Core and a production bundle; the journey now verifies a lost response, exact Core receipt replay, and conflicts for changed details and a separate same-name request.",
-  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. Browser profiles emulate mobile devices; physical Safari is unavailable. The name guard applies to Butler keyed creates; unkeyed project creation retains its existing semantics.",
+  "change_digest": "46f1667231751af8dfbba336f4318d65f38393025ac3cf66e31f0548dea30c0f",
+  "reviewed_by": "Codex focused review for Butler project lifecycle plus workflow registry source guard",
+  "reason": "Fifteen collected Python cases retain the 11 Butler project lifecycle, durable retry, knowledge-index and Chroma checks and add four Node-backed registry checks: current UI call inventory, detected call drift, rejection of false supported status, and refusal of invented Core catalog operations. Sixty-six listed frontend cases remain selected for the project lifecycle candidate. The frontend production build now runs the source guard as prebuild and is required in CI. Eight paired browser profiles retain the authenticated production-LAN Butler project journey. The registry/docs slice changes no runtime workflow; its own checks are source-level.",
+  "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend, and Playwright journeys are excluded. The registry scans calls on the variable named api and is explicitly an incomplete action map; unreviewed signatures do not imply Butler support. Browser profiles emulate mobile devices; physical Safari is unavailable. The name guard applies to Butler keyed creates; unkeyed project creation retains existing semantics.",
   "expected_tests": {
-    "python": 11,
+    "python": 15,
     "frontend": 66,
     "native": 0,
     "playwright": 8
@@ -13,7 +13,7 @@
     "3.12"
   ],
   "python_browser": false,
-  "python_node": false,
+  "python_node": true,
   "python": [
     "tests/v3/test_butler_capabilities.py::test_interactive_butler_prepares_project_lifecycle_with_exact_revisions",
     "tests/v3/test_butler_capabilities.py::test_scheduled_butler_cannot_discover_interactive_project_mutations",
@@ -25,7 +25,11 @@
     "tests/v3/test_setup.py::test_concurrent_project_create_retries_share_one_project",
     "tests/v3/test_setup.py::test_concurrent_butler_creates_cannot_reuse_project_name",
     "tests/v3/test_api.py::test_project_creation_records_explicit_host_consent_without_persisting_request_field",
-    "tests/v3/test_api.py::test_project_create_request_id_replays_exact_core_result"
+    "tests/v3/test_api.py::test_project_create_request_id_replays_exact_core_result",
+    "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_unsupported_action_marked_supported",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_operation_missing_from_core_catalog"
   ],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",

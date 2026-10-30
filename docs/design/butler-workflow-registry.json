@@ -1,0 +1,2309 @@
+{
+  "version": 1,
+  "actions": [
+    {
+      "id": "chat.archive",
+      "entry_point": "Conversation menu: Archive or Restore a saved main chat",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::setChatSessionArchived"
+      ],
+      "core_owner": "ChatService and chat session metadata",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat",
+        "change": "nebula.work.update_chat"
+      },
+      "authority": "Selected project, exact session revision, idle turn for archive",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_control_assistant_updates_chat_and_reuses_saved_mission_retry",
+      "result": "Core saved archived_at agrees with chat list after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "chat.priority",
+      "entry_point": "Conversation menu: Pin or flag a saved main chat",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::setChatSessionPriority"
+      ],
+      "core_owner": "ChatService and chat session metadata",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat",
+        "change": "nebula.work.update_chat"
+      },
+      "authority": "Selected project, exact session revision, listed flag color",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade control assistant starts project work on production LAN Core",
+      "result": "Core saved pinned and flag_color agree with refreshed sidebar",
+      "status": "supported"
+    },
+    {
+      "id": "chat.fork",
+      "entry_point": "Conversation toolbar: fork a saved main chat",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::forkChatSession"
+      ],
+      "core_owner": "ChatService and harness session lineage",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat",
+        "change": "nebula.work.fork_chat"
+      },
+      "authority": "Selected project, source chat revision and saved message ID",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_chat_fork_and_delete_are_project_bound_and_revision_guarded",
+      "result": "New chat has saved parent lineage and its own transcript",
+      "status": "supported"
+    },
+    {
+      "id": "chat.delete",
+      "entry_point": "Conversation menu: permanently delete a saved main chat",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::deleteChatSession"
+      ],
+      "core_owner": "ChatService and session dependency guards",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat",
+        "change": "nebula.work.delete_chat"
+      },
+      "authority": "Explicit instruction, selected project, current revision and title; refuse active work",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_chat_fork_and_delete_are_project_bound_and_revision_guarded",
+      "result": "Deleted chat is absent on Core readback",
+      "status": "supported"
+    },
+    {
+      "id": "chat.rename",
+      "entry_point": "Conversation menu: rename a saved main chat",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::renameChatSession"
+      ],
+      "core_owner": "ChatService and chat session revision",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat",
+        "change": "nebula.work.update_chat"
+      },
+      "authority": "Selected project and current revision",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_control_assistant_updates_chat_and_reuses_saved_mission_retry",
+      "result": "Saved title appears in chat detail and list",
+      "status": "supported"
+    },
+    {
+      "id": "chat.rewind",
+      "entry_point": "Edit a saved user message in its existing conversation",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::rewindChatSession"
+      ],
+      "core_owner": "ChatService, replaced messages, and harness rewind",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat (recent messages only)",
+        "change": "missing"
+      },
+      "authority": "Selected project, exact user message, current revision, idle turn; replacement needs explicit confirmation",
+      "observed_result_test": "missing: Butler rewind and real-Core replay regression",
+      "result": "Retained and replaced messages, harness state, and new turn must agree after reconnect",
+      "status": "gap"
+    },
+    {
+      "id": "chat.export",
+      "entry_point": "Conversation menu: download a Markdown transcript",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::listChatMessages"
+      ],
+      "core_owner": "ChatService supplies saved messages; browser owns download",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat (bounded recent messages)",
+        "change": "missing: browser export handoff"
+      },
+      "authority": "Requesting browser confirms sensitive transcript export and keeps local download private",
+      "observed_result_test": "missing: Butler export handoff and browser download regression",
+      "result": "Requesting device downloads complete saved transcript without returning it through the model",
+      "status": "device_handoff"
+    },
+    {
+      "id": "project.create",
+      "entry_point": "Project switcher or Butler request: create a project",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::createEngagement"
+      ],
+      "core_owner": "Core project store and durable create request receipt",
+      "butler": {
+        "discover": "nebula.projects.list",
+        "read": "nebula.projects.detail",
+        "change": "nebula.projects.create"
+      },
+      "authority": "Interactive requesting browser or eligible background Act authority; normalized name and stable request ID",
+      "observed_result_test": "ui/tests/real-core.spec.ts::Butler project lifecycle confirms and reads back changes on production LAN Core",
+      "result": "Saved project ID, default scope and Host policy appear after retry and refresh",
+      "status": "supported"
+    },
+    {
+      "id": "project.rename",
+      "entry_point": "Project switcher or Butler request: rename a project",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::renameEngagementAtRevision"
+      ],
+      "core_owner": "Core project store",
+      "butler": {
+        "discover": "nebula.projects.list",
+        "read": "nebula.projects.detail",
+        "change": "nebula.projects.rename"
+      },
+      "authority": "Interactive requesting browser or eligible background Act authority; current project revision",
+      "observed_result_test": "ui/tests/real-core.spec.ts::Butler project lifecycle confirms and reads back changes on production LAN Core",
+      "result": "Saved name appears in project list after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "project.archive",
+      "entry_point": "Project switcher or Butler request: archive or restore a project",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::setEngagementArchived"
+      ],
+      "core_owner": "Core project store and project switcher",
+      "butler": {
+        "discover": "nebula.projects.list",
+        "read": "nebula.projects.detail",
+        "change": "nebula.projects.archive / nebula.projects.restore"
+      },
+      "authority": "Interactive browser confirmation for archive, current revision, exact project; eligible background Act authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::Butler project lifecycle confirms and reads back changes on production LAN Core",
+      "result": "Core status and project switcher agree after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "project.delete",
+      "entry_point": "Project switcher or Butler request: permanently delete an archived project",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::deleteArchivedEngagement"
+      ],
+      "core_owner": "Core project deletion lock and dependency guards",
+      "butler": {
+        "discover": "nebula.projects.list",
+        "read": "nebula.projects.detail",
+        "change": "nebula.projects.delete"
+      },
+      "authority": "Explicit browser confirmation, archived target, current revision, dependency preflight",
+      "observed_result_test": "ui/tests/real-core.spec.ts::Butler project lifecycle confirms and reads back changes on production LAN Core",
+      "result": "Deleted project is absent and stale URL selection clears",
+      "status": "supported"
+    },
+    {
+      "id": "work.create",
+      "entry_point": "Work board: create a manual item",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"POST\" `engagements/${encodeURIComponent(target)}/work`",
+        "ui/src/pages/WorkPage.tsx::request::\"POST\" target"
+      ],
+      "core_owner": "WorkService and project Work store",
+      "butler": {
+        "discover": "nebula.work.work_items",
+        "read": "nebula.work.work_item",
+        "change": "nebula.work.create_work_item"
+      },
+      "authority": "Selected project, explicit instruction, stable request ID",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade control assistant starts project work on production LAN Core",
+      "result": "Created item appears in project Work list and exact detail",
+      "status": "supported"
+    },
+    {
+      "id": "work.update",
+      "entry_point": "Work board: edit title, description, priority or assignment",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `${target}/${encodeURIComponent(trackItemId)}`"
+      ],
+      "core_owner": "WorkService and item revision",
+      "butler": {
+        "discover": "nebula.work.work_items",
+        "read": "nebula.work.work_item",
+        "change": "nebula.work.update_work_item"
+      },
+      "authority": "Selected project, current item revision, project-bound assignee",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_butler_manages_project_work_items_with_saved_revisions",
+      "result": "Saved item fields appear in detail after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "work.check_in",
+      "entry_point": "Work board: post a check-in or status change",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"POST\" `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}/updates`"
+      ],
+      "core_owner": "WorkService, item and update store",
+      "butler": {
+        "discover": "nebula.work.work_items",
+        "read": "nebula.work.work_item / nebula.work.work_updates",
+        "change": "nebula.work.check_in_work_item"
+      },
+      "authority": "Selected project, current item revision, stable request ID",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade control assistant starts project work on production LAN Core",
+      "result": "Saved update and status appear in Work detail after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "work.agent_access",
+      "entry_point": "Work board: enable or disable agent Work tools",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/setting`"
+      ],
+      "core_owner": "Core project revision and Work setting",
+      "butler": {
+        "discover": "nebula.work.catalog",
+        "read": "nebula.work.work_setting",
+        "change": "nebula.work.set_work_setting"
+      },
+      "authority": "Explicit instruction, selected project and current project revision",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade control assistant starts project work on production LAN Core",
+      "result": "Core project setting and Work board agree after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "workspace.files",
+      "entry_point": "Files or Code: upload, rename, delete or download a workspace file",
+      "ui_calls": [
+        "ui/src/components/WorkspacePanel.tsx::uploadWorkspaceFile",
+        "ui/src/components/WorkspacePanel.tsx::renameWorkspaceEntry",
+        "ui/src/components/WorkspacePanel.tsx::deleteWorkspaceEntry",
+        "ui/src/components/WorkspacePanel.tsx::downloadWorkspaceFile",
+        "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile"
+      ],
+      "core_owner": "WorkspaceService and linked-folder policy",
+      "butler": {
+        "discover": "nebula.navigate.open",
+        "read": "missing: bounded file discovery and preview",
+        "change": "missing: typed file actions"
+      },
+      "authority": "Selected project, path containment, host-folder ownership, exact file revision or content hash; local picker and download stay on browser",
+      "observed_result_test": "missing: Butler workspace action and LAN file lifecycle regression",
+      "result": "Saved bytes, path and conflict state must be read from Core; local file picker remains device-owned",
+      "status": "gap"
+    },
+    {
+      "id": "notebook.cells",
+      "entry_point": "Notebook panel: create notebook, edit cell, run or interrupt it",
+      "ui_calls": [
+        "ui/src/components/NotebookPanel.tsx::createNotebook",
+        "ui/src/components/NotebookPanel.tsx::saveNotebookCell",
+        "ui/src/components/NotebookPanel.tsx::runNotebookCell",
+        "ui/src/components/NotebookPanel.tsx::interruptNotebookRun"
+      ],
+      "core_owner": "NotebookService, notebook file revision, kernel run state",
+      "butler": {
+        "discover": "nebula.settings.catalog (Notebook mode only)",
+        "read": "missing: notebook path and cell discovery",
+        "change": "missing: typed notebook actions"
+      },
+      "authority": "Selected project, current file revision or source hash, kernel policy and run identity",
+      "observed_result_test": "missing: Butler notebook action and LAN cell lifecycle regression",
+      "result": "Saved source, run output and interrupt state must be read from Core",
+      "status": "gap"
+    },
+    {
+      "id": "resources.library",
+      "entry_point": "Library: ingest or remove a project resource",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem",
+        "ui/src/state/WorkspaceContext.tsx::deleteLibraryItem"
+      ],
+      "core_owner": "Core library and artifact store",
+      "butler": {
+        "discover": "nebula.navigate.open",
+        "read": "missing: bounded resource list and detail",
+        "change": "missing: typed library actions"
+      },
+      "authority": "Selected project, artifact provenance and exact resource revision; local file selection stays device-owned",
+      "observed_result_test": "missing: Butler library action and LAN resource lifecycle regression",
+      "result": "Saved resource appears in Library or disappears after deletion and refresh",
+      "status": "gap"
+    },
+    {
+      "id": "storage.enrollment",
+      "entry_point": "Storage settings: enroll, rotate or revoke a source",
+      "ui_calls": [
+        "ui/src/components/StorageIntegrations.tsx::createStorageSource",
+        "ui/src/components/StorageIntegrations.tsx::rotateStorageSource",
+        "ui/src/components/StorageIntegrations.tsx::revokeStorageSource"
+      ],
+      "core_owner": "Storage integration service and source revision",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.read (nonsecret settings only)",
+        "change": "missing: specialized requesting-device handoff"
+      },
+      "authority": "Requesting device handles credentials, one-time webhook token and confirmation; Core enforces revision and source policy",
+      "observed_result_test": "missing: Butler handoff and LAN enrollment/rotation regression",
+      "result": "Saved source status is read from Core; one-time value stays on requesting device",
+      "status": "device_handoff"
+    }
+  ],
+  "ui_api_calls": [
+    {
+      "key": "ui/src/api/butlerInstructions.ts::request::\"PUT\" \"butler/check-interval\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerInstructions.ts::request::\"PUT\" \"butler/instructions\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerInstructions.ts::request::GET \"butler/check-interval\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerInstructions.ts::request::GET \"butler/instructions\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerMemory.ts::request::\"DELETE\" `butler/memory/${encodeURIComponent(item.id)}?engagement_id=${encodeURIComponent(projectId)}&expected_revision=${item.revision}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerMemory.ts::request::\"PATCH\" `butler/memory/${encodeURIComponent(item.id)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerMemory.ts::request::\"POST\" \"butler/memory/search\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerMemory.ts::request::GET `butler/memory?engagement_id=${encodeURIComponent(projectId)}&limit=50`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerOverview.ts::request::\"POST\" `engagements/${encodeURIComponent(projectId)}/butler/incidents/${encodeURIComponent(incident.id)}/acknowledge`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerOverview.ts::request::\"PUT\" `engagements/${encodeURIComponent(policy.projectId)}/butler/authority`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerOverview.ts::request::GET `engagements/${encodeURIComponent(projectId)}/butler/authority`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerOverview.ts::request::GET `engagements/${encodeURIComponent(projectId)}/butler/overview${query.size ? `?${query}` : \"\"}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/toolSharingConsent.ts::setHarnessToolResultSharing",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/toolSharingConsent.ts::setProviderToolResultSharing",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/AIWritingDialog.tsx::transformWriting",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/AskNebulaPopup.tsx::cancelChatTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/AskNebulaPopup.tsx::createTemporaryChat",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/AskNebulaPopup.tsx::discardTemporaryChat",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/AskNebulaPopup.tsx::getPendingChatTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/AskNebulaPopup.tsx::keepTemporaryChatAlive",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/AskNebulaPopup.tsx::stopHarnessTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/AskNebulaPopup.tsx::streamChat",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/AuthenticatedChatImage.tsx::fetchChatImagePreview",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserAttack",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserCrawl",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserRepeaterTab",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserTokenAnalysis",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::decideSecurityBrowserIntercept",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserAttack",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserCrawl",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserRepeaterTab",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::getArtifactContent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::getSecurityBrowserResearch",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::securityBrowserCompare",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::securityBrowserDecode",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserAttack",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserCrawl",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserRepeaterTab",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::createCredential",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::credentialVaultStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::listHarnesses",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::listMcpServers",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::request::\"PATCH\" `${endpoint(projectId)}/candidates/${encodeURIComponent(revising.id)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::request::GET `${endpoint(projectId)}/github-repositories?credential_ref=${encodeURIComponent(ref)}&page=${page}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::request::GET endpoint(projectId)",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerIssues.tsx::request::editing ? \"PUT\" : \"POST\" path",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerScheduledTranscript.tsx::getHarnessTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerScheduledTranscript.tsx::getHarnessTurnEvents",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ChatAttachments.tsx::ingestKnowledgeSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatAttachments.tsx::listKnowledgeSources",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatAttachments.tsx::listWorkspace",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatAttachments.tsx::previewWorkspaceFile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatAttachments.tsx::request::GET `chat/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(source.id)}/preview`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatCatchUp.tsx::request::\"PUT\" `${path}/read-cursor`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatCatchUp.tsx::request::GET `${path}/catch-up?device_id=${encodeURIComponent(device)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatEvidence.tsx::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/evidence`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatResults.tsx::downloadToolArtifact",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatResults.tsx::fetchChatImagePreview",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatResults.tsx::listToolCallArtifacts",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatResults.tsx::readToolOutput",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatResults.tsx::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/results?offset=${offset}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ChatTurnDetails.tsx::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/summary`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::completeCode",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::deleteWorkspaceEntry",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::downloadWorkspaceFile",
+      "count": 4
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::getToken",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::listWorkspace",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::promoteWorkspaceFile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::renameWorkspaceEntry",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/CommandPalette.tsx::searchResources",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::cancelSetupImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::closeContainerTerminal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::containerTerminalCapabilities",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::containerTerminalCapacity",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::getToken",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::preflightContainerTerminal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::prepareSetupImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::recoverContainerTerminals",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::retrySetupImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::setupStatus",
+      "count": 4
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::startContainerTerminal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::terminalCommandHistoryStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ContainerTerminalPanel.tsx::uploadEvidence",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/DevicePairingSettings.tsx::createDevicePairing",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/DevicePairingSettings.tsx::getToken",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/DevicePairingSettings.tsx::listPairedDevices",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/DevicePairingSettings.tsx::revokePairedDevice",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorDebuggerPanel.tsx::getToken",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorDebuggerPanel.tsx::startDebugSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorDebuggerPanel.tsx::workspaceDebugConfigurations",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorEnvironmentDialog.tsx::containerTerminalCapabilities",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorSourceControl.tsx::sourceControlDiff",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorSourceControl.tsx::sourceControlStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorTasksDialog.tsx::workspaceTasks",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EditorWorkspaceSearch.tsx::searchWorkspace",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ElectronBrowser.tsx::request::GET path",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::getAutomationPolicy",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::getEngagementScope",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::getTypeSafeIntegration",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::getWebSearchRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::interruptNotebookRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::listActiveNotebookRuns",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::listScopeToolCandidates",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::listVpnProfiles",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::updateAutomationPolicy",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::updateEngagementScope",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EngagementPolicySettings.tsx::waitNotebookRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EnvironmentSettings.tsx::discoverSshEnvironments",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EnvironmentSettings.tsx::forgetSshEnvironment",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/EnvironmentSettings.tsx::probeSshEnvironment",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/EnvironmentSettings.tsx::saveSshEnvironment",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/EnvironmentTargetPicker.tsx::discoverSshEnvironments",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ExecutionHistory.tsx::cancelExecution",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ExecutionHistory.tsx::executionOutput",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/ExecutionHistory.tsx::getArtifactContent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ExecutionHistory.tsx::listExecutions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ExecutionInsightDialog.tsx::attachExecutionToChat",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ExecutionInsightDialog.tsx::editGeneratedDraft",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ExecutionInsightDialog.tsx::generateExecutionDraft",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ExecutionInsightDialog.tsx::getGeneratedDraft",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ExecutionInsightDialog.tsx::transitionGeneratedDraft",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ExecutionReviewDialog.tsx::preflightExecution",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ExecutionReviewDialog.tsx::startExecution",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HandoffRecoveryNotice.tsx::consumeHandoff",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HandoffRecoveryNotice.tsx::resolveHandoff",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::checkHarness",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::createCredential",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::createHarness",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::createMcpServer",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::deleteHarness",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::deleteMcpServer",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::listHarnesses",
+      "count": 4
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::listMcpServers",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::probeMcpServer",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::testHarnessTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::updateHarness",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/HarnessSettings.tsx::updateMcpServer",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/HostFolderPicker.tsx::createHostWorkspaceFolder",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/HostFolderPicker.tsx::listHostWorkspaceFolders",
+      "count": 6
+    },
+    {
+      "key": "ui/src/components/ManagedAssistantBrowser.tsx::openBrowserCompanionStream",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ManagedAssistantBrowser.tsx::request::GET path",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/McpImportDialog.tsx::importMcpServers",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/McpImportDialog.tsx::mcpServerSchema",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/McpServerChoices.tsx::getEngagementScope",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/MissionControls.tsx::getAutomationRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/MissionControls.tsx::listHarnessSessions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/MissionControls.tsx::listHarnesses",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/MissionControls.tsx::listMcpServers",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/MobileAttentionInbox.tsx::listChatAttention",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::cancelChatTurn",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getButlerVoiceSettings",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getChatAssistantConfig",
+      "count": 7
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getControlAssistantSession",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getHeadlessSecuritySession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getOrCreateControlAssistantSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getPendingChatTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
+      "count": 5
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::listChatMessages",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::listEngagements",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::startHeadlessSecuritySession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::stopHeadlessSecuritySession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::streamChat",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::updateAutomationPolicy",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::updateButlerVoiceSettings",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::updateChatAssistantConfig",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::uploadChatImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaVoice.tsx::getVoiceWorkDetail",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaVoice.tsx::getVoiceWorkRoster",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaVoice.tsx::startVoiceSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookFileIndexSettings.tsx::notebookFileIndex",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookFileIndexSettings.tsx::removeNotebookFileIndex",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookFileIndexSettings.tsx::setNotebookFileIndex",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::createNotebook",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::installNotebookPackage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::interruptNotebookRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::listNotebookRuns",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::listNotebooks",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::notebookStatus",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::readNotebook",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::readNotebookRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::restartNotebookKernel",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::runNotebookCell",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::saveNotebookCell",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::searchNotebookPackage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotebookPanel.tsx::watchNotebookRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotesPanel.tsx::createObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotesPanel.tsx::deleteObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotesPanel.tsx::listObservations",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/NotesPanel.tsx::observationDependencies",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NotesPanel.tsx::updateObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/OpenRouterCreditsPanel.tsx::request::\"POST\" `providers/${encodeURIComponent(providerId)}/openrouter/credits/refresh`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::dismissPostToolSuggestion",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::generateExecutionDraft",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::generateMissionDraft",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::getGeneratedDraft",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::getPostToolAssistant",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::listExecutions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::listPostToolResults",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::listRuns",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistant.tsx::setPostToolAssistant",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistantSettings.tsx::getPostToolAssistant",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistantSettings.tsx::listHarnesses",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/PostToolAssistantSettings.tsx::setPostToolAssistant",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ProjectWorkOverview.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(current.id)}/updates`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ProjectWorkOverview.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ProjectWorkOverview.tsx::watchWorkChanges",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ProviderGoalChildren.tsx::listGoalChildren",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ProviderGoalChildren.tsx::startGoalChild",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ProviderGoalPanel.tsx::createChatGoal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ProviderGoalPanel.tsx::getChatGoal",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/ProviderGoalPanel.tsx::replaceChatGoalSkills",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ProviderGoalPanel.tsx::updateChatGoal",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ProviderGoalPanel.tsx::writeChatGoal",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ResourceActionMenu.tsx::resolveResourceActions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ResourceRelationsPanel.tsx::listResourceRelations",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ResourceRelationsPanel.tsx::resolveResource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/RuntimeUsagePanel.tsx::getRuntimeUsage",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ScopeImportDialog.tsx::applyScopeImport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ScopeImportDialog.tsx::createScopeImport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ScopeImportDialog.tsx::discardScopeImport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::createSecurityBrowserAssessment",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::deleteSecurityBrowserAssessment",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getSecurityBrowserAssessments",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getToken",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::grantSecurityBrowserCandidateValidation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::refreshSecurityBrowserAssessmentReadiness",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::revokeSecurityBrowserCandidateValidation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::transitionSecurityBrowserAssessment",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityDashboard.tsx::decideSecurityBrowserIntercept",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityDashboard.tsx::getSecurityBrowserAutomation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityDashboard.tsx::getSecurityBrowserResearch",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityDashboard.tsx::getSecurityBrowserWorkspace",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityDashboard.tsx::stopAgentSecurity",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SecurityDashboard.tsx::stopSecurityBrowserAutomation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageActions.tsx::storageAction",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageActions.tsx::storageDashboard",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageIntegrations.tsx::createStorageSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageIntegrations.tsx::listHarnesses",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageIntegrations.tsx::revokeStorageSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageIntegrations.tsx::rotateStorageSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageIntegrations.tsx::storageDashboard",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/StorageIntegrations.tsx::updateStorageSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TerminalCommandHistoryPanel.tsx::listTerminalCommands",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalCommandHistoryStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalCommandOutput",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalRecordingTools",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TerminalCommandHistoryPanel.tsx::updateTerminalRecordingTools",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::createVpnProfile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::deleteVpnProfile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::getAutomationPolicy",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::getAutomationRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::listRunnerProfiles",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::listVpnProfiles",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::prepareAutomationRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::updateAutomationPolicy",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/ToolingSettings.tsx::updateRunnerProfile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TopBar.tsx::engagementContainerTerminalPublicIp",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TypeSafeIntegrationSettings.tsx::getTypeSafeIntegration",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TypeSafeIntegrationSettings.tsx::removeTypeSafeKey",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TypeSafeIntegrationSettings.tsx::saveTypeSafeKey",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/TypeSafeIntegrationSettings.tsx::testTypeSafeKey",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WebSearchRuntimeSettings.tsx::getWebSearchRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WebSearchRuntimeSettings.tsx::removeWebSearchRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WebSearchRuntimeSettings.tsx::setWebSearchEngines",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::claimSecurityBrowserHandoff",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::createMission",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserHandoff",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserIdentity",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserRepeaterTab",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserSession",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::decideSecurityBrowserAction",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::decideSecurityBrowserIntercept",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::finishSecurityBrowserAction",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::finishSecurityBrowserHandoff",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::getEngagementScope",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::getSecurityBrowserAutomation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::getSecurityBrowserResearch",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::getSecurityBrowserWorkspace",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::listHarnesses",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::listProviders",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::proposeSecurityBrowserAction",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::startSecurityBrowserAction",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::stopSecurityBrowserAutomation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::syncSecurityBrowserSession",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::updateEngagementScope",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::updateSecurityBrowserCapture",
+      "count": 4
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::deleteWorkspaceEntry",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::downloadWorkspaceFile",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::listWorkspace",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::previewWorkspaceFile",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::promoteWorkspaceFile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::renameWorkspaceEntry",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::resetWorkspace",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::uploadWorkspaceFile",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkspacePanel.tsx::workspaceResetStatus",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/assistantSettingsMutations.ts::request::\"PUT\" path",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/assistantSettingsMutations.ts::request::GET path",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/chat-subagents/ChatSubagentPane.tsx::decideApproval",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/chat-subagents/ChatSubagentPane.tsx::stopAllChatSubagents",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/chat-subagents/ChatSubagentPane.tsx::stopChatSubagent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/chat-subagents/useChatSubagents.ts::listChatSubagentsIfChanged",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(item.id)}/updates`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(linked[0].item_id)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `work/updates?source_session_id=${encodeURIComponent(sessionId)}&limit=1`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::watchWorkChanges",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/structured-result/useStructuredResults.ts::getStructuredResult",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/structured-result/useStructuredResults.ts::listStructuredResultsIfChanged",
+      "count": 1
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticErrors",
+      "count": 2
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticSensitiveDetail",
+      "count": 1
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticsFiles",
+      "count": 2
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticsSettings",
+      "count": 1
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::exportDiagnostics",
+      "count": 1
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::health",
+      "count": 2
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::resolveDiagnosticIncidents",
+      "count": 1
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::runDiagnosticAction",
+      "count": 1
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::setupStatus",
+      "count": 2
+    },
+    {
+      "key": "ui/src/diagnostics/DiagnosticsPanel.tsx::updateDiagnosticsSettings",
+      "count": 1
+    },
+    {
+      "key": "ui/src/guides/GuideOverlay.tsx::createGuideStarterFiles",
+      "count": 1
+    },
+    {
+      "key": "ui/src/guides/GuideProvider.tsx::listGuideProgress",
+      "count": 1
+    },
+    {
+      "key": "ui/src/guides/GuideProvider.tsx::saveGuideProgress",
+      "count": 1
+    },
+    {
+      "key": "ui/src/hooks/useCredentialVault.ts::credentialVaultStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/AgentsPage.tsx::discussRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/AgentsPage.tsx::steerRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/EvidencePage.tsx::getArtifactContent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/KnowledgePage.tsx::getArtifactContent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/KnowledgePage.tsx::getKnowledgeIndexStatus",
+      "count": 4
+    },
+    {
+      "key": "ui/src/pages/LibraryPage.tsx::getArtifactContent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ReportsPage.tsx::downloadReportPdf",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ReportsPage.tsx::exportEngagementBundle",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ReportsPage.tsx::getReportRender",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ReportsPage.tsx::renderReport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ResultsPage.tsx::deleteStructuredResult",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::applyChatRuntimeSwitch",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::cancelChatTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::createChatGoalConversation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::decideHarnessInteraction",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::deleteChatSession",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::discardTemporaryChat",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::downloadToolArtifact",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::executionCapabilities",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::followChatTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::followHarnessTurnEvents",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::forkChatSession",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getApproval",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getAutomationPolicy",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getAutomationRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getChatContext",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getChatGoal",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getChatSession",
+      "count": 9
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getChatTaskPlans",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getControlAssistantSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getEngagementAssistantDefaults",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getEngagementScope",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getHarnessSessionActivity",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getHarnessTurn",
+      "count": 6
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getHarnessTurnEvents",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getPendingChatTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getPendingChatTurnStatus",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::importExternalHarnessSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listChatHookExecutions",
+      "count": 3
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listChatMessages",
+      "count": 3
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listChatSessionActivityIfChanged",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listChatSessions",
+      "count": 3
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listChatSessionsPage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listConversationSideChats",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listExternalHarnessSessions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listHarnessInteractions",
+      "count": 4
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listHarnessSessions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listHarnessSkills",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listHarnesses",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listMcpServers",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listNativeHooks",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listSessionHookExecutions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listSkills",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::listToolCallArtifacts",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::notebookStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::pinChatNotebook",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::preflightChatRuntimeSwitch",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::readToolOutput",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::renameChatSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::request::GET \"desktop-browser-mode\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::resumeChatTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::retryHarnessTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::rewindChatSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::rewindHarnessCheckpoint",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::saveSshEnvironment",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::searchToolOutput",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::setChatSessionArchived",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::setChatSessionPriority",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::steerHarnessTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::stopHarnessSubagent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::stopHarnessTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::streamChat",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::updateAutomationPolicy",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::updateChatAssistantConfig",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::updateChatSessionAssistantSettings",
+      "count": 4
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::updateEngagementAssistantDefaults",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::uploadChatImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::cancelSetupImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::createCredential",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::deleteCredential",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::discoverLocalProviders",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::getSkillCatalog",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::listOpenRouterUpstreamProviders",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::listSkills",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::retrySetupImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::selectSetupRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/StoragePage.tsx::retryStorageDispatch",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/StoragePage.tsx::storageDashboard",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::listChatSessions",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `${target}/${encodeURIComponent(trackItemId)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/setting`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"POST\" `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}/updates`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"POST\" `engagements/${encodeURIComponent(target)}/work`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"POST\" target",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::GET \"work/updates\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::GET `${target}/${encodeURIComponent(trackItemId)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::GET `work/items?offset=${offset}&limit=${workPageSize}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::watchWorkChanges",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/providerCredentialRecovery.ts::credentialStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/useChatNavigation.ts::request::\"PUT\" `chat/sessions/${encodeURIComponent(sessionId)}/bookmarks/${encodeURIComponent(messageId)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/useChatNavigation.ts::request::GET `chat/projects/${encodeURIComponent(projectId)}/search?${params}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/useChatNavigation.ts::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/bookmarks`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/useChatQueue.ts::request::\"POST\" path",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/useChatQueue.ts::request::GET path",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/useChatQueue.ts::requestIfChanged",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/useSessionState.ts::requestIfChanged",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkbenchDraftContext.tsx::cancelHandoff",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkbenchDraftContext.tsx::createHandoff",
+      "count": 2
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::activateOperatorProfile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createAsset",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createEngagement",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createFinding",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createMission",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createOperatorProfile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createProvider",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::createReport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::decideApproval",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteArchivedEngagement",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteKnowledgeSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteLibraryItem",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteOperatorProfile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteProvider",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::getToken",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::ingestKnowledgeSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::ingestKnowledgeUrlSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listApprovals",
+      "count": 2
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listAssets",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listEngagements",
+      "count": 4
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listEvidence",
+      "count": 2
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listFindings",
+      "count": 2
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listHarnesses",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listKnowledgeSources",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listLibraryItems",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listObservations",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listOperatorProfiles",
+      "count": 2
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listProviderCatalog",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listProviders",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listReports",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::listRuns",
+      "count": 2
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::refreshProviderHealth",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::refreshSetupRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::reindexKnowledgeSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::reindexLibraryItem",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::renameEngagementAtRevision",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::retryMission",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::setEngagementArchived",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::setProviderEnabled",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::setupStatus",
+      "count": 2
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::signOffReport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::stopRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::updateFinding",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::updateObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::updateOperatorProfile",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::updateProvider",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::updateReport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::uploadEvidence",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::verifyProviderCapabilities",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/useCoreConnectionMonitor.ts::health",
+      "count": 1
+    }
+  ]
+}

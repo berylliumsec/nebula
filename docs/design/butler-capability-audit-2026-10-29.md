@@ -135,10 +135,45 @@ request ID fails closed instead of recreating it.
 
 ## Remaining work to reach the product goal
 
-1. Add a maintained **workflow coverage registry** linking each operator UI
-   action to its Core owner, Butler discover/read/change actions, required
-   authority, and an observed-result test. Use it to detect newly added UI
-   actions without silently making them model-callable.
+### Workflow registry contract
+
+The operator journey is to ask Butler to find and perform an action that is
+visible in Nebula. The UI and Butler must name the same Core-owned target, and
+Butler's catalog must distinguish actions it can perform from actions requiring
+the requesting device or a future typed implementation. The registry records
+the UI entry point, Core owner, Butler discovery/read/change operations,
+authority, and an observed-result test for each reviewed action. A source guard
+must flag newly introduced UI API calls for review; adding a row alone must
+never grant Butler a capability. Source and catalog own discovery, Core owns
+durable state and authorization, the URL owns selected project identity, and
+the browser owns device-local choices and confirmations. For this registry-only
+slice, create, select, stream, interrupt, refresh, retry, and delete are the
+lifecycles of the recorded workflows, not actions performed by the registry.
+Each supported row must name a test of its own observed result; a gap row must
+state the missing action or evidence. The source guard is a review alarm, not a
+proof that every click has been catalogued.
+
+The first registry lives in `docs/design/butler-workflow-registry.json` and is
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 19
+reviewed actions, including explicit rewind, export, workspace, Notebook,
+Library, and storage gaps. Its source inventory contains 492 distinct `api`
+call signatures in production UI TypeScript, of which 30 are linked to those
+reviewed actions; 462 still require action-level review. Direct `api.request`
+calls are keyed by route expression and HTTP verb. The guard fails when a call
+is added, removed, or repeated without refreshing the inventory. It does not
+see calls through other receiver names or UI actions with no API call, so the
+registry is an incomplete coverage map. `supported` means the named Butler
+operation and observed-result test exist; `gap` and `device_handoff` explicitly
+name the missing operation or browser handoff. To review a new call, trace its
+visible control to Core, add or update an action row, then run the script with
+`--write-inventory`. Neither that command nor a registry row changes Butler's
+tool catalog.
+
+1. Expand the **workflow coverage registry** to every operator UI action,
+   including calls through other receiver names and controls without API calls.
+   Keep Core owner, Butler discover/read/change actions, authority, and an
+   observed-result test current. The initial source guard detects changes to
+   tracked `api` calls without making them model-callable.
 2. Add typed conversation rewind/export and bounded workspace, Notebook, and resource
    actions in their owning services. Each needs target discovery, optimistic
    revisions where applicable, and durable read-back.
