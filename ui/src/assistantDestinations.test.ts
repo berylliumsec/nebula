@@ -10,6 +10,8 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("show archived Butler chats")?.id).toBe("chat");
     expect(destinationToOpen("open pinned chats")?.id).toBe("chat");
     expect(destinationToOpen("show flagged chats")?.id).toBe("chat");
+    expect(destinationToOpen("open bulk chat actions")?.id).toBe("chat");
+    expect(destinationToOpen("open select conversations")?.id).toBe("chat");
     expect(destinationToOpen("open goal resume instruction")?.id).toBe("chat");
     expect(destinationToOpen("open switch chat provider")?.id).toBe("chat");
     expect(destinationToOpen("open check-in history")?.id).toBe("project-work");
@@ -19,7 +21,7 @@ describe("assistant app destinations", () => {
   });
 
   it("resolves every listed route with the selected project and preserves encoded IDs", () => {
-    expect(assistantDestinations).toHaveLength(21);
+    expect(assistantDestinations).toHaveLength(22);
     expect(destinationToOpen("open Butler scheduled activity")?.path).toBe("/settings#butler-oversight");
     expect(new Set(assistantDestinations.map((entry) => entry.id)).size).toBe(assistantDestinations.length);
     for (const destination of assistantDestinations) {
