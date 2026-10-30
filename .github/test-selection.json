@@ -1,10 +1,10 @@
 {
   "change_digest": "938f12967f2fa413f7e7eec0ce51cdb2f3cdc8886ed2e43ad27ebe2744496602",
   "reviewed_by": "Codex focused review of cumulative Butler control PR and merged bulk chat actions",
-  "reason": "Retain prior project lifecycle, chat rewind, Notebook edit, transcript export, product knowledge, registry, and typed-action selections. Cover exact shared Library catalog and revision guards, browser-owned file selection and original-file download, reindex and removal, artifact retention, background exclusion, product-help discovery, and receipt parsing. Seven frontend files collect 95 cases for Butler browser handoffs and previous project/export behavior. Eight paired non-loopback LAN Library profiles cover cancellation, authenticated upload, original-byte download, revision guard, read-back, refresh, reconnect, removal, and retained artifact journey in addition to the prior 32 cases. Integrate upstream bulk chat actions: full-list selection, partial failure and retry, archive/restore, pin/flag, deletion confirmation, destination and product-help discovery, and compact toolbar geometry. Add its four Python, three frontend-file and eight paired LAN browser selections to the reviewed cumulative plan; duplicate Python tests are selected once. Add project-scoped workspace text-file listing, bounded read, hash-guarded create/edit/rename, browser-confirmed delete and byte-verified download; select its Python, browser handoff and eight paired LAN profiles.",
+  "reason": "Retain prior project lifecycle, chat rewind, Notebook edit, transcript export, product knowledge, registry, and typed-action selections. Cover exact shared Library catalog and revision guards, browser-owned file selection and original-file download, reindex and removal, artifact retention, background exclusion, product-help discovery, and receipt parsing. Seven frontend files collect 95 cases for Butler browser handoffs and previous project/export behavior. Eight paired non-loopback LAN Library profiles cover cancellation, authenticated upload, original-byte download, revision guard, read-back, refresh, reconnect, removal, and retained artifact journey in addition to the prior 32 cases. Integrate upstream bulk chat actions: full-list selection, partial failure and retry, archive/restore, pin/flag, deletion confirmation, destination and product-help discovery, and compact toolbar geometry. Add its four Python, three frontend-file and eight paired LAN browser selections to the reviewed cumulative plan; duplicate Python tests are selected once. Add project-scoped workspace text-file listing, bounded read, hash-guarded create/edit/rename, browser-confirmed delete and byte-verified download; select its Python, browser handoff and eight paired LAN profiles. Retain the already reviewed Core chat setup responsiveness, MCP tool preparation, and stream lifecycle regressions from the concurrent main integration.",
   "exclusions": "No native source changed, so no native tests are selected. Unrelated Python, frontend and browser journeys are excluded. Notebook run lifecycle/package installation, binary workspace upload, directory and terminal lifecycle, linked-host-folder selection, direct browser page control, evidence and reports still require separate work. Browser profiles emulate mobile devices; physical Safari and the operating system's final download save location are unavailable. Butler's enabled Knowledge setting may separately supply bounded Library excerpts to the model; the control action sends metadata only. A confirmed Library removal proves the Core item is absent and the original artifact remains; it does not independently prove every downstream index cache is cleared after an index cleanup failure. The upstream bulk chat journey is selected at its exact eight profiles; unrelated UI and Core suites remain excluded.",
   "expected_tests": {
-    "python": 36,
+    "python": 52,
     "frontend": 95,
     "native": 0,
     "playwright": 56
@@ -50,7 +50,19 @@
     "tests/v3/test_workspace.py::test_workspace_file_rename_and_delete_refuse_stale_hashes",
     "tests/v3/test_workspace.py::test_workspace_file_actions_reject_fifo_without_blocking",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_workspace_file_guidance",
-    "tests/v3/test_butler_workflow_registry.py"
+    "tests/v3/test_butler_workflow_registry.py",
+    "tests/v3/test_mcp_probe.py::test_rebuilt_mcp_tools_reuse_validated_schema_but_recheck_nested_edits",
+    "tests/v3/test_mcp_probe.py::test_concurrent_mcp_turns_check_the_same_new_schema_once",
+    "tests/v3/test_mcp_probe.py::test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name",
+    "tests/v3/test_mcp_probe.py::test_open_world_mcp_is_explicitly_network_capable_and_deny_is_bypassable",
+    "tests/v3/test_tool_catalog.py::test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation",
+    "tests/v3/test_turn_preflight_latency.py::test_tool_ranking_overlaps_knowledge_planning",
+    "tests/v3/test_turn_preflight_latency.py::test_a_failed_preparation_cancels_its_pending_ranking",
+    "tests/v3/test_setup.py::test_status_keeps_event_loop_responsive_while_snapshot_waits",
+    "tests/v3/test_chat_api.py::test_chat_api_completes_streams_and_exposes_durable_history",
+    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches",
+    "tests/v3/test_chat_api.py::test_stopping_provider_chat_cancels_the_core_owned_turn",
+    "tests/v3/test_chat_subagent_lifecycle.py::test_goal_continuation_after_reports_keeps_the_operators_turn_settings"
   ],
   "frontend": [
     "ui/src/components/NebulaControlAssistant.test.tsx",
