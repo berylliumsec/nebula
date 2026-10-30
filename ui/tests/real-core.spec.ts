@@ -7122,18 +7122,22 @@ test("assistant upgrade Butler adds, downloads, reindexes and removes one shared
   ]);
 });
 
-test("assistant upgrade Butler drafts, signs and exports a report on production LAN Core", async ({page}, testInfo) => {
+test("assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(360_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
   const prompts = {
     create: "Create the synthetic Butler report draft.",
+    createDisposable: "Create a temporary report draft to delete.",
     update: "Move the synthetic Butler report into review with a summary.",
+    delete: "Delete the temporary report draft.",
     signoff: "Open sign-off for the synthetic Butler report.",
     pdf: "Export the synthetic Butler report PDF.",
     bundle: "Export the synthetic engagement bundle.",
   };
   let reportId = "";
   let reportRevision = 0;
+  let disposableId = "";
+  let disposableRevision = 0;
   let projectId = "";
   let projectRevision = 0;
   const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm the report action.", toolCall: body => {
@@ -7143,15 +7147,17 @@ test("assistant upgrade Butler drafts, signs and exports a report on production 
     const action = Object.entries(prompts).find(([, instruction]) => prompt.startsWith(instruction))?.[0];
     if (!action) return undefined;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
-    const operation = action === "create" ? "nebula.reports.create"
+    const operation = action === "create" || action === "createDisposable" ? "nebula.reports.create"
       : action === "update" ? "nebula.reports.update"
+      : action === "delete" ? "nebula.reports.delete"
       : action === "signoff" ? "nebula.reports.signoff"
       : action === "pdf" ? "nebula.reports.export_pdf" : "nebula.reports.export_bundle";
     if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: `${action} project report`}};
-    if (action === "create") {
+    if (action === "create" || action === "createDisposable") {
       if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation}};
       if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation,
-        arguments: {title: "Synthetic Butler assessment", executive_summary: "Draft summary"}}};
+        arguments: {title: action === "createDisposable" ? "Temporary Butler draft" : "Synthetic Butler assessment",
+          executive_summary: "Draft summary"}}};
       return undefined;
     }
     if (action === "bundle") {
@@ -7165,10 +7171,12 @@ test("assistant upgrade Butler drafts, signs and exports a report on production 
     if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.list"}};
     if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.list", arguments: {}}};
     if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.detail"}};
-    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.detail", arguments: {report_id: reportId}}};
+    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.detail",
+      arguments: {report_id: action === "delete" ? disposableId : reportId}}};
     if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation}};
     if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation,
-      arguments: {report_id: reportId, expected_revision: reportRevision,
+      arguments: {report_id: action === "delete" ? disposableId : reportId,
+        expected_revision: action === "delete" ? disposableRevision : reportRevision,
         ...(action === "update" ? {status: "review", executive_summary: "Reviewed synthetic evidence."} : {})}}};
     return undefined;
   }});
@@ -7253,12 +7261,49 @@ test("assistant upgrade Butler drafts, signs and exports a report on production 
     expect(bundle.suggestedFilename()).toBe("Butler-report-fixture.nebula.zip");
     expect((await readFile((await bundle.path())!)).subarray(0, 2).toString()).toBe("PK");
     expect((await (await api.get(`reports/${reportId}`)).json() as {revision: number}).revision).toBe(reportRevision);
+    await send(prompts.createDisposable);
+    await expect.poll(async () => {
+      const rows = await (await api.get(`reports?engagement_id=${projectId}`)).json() as Array<{id: string; title: string; revision: number}>;
+      const row = rows.find(item => item.title === "Temporary Butler draft");
+      disposableId = row?.id ?? "";
+      disposableRevision = row?.revision ?? 0;
+      return disposableId;
+    }, {timeout: 45_000}).not.toBe("");
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${disposableId}$`));
+    await send(prompts.delete);
+    const deletePrompt = page.getByRole("dialog", {name: "Permanently delete Temporary Butler draft?"});
+    await expect(deletePrompt).toBeVisible({timeout: 45_000});
+    await deletePrompt.getByRole("button", {name: "Cancel"}).click();
+    expect((await api.get(`reports/${disposableId}`)).status()).toBe(200);
+    await send(prompts.delete);
+    await expect(deletePrompt).toBeVisible({timeout: 45_000});
+    await deletePrompt.getByRole("button", {name: "Delete report"}).click();
+    await expect.poll(async () => (await api.get(`reports/${disposableId}`)).status(), {timeout: 45_000}).toBe(404);
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${reportId}$`));
+    await page.reload();
+    await expect(page.getByRole("navigation", {name: "Reports"}).getByRole("button", {name: /Temporary Butler draft/})).toHaveCount(0);
+    const screenDraft = await api.post("reports", {data: {
+      engagement_id: projectId, title: "Reports screen draft", status: "draft", executive_summary: "Disposable",
+    }});
+    expect(screenDraft.ok(), await screenDraft.text()).toBe(true);
+    const screenReport = await screenDraft.json() as {id: string; revision: number};
+    await page.goto(`${core.origin}/projects/${projectId}/reports/${screenReport.id}`);
+    const screenDelete = page.getByRole("button", {name: "Delete report"});
+    await expect(screenDelete).toBeEnabled();
+    await screenDelete.click();
+    const screenPrompt = page.getByRole("dialog", {name: "Permanently delete Reports screen draft?"});
+    await expect(screenPrompt).toBeVisible();
+    await screenPrompt.getByRole("button", {name: "Delete report"}).click();
+    await expect.poll(async () => (await api.get(`reports/${screenReport.id}`)).status()).toBe(404);
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${reportId}$`));
+    expect((await (await api.get(`reports?engagement_id=${projectId}`)).json() as Array<{id: string}>).map(item => item.id))
+      .toEqual([reportId]);
     expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-report-lan", {body: JSON.stringify({origin: core.origin, build: "production",
       project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
       reportId, revision: reportRevision,
-      result: "Butler draft and edit read back from Core; operator attested final report; cancelled PDF started no download; PDF and sensitive bundle downloaded on requesting browser"}), contentType: "application/json"});
+      result: "Butler draft and edit read back from Core; operator attested final report; cancelled PDF started no download; PDF and sensitive bundle downloaded on requesting browser; Butler and Reports screen confirmed draft deletion and Core absence"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
