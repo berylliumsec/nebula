@@ -9985,7 +9985,9 @@ def create_app(
         tags=["library"],
         dependencies=[Depends(require_auth)],
     )
-    async def reindex_global_library_item(item_id: str) -> LibraryItem:
+    async def reindex_global_library_item(
+        item_id: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> LibraryItem:
         if artifact_store is None:
             raise HTTPException(
                 status_code=503,
@@ -9998,6 +10000,7 @@ def create_app(
                 artifact_store=artifact_store,
                 item_id=item_id,
                 knowledge_index=knowledge_index,
+                expected_revision=expected_revision,
             )
             return library_item_summary(updated)
         except DocumentTooLargeError as exc:
@@ -10018,10 +10021,12 @@ def create_app(
         tags=["library"],
         dependencies=[Depends(require_auth)],
     )
-    async def delete_global_library_item(item_id: str) -> Response:
+    async def delete_global_library_item(
+        item_id: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> Response:
         """Remove an item from retrieval while retaining its immutable artifact."""
 
-        store.delete(LibraryItem, item_id)
+        store.delete(LibraryItem, item_id, expected_revision=expected_revision)
         if knowledge_index is not None:
             try:
                 await asyncio.to_thread(knowledge_index.delete_library_item, item_id)
