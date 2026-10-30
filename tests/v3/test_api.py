@@ -1504,7 +1504,7 @@ def test_project_creation_records_explicit_host_consent_without_persisting_reque
     )
 
 
-def test_project_create_request_id_replays_exact_core_result(api):
+def test_project_create_request_id_replays_exact_core_result(api, tmp_path):
     client, store, _ = api
     body = {
         "name": "Idempotent project",
@@ -1527,6 +1527,45 @@ def test_project_create_request_id_replays_exact_core_result(api):
         json={**body, "description": "Different request"},
     )
     assert conflict.status_code == 409
+
+    linked_folder = tmp_path / "linked"
+    linked_folder.mkdir()
+    linked_body = {
+        "name": "Linked retry project",
+        "workspace_path": str(linked_folder),
+        "host_access_acknowledged": False,
+        "request_id": "linked-request-one",
+    }
+    linked = client.post("/api/v1/engagements", headers=_auth(), json=linked_body)
+    assert linked.status_code == 201, linked.text
+    assert linked.json()["workspace_path"] == str(linked_folder.resolve())
+    assert (
+        client.post("/api/v1/engagements", headers=_auth(), json=linked_body).json()
+        == linked.json()
+    )
+    [policy] = store.list_entities(
+        AutomationProjectPolicy, engagement_id=linked.json()["id"]
+    )
+    assert policy.host_access_acknowledged is False
+
+    other_folder = tmp_path / "other"
+    other_folder.mkdir()
+    changed_folder = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={**linked_body, "workspace_path": str(other_folder)},
+    )
+    assert changed_folder.status_code == 409
+    missing_folder = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={
+            **linked_body,
+            "request_id": "missing-folder",
+            "workspace_path": str(tmp_path / "missing"),
+        },
+    )
+    assert missing_folder.status_code == 422
 
 
 def test_typed_crud_revision_and_overview(api):

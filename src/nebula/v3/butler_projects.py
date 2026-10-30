@@ -95,13 +95,15 @@ class ButlerProjects:
     def _pending(action: dict[str, Any]) -> dict[str, Any]:
         return {"state": "pending_browser_apply", "client_action": action}
 
-    def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def create(
+        self, arguments: dict[str, Any], *, linked_folder: bool = False
+    ) -> dict[str, Any]:
         name = arguments["name"].strip()
         if not name:
             raise ValueError("project name cannot be blank")
         return self._pending(
             {
-                "kind": "project_create",
+                "kind": "project_create_linked" if linked_folder else "project_create",
                 "name": name,
                 "description": arguments.get("description", ""),
                 "client_name": arguments.get("client_name", ""),
@@ -191,6 +193,13 @@ class ButlerProjects:
                 _CREATE,
                 RiskClass.WORKSPACE_WRITE,
                 self.create,
+            ),
+            (
+                "nebula.projects.create_linked",
+                "Ask the requesting browser to browse and select a Nebula-host folder for a new project. The model supplies a project name, not an absolute path. Core resolves the folder and saves it with one durable create retry ID. Host command access remains unacknowledged. Inspect the project list after an uncertain response before retrying.",
+                _CREATE,
+                RiskClass.WORKSPACE_WRITE,
+                lambda arguments: self.create(arguments, linked_folder=True),
             ),
             (
                 "nebula.projects.rename",

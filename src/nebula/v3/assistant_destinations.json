@@ -1,5 +1,5 @@
 [
-  {"id":"projects","label":"All projects","path":"/projects","aliases":["projects","my projects","project list","all projects","browse projects"]},
+  {"id":"projects","label":"All projects","path":"/projects","aliases":["projects","my projects","project list","all projects","browse projects","create a linked project","choose project host folder","project folder on Nebula host"],"guide":"Browse and select existing projects, including archived ones. Butler can create a new project with a managed workspace or ask the paired browser to choose a Nebula-host folder for a linked project. Core reads back the saved workspace path; Host command access still needs operator consent. This does not relink an existing project."},
   {"id":"project","label":"Project overview","path":"/projects/{project_id}","aliases":["current project","project overview","project home","project"]},
   {"id":"project-work","label":"Project work","path":"/projects/{project_id}/work","aliases":["work board","project work","tasks","work items","create work item","assign work item","change work priority","post work update","work check-in","enable agent tools","disable agent tools","work updates","check-in history"]},
   {"id":"assets","label":"Assets","path":"/projects/{project_id}/assets","aliases":["assets","project assets","asset inventory"]},

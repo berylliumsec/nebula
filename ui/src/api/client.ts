@@ -6144,8 +6144,10 @@ export class ApiClient {
     }).then(mapAssistantDefaults);
   }
 
-  getProjectLifecycle(id: string): Promise<{ id: string; name: string; status: EngagementSummary["status"]; revision: number }> {
-    return this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}`).then(({ id: projectId, name, status, revision }) => ({ id: projectId, name, status, revision }));
+  getProjectLifecycle(id: string): Promise<{ id: string; name: string; status: EngagementSummary["status"]; revision: number; workspacePath?: string }> {
+    return this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}`).then(({ id: projectId, name, status, revision, workspace_path }) => ({
+      id: projectId, name, status, revision, workspacePath: workspace_path ?? undefined,
+    }));
   }
 
   async renameEngagementAtRevision(id: string, name: string, expectedRevision: number): Promise<EngagementSummary> {

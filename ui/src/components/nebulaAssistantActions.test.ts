@@ -106,6 +106,12 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: "", request_id: requestId}}}, "selected"))
       .toEqual({kind: "project_create", name: "New", description: "", clientName: "", requestId});
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: ""}}}, "selected")).toBeUndefined();
+    const linked = {kind: "project_create_linked", name: "Linked", description: "", client_name: "", request_id: requestId};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create_linked", client_action: linked}}, "selected"))
+      .toEqual({kind: "project_create_linked", sourceProjectId: "selected", name: "Linked", description: "", clientName: "", requestId});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create_linked", client_action: {...linked, workspace_path: "/private"}}}, "selected"))
+      .toEqual({kind: "project_create_linked", sourceProjectId: "selected", name: "Linked", description: "", clientName: "", requestId});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: linked}}, "selected")).toBeUndefined();
   });
   it("accepts only a scoped transcript export handoff from Core", () => {
     const sessionId = "9482d86e-2ddc-436b-90be-30b878f68537";
