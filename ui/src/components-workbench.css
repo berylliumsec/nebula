@@ -591,15 +591,15 @@ kbd { font-size: 11px; }
 .session-list-search input { min-width: 0; height: 42px; flex: 1; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; color: var(--text); background: transparent; appearance: none; font: inherit; font-size: 12px; }
 .session-list-search input::-webkit-search-cancel-button { display: none; }
 .session-list-search .icon-button { width: 44px; height: 44px; }
-.session-bulk-toolbar { display: grid; gap: 7px; margin: 7px 8px 0; padding: 8px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); }
-.session-bulk-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
-.session-bulk-summary strong { flex: 1 0 100%; color: var(--text); font-size: 12px; }
-.session-bulk-summary button, .session-bulk-toolbar p button { min-height: 44px; padding: 3px 5px; border: 0; border-radius: 6px; color: var(--blue); background: transparent; font-size: 11px; cursor: pointer; }
+.session-bulk-toolbar { display: grid; gap: 2px; margin: 4px 8px 0; padding-bottom: 4px; border-bottom: 1px solid var(--border-soft); }
+.session-bulk-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+.session-bulk-summary strong { margin-right: auto; color: var(--text); font-size: 11px; white-space: nowrap; }
+.session-bulk-summary button, .session-bulk-toolbar p button { min-height: 44px; padding: 0 3px; border: 0; border-radius: 6px; color: var(--blue); background: transparent; font-size: 11px; white-space: nowrap; cursor: pointer; }
 .session-bulk-summary button:hover, .session-bulk-summary button:focus-visible, .session-bulk-toolbar p button:hover, .session-bulk-toolbar p button:focus-visible { background: var(--surface-hover); }
 .session-bulk-toolbar button:disabled { opacity: .45; cursor: default; }
-.session-bulk-apply { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-.session-bulk-apply select { min-width: 0; min-height: 44px; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface); font: inherit; font-size: 12px; }
-.session-bulk-apply > button { min-height: 44px; padding-inline: 11px; }
+.session-bulk-apply { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; }
+.session-bulk-apply select { min-width: 0; min-height: 44px; padding: 0 6px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); background: var(--canvas); font: inherit; font-size: 11px; }
+.session-bulk-apply > button { min-height: 44px; padding-inline: 8px; }
 .session-bulk-toolbar p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.4; }
 .session-bulk-toolbar p.error { color: var(--red); }
 .session-bulk-toolbar p.success { color: var(--green); }

@@ -9086,7 +9086,11 @@ reliabilityTest("assistant upgrade bulk chat actions persist and retry on produc
     await sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"}).check();
     await sidebar.getByRole("checkbox", {name: "Select conversation Recover ordinary goal"}).check();
     await expect(sidebar.getByText("2 selected")).toBeVisible();
+    const bulkToolbar = sidebar.locator(".session-bulk-toolbar");
+    expect(await bulkToolbar.evaluate(element => Math.round(element.getBoundingClientRect().height))).toBeLessThanOrEqual(100);
+    expect(await bulkToolbar.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     expect(await sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"}).evaluate(input => Math.round(input.parentElement!.getBoundingClientRect().width))).toBeGreaterThanOrEqual(44);
+    expect(await sidebar.getByLabel("Action for selected conversations").evaluate(select => Math.round(select.getBoundingClientRect().height))).toBeGreaterThanOrEqual(44);
     expect((await new AxeBuilder({page}).include(".session-bulk-toolbar").analyze()).violations).toEqual([]);
 
     let refuseOnce = true;

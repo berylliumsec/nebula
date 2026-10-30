@@ -1,7 +1,7 @@
 {
-  "change_digest": "1471c9de5963e65dbf16c744d0dec8e60a37c22958e701a4c593c5148f031559",
-  "reviewed_by": "Codex focused review for bulk chat actions",
-  "reason": "The selected tests cover full-list selection and Core readback, partial failure and retry, archive and restore, pin and flag, deletion confirmation and durable removal, sidebar grouping, assistant destination discovery, product-help search and Chroma source-digest synchronization. The real-Core journey runs on the production bundle over a non-loopback LAN origin in desktop and emulated mobile Chromium and WebKit profiles.",
+  "change_digest": "7ae4e00838374ac0e512626a43eff40e634a5bd68051aa8642a3197a68620016",
+  "reviewed_by": "Codex focused review for bulk chat actions and compact toolbar",
+  "reason": "The selected tests cover full-list selection and Core readback, partial failure and retry, archive and restore, pin and flag, deletion confirmation and durable removal, sidebar grouping, assistant destination discovery, product-help search and Chroma source-digest synchronization. The real-Core journey runs on the production bundle over a non-loopback LAN origin in desktop and emulated mobile Chromium and WebKit profiles. The same selected real-Core browser journey now checks that the selection toolbar fits in a compact two-row height without clipping while retaining 44 px controls across desktop and mobile profiles.",
   "exclusions": "No native code changed. Unrelated chat streaming, mission, provider, and project workflows are excluded. The existing single-chat and delete-all actions retain their API contracts. Physical-device testing is unavailable.",
   "expected_tests": {
     "python": 4,
