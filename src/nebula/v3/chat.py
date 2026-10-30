@@ -14332,11 +14332,19 @@ class ChatService:
         return fork
 
     def rewind_session(
-        self, session_id: str, *, before_message_id: str
+        self,
+        session_id: str,
+        *,
+        before_message_id: str,
+        expected_revision: int | None = None,
     ) -> tuple[ChatSession, list[ChatMessage], list[ChatMessage]]:
         """Retract an operator message and its replies so it can be resent here."""
 
         session = self.store.get(ChatSession, session_id)
+        if expected_revision is not None and session.revision != expected_revision:
+            raise ChatHistoryConflict(
+                "conversation changed; read its current revision before editing"
+            )
         if self.pending_turn(session_id) is not None:
             raise ChatHistoryConflict(
                 "conversation cannot be edited while a response is active"
