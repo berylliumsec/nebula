@@ -8,6 +8,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -51,6 +52,35 @@ from nebula.v3.runtime_platform import (
 
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+def test_status_keeps_event_loop_responsive_while_snapshot_waits(tmp_path, monkeypatch):
+    service = SetupService(NebulaStore(tmp_path / "core.db"), None)
+    original_snapshot = service._snapshot
+    entered = Event()
+    release = Event()
+
+    def waiting_snapshot():
+        entered.set()
+        assert release.wait(timeout=2)
+        return original_snapshot()
+
+    monkeypatch.setattr(service, "_snapshot", waiting_snapshot)
+
+    async def scenario():
+        task = asyncio.create_task(service.status())
+        try:
+            for _ in range(200):
+                if entered.is_set():
+                    break
+                await asyncio.sleep(0.001)
+            assert entered.is_set()
+            assert not task.done()
+        finally:
+            release.set()
+        await task
+
+    asyncio.run(scenario())
 
 
 def _platform(tmp_path: Path, store: NebulaStore) -> RuntimePlatform:
