@@ -7332,7 +7332,7 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
 });
 
 test("assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core", async ({page}, testInfo) => {
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
   const repository = path.resolve(import.meta.dirname, "../..");
   const runtimeDir = path.join(repository, "ui/src-tauri/resources/notebook-runtime");
   if (!existsSync(path.join(runtimeDir, "nebula-notebook-runtime.json"))) {
@@ -7344,16 +7344,42 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
   let cellId = "";
   let sourceHash = "";
   let runId = "";
+  let notebookRevision = "";
+  let kernelId = "";
+  let restartCount = 0;
   const editInstruction = "Edit the saved research notebook cell to print 43.";
   const runInstruction = "Run the exact saved research notebook cell.";
   const interruptInstruction = "Interrupt the current research notebook run.";
+  const restartInstruction = "Restart the current research notebook kernel.";
+  const installInstruction = "Install ipykernel in the project Notebook environment.";
   const stub = await startLocalModelStub({responseContent: "I checked Core's Notebook state.", toolCall: body => {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
     const lastUser = messages.map(message => message.role).lastIndexOf("user");
     const instruction = messages[lastUser]?.content;
-    if (instruction !== editInstruction && instruction !== runInstruction && instruction !== interruptInstruction) return undefined;
+    if (instruction !== editInstruction && instruction !== runInstruction && instruction !== interruptInstruction
+        && instruction !== restartInstruction && instruction !== installInstruction) return undefined;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
-    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: instruction === editInstruction ? "notebook edit cell" : instruction === runInstruction ? "notebook execute cell" : "notebook interrupt run"}};
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: instruction === editInstruction ? "notebook edit cell" : instruction === runInstruction ? "notebook execute cell" : instruction === restartInstruction ? "notebook restart kernel" : instruction === installInstruction ? "notebook install package" : "notebook interrupt run"}};
+    if (instruction === restartInstruction) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.kernel"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.kernel", arguments: {path: "research.ipynb"}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.restart"}};
+      if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.restart", arguments: {
+        path: "research.ipynb", expected_notebook_revision: notebookRevision, expected_kernel_id: kernelId, expected_restart_count: restartCount,
+      }}};
+      return undefined;
+    }
+    if (instruction === installInstruction) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.read"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.read", arguments: {path: "research.ipynb"}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.package_status"}};
+      if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.package_status", arguments: {path: "research.ipynb", name: "ipykernel"}}};
+      if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.install_package"}};
+      if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.install_package", arguments: {
+        path: "research.ipynb", requirement: "ipykernel", expected_notebook_revision: notebookRevision,
+      }}};
+      return undefined;
+    }
     if (instruction === interruptInstruction) {
       if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.run"}};
       if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.run", arguments: {run_id: runId}}};
@@ -7430,7 +7456,8 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
       path: "research.ipynb", cell_id: cellId, source: "stale overwrite", cell_type: "code", expected_source_hash: sourceHash,
     }});
     expect(stale.status()).toBe(409);
-    const edited = await (await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`)).json() as {cell_revisions: Record<string, string>};
+    const edited = await (await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`)).json() as {revision: string; cell_revisions: Record<string, string>};
+    notebookRevision = edited.revision;
     const oldHash = sourceHash;
     sourceHash = edited.cell_revisions[cellId];
     const staleRun = await api.post(`engagements/${projectId}/notebooks/runs`, {data: {
@@ -7448,6 +7475,47 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
     const completed = await (await api.get(`engagements/${projectId}/notebooks/runs/${runId}`)).json() as {run: {source_hash: string}; events: Array<{event_type: string; payload: unknown}>};
     expect(completed.run.source_hash).toBe(sourceHash);
     expect(completed.events.some(event => event.event_type === "notebook.output" && JSON.stringify(event.payload).includes("43"))).toBe(true);
+    notebookRevision = (await (await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`)).json() as {revision: string}).revision;
+    const kernelBefore = await (await api.get(`engagements/${projectId}/notebooks/kernel?path=research.ipynb`)).json() as {state: string; kernel_id: string; restart_count: number; notebook_revision: string};
+    expect(kernelBefore.state).toBe("idle");
+    kernelId = kernelBefore.kernel_id;
+    restartCount = kernelBefore.restart_count;
+    expect(kernelBefore.notebook_revision).toBe(notebookRevision);
+    await send(restartInstruction);
+    await expect.poll(async () => {
+      const current = await (await api.get(`engagements/${projectId}/notebooks/kernel?path=research.ipynb`)).json() as {kernel_id: string; restart_count: number};
+      expect(current.kernel_id).toBe(kernelId);
+      return current.restart_count;
+    }, {timeout: 45_000}).toBe(restartCount + 1);
+    const packageBefore = await (await api.get(`engagements/${projectId}/notebooks/packages/installed?path=research.ipynb&name=ipykernel`)).json() as {name: string; installed: boolean; version: string | null};
+    expect(packageBefore.installed).toBe(true);
+    await send(installInstruction);
+    const sessionResponse = await api.get(`chat/control-assistant/session?engagement_id=${projectId}`);
+    expect(sessionResponse.ok(), await sessionResponse.text()).toBe(true);
+    const sessionId = (await sessionResponse.json() as {id: string}).id;
+    const installToolReply = () => stub.requests.flatMap(body => {
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+      return messages.filter(message => message.role === "tool" && typeof message.content === "string"
+        && message.content.includes('"butler_operation": "nebula.notebook.install_package"'));
+    }).at(-1);
+    await expect.poll(() => Boolean(installToolReply()), {timeout: 90_000}).toBe(true);
+    const installReceipt = JSON.parse(installToolReply()!.content as string) as {
+      butler_operation: string; installed: boolean; package: {name: string; version: string; execution_mode: string};
+    };
+    expect(installReceipt).toMatchObject({
+      butler_operation: "nebula.notebook.install_package", installed: true,
+      package: {name: "ipykernel", version: packageBefore.version, execution_mode: "host"},
+    });
+    await expect.poll(async () => {
+      const saved = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{
+        role: string; metadata?: {tool_results?: Array<{capability?: string; status?: string; summary?: string}>};
+      }>;
+      return saved.some(message => message.role === "assistant" && message.metadata?.tool_results?.some(result =>
+        result.capability === "nebula.capabilities.change" && result.status === "complete"
+        && result.summary?.includes("installed, package, requirement")));
+    }, {timeout: 30_000}).toBe(true);
+    const packageAfter = await (await api.get(`engagements/${projectId}/notebooks/packages/installed?path=research.ipynb&name=ipykernel`)).json() as {name: string; installed: boolean; version: string | null};
+    expect(packageAfter).toMatchObject({installed: true, version: packageBefore.version});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
     const notebook = page.getByRole("region", {name: "Project notebook"});
     await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
@@ -7482,7 +7550,8 @@ test("assistant upgrade Butler edits, runs and interrupts a project Notebook on 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-notebook-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId, cellId, completedRunId, interruptedRunId: runId,
-      result: "Butler saved an exact cell, ran its current hash with ordered Core output, refused a stale hash, interrupted one exact run, and refreshed Notebook agreed"}), contentType: "application/json"});
+      kernelId, restartCount, packageName: packageAfter.name, packageVersion: packageAfter.version,
+      result: "Butler saved an exact cell, ran its current hash with ordered Core output, restarted an idle kernel with Core count read-back, installed an offline package with Core environment read-back, refused a stale source hash, interrupted one exact run, and refreshed Notebook agreed"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
