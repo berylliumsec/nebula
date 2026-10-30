@@ -521,6 +521,29 @@
       "status": "supported"
     },
     {
+      "id": "evidence.upload",
+      "entry_point": "Butler or Evidence: choose a device file for immutable evidence in the selected project",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::uploadEvidence",
+        "ui/src/components/NebulaControlAssistant.tsx::listAssets",
+        "ui/src/components/NebulaControlAssistant.tsx::listFindings",
+        "ui/src/components/butlerEvidenceUpload.ts::uploadEvidence",
+        "ui/src/components/butlerEvidenceUpload.ts::getEvidence",
+        "ui/src/components/butlerEvidenceUpload.ts::listEvidence",
+        "ui/src/components/butlerEvidenceUpload.ts::listFindings"
+      ],
+      "core_owner": "Core evidence API, artifact store and project relation validator; requesting browser owns file selection",
+      "butler": {
+        "discover": "nebula.evidence.list and nebula.evidence.targets",
+        "read": "nebula.evidence.detail",
+        "change": "nebula.evidence.upload_from_device"
+      },
+      "authority": "Interactive Butler, selected project, browser-owned bytes, same-project links and Core read-back",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler uploads one immutable evidence file on production LAN Core",
+      "result": "Core's exact evidence record and refreshed project list agree on hash, size, artifact and links; the model receives no file bytes",
+      "status": "supported"
+    },
+    {
       "id": "report.create",
       "entry_point": "Butler request or Reports: create a selected-project draft",
       "ui_calls": [
@@ -1336,11 +1359,19 @@
       "count": 7
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::listAssets",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listChatMessages",
       "count": 4
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listEngagements",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::listFindings",
       "count": 1
     },
     {
@@ -1930,6 +1961,22 @@
     {
       "key": "ui/src/components/assistantSettingsMutations.ts::request::GET path",
       "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerEvidenceUpload.ts::getEvidence",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerEvidenceUpload.ts::listEvidence",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerEvidenceUpload.ts::listFindings",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerEvidenceUpload.ts::uploadEvidence",
+      "count": 1
     },
     {
       "key": "ui/src/components/butlerTerminalStop.ts::closeProjectContainerTerminal",

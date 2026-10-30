@@ -463,6 +463,19 @@ def test_product_search_finds_butler_check_interval_setting(monkeypatch):
     assert any(item["heading"] == "Butler check interval" for item in matches)
 
 
+def test_product_search_finds_butler_evidence_upload_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does Butler upload a device evidence file and verify its hash and links?"
+    )
+    assert any(
+        item["heading"] == "Butler evidence control"
+        and "nebula.evidence.upload_from_device" in str(item["text"])
+        and "SHA-256" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_explains_harness_to_provider_chat_switch(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
