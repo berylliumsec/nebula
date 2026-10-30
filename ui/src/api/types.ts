@@ -3000,6 +3000,7 @@ export interface KnowledgeSource {
 
 export interface LibraryItem {
   id: Identifier;
+  revision: number;
   name: string;
   sourceType: string;
   artifactId?: Identifier;

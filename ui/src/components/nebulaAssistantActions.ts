@@ -16,7 +16,8 @@ export type SettingClientAction =
   | { kind: "project_create"; name: string; description: string; clientName: string; requestId: string }
   | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
   | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string }
-  | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number };
+  | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
+  | { kind: "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
 
 export interface AssistantWorkReceipt { url: string; content: string }
 
@@ -85,6 +86,16 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
       && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.session_id)
       && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1) {
     return {kind: "chat_export", projectId, sessionId: value.session_id, expectedRevision: Number(value.expected_revision)};
+  }
+  const libraryKind = operation === "nebula.library.reindex" ? "library_reindex"
+    : operation === "nebula.library.remove" ? "library_remove" : undefined;
+  if (projectAction && libraryKind && value.kind === libraryKind
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.item_id === "string"
+      && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.item_id)
+      && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+      && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 300) {
+    return {kind: libraryKind, projectId, itemId: value.item_id, expectedRevision: Number(value.expected_revision), name: value.name};
   }
   if (projectAction && operation.startsWith("nebula.projects.")) {
     const name = value.name;

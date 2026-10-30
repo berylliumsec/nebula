@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ChatStreamEvent } from "../api/types";
+import { ApiError } from "../api/client";
 import { ThemeProvider } from "../state/ThemeContext";
 import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
@@ -1124,6 +1125,79 @@ describe("NebulaControlAssistant", () => {
     } finally {
       anchorClick.mockRestore();
     }
+  });
+
+  it("confirms an exact shared Library reindex, rereads Core, and refreshes the Library", async () => {
+    const user = userEvent.setup();
+    const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const current = {id: itemId, name: "Shared note", revision: 4, status: "ready", artifactId: "artifact"};
+    const getLibraryItem = vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current).mockResolvedValueOnce({...current, revision: 5});
+    const reindexLibraryItemAtRevision = vi.fn().mockResolvedValue({...current, revision: 5});
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "library-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.reindex", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_reindex", project_id: "project", item_id: itemId, expected_revision: 4, name: "Shared note"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked this browser to reindex the item."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, reindexLibraryItemAtRevision},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [], retryResource,
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Reindex the shared note{enter}");
+    expect(await screen.findByRole("heading", {name: "Reindex Shared note?"})).toBeVisible();
+    expect(reindexLibraryItemAtRevision).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Cancel"}));
+    await waitFor(() => expect(screen.getByText("Shared note was not reindexed. No change was saved.")).toBeVisible());
+    await user.type(composer, "Reindex the shared note{enter}");
+    await user.click(await screen.findByRole("button", {name: "Reindex shared item"}));
+    await waitFor(() => expect(reindexLibraryItemAtRevision).toHaveBeenCalledWith(itemId, 4));
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("library"));
+    expect(await screen.findByText("Reindexed Shared note in Core's shared Library at revision 5.")).toBeVisible();
+    expect(getLibraryItem).toHaveBeenCalledTimes(4);
+  });
+
+  it("removes a shared Library item only after confirmation and a Core 404 readback", async () => {
+    const user = userEvent.setup();
+    const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const current = {id: itemId, name: "Shared note", revision: 4, status: "ready"};
+    const getLibraryItem = vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(current)
+      .mockRejectedValueOnce(new ApiError("Not found", 404));
+    const deleteLibraryItemAtRevision = vi.fn().mockResolvedValue(undefined);
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "library-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.remove", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_remove", project_id: "project", item_id: itemId, expected_revision: 4, name: "Shared note"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked this browser to remove the item."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, deleteLibraryItemAtRevision},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [], retryResource,
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Remove the shared note{enter}");
+    expect(await screen.findByRole("heading", {name: "Remove Shared note?"})).toBeVisible();
+    expect(deleteLibraryItemAtRevision).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Remove shared item"}));
+    await waitFor(() => expect(deleteLibraryItemAtRevision).toHaveBeenCalledWith(itemId, 4));
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("library"));
+    expect(await screen.findByText("Removed Shared note from Core's shared Library. Its original artifact was retained.")).toBeVisible();
   });
 
   it.each([

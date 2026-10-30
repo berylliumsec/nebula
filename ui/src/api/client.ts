@@ -2959,6 +2959,7 @@ function mapLibraryItem(value: WireLibraryItem): LibraryItem {
   const metadata = value.metadata ?? {};
   return {
     id: value.id,
+    revision: value.revision,
     name: value.name,
     sourceType: value.source_type,
     artifactId: value.artifact_id ?? undefined,
@@ -8296,6 +8297,10 @@ export class ApiClient {
       .then((items) => page(items.map(mapLibraryItem)));
   }
 
+  getLibraryItem(id: string, signal?: AbortSignal): Promise<LibraryItem> {
+    return this.request<WireLibraryItem>(`library/items/${encodeURIComponent(id)}`, { signal }).then(mapLibraryItem);
+  }
+
   ingestLibraryItem(
     body: LibraryIngestRequest,
     signal?: AbortSignal,
@@ -8318,8 +8323,22 @@ export class ApiClient {
     ).then(mapLibraryItem);
   }
 
+  reindexLibraryItemAtRevision(id: string, expectedRevision: number, signal?: AbortSignal): Promise<LibraryItem> {
+    return this.request<WireLibraryItem>(
+      `library/items/${encodeURIComponent(id)}/reindex?expected_revision=${expectedRevision}`,
+      { method: "POST", signal },
+    ).then(mapLibraryItem);
+  }
+
   async deleteLibraryItem(id: string, signal?: AbortSignal): Promise<void> {
     await this.request<void>(`library/items/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      signal,
+    });
+  }
+
+  async deleteLibraryItemAtRevision(id: string, expectedRevision: number, signal?: AbortSignal): Promise<void> {
+    await this.request<void>(`library/items/${encodeURIComponent(id)}?expected_revision=${expectedRevision}`, {
       method: "DELETE",
       signal,
     });

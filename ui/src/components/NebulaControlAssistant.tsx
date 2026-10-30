@@ -77,7 +77,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement } = useWorkspace();
+  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -864,7 +864,62 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `Started a Markdown transcript download for ${observed.title} on this device (${messages.length} saved messages).`;
   };
 
+  const applyLibraryAction = async (action: Extract<SettingClientAction, {kind: "library_reindex" | "library_remove"}>): Promise<string> => {
+    if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before changing the shared Library.");
+    }
+    const current = await api.getLibraryItem(action.itemId);
+    if (current.revision !== action.expectedRevision || current.name !== action.name) {
+      throw new Error("The shared Library item changed. Ask Butler to read it again before acting.");
+    }
+    const removing = action.kind === "library_remove";
+    if (!removing && !current.artifactId) throw new Error("This Library item has no original file to reindex.");
+    const approved = await confirm({
+      title: `${removing ? "Remove" : "Reindex"} ${current.name}?`,
+      message: removing
+        ? "This removes the item from the Library shared by every project. The original artifact remains stored. This change cannot be undone from Butler."
+        : "This rebuilds the Library item from its original artifact and changes retrieval for every project.",
+      confirmLabel: removing ? "Remove shared item" : "Reindex shared item",
+      ...(removing ? {tone: "danger" as const} : {}),
+    });
+    if (!approved) return `${current.name} was not ${removing ? "removed" : "reindexed"}. No change was saved.`;
+    if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to read the Library item again.");
+    const before = await api.getLibraryItem(action.itemId);
+    if (before.revision !== action.expectedRevision || before.name !== action.name) {
+      throw new Error("The shared Library item changed during confirmation. Ask Butler to read it again.");
+    }
+    if (removing) {
+      try {
+        await api.deleteLibraryItemAtRevision(action.itemId, action.expectedRevision);
+      } catch {
+        throw new Error("Core did not confirm removal. Refresh the shared Library and read this item before retrying.");
+      }
+      try {
+        await api.getLibraryItem(action.itemId);
+      } catch (caught) {
+        if (caught instanceof ApiError && caught.status === 404) {
+          await retryResource("library");
+          return `Removed ${action.name} from Core's shared Library. Its original artifact was retained.`;
+        }
+        throw caught;
+      }
+      throw new Error("Core still lists this shared Library item. Refresh Library before retrying.");
+    }
+    try {
+      await api.reindexLibraryItemAtRevision(action.itemId, action.expectedRevision);
+    } catch {
+      throw new Error("Core did not confirm reindexing. Refresh the shared Library and read this item before retrying.");
+    }
+    const observed = await api.getLibraryItem(action.itemId);
+    if (observed.name !== action.name || observed.revision <= action.expectedRevision || observed.status !== "ready") {
+      throw new Error("Core has not confirmed a ready Library item. Refresh Library and inspect its current status.");
+    }
+    await retryResource("library");
+    return `Reindexed ${observed.name} in Core's shared Library at revision ${observed.revision}.`;
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
+    if (action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "chat_export") return applyChatExport(action);
     if (action.kind === "project_create" || action.kind === "project_rename" || action.kind === "project_archive"
       || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
