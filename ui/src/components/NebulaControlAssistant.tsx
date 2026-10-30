@@ -100,6 +100,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [uploadingWorkspace, setUploadingWorkspace] = useState(false);
   const [pendingNotebookIndex, setPendingNotebookIndex] = useState<Extract<SettingClientAction, {kind: "notebook_choose_file_index"}>>();
   const [connectingNotebookIndex, setConnectingNotebookIndex] = useState(false);
+  const [pendingLinkedProject, setPendingLinkedProject] = useState<Extract<SettingClientAction, {kind: "project_create_linked"}>>();
+  const [creatingLinkedProject, setCreatingLinkedProject] = useState(false);
   const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -765,33 +767,54 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `${engagement.name} headless security browser: ${observed.state}${observed.session_id ? ` · session ${observed.session_id}` : ""}.`;
   };
 
-  const applyProjectLifecycle = async (action: Extract<SettingClientAction, { kind: "project_create" | "project_rename" | "project_archive" | "project_restore" | "project_delete" }>): Promise<string> => {
+  const createButlerProject = async (action: Extract<SettingClientAction, {kind: "project_create" | "project_create_linked"}>, workspacePath?: string) => {
     if (!api || coreState !== "online") throw new Error("Reconnect to Core before changing a project.");
-    if (action.kind === "project_create") {
-      const matchingProjects = async () => (await api.listEngagements()).items.filter((project) => projectNameKey(project.name) === projectNameKey(action.name));
-      const describeMatches = (matches: Awaited<ReturnType<typeof matchingProjects>>) => matches.slice(0, 3).map((project) => `${project.id} (${project.status})`).join(", ");
-      let existing;
+    const matchingProjects = async () => (await api.listEngagements()).items.filter((project) => projectNameKey(project.name) === projectNameKey(action.name));
+    const describeMatches = (matches: Awaited<ReturnType<typeof matchingProjects>>) => matches.slice(0, 3).map((project) => `${project.id} (${project.status})`).join(", ");
+    let existing;
+    try {
+      existing = await matchingProjects();
+    } catch {
+      throw new Error("Core's project list is unavailable. Reconnect and check All projects before asking Butler to create one.");
+    }
+    if (existing.length) throw new Error(`Core already has a project named ${action.name}: ${describeMatches(existing)}. Ask Butler to read it before creating another.`);
+    const created = await createEngagement({name: action.name, description: action.description,
+      clientName: action.clientName || undefined, workspacePath,
+      hostAccessAcknowledged: false, requestId: action.requestId}).catch(async () => {
+      let after;
       try {
-        existing = await matchingProjects();
+        after = await matchingProjects();
       } catch {
-        throw new Error("Core's project list is unavailable. Reconnect and check All projects before asking Butler to create one.");
+        throw new Error(`Core did not confirm whether ${action.name} was created, and its project list is unavailable. Reconnect and check All projects before retrying.`);
       }
-      if (existing.length) throw new Error(`Core already has a project named ${action.name}: ${describeMatches(existing)}. Ask Butler to read it before creating another.`);
-      const created = await createEngagement({ name: action.name, description: action.description, clientName: action.clientName || undefined, hostAccessAcknowledged: false, requestId: action.requestId }).catch(async () => {
-        let after;
-        try {
-          after = await matchingProjects();
-        } catch {
-          throw new Error(`Core did not confirm whether ${action.name} was created, and its project list is unavailable. Reconnect and check All projects before retrying.`);
-        }
-        throw new Error(after.length
-          ? `Core did not confirm whether ${action.name} was created. It now lists ${describeMatches(after)}. Ask Butler to read that project before retrying.`
-          : `Core did not confirm whether ${action.name} was created. Check All projects before retrying.`);
-      });
-      const observed = await api.getProjectLifecycle(created.id);
-      if (observed.name !== action.name || observed.status === "archived") throw new Error("Core did not confirm the new project. Check All projects before retrying.");
+      throw new Error(after.length
+        ? `Core did not confirm whether ${action.name} was created. It now lists ${describeMatches(after)}. Ask Butler to read that project before retrying.`
+        : `Core did not confirm whether ${action.name} was created. Check All projects before retrying.`);
+    });
+    const observed = await api.getProjectLifecycle(created.id);
+    if (observed.name !== action.name || observed.status === "archived"
+        || observed.workspacePath !== workspacePath) {
+      throw new Error("Core did not confirm the new project and its workspace. Check All projects before retrying.");
+    }
+    if (workspacePath) {
+      const policy = await api.getAutomationPolicy(created.id);
+      if (policy.hostAccessAcknowledged) throw new Error("Core unexpectedly acknowledged Host access. Inspect the project's execution policy before use.");
+    }
+    return observed;
+  };
+
+  const applyProjectLifecycle = async (action: Extract<SettingClientAction, { kind: "project_create" | "project_create_linked" | "project_rename" | "project_archive" | "project_restore" | "project_delete" }>): Promise<string> => {
+    if (!api || coreState !== "online") throw new Error("Reconnect to Core before changing a project.");
+    if (action.kind === "project_create_linked") {
+      if (activeImageProject.current !== action.sourceProjectId) throw new Error("Select the original project before choosing a host folder.");
+      setPendingLinkedProject(action);
+      setView("chat");
+      return "Choose a folder on the Nebula host in Butler's project control. Core will link it to the new project; Host command access still needs operator consent.";
+    }
+    if (action.kind === "project_create") {
+      const observed = await createButlerProject(action);
       setHidden(true);
-      onNavigate(`${projectSurface(created.id, "workbench")}?view=chat`);
+      onNavigate(`${projectSurface(observed.id, "workbench")}?view=chat`);
       return `Created ${observed.name} in Core. Host access still needs operator consent before use.`;
     }
     const current = await api.getProjectLifecycle(action.projectId);
@@ -844,6 +867,33 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return archiving
       ? `Archived ${observed.name} in Core. Running work continues; restore it from Archived projects.`
       : `Restored ${observed.name} in Core. Select it from active projects.`;
+  };
+
+  const createLinkedProject = async (path: string): Promise<void> => {
+    const action = pendingLinkedProject;
+    if (!action || creatingLinkedProject) return;
+    if (!api || coreState !== "online" || activeImageProject.current !== action.sourceProjectId) {
+      setPendingLinkedProject(undefined);
+      setError("Reconnect and select the original project before choosing another folder.");
+      return;
+    }
+    setCreatingLinkedProject(true);
+    setError("");
+    try {
+      const observed = await createButlerProject(action, path);
+      if (activeImageProject.current !== action.sourceProjectId) throw new Error("The selected project changed. Inspect All projects before retrying.");
+      setPendingLinkedProject(undefined);
+      setMessages((current) => [...current, {role: "assistant", content: `Created ${observed.name} with host folder ${observed.workspacePath} in Core. Host command access still needs operator consent.`}]);
+      setHidden(true);
+      onNavigate(`${projectSurface(observed.id, "workbench")}?view=chat`);
+    } catch (caught) {
+      void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.linked_project_create_failed",
+        message: "Butler could not confirm the linked project.", outcome: "failure", stage: "project-create", retryable: true, exception: caught});
+      setPendingLinkedProject(undefined);
+      setError(caught instanceof Error ? caught.message : "Core did not confirm the project. Inspect All projects before retrying.");
+    } finally {
+      setCreatingLinkedProject(false);
+    }
   };
 
   const openSelectedSetting = (entry: SettingCatalogEntry) => {
@@ -1253,7 +1303,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "workspace_download") return applyWorkspaceDownload(action);
     if (action.kind === "workspace_upload") return applyWorkspaceUpload(action);
     if (action.kind === "workspace_delete_directory") return applyWorkspaceDeleteDirectory(action);
-    if (action.kind === "project_create" || action.kind === "project_rename" || action.kind === "project_archive"
+    if (action.kind === "project_create" || action.kind === "project_create_linked" || action.kind === "project_rename" || action.kind === "project_archive"
       || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
     if (action.kind === "project_execution_mode") return applyProjectMode(action);
@@ -1882,6 +1932,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <button className="button quiet" type="button" disabled={connectingNotebookIndex} onClick={() => {setPendingNotebookIndex(undefined); setMessages((current) => [...current, {role: "assistant", content: "No Notebook file index was selected."}]);}}>Cancel</button>
       </div>
       {connectingNotebookIndex && <span role="status">Checking file index in Core…</span>}
+    </section>}
+    {pendingLinkedProject && pendingLinkedProject.sourceProjectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Choose linked project folder">
+      <div><strong>Choose project folder</strong><small>Browse a folder on the Nebula host. This becomes the new project's shared workspace. Host command access still needs consent.</small></div>
+      <div className={styles.libraryHandoffActions}>
+        <HostFolderPicker api={coreState === "online" && !creatingLinkedProject ? api : undefined} onSelect={path => {void createLinkedProject(path);}} />
+        <button className="button quiet" type="button" disabled={creatingLinkedProject} onClick={() => {setPendingLinkedProject(undefined); setMessages((current) => [...current, {role: "assistant", content: "No project was created. The host folder was not linked."}]);}}>Cancel</button>
+      </div>
+      {creatingLinkedProject && <span role="status">Creating linked project in Core…</span>}
     </section>}
     {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>

@@ -13,6 +13,21 @@ it("passes Butler's project-create retry ID to Core", async () => {
   });
 });
 
+it("sends the browser-selected host folder and reads back Core's linked path", async () => {
+  const wire = {id: "linked-project", name: "Linked", status: "draft", revision: 1,
+    workspace_path: "/srv/linked", metadata: {}};
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(JSON.stringify(wire), {status: 201}))
+    .mockResolvedValueOnce(new Response(JSON.stringify(wire)));
+  const api = new ApiClient({baseUrl: "http://localhost:8765", fetch: fetchMock});
+  const created = await api.createEngagement({name: "Linked", workspacePath: "/srv/linked", requestId: "linked-action", hostAccessAcknowledged: false});
+  expect(created.workspacePath).toBe("/srv/linked");
+  expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+    workspace_path: "/srv/linked", host_access_acknowledged: false, request_id: "linked-action",
+  });
+  expect(await api.getProjectLifecycle(created.id)).toMatchObject({workspacePath: "/srv/linked", revision: 1});
+});
+
 it.each([true, false])("saves project archive=%s with Core's revision contract", async (archived) => {
   const original = { id: "project/1", name: "Project", status: "paused", revision: 7, metadata: {} };
   const fetchMock = vi.fn<typeof fetch>()

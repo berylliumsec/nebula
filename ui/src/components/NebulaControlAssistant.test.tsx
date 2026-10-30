@@ -1446,6 +1446,54 @@ describe("NebulaControlAssistant", () => {
     expect(createEngagement).not.toHaveBeenCalled();
   });
 
+  it("lets the requesting browser choose a linked project folder and leaves Host consent pending", async () => {
+    const user = userEvent.setup();
+    const sourceProjectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const createdProjectId = "8c516abd-4d22-4a54-a43a-79923ed66af9";
+    const hostFolder = "/srv/linked-project";
+    const createEngagement = vi.fn().mockResolvedValue({id: createdProjectId, name: "Linked project", workspacePath: hostFolder});
+    const listHostWorkspaceFolders = vi.fn().mockResolvedValue({path: hostFolder, parent: "/srv", directories: [], truncated: false});
+    const getProjectLifecycle = vi.fn().mockResolvedValue({id: createdProjectId, name: "Linked project", status: "draft", revision: 1, workspacePath: hostFolder});
+    const getAutomationPolicy = vi.fn().mockResolvedValue({hostAccessAcknowledged: false});
+    const onNavigate = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "linked-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Choose a host folder", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.projects.create_linked", butler_project_id: sourceProjectId,
+          state: "pending_browser_apply", client_action: {kind: "project_create_linked", name: "Linked project",
+            description: "", client_name: "", request_id: "e02b1f22-7a31-4810-b912-16300357494c"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "Choose a folder on the Nebula host."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, engagementId: sourceProjectId}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, listEngagements: vi.fn().mockResolvedValue({items: []}),
+        listHostWorkspaceFolders, getProjectLifecycle, getAutomationPolicy},
+      coreState: "online", engagement: {id: sourceProjectId, name: "Source project"}, createEngagement,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Create a linked project{enter}");
+    const handoff = await screen.findByRole("region", {name: "Choose linked project folder"});
+    expect(createEngagement).not.toHaveBeenCalled();
+    await user.click(within(handoff).getByRole("button", {name: "Cancel"}));
+    expect(createEngagement).not.toHaveBeenCalled();
+    await user.type(composer, "Create a linked project{enter}");
+    await user.click(within(await screen.findByRole("region", {name: "Choose linked project folder"})).getByRole("button", {name: "Browse folders"}));
+    const picker = await screen.findByRole("dialog", {name: "Choose project folder"});
+    await user.click(within(picker).getByRole("button", {name: "Select folder"}));
+    await waitFor(() => expect(createEngagement).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Linked project", workspacePath: hostFolder, hostAccessAcknowledged: false,
+      requestId: "e02b1f22-7a31-4810-b912-16300357494c",
+    })));
+    await waitFor(() => expect(getProjectLifecycle).toHaveBeenCalledWith(createdProjectId));
+    expect(getAutomationPolicy).toHaveBeenCalledWith(createdProjectId);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/${createdProjectId}/workbench?view=chat`));
+  });
+
   it("saves an all-destinations policy from a model receipt and refreshes Project Policy", async () => {
     const user = userEvent.setup();
     const current = { revision: 2, allow_all_targets: false, bypass_permissions: false, local_only: true,
