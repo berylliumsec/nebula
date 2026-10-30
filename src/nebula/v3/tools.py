@@ -9,14 +9,17 @@ import base64
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import shutil
 import socket
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator
 from enum import Enum
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal, Protocol, TypeVar, cast
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -237,6 +240,44 @@ RETRIEVAL_TOOL_NAMES = frozenset(
 )
 
 
+# Chat preparation rebuilds ToolSpecs from the same MCP snapshots on every
+# turn. Checking each schema against the draft meta-schema is CPU intensive.
+# Cache only successful checks by full schema content so edits (including nested
+# edits) must pass validation again. Hold the lock through a miss so concurrent
+# turns do not repeat the same expensive check before either can populate it.
+_VALID_SCHEMA_CACHE_LIMIT = 1_024
+_MAX_SCHEMA_CACHE_KEY_BYTES = 32 * 1_024
+_valid_schema_cache: OrderedDict[str, None] = OrderedDict()
+_valid_schema_cache_lock = Lock()
+
+
+def _schema_cache_key(value: Any) -> str | None:
+    """Canonical key only for JSON values; retain original behavior otherwise."""
+
+    def plain_json(item: Any) -> bool:
+        if item is None or type(item) in (str, int, bool):
+            return True
+        if type(item) is float:
+            return math.isfinite(item)
+        if type(item) is list:
+            return all(plain_json(child) for child in item)
+        if type(item) is dict:
+            return all(
+                type(key) is str and plain_json(child) for key, child in item.items()
+            )
+        return False
+
+    try:
+        if plain_json(value):
+            key = json.dumps(value, sort_keys=True, separators=(",", ":"))
+            # json.dumps emits ASCII by default, so this is also a byte bound.
+            return key if len(key) <= _MAX_SCHEMA_CACHE_KEY_BYTES else None
+    except (RecursionError, TypeError, ValueError):
+        # diagnostic-expected: uncacheable values still take the validator path.
+        pass
+    return None
+
+
 class ToolSpec(BaseModel):
     """Security and data contract for a fixed or MCP capability."""
 
@@ -277,8 +318,19 @@ class ToolSpec(BaseModel):
     @field_validator("input_schema", "output_schema")
     @classmethod
     def valid_object_schema(cls, value: dict[str, Any]) -> dict[str, Any]:
+        key = _schema_cache_key(value)
         try:
-            Draft202012Validator.check_schema(value)
+            if key is None:
+                Draft202012Validator.check_schema(value)
+            else:
+                with _valid_schema_cache_lock:
+                    if key not in _valid_schema_cache:
+                        Draft202012Validator.check_schema(value)
+                        _valid_schema_cache[key] = None
+                        if len(_valid_schema_cache) > _VALID_SCHEMA_CACHE_LIMIT:
+                            _valid_schema_cache.popitem(last=False)
+                    else:
+                        _valid_schema_cache.move_to_end(key)
         except SchemaError as exc:
             record_caught_exception(
                 "runtime",

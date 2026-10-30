@@ -5778,7 +5778,8 @@ class ChatService:
                             ScopePolicy, selected_engagement.scope_policy_id
                         )
                         bypass_permissions = selected_scope.bypass_permissions
-                mcp_profiles = resolve_mcp_profiles(
+                mcp_profiles = await asyncio.to_thread(
+                    resolve_mcp_profiles,
                     self.store,
                     request.mcp_server_ids,
                     bypass_permissions=bypass_permissions,
@@ -5832,7 +5833,9 @@ class ChatService:
         skill_resources_selected = any(item.resources for item in skill_snapshots)
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
-        web_search_selected = not side_chat and self._web_search_selected(engagement_id)
+        web_search_selected = not side_chat and await asyncio.to_thread(
+            self._web_search_selected, engagement_id
+        )
         settings_assistant_available = bool(
             settings_only
             and not side_chat
@@ -5912,14 +5915,15 @@ class ChatService:
             # catalog never turns tools on by itself, so a plain chat stays
             # one.
             catalog_profiles = (
-                self._mcp_catalog(engagement_id, mcp_profiles)
+                await asyncio.to_thread(self._mcp_catalog, engagement_id, mcp_profiles)
                 if self.tool_platform is not None and request.allow_mcp_catalog
                 else ()
             )
             turn_id = str(uuid4())
             try:
                 extra_components = (
-                    self.tool_platform.chat_components(
+                    await asyncio.to_thread(
+                        self.tool_platform.chat_components,
                         engagement_id=engagement_id,
                         turn_id=turn_id,
                         provider=provider,
@@ -6322,7 +6326,8 @@ class ChatService:
             # toward the target too, or a tool-heavy turn is assembled to the
             # target and then sent well over it.
             reserved_tokens = (
-                self._tool_request_reserve(
+                await asyncio.to_thread(
+                    self._tool_request_reserve,
                     tool_components,
                     deferred_specs,
                     catalog_profiles,
