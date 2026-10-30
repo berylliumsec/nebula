@@ -346,7 +346,9 @@ def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_p
 
     async def scenario():
         found = await capabilities.search({"query": "export chat transcript"})
-        assert any(row["operation"] == "nebula.chats.export" for row in found["matches"])
+        assert any(
+            row["operation"] == "nebula.chats.export" for row in found["matches"]
+        )
         described = await capabilities.describe({"operation": "nebula.chats.export"})
         assert described["invoke_with"] == "nebula.capabilities.change"
         prepared = await capabilities.invoke(
