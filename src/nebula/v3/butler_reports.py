@@ -90,18 +90,19 @@ class ButlerReports:
         return report
 
     def _references(self, changes: dict[str, Any]) -> None:
-        for field, model in (
-            ("finding_ids", Finding),
-            ("observation_ids", Observation),
-        ):
+        for field in ("finding_ids", "observation_ids"):
             for entity_id in changes.get(field, []):
-                entity = self.store.get(model, entity_id)
+                entity: Finding | Observation
+                if field == "finding_ids":
+                    entity = self.store.get(Finding, entity_id)
+                else:
+                    entity = self.store.get(Observation, entity_id)
                 if entity.engagement_id != self.project_id:
                     raise ValueError(
                         f"{field} includes an item outside the selected project"
                     )
 
-    def list(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def list_reports(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
         rows = self.store.list_entities(
             Report, engagement_id=self.project_id, offset=offset, limit=51
@@ -114,10 +115,19 @@ class ButlerReports:
     def sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
         kind = arguments["kind"]
         offset = arguments.get("offset", 0)
-        model = Finding if kind == "finding" else Observation
-        rows = self.store.list_entities(
-            model, engagement_id=self.project_id, offset=offset, limit=51
-        )
+        rows: list[Finding | Observation] = []
+        if kind == "finding":
+            rows.extend(
+                self.store.list_entities(
+                    Finding, engagement_id=self.project_id, offset=offset, limit=51
+                )
+            )
+        else:
+            rows.extend(
+                self.store.list_entities(
+                    Observation, engagement_id=self.project_id, offset=offset, limit=51
+                )
+            )
         return {
             "kind": kind,
             "items": [
@@ -274,7 +284,7 @@ class ButlerReports:
                 "Page saved reports in the selected project.",
                 _schema({"offset": _PAGE}),
                 RiskClass.LOCAL_READ,
-                self.list,
+                self.list_reports,
             ),
             (
                 "nebula.reports.sources",
