@@ -66,6 +66,7 @@
     {"name": "butler-chat-export", "patterns": ["src/nebula/v3/butler_chat_export.py", "ui/src/pages/chatTranscriptExport.ts", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-chat-export"]},
     {"name": "butler-workspace", "patterns": ["src/nebula/v3/butler_workspace.py", "src/nebula/v3/workspace.py", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-workspace"]},
     {"name": "butler-library", "patterns": ["src/nebula/v3/butler_library.py"], "areas": ["butler-library"]},
+    {"name": "butler-evidence", "patterns": ["src/nebula/v3/butler_evidence.py", "ui/src/components/butlerEvidenceUpload.ts"], "areas": ["butler-evidence"]},
     {"name": "butler-reports", "patterns": ["src/nebula/v3/butler_reports.py", "ui/src/pages/ReportsPage.tsx", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-reports"]},
     {"name": "butler-notebook", "patterns": ["src/nebula/v3/butler_notebook.py", "src/nebula/v3/butler_capabilities.py", "src/nebula/v3/notebook_mcp.py"], "areas": ["butler-notebook"]},
     {"name": "butler-notebook-file-index", "patterns": ["src/nebula/v3/butler_notebook.py", "src/nebula/v3/notebooks.py", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-notebook-file-index"]},
@@ -248,6 +249,16 @@
       {"area":"butler-library","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-library","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-library","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-evidence": [
+      {"area":"butler-evidence","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler uploads one immutable evidence file on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-chat-export": [
       {"area":"butler-chat-export","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
