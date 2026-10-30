@@ -107,6 +107,18 @@ describe("settings assistant actions", () => {
       .toEqual({kind: "project_create", name: "New", description: "", clientName: "", requestId});
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: ""}}}, "selected")).toBeUndefined();
   });
+  it("accepts a Notebook host-index picker only for the selected project and current revision", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "index-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Choose an index", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.notebook.choose_file_index", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "notebook_choose_file_index", project_id: "selected", expected_project_revision: 4}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "notebook_choose_file_index", projectId: "selected", expectedProjectRevision: 4});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.notebook.file_index"}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "notebook_choose_file_index", project_id: "selected", expected_project_revision: 0}}}, "selected")).toBeUndefined();
+  });
   it("accepts only a scoped transcript export handoff from Core", () => {
     const sessionId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const event: ChatStreamEvent = {

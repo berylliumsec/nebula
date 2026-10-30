@@ -391,20 +391,23 @@
       "id": "notebook.file_index",
       "entry_point": "Notebook file-index settings: connect, inspect or remove a host file index",
       "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::notebookFileIndex",
+        "ui/src/components/NebulaControlAssistant.tsx::setNotebookFileIndex",
+        "ui/src/components/NebulaControlAssistant.tsx::listNotebooks",
         "ui/src/components/NotebookFileIndexSettings.tsx::notebookFileIndex",
         "ui/src/components/NotebookFileIndexSettings.tsx::setNotebookFileIndex",
         "ui/src/components/NotebookFileIndexSettings.tsx::removeNotebookFileIndex"
       ],
-      "core_owner": "Notebook file-index service and linked host path policy",
+      "core_owner": "NotebookService file-index state, project metadata and host SQLite validation",
       "butler": {
-        "discover": "nebula.navigate.open (Notebook destination)",
-        "read": "missing: bounded project file-index status and source-path discovery",
-        "change": "missing: typed connect and remove file-index actions"
+        "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
+        "read": "nebula.notebook.file_index and refreshed Notebook list",
+        "change": "nebula.notebook.choose_file_index browser handoff and nebula.notebook.remove_file_index"
       },
-      "authority": "Selected project, linked host path containment and current file-index revision",
-      "observed_result_test": "missing: Butler file-index LAN lifecycle",
-      "result": "Core must read back the selected index and removal without disclosing unrelated host files",
-      "status": "gap"
+      "authority": "Selected project, live Notebook grant, requesting browser host-file choice, Core workspace validation and current project revision",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core",
+      "result": "Core reads back the selected index and refreshed Notebook list; stale removal fails and exact removal restores project-folder scanning",
+      "status": "supported"
     },
     {
       "id": "library.add",
@@ -1180,11 +1183,23 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::listNotebooks",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::notebookFileIndex",
+      "count": 3
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::previewWorkspaceFile",
       "count": 1
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::reindexLibraryItemAtRevision",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::setNotebookFileIndex",
       "count": 1
     },
     {

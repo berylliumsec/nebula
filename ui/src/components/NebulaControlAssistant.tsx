@@ -29,6 +29,7 @@ import { MicrophoneIcon, NebulaVoice } from "./NebulaVoice";
 import { ButlerMemory } from "./ButlerMemory";
 import { ButlerOversight } from "./ButlerOversight";
 import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
+import { HostFolderPicker } from "./HostFolderPicker";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
 import styles from "./NebulaControlAssistant.module.css";
@@ -97,6 +98,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [uploadingLibrary, setUploadingLibrary] = useState(false);
   const [pendingWorkspaceUpload, setPendingWorkspaceUpload] = useState<Extract<SettingClientAction, {kind: "workspace_upload"}>>();
   const [uploadingWorkspace, setUploadingWorkspace] = useState(false);
+  const [pendingNotebookIndex, setPendingNotebookIndex] = useState<Extract<SettingClientAction, {kind: "notebook_choose_file_index"}>>();
+  const [connectingNotebookIndex, setConnectingNotebookIndex] = useState(false);
   const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -243,6 +246,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     workspaceUploadAbort.current?.abort();
     setPendingWorkspaceUpload(undefined);
     setUploadingWorkspace(false);
+    setPendingNotebookIndex(undefined);
+    setConnectingNotebookIndex(false);
     setImageHelp(false);
     setPendingTurn(undefined);
     setPendingCheckedSessionId(undefined);
@@ -1187,7 +1192,60 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
   };
 
+  const applyNotebookIndexChoice = async (action: Extract<SettingClientAction, {kind: "notebook_choose_file_index"}>): Promise<string> => {
+    if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before choosing a Notebook file index.");
+    }
+    const current = await api.notebookFileIndex(action.projectId);
+    if (current.project_revision !== action.expectedProjectRevision) {
+      throw new Error("The project changed. Ask Butler to read its current file index before choosing one.");
+    }
+    setPendingNotebookIndex(action);
+    setView("chat");
+    return "Choose a SQLite file index on the Nebula host in Butler's file-index control. Core will verify it against this project before saving it.";
+  };
+
+  const connectNotebookIndex = async (path: string): Promise<void> => {
+    const action = pendingNotebookIndex;
+    if (!action) return;
+    if (!api || coreState !== "online" || activeImageProject.current !== action.projectId) {
+      setPendingNotebookIndex(undefined);
+      setError("Reconnect to Core and select the original project before choosing another index file.");
+      return;
+    }
+    setConnectingNotebookIndex(true);
+    setError("");
+    try {
+      const before = await api.notebookFileIndex(action.projectId);
+      if (before.project_revision !== action.expectedProjectRevision) {
+        throw new Error("The project changed. Ask Butler to read its current file index before choosing one.");
+      }
+      const saved = await api.setNotebookFileIndex(action.projectId, path, action.expectedProjectRevision);
+      const notebooks = await api.listNotebooks(action.projectId, true);
+      const observed = await api.notebookFileIndex(action.projectId);
+      if (activeImageProject.current !== action.projectId || saved.path !== path || observed.path !== path
+          || saved.project_revision !== action.expectedProjectRevision + 1
+          || observed.project_revision !== saved.project_revision || observed.state === "none") {
+        throw new Error("Core did not confirm this file index. Inspect Notebook before choosing it again.");
+      }
+      setPendingNotebookIndex(undefined);
+      setMessages((current) => [...current, {role: "assistant", content: observed.state === "fallback"
+        ? `Core saved the file index, but it is unavailable. Notebook is scanning the project folder. Inspect ${path} before trying again.`
+        : `Core ${observed.state === "partial" ? "saved a partial" : "connected the"} file index ${path}. Notebook now lists ${notebooks.length} file${notebooks.length === 1 ? "" : "s"}.`}]);
+    } catch (caught) {
+      void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.notebook_index_failed",
+        message: "Butler could not confirm the Notebook file index.", outcome: "failure",
+        stage: "notebook-index", retryable: true, exception: caught});
+      setPendingNotebookIndex(undefined);
+      setError(caught instanceof Error && caught.message.startsWith("The project changed") ? caught.message
+        : "Core did not confirm the file index. Inspect Notebook before choosing another file; the first choice may have been saved.");
+    } finally {
+      setConnectingNotebookIndex(false);
+    }
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
+    if (action.kind === "notebook_choose_file_index") return applyNotebookIndexChoice(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
     if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "chat_export") return applyChatExport(action);
@@ -1816,6 +1874,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           else {setPendingWorkspaceUpload(undefined); setMessages((current) => [...current, {role: "assistant", content: "No workspace file was selected or uploaded."}]);}
         }}>{uploadingWorkspace ? "Cancel upload" : "Cancel"}</button>
       </div>
+    </section>}
+    {pendingNotebookIndex && pendingNotebookIndex.projectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Choose Notebook file index">
+      <div><strong>Choose Notebook file index</strong><small>Select a SQLite index file on the Nebula host. Core will check it against this project's folder.</small></div>
+      <div className={styles.libraryHandoffActions}>
+        <HostFolderPicker api={coreState === "online" && !connectingNotebookIndex ? api : undefined} purpose="index" onSelect={path => {void connectNotebookIndex(path);}} />
+        <button className="button quiet" type="button" disabled={connectingNotebookIndex} onClick={() => {setPendingNotebookIndex(undefined); setMessages((current) => [...current, {role: "assistant", content: "No Notebook file index was selected."}]);}}>Cancel</button>
+      </div>
+      {connectingNotebookIndex && <span role="status">Checking file index in Core…</span>}
     </section>}
     {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>

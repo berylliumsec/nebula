@@ -22,6 +22,7 @@ export type SettingClientAction =
   | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
   | { kind: "workspace_delete_directory"; projectId: string; path: string; expectedEntryIdentity: string }
   | { kind: "library_add"; projectId: string }
+  | { kind: "notebook_choose_file_index"; projectId: string; expectedProjectRevision: number }
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
 
 export interface AssistantWorkReceipt { url: string; content: string }
@@ -132,6 +133,13 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   if (projectAction && operation === "nebula.library.add" && value.kind === "library_add"
       && typeof projectId === "string" && value.project_id === projectId) {
     return {kind: "library_add", projectId};
+  }
+  if (projectAction && operation === "nebula.notebook.choose_file_index"
+      && value.kind === "notebook_choose_file_index"
+      && typeof projectId === "string" && value.project_id === projectId
+      && Number.isInteger(value.expected_project_revision) && Number(value.expected_project_revision) >= 1) {
+    return {kind: "notebook_choose_file_index", projectId,
+      expectedProjectRevision: Number(value.expected_project_revision)};
   }
   const libraryKind = operation === "nebula.library.download" ? "library_download"
     : operation === "nebula.library.reindex" ? "library_reindex"

@@ -277,6 +277,14 @@ def test_product_search_finds_butler_notebook_guidance(monkeypatch):
         and "nebula.notebook.package_status" in str(item["text"])
         for item in resources
     )
+    indexes = search_product_knowledge(
+        "How can Butler choose and remove a Notebook file index on the host?"
+    )
+    assert any(
+        "choose_file_index" in str(item["text"])
+        and "remove_file_index" in str(item["text"])
+        for item in indexes
+    )
 
 
 def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):

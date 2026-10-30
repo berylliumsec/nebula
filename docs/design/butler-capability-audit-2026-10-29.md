@@ -29,7 +29,7 @@ and reads; these counts are not a coverage percentage.
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create, rename, archive, restore, and permanent delete through the requesting browser; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host folder selection and Host consent remain in their visible controls. |
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, request browser-owned binary upload and verified download, and create, rename or delete an empty directory against current identities | Terminal lifecycle and linked-host-folder selection remain gaps. Scheduled Butler has no file actions. |
-| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run; read and restart an idle kernel; read or install an exact package with environment read-back; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, Notebook file-index selection, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
+| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run; read and restart an idle kernel; read or install an exact package with environment read-back; choose or remove a host SQLite file index through the requesting browser and Core project revision; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
 The present gateway is deliberately small: Butler receives
@@ -274,6 +274,7 @@ receipt only after Core read-back.
 | Execute and interrupt | A saved code cell returns a run ID; Core policy and Host consent are enforced; ordered results and interruption are read from that run | Notebook runtime and Core run store | Tool and real Core |
 | Restart kernel | Butler selects a live idle kernel by ID, restart count and current Notebook file revision; Core acknowledges the restart and reports an incremented count for that same kernel | Notebook worker and project workspace | Tool and production LAN browser |
 | Install package | Butler selects a project Notebook and exact requirement, then Core applies Host or Docker policy and reads the installed distribution and version from that same environment; an uncertain result is inspected before retry | Notebook environment and project policy | Tool and production LAN browser |
+| Connect and remove file index | Butler reads the selected project's index and revision; a paired browser chooses the host SQLite file, Core validates it against the workspace and saves it at that revision; Notebook's refreshed list reflects the index, cancellation changes nothing, stale removal fails, and removal restores folder scanning | Project metadata, host picker and Notebook list | Tool and production LAN browser |
 | Refresh and reconnect | The same path, source hash, saved cell and run status appear in Notebook and Butler after reload | Workspace file, Core run store and URL | Production LAN browser |
 | Failure and retry | Permission, stale revision, unavailable runtime and uncertain run effects identify the next safe read; no blind duplicate execution | Core error contract | Tool and real Core |
 
@@ -284,9 +285,12 @@ than restarted. Package installation requires the current notebook revision,
 the live Notebook grant, project Host consent and selected runtime policy. Core
 queries installed distribution metadata in that environment after the command;
 Butler reads it again before claiming a version. An uncertain response requires
-`package_status` before retrying. Project file-index configuration remains a
-separate host-picker workflow. Browser keyboard and mobile checks apply to the
-selected Notebook journey, even when Butler's tool routing is server-side.
+`package_status` before retrying. For an index, Butler returns a path-free
+browser handoff at the current project revision. The requesting browser chooses
+a SQLite host file, and Core checks that it inventories the selected project
+before saving. Butler can remove that exact selection with a revision check;
+the project files remain untouched. Browser keyboard and mobile checks apply
+to the selected Notebook journey, even when Butler's tool routing is server-side.
 
 ### Chat history rewind contract
 
@@ -333,8 +337,8 @@ proof that every click has been catalogued.
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
 checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 27
 reviewed actions, including explicit export, workspace, Notebook, Library, and
-storage dispositions. Its source inventory contains 507 distinct `api` call
-signatures in production UI TypeScript, of which 58 are linked to those
+storage dispositions. Its source inventory contains 510 distinct `api` call
+signatures in production UI TypeScript, of which 61 are linked to those
 reviewed actions; 449 still require action-level review. The new Workbench bulk
 chat calls map to the existing per-chat archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
@@ -353,8 +357,8 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Complete Notebook file-index selection, terminal lifecycle, linked host folder
-   selection, and the remaining resource actions in their owning services. Each
+2. Complete terminal lifecycle, linked host folder selection, and the remaining
+   resource actions in their owning services. Each
    needs target discovery, optimistic revisions where applicable, and observed
    Core read-back.
 3. Add specialized device and administration handoffs for local file selection,
