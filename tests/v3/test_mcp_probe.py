@@ -2,10 +2,14 @@ import asyncio
 import json
 import sys
 import textwrap
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator
 
 from nebula.v3 import mcp
 from nebula.v3.credentials import CredentialStore
@@ -288,6 +292,85 @@ def test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name(tmp_path):
     assert plugin.spec.name == mcp_tool_runtime_name(profile.id, "scan")
     assert plugin.spec.name != plugin.spec.display_name
     assert plugin.spec.display_name == "remote · scan"
+
+
+def test_rebuilt_mcp_tools_reuse_validated_schema_but_recheck_nested_edits(
+    tmp_path, monkeypatch
+):
+    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
+    schema = {
+        "type": "object",
+        "properties": {
+            "mcp_schema_cache_regression": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+            }
+        },
+    }
+    profile.capabilities.tools[0].input_schema = schema
+    original_check = Draft202012Validator.check_schema
+    checked = 0
+
+    def count_checks(cls, candidate):
+        nonlocal checked
+        if "mcp_schema_cache_regression" in candidate.get("properties", {}):
+            checked += 1
+        return original_check(candidate)
+
+    monkeypatch.setattr(Draft202012Validator, "check_schema", classmethod(count_checks))
+
+    build_mcp_tool_plugins(service, (profile,))
+    build_mcp_tool_plugins(service, (profile.model_copy(deep=True),))
+    assert checked == 1
+
+    schema["properties"]["mcp_schema_cache_regression"]["properties"]["value"][
+        "type"
+    ] = "integer"
+    build_mcp_tool_plugins(service, (profile,))
+    assert checked == 2
+
+    schema["properties"]["mcp_schema_cache_regression"]["properties"]["value"][
+        "type"
+    ] = "not-a-json-schema-type"
+    with pytest.raises(ValueError, match="invalid JSON Schema"):
+        build_mcp_tool_plugins(service, (profile,))
+    assert checked == 3
+
+
+def test_concurrent_mcp_turns_check_the_same_new_schema_once(tmp_path, monkeypatch):
+    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
+    profile.capabilities.tools[0].input_schema = {
+        "type": "object",
+        "properties": {"mcp_schema_parallel_regression": {"type": "string"}},
+    }
+    original_check = Draft202012Validator.check_schema
+    checked = 0
+    entered = Event()
+    release = Event()
+    start = Barrier(4)
+
+    def count_checks(cls, candidate):
+        nonlocal checked
+        if "mcp_schema_parallel_regression" in candidate.get("properties", {}):
+            checked += 1
+            entered.set()
+            assert release.wait(timeout=2)
+        return original_check(candidate)
+
+    monkeypatch.setattr(Draft202012Validator, "check_schema", classmethod(count_checks))
+
+    def build():
+        start.wait(timeout=2)
+        return build_mcp_tool_plugins(service, (profile.model_copy(deep=True),))
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(build) for _ in range(4)]
+        assert entered.wait(timeout=2)
+        time.sleep(0.1)
+        release.set()
+        for future in futures:
+            assert len(future.result(timeout=2)) == 1
+    assert checked == 1
 
 
 def test_open_world_mcp_is_explicitly_network_capable_and_deny_is_bypassable(tmp_path):
