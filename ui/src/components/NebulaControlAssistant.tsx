@@ -971,6 +971,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         } catch (caught) {
           createError = caught;
           // A lost response may follow a committed write. Read the fixed ID before retrying.
+          void logDiagnostic({level: "warning", eventCode: "interface.nebula_assistant.report_create_response_failed",
+            message: "Butler could not confirm the report draft response and is checking Core's saved ID.",
+            outcome: "failure", stage: "report-create", retryable: true, exception: caught});
         }
         try {
           observed = await api.getReport(action.reportId);
