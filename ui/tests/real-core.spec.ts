@@ -2637,7 +2637,7 @@ test("assistant upgrade running tool details survive a production LAN chat reloa
     ]);
     const assistantUrl = `${core.origin}/?view=chat&session=running-tool-session#token=${encodeURIComponent(core.token)}`;
     const inspect = async () => {
-      const ledger = page.getByRole("region", { name: "Work summary" });
+      const ledger = page.getByRole("region", { name: /^Work summary for reply / });
       await expect(ledger.locator(".activity-ledger-compact-current")).toContainText("Command on simulation-host");
       await ledger.getByRole("button", { name: "Show activity" }).click();
       const running = ledger.locator(".activity-ledger-audit li").filter({ hasText: "Command on simulation-host" }).locator("details");
@@ -7115,6 +7115,108 @@ test("assistant upgrade Butler adds, downloads, reindexes and removes one shared
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], itemId, sourceRevision: original.revision,
       reindexedRevision: reindexed.revision, knowledgeExcerptObserved: modelSawKnowledgeExcerpt,
       result: "cancel left Core unchanged; browser-owned upload and original-file download; reindex and removal confirmed; stale mutation rejected; artifact retained; action tool did not return file text"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler uploads one immutable evidence file on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(240_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const instruction = "Add my synthetic proof file as project evidence linked to the selected finding and asset.";
+  const content = Buffer.from("Synthetic Butler evidence bytes. Keep these off the model.\n");
+  let findingId = "";
+  let assetId = "";
+  let modelSawFile = false;
+  const stub = await startLocalModelStub({responseContent: "Choose the evidence file on this device.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (typeof messages[lastUser]?.content !== "string" || !messages[lastUser].content.startsWith(instruction)) return undefined;
+    if (JSON.stringify(messages.filter(message => message.role === "tool")).includes(content.toString())) modelSawFile = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "upload evidence from device"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.upload_from_device"}};
+    if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.evidence.upload_from_device",
+      arguments: {title: "Synthetic proof", description: "Linked fixture", evidence_type: "operator_upload",
+        finding_id: findingId, asset_ids: [assetId]}}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler evidence fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdFinding = await api.post("findings", {data: {engagement_id: projectId, title: "Selected finding",
+      description: "Synthetic finding", severity: "info", status: "candidate"}});
+    expect(createdFinding.ok(), await createdFinding.text()).toBe(true);
+    findingId = (await createdFinding.json() as {id: string}).id;
+    const createdAsset = await api.post("assets", {data: {engagement_id: projectId, name: "Selected asset", asset_type: "host"}});
+    expect(createdAsset.ok(), await createdAsset.text()).toBe(true);
+    assetId = (await createdAsset.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler evidence model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler evidence LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async () => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByRole("region", {name: "Add project evidence"})).toBeVisible({timeout: 45_000});
+    };
+    await send();
+    await assistant.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("No evidence file was uploaded.")).toBeVisible();
+    expect(await (await api.get(`evidence?engagement_id=${projectId}`)).json()).toEqual([]);
+    await send();
+    await assistant.getByLabel("Choose project evidence file").setInputFiles({name: "proof.txt", mimeType: "text/plain", buffer: content});
+    const confirmation = page.getByRole("dialog", {name: "Store proof.txt as evidence?"});
+    await expect(confirmation).toContainText("Selected finding");
+    await confirmation.getByRole("button", {name: "Store evidence"}).click();
+    const expectedHash = createHash("sha256").update(content).digest("hex");
+    await expect(assistant.getByText(new RegExp(`Stored Synthetic proof as evidence in Core.*${expectedHash}`))).toBeVisible({timeout: 45_000});
+    const rows = await (await api.get(`evidence?engagement_id=${projectId}`)).json() as Array<{
+      id: string; engagement_id: string; artifact_id: string; finding_id: string; asset_ids: string[];
+      sha256: string; title: string; metadata: {size: number; filename: string};
+    }>;
+    expect(rows).toHaveLength(1);
+    const saved = rows[0];
+    expect(saved).toMatchObject({engagement_id: projectId, finding_id: findingId, asset_ids: [assetId],
+      sha256: expectedHash, title: "Synthetic proof", metadata: {size: content.length, filename: "proof.txt"}});
+    const artifact = await api.get(`artifacts/${saved.artifact_id}/content`);
+    expect(artifact.ok()).toBe(true);
+    expect(await artifact.body()).toEqual(content);
+    const linked = await (await api.get(`findings/${findingId}`)).json() as {evidence_ids: string[]};
+    expect(linked.evidence_ids).toContain(saved.id);
+    await page.goto(`${core.origin}/projects/${projectId}/evidence`);
+    await expect(page.getByText("Synthetic proof", {exact: true}).first()).toBeVisible();
+    await page.reload();
+    await expect(page.getByText("Synthetic proof", {exact: true}).first()).toBeVisible();
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(new RegExp(`Stored Synthetic proof as evidence in Core.*${expectedHash}`))).toBeVisible();
+    expect(modelSawFile).toBe(false);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-evidence-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], evidenceId: saved.id,
+      hash: expectedHash, result: "cancel left Core unchanged; browser-owned immutable upload, exact artifact bytes and links confirmed; refresh retained record and Butler outcome"}),
+    contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
@@ -12071,7 +12173,7 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     await page.getByRole("button", { name: "Send message", exact: true }).click();
 
     // The supervisor parks on the wait: a named pause, not a lost stream.
-    const waiting = page.locator(".chat-message.assistant").last().getByRole("region", { name: "Work summary" });
+    const waiting = page.locator(".chat-message.assistant").last().getByRole("region", { name: /^Work summary for reply / });
     await expect(waiting).toContainText("Waiting for delegated work.", { timeout: 30_000 });
     await expect(page.getByRole("status", { name: "Waiting for subagents" })).toHaveCount(0);
     await expect(page.getByText("Callback ready")).toHaveCount(0);
@@ -12085,7 +12187,7 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     await expectNoChatStreamFailure(page);
     const waitingReply = page.locator(".chat-message.assistant").last();
     await expect(waitingReply).toContainText("Waiting for delegated work.");
-    const waitingWork = waitingReply.getByRole("region", { name: "Work summary" });
+    const waitingWork = waitingReply.getByRole("region", { name: /^Work summary for reply / });
     await expect(waitingWork.locator(".activity-ledger-progress-preview")).toContainText("I am delegating the banner check.");
     await expect(waitingReply.locator(".chat-message-body > .assistant-markdown")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("provider-wait-compact.png") });
@@ -12106,7 +12208,7 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     const completedReply = page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" });
     await expect(completedReply.locator(".chat-message-body > .assistant-markdown")).toContainText("PARENT_SUMMARY: the subagent confirmed the banner.");
     await expect(completedReply.locator(".chat-message-body > .assistant-markdown")).not.toContainText("I am delegating the banner check.");
-    await completedReply.getByRole("region", { name: "Work summary" }).getByRole("button", { name: "View work" }).click();
+    await completedReply.getByRole("region", { name: /^Work summary for reply / }).getByRole("button", { name: "View work" }).click();
     await expect(completedReply.getByRole("region", { name: "Progress updates" })).toContainText("I am delegating the banner check.");
     await expect(page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" })).toHaveCount(1);
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
@@ -12115,7 +12217,7 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     await expect(page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" })).toHaveCount(1, { timeout: 20_000 });
     const reloadedReply = page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" });
     await expect(reloadedReply.locator(".chat-message-body > .assistant-markdown")).not.toContainText("I am delegating the banner check.");
-    await reloadedReply.getByRole("region", { name: "Work summary" }).getByRole("button", { name: "View work" }).click();
+    await reloadedReply.getByRole("region", { name: /^Work summary for reply / }).getByRole("button", { name: "View work" }).click();
     await expect(reloadedReply.getByRole("region", { name: "Progress updates" })).toContainText("I am delegating the banner check.");
     await testInfo.attach("subagent-wait-followed", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, followRequests }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("subagent-wait-followed.png") });
