@@ -30,6 +30,7 @@ import { ButlerMemory } from "./ButlerMemory";
 import { ButlerOversight } from "./ButlerOversight";
 import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
 import { HostFolderPicker } from "./HostFolderPicker";
+import { applyButlerTerminalStop } from "./butlerTerminalStop";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
 import styles from "./NebulaControlAssistant.module.css";
@@ -1465,6 +1466,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   };
 
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
+    if (action.kind === "terminal_stop") {
+      if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original Project before stopping its terminal.");
+      }
+      return applyButlerTerminalStop(api, action, () => activeImageProject.current, async (session) => confirm({
+        title: `Stop terminal ${session.sessionId.slice(0, 8)}?`,
+        message: "This stops the live terminal and ends running commands. Packages installed only in its container will be lost. Project workspace files remain.",
+        confirmLabel: "Stop terminal",
+        tone: "danger",
+      }));
+    }
     if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_signoff"
         || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);

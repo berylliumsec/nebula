@@ -28,7 +28,8 @@ export type SettingClientAction =
   | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
   | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
   | { kind: "report_signoff" | "report_export_pdf"; projectId: string; reportId: string; expectedRevision: number }
-  | { kind: "report_export_bundle"; projectId: string; expectedProjectRevision: number };
+  | { kind: "report_export_bundle"; projectId: string; expectedProjectRevision: number }
+  | { kind: "terminal_stop"; projectId: string; sessionId: string; expectedCreatedAt: string };
 
 export interface AssistantWorkReceipt { url: string; content: string }
 
@@ -109,6 +110,15 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (projectAction && operation === "nebula.terminal.stop" && value.kind === "terminal_stop"
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.session_id === "string" && uuidPattern.test(value.session_id)
+      && typeof value.expected_created_at === "string"
+      && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)$/.test(value.expected_created_at)
+      && Number.isFinite(Date.parse(value.expected_created_at))) {
+    return {kind: "terminal_stop", projectId, sessionId: value.session_id,
+      expectedCreatedAt: value.expected_created_at};
+  }
   if (projectAction && typeof projectId === "string" && value.project_id === projectId
       && operation.startsWith("nebula.reports.")) {
     const reportId = typeof value.report_id === "string" && uuidPattern.test(value.report_id) ? value.report_id : undefined;

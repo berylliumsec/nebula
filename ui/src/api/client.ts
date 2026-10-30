@@ -1,5 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import { mapTerminalSessionList, type TerminalSessionList, type WireTerminalSessionList } from "./terminalTypes";
 import type { StorageAction, StorageDashboard, StorageSource } from "./types";
 import type {
   AgentRunSummary,
@@ -8800,6 +8801,32 @@ export class ApiClient {
           : { mode: "unrestricted", runtimeNetwork: "bridge", publishedPorts: [] },
       })),
     }));
+  }
+
+  listProjectContainerTerminals(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<TerminalSessionList> {
+    return this.request<WireTerminalSessionList>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminals`,
+      { signal },
+    ).then(mapTerminalSessionList);
+  }
+
+  closeProjectContainerTerminal(
+    engagementId: string,
+    sessionId: string,
+    expectedCreatedAt: string,
+    signal?: AbortSignal,
+  ): Promise<TerminalSessionList> {
+    return this.request<WireTerminalSessionList>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminals/${encodeURIComponent(sessionId)}/close`,
+      {
+        method: "POST",
+        signal,
+        body: JSON.stringify({ expected_created_at: expectedCreatedAt }),
+      },
+    ).then(mapTerminalSessionList);
   }
 
   containerTerminalCapacity(

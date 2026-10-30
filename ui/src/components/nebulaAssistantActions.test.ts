@@ -127,6 +127,24 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "other", session_id: sessionId, expected_revision: 5}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "selected", session_id: "../other", expected_revision: 5}}}, "selected")).toBeUndefined();
   });
+  it("accepts only an exact selected-project terminal stop handoff", () => {
+    const sessionId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const action = {kind: "terminal_stop", project_id: "selected", session_id: sessionId,
+      expected_created_at: "2026-10-30T20:30:00.123456Z"};
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "terminal-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending browser action", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.terminal.stop", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: action},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "terminal_stop", projectId: "selected",
+      sessionId, expectedCreatedAt: action.expected_created_at});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, session_id: "../other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, expected_created_at: "2026-10-30T20:30:00"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff"}}, "selected")).toBeUndefined();
+  });
   it("accepts only scoped report drafts, current revisions and device handoffs", () => {
     const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const findingId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
