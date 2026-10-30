@@ -5,7 +5,15 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from .domain import Engagement, Finding, Observation, Report, ReportStatus, RiskClass
+from .domain import (
+    Engagement,
+    Finding,
+    Observation,
+    Report,
+    ReportRender,
+    ReportStatus,
+    RiskClass,
+)
 from .storage import NebulaStore
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -250,6 +258,27 @@ class ButlerReports:
             }
         )
 
+    def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = self._current(arguments)
+        if report.status == ReportStatus.FINAL:
+            raise ValueError("a signed final report cannot be deleted")
+        if self.store.find_entities(
+            ReportRender,
+            {"report_id": report.id},
+            engagement_id=self.project_id,
+            limit=1,
+        ):
+            raise ValueError("a report with a saved PDF render cannot be deleted")
+        return self._pending(
+            {
+                "kind": "report_delete",
+                "project_id": self.project_id,
+                "report_id": report.id,
+                "expected_revision": report.revision,
+                "title": report.title,
+            }
+        )
+
     def export_pdf(self, arguments: dict[str, Any]) -> dict[str, Any]:
         report = self._current(arguments)
         return self._pending(
@@ -326,6 +355,13 @@ class ButlerReports:
                 _CURRENT,
                 RiskClass.WORKSPACE_WRITE,
                 self.signoff,
+            ),
+            (
+                "nebula.reports.delete",
+                "Ask the requesting browser to confirm permanent deletion of an exact non-final, unrendered report at its current revision. Core retains the source findings and notes; signed final reports and reports with a saved PDF render cannot be deleted. After an uncertain response, inspect the exact report before retrying.",
+                _CURRENT,
+                RiskClass.WORKSPACE_WRITE,
+                self.delete,
             ),
             (
                 "nebula.reports.export_pdf",

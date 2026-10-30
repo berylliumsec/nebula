@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import type { AIWritingProvenance, ReportNoteTransform } from "../api/types";
 import { AIWritingDialog } from "../components/AIWritingDialog";
 import { aiRuntimeOptions } from "../components/aiRuntimes";
@@ -42,6 +42,7 @@ export function ReportsPage() {
     api,
     createOperatorProfile,
     createReport,
+    deleteReport,
     engagement,
     findings,
     harnesses,
@@ -79,6 +80,7 @@ export function ReportsPage() {
   const [signoffName, setSignoffName] = useState("");
   const [attestation, setAttestation] = useState("I reviewed this report and approve it as the final record.");
   const [signing, setSigning] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [writingTarget, setWritingTarget] = useState<{ kind: "summary" } | { kind: "note"; observationId: string }>();
   const readOnly = selected?.status === "final";
   const writingRuntimes = useMemo(
@@ -316,6 +318,30 @@ export function ReportsPage() {
     setSignoffOpen(true);
   };
 
+  const remove = async () => {
+    if (!selected || !engagement || selected.status === "final" || dirty || deleting) return;
+    const target = selected;
+    const approved = await confirm({
+      title: `Permanently delete ${target.title}?`,
+      message: "This removes the saved draft or review report. Its source findings, notes and evidence remain. A signed final report cannot be deleted.",
+      confirmLabel: "Delete report",
+      tone: "danger",
+    });
+    if (!approved) return;
+    setDeleting(true);
+    setError(undefined);
+    try {
+      await deleteReport(target.id, engagement.id, target.revision);
+      setSelectedId("");
+      navigate(resourcePath(engagement.id, "report"), {replace: true});
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.reports_page.delete_failed", "A report deletion could not be confirmed.", caught, "reports_page");
+      setError(caught instanceof Error ? caught.message : "Core could not confirm the report deletion. Inspect Reports before retrying.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   useEffect(() => {
     const requestedRevision = new URLSearchParams(location.search).get("butler_signoff");
     if (!requestedRevision || !selected || selected.id !== resourceId) return;
@@ -389,7 +415,7 @@ export function ReportsPage() {
           <header><h2>{selected.status === "review" ? "Sign off & export" : "Export"}</h2><p>{dirty ? "Save this revision before exporting. PDF output is always rendered from the persisted record." : `PDF output uses saved revision ${selected.revision}.`}</p></header>
           {engagement && <ResourceRelationsPanel resource={{ projectId: engagement.id, kind: "report", id: selected.id, revision: selected.revision }} actionAdapters={{ download: exportPdf }} />}
           <ul><li className={summary.trim() ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Executive summary</strong><small>{summary.trim() ? "Present" : "Needs content"}</small></span></li><li className={linkedFindings.length ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Finding coverage</strong><small>{linkedFindings.length} included</small></span></li></ul>
-          <div className="export-actions">{selected.status === "review" && <button className="button primary full" type="button" disabled={dirty || signing} title={dirty ? "Save the report before sign-off" : undefined} onClick={openSignoff}><BadgeCheck size={15} /> Sign off final report</button>}<button className={`button ${selected.status === "review" ? "secondary" : "primary"} full`} type="button" disabled={dirty || !api || pdfState !== "idle"} title={dirty ? "Save the report before exporting" : undefined} onClick={() => void exportPdf()}>{pdfState === "idle" ? <Download size={15} /> : <LoaderCircle className="spin" size={15} />} {pdfState === "idle" ? "Export PDF" : pdfState === "downloading" ? "Downloading…" : "Rendering PDF…"}</button><button className="button secondary full" type="button" disabled={!api || !engagement || bundleSaving} onClick={() => void exportBundle()}>{bundleSaving ? <LoaderCircle className="spin" size={15} /> : <Archive size={15} />} {bundleSaving ? "Exporting…" : "Export engagement bundle"}</button><p className="provider-dialog-note">The .nebula.zip bundle is a portable sensitive export, not a backup. It includes unredacted evidence, retained selected-tool terminal results, and metadata-only terminal records; scratch workspace files are excluded.</p></div>
+          <div className="export-actions">{selected.status === "review" && <button className="button primary full" type="button" disabled={dirty || signing} title={dirty ? "Save the report before sign-off" : undefined} onClick={openSignoff}><BadgeCheck size={15} /> Sign off final report</button>}<button className={`button ${selected.status === "review" ? "secondary" : "primary"} full`} type="button" disabled={dirty || !api || pdfState !== "idle"} title={dirty ? "Save the report before exporting" : undefined} onClick={() => void exportPdf()}>{pdfState === "idle" ? <Download size={15} /> : <LoaderCircle className="spin" size={15} />} {pdfState === "idle" ? "Export PDF" : pdfState === "downloading" ? "Downloading…" : "Rendering PDF…"}</button><button className="button secondary full" type="button" disabled={!api || !engagement || bundleSaving} onClick={() => void exportBundle()}>{bundleSaving ? <LoaderCircle className="spin" size={15} /> : <Archive size={15} />} {bundleSaving ? "Exporting…" : "Export engagement bundle"}</button><p className="provider-dialog-note">The .nebula.zip bundle is a portable sensitive export, not a backup. It includes unredacted evidence, retained selected-tool terminal results, and metadata-only terminal records; scratch workspace files are excluded.</p>{!readOnly && <button className="button quiet full" type="button" disabled={!api || dirty || saving || deleting} title={dirty ? "Save or discard edits before deleting" : undefined} onClick={() => void remove()}>{deleting ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />} {deleting ? "Deleting…" : "Delete report"}</button>}</div>
         </aside>
       </div>}
       {creating && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="report-dialog-title" onClose={() => setCreating(false)} onSubmit={(event) => void create(event)}><header><div><small>Persisted deliverable</small><h2 id="report-dialog-title">New report</h2></div><button className="icon-button subtle" type="button" aria-label="Close report dialog" onClick={() => setCreating(false)}><X size={17} /></button></header><label>Title<input required autoFocus value={newTitle} placeholder={`${engagement?.name ?? "Engagement"} assessment`} onChange={(event) => setNewTitle(event.target.value)} /></label><p className="provider-dialog-note">Validated and confirmed findings are included initially and can be changed in the editor.</p>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button secondary" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={createSaving || !newTitle.trim()}>{createSaving ? "Creating…" : "Create report"}</button></footer></ModalSurface>}

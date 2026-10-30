@@ -9,9 +9,10 @@ import { ReportsPage } from "./ReportsPage";
 const { workspace } = vi.hoisted(() => ({
   workspace: {
     activeOperator: undefined,
-    api: undefined,
+    api: undefined as object | undefined,
     createOperatorProfile: vi.fn(),
     createReport: vi.fn(),
+    deleteReport: vi.fn(),
     engagement: { id: "project-1", name: "Scratch Project", status: "active" },
     findings: [] as never[],
     harnesses: [] as never[],
@@ -68,7 +69,38 @@ function renderReports(route: string) {
 describe("report editor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    workspace.api = undefined;
     workspace.reports = [report("report-1", "Perimeter assessment")];
+  });
+
+  it("confirms draft deletion and keeps a cancelled draft", async () => {
+    workspace.api = {};
+    const user = userEvent.setup();
+    renderReports("/projects/project-1/reports/report-1");
+    await user.click(screen.getByRole("button", {name: "Delete report"}));
+    const first = await screen.findByRole("dialog", {name: "Permanently delete Perimeter assessment?"});
+    await user.click(within(first).getByRole("button", {name: "Cancel"}));
+    expect(workspace.deleteReport).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Router path")).toHaveTextContent("/projects/project-1/reports/report-1");
+
+    await user.click(screen.getByRole("button", {name: "Delete report"}));
+    const second = await screen.findByRole("dialog", {name: "Permanently delete Perimeter assessment?"});
+    await user.click(within(second).getByRole("button", {name: "Delete report"}));
+    await waitFor(() => expect(workspace.deleteReport).toHaveBeenCalledWith("report-1", "project-1", 1));
+  });
+
+  it("keeps final reports and unsaved edits out of the deletion path", async () => {
+    workspace.api = {};
+    workspace.reports = [report("report-1", "Signed report", {status: "final", revision: 4})];
+    const view = renderReports("/projects/project-1/reports/report-1");
+    expect(screen.queryByRole("button", {name: "Delete report"})).not.toBeInTheDocument();
+    view.unmount();
+
+    workspace.reports = [report("report-1", "Draft report")];
+    renderReports("/projects/project-1/reports/report-1");
+    await userEvent.setup().type(screen.getByRole("textbox", {name: "Report title"}), " v2");
+    expect(screen.getByRole("button", {name: "Delete report"})).toBeDisabled();
+    expect(workspace.deleteReport).not.toHaveBeenCalled();
   });
 
   it("opens Butler's exact review revision for operator attestation and refuses stale links", async () => {

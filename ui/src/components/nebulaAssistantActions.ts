@@ -28,6 +28,7 @@ export type SettingClientAction =
   | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
   | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
   | { kind: "report_signoff" | "report_export_pdf"; projectId: string; reportId: string; expectedRevision: number }
+  | { kind: "report_delete"; projectId: string; reportId: string; expectedRevision: number; title: string }
   | { kind: "report_export_bundle"; projectId: string; expectedProjectRevision: number }
   | { kind: "terminal_stop"; projectId: string; sessionId: string; expectedCreatedAt: string };
 
@@ -153,6 +154,10 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     }
     if (revision && operation === "nebula.reports.signoff" && value.kind === "report_signoff") {
       return {kind: "report_signoff", projectId, reportId, expectedRevision: revision};
+    }
+    if (revision && operation === "nebula.reports.delete" && value.kind === "report_delete"
+        && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500) {
+      return {kind: "report_delete", projectId, reportId, expectedRevision: revision, title: value.title};
     }
     if (revision && operation === "nebula.reports.export_pdf" && value.kind === "report_export_pdf") {
       return {kind: "report_export_pdf", projectId, reportId, expectedRevision: revision};

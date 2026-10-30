@@ -174,6 +174,17 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff",
       client_action: {kind: "report_signoff", project_id: "selected", report_id: reportId, expected_revision: 3}}}, "selected"))
       .toEqual({kind: "report_signoff", projectId: "selected", reportId, expectedRevision: 3});
+    const deleteAction = {kind: "report_delete", project_id: "selected", report_id: reportId,
+      expected_revision: 3, title: "Assessment"};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: deleteAction}}, "selected"))
+      .toEqual({kind: "report_delete", projectId: "selected", reportId, expectedRevision: 3, title: "Assessment"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: {...deleteAction, project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: {...deleteAction, expected_revision: 0}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: {...deleteAction, title: ""}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.export_bundle",
       client_action: {kind: "report_export_bundle", project_id: "selected", expected_project_revision: 2}}}, "selected"))
       .toEqual({kind: "report_export_bundle", projectId: "selected", expectedProjectRevision: 2});

@@ -349,6 +349,17 @@ def test_product_search_finds_butler_terminal_stop_boundary(monkeypatch):
     assert "requesting browser" in text
 
 
+def test_product_search_finds_butler_report_deletion_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler delete a draft report and what if it has a saved PDF render?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "nebula.reports.delete" in text
+    assert "render" in text
+    assert "signed" in text
+
+
 def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

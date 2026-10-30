@@ -195,6 +195,7 @@
 .report-review li strong { font-size: 11px; }
 .report-review li small { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .export-actions { display: grid; gap: 6px; padding: 13px; }
+.export-actions > .button { min-height: var(--touch-target); }
 .export-formats { padding: 0 10px 12px; text-align: center; }
 
 /* Settings and providers */

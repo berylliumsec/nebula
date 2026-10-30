@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,15 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_capabilities import ButlerCapabilities
-from nebula.v3.domain import Engagement, Finding, FindingStatus, Observation, Report
+from nebula.v3.domain import (
+    Engagement,
+    Finding,
+    FindingStatus,
+    Observation,
+    Report,
+    ReportRender,
+    ReportStatus,
+)
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError
 
@@ -319,3 +328,144 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
             "changes": {"status": "final"},
         },
     ).status_code in {400, 422}
+
+
+def test_butler_report_delete_requires_current_project_and_core_confirmation(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    selected = store.create(Engagement(name="Selected"))
+    foreign = store.create(Engagement(name="Foreign"))
+    finding = store.create(Finding(engagement_id=selected.id, title="Source finding"))
+    draft = store.create(
+        Report(
+            engagement_id=selected.id,
+            title="Disposable draft",
+            finding_ids=[finding.id],
+        )
+    )
+    rendered = store.create(Report(engagement_id=selected.id, title="Rendered draft"))
+    store.create(
+        ReportRender(
+            engagement_id=selected.id,
+            report_id=rendered.id,
+            report_revision=rendered.revision,
+            input_fingerprint="0" * 64,
+            template_version="test",
+            renderer_version="test",
+        )
+    )
+    final = store.create(
+        Report(
+            engagement_id=selected.id,
+            title="Signed",
+            status=ReportStatus.FINAL,
+            signed_off_by="test-operator",
+            signed_off_at=datetime.now(timezone.utc),
+        )
+    )
+    foreign_draft = store.create(Report(engagement_id=foreign.id, title="Foreign"))
+    capabilities = ButlerCapabilities(
+        store, ArtifactStore(tmp_path / "artifacts"), selected.id
+    )
+
+    async def scenario():
+        matches = await capabilities.search({"query": "delete a report draft"})
+        assert any(
+            row["operation"] == "nebula.reports.delete" for row in matches["matches"]
+        )
+        with pytest.raises(ValueError, match="outside the selected project"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.reports.delete",
+                    "arguments": {
+                        "report_id": foreign_draft.id,
+                        "expected_revision": foreign_draft.revision,
+                    },
+                },
+                change=True,
+            )
+        with pytest.raises(ValueError, match="changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.reports.delete",
+                    "arguments": {
+                        "report_id": draft.id,
+                        "expected_revision": draft.revision + 1,
+                    },
+                },
+                change=True,
+            )
+        with pytest.raises(ValueError, match="signed final report"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.reports.delete",
+                    "arguments": {
+                        "report_id": final.id,
+                        "expected_revision": final.revision,
+                    },
+                },
+                change=True,
+            )
+        with pytest.raises(ValueError, match="saved PDF render"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.reports.delete",
+                    "arguments": {
+                        "report_id": rendered.id,
+                        "expected_revision": rendered.revision,
+                    },
+                },
+                change=True,
+            )
+        pending = await capabilities.invoke(
+            {
+                "operation": "nebula.reports.delete",
+                "arguments": {
+                    "report_id": draft.id,
+                    "expected_revision": draft.revision,
+                },
+            },
+            change=True,
+        )
+        assert pending["state"] == "pending_browser_apply"
+        assert pending["client_action"] == {
+            "kind": "report_delete",
+            "project_id": selected.id,
+            "report_id": draft.id,
+            "expected_revision": draft.revision,
+            "title": draft.title,
+        }
+        assert store.get(Report, draft.id).id == draft.id
+
+    asyncio.run(scenario())
+
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=ArtifactStore(tmp_path / "artifacts"),
+            auth_token="test-token",
+        )
+    )
+    auth = {"Authorization": "Bearer test-token"}
+    route = f"/api/v1/reports/{draft.id}"
+    stale = client.delete(route, headers={**auth, "If-Match": str(draft.revision + 1)})
+    assert stale.status_code == 409, stale.text
+    assert client.get(route, headers=auth).status_code == 200
+    removed = client.delete(route, headers={**auth, "If-Match": str(draft.revision)})
+    assert removed.status_code == 204, removed.text
+    assert client.get(route, headers=auth).status_code == 404
+    assert client.get(f"/api/v1/findings/{finding.id}", headers=auth).status_code == 200
+    assert (
+        client.delete(
+            f"/api/v1/reports/{final.id}",
+            headers={**auth, "If-Match": str(final.revision)},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.delete(
+            f"/api/v1/reports/{rendered.id}",
+            headers={**auth, "If-Match": str(rendered.revision)},
+        ).status_code
+        == 409
+    )
+    assert client.get(f"/api/v1/reports/{rendered.id}", headers=auth).status_code == 200

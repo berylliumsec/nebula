@@ -534,7 +534,7 @@
         "change": "nebula.reports.create"
       },
       "authority": "Interactive selected project; fixed create ID and Core read-back; browser retains report URL",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
       "result": "Exact draft ID, title, sources and summary appear in Core and Reports after refresh",
       "status": "supported"
     },
@@ -552,8 +552,27 @@
         "change": "nebula.reports.update"
       },
       "authority": "Interactive selected project and exact report revision; final reports immutable",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
       "result": "Saved fields and incremented revision agree in Core and Reports",
+      "status": "supported"
+    },
+    {
+      "id": "report.delete",
+      "entry_point": "Butler request or Reports: confirm permanent deletion of an exact non-final report",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getReport",
+        "ui/src/state/WorkspaceContext.tsx::deleteReportAtRevision",
+        "ui/src/state/WorkspaceContext.tsx::listReports"
+      ],
+      "core_owner": "Core report validator, revision guard and dependent render records",
+      "butler": {
+        "discover": "nebula.reports.list",
+        "read": "nebula.reports.detail",
+        "change": "nebula.reports.delete"
+      },
+      "authority": "Interactive selected project, exact report revision and requesting-browser destructive confirmation; Core refuses signed finals or reports referenced by saved renders",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
+      "result": "Core returns 404 for the exact deleted report, refreshed Reports omits it, and source findings remain",
       "status": "supported"
     },
     {
@@ -570,7 +589,7 @@
         "change": "nebula.reports.signoff"
       },
       "authority": "Browser opens exact revision; operator personally supplies identity and attestation; Butler cannot finalize it",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
       "result": "Core final record is signed and immutable after operator submits the form",
       "status": "supported"
     },
@@ -589,7 +608,7 @@
         "change": "nebula.reports.export_pdf"
       },
       "authority": "Interactive selected project, exact revision, browser confirmation and requesting-device download",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
       "result": "Browser receives a PDF for the saved revision; Butler receives no PDF bytes",
       "status": "supported"
     },
@@ -607,7 +626,7 @@
         "change": "nebula.reports.export_bundle"
       },
       "authority": "Interactive selected project and requesting-browser sensitive-export confirmation",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
       "result": "Browser receives a sensitive ZIP; Butler receives no bundle bytes",
       "status": "supported"
     },
@@ -2549,6 +2568,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/state/WorkspaceContext.tsx::deleteReportAtRevision",
+      "count": 1
+    },
+    {
       "key": "ui/src/state/WorkspaceContext.tsx::deleteRun",
       "count": 1
     },
@@ -2618,7 +2641,7 @@
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listReports",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listRuns",
