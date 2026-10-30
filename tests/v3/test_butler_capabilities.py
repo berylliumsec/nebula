@@ -422,6 +422,12 @@ def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path
                 "matches"
             ]
         )
+        assert not any(
+            row["operation"].startswith("nebula.library.")
+            for row in (await capabilities.search({"query": "shared library"}))[
+                "matches"
+            ]
+        )
         with pytest.raises(CapabilityInputError, match="listed operation"):
             await capabilities.invoke(
                 {"operation": "nebula.projects.archive", "arguments": {}}, change=True

@@ -67,6 +67,8 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.set_project_scope",
         "nebula.settings.headless_session",
         "nebula.chats.export",
+        "nebula.library.reindex",
+        "nebula.library.remove",
     }
 )
 _BACKGROUND_CHANGES = frozenset(
@@ -127,6 +129,10 @@ _CATEGORIES = (
     {
         "id": "notebook",
         "description": "Project-scoped Notebook files, cells, package lookup, and existing run results under the current Notebook grant",
+    },
+    {
+        "id": "library",
+        "description": "Bounded shared Library item discovery and requesting-browser reindex or removal",
     },
     {
         "id": "settings",
@@ -212,6 +218,7 @@ class ButlerCapabilities:
         }
         if background_case_id is None:
             from .butler_chat_export import ButlerChatExport
+            from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
 
             self._actions.update(
@@ -221,6 +228,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerChatExport(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerLibrary(store, project_id).actions()
                 }
             )
             if notebooks is not None:
