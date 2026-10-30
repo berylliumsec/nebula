@@ -10,6 +10,8 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("show archived Butler chats")?.id).toBe("chat");
     expect(destinationToOpen("open pinned chats")?.id).toBe("chat");
     expect(destinationToOpen("show flagged chats")?.id).toBe("chat");
+    expect(destinationToOpen("open bulk chat actions")?.id).toBe("chat");
+    expect(destinationToOpen("open select conversations")?.id).toBe("chat");
     expect(destinationToOpen("open goal resume instruction")?.id).toBe("chat");
     expect(destinationToOpen("open switch chat provider")?.id).toBe("chat");
     expect(destinationToOpen("open Knowledge")?.id).toBe("sources");

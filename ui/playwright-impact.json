@@ -1272,6 +1272,16 @@
             "shard": "1/1"
       }
 ],
+    "bulk-chat-actions": [
+      {"area":"bulk-chat-actions","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"bulk-chat-actions","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"bulk-chat-actions","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"bulk-chat-actions","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"bulk-chat-actions","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"bulk-chat-actions","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"bulk-chat-actions","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"bulk-chat-actions","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade bulk chat actions persist and retry on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "conversation-delete-reconciliation": [
       {"area":"conversation-delete-reconciliation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization conversation bulk delete reconciles stale rows and preserves the blocking diagnostic","runtime":"mock","shard":"1/1"},
       {"area":"conversation-delete-reconciliation","project":"compact","test_match":"tests/interface.spec.ts","grep":"stabilization conversation bulk delete reconciles stale rows and preserves the blocking diagnostic","runtime":"mock","shard":"1/1"},

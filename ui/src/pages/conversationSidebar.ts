@@ -1,4 +1,5 @@
 import type { ChatSessionSummary } from "../api/types";
+import { conversationMatchesSearch } from "./chatBulkActions";
 
 type ActivityState = "working" | "waiting" | "idle";
 
@@ -31,11 +32,7 @@ export function groupSidebarConversations(
   expandedArchives: ReadonlySet<string> = new Set(),
 ): { groups: ConversationSidebarGroup[]; matchCount: number } {
   const query = search.trim().toLocaleLowerCase();
-  const matches = (session: ChatSessionSummary) => !query || [
-    session.title,
-    session.model,
-    session.backend === "harness" ? "agent harness" : "provider",
-  ].some(value => value?.toLocaleLowerCase().includes(query));
+  const matches = (session: ChatSessionSummary) => conversationMatchesSearch(session, search);
   const matchCount = sessions.filter(matches).length;
   const byId = new Map(sessions.map(session => [session.id, session]));
   const subagents = new Map<string, ChatSessionSummary[]>();
