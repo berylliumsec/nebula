@@ -192,3 +192,87 @@ def test_scheduled_butler_workspace_actions_are_unavailable(tmp_path):
     )
     assert "nebula.workspace.delete_file" in interactive._actions
     assert not any(name.startswith("nebula.workspace.") for name in scheduled._actions)
+
+
+def test_butler_workspace_directory_actions_and_device_handoff(tmp_path):
+    _store, _artifacts, workspace, runtime, selected, _foreign, capabilities = _fixture(
+        tmp_path
+    )
+
+    async def invoke(name, arguments=None):
+        return await capabilities.invoke(
+            {"operation": f"nebula.workspace.{name}", "arguments": arguments or {}},
+            change=name != "list",
+        )
+
+    async def scenario():
+        root = await invoke("list")
+        assert len(root["directory_identity"]) == 64
+        created = await invoke(
+            "create_directory",
+            {
+                "path": "captures",
+                "expected_parent_identity": root["directory_identity"],
+            },
+        )
+        assert created["kind"] == "directory"
+        assert (runtime.workspace_for(selected.id) / "captures").is_dir()
+        with pytest.raises(Exception, match="changed"):
+            await invoke(
+                "create_directory",
+                {
+                    "path": "other",
+                    "expected_parent_identity": root["directory_identity"],
+                },
+            )
+        folder = await invoke("list", {"path": "captures"})
+        assert folder["directory_identity"] == created["entry_identity"]
+        pending = await invoke(
+            "upload_from_device",
+            {
+                "directory": "captures",
+                "expected_directory_identity": folder["directory_identity"],
+            },
+        )
+        assert pending["client_action"] == {
+            "kind": "workspace_upload",
+            "project_id": selected.id,
+            "directory": "captures",
+            "expected_directory_identity": folder["directory_identity"],
+        }
+        assert "file bytes" not in str(pending)
+        renamed = await invoke(
+            "rename_directory",
+            {
+                "path": "captures",
+                "new_name": "archive",
+                "expected_entry_identity": folder["directory_identity"],
+            },
+        )
+        assert renamed["path"] == "archive"
+        with pytest.raises(Exception, match="changed"):
+            await invoke(
+                "delete_directory",
+                {
+                    "path": "archive",
+                    "expected_entry_identity": folder["directory_identity"],
+                },
+            )
+        current = await invoke("list", {"path": "archive"})
+        deletion = await invoke(
+            "delete_directory",
+            {
+                "path": "archive",
+                "expected_entry_identity": current["directory_identity"],
+            },
+        )
+        assert deletion["client_action"]["kind"] == "workspace_delete_directory"
+        assert (runtime.workspace_for(selected.id) / "archive").exists()
+        workspace.delete(
+            selected.id,
+            "archive",
+            expected_entry_identity=current["directory_identity"],
+        )
+        assert not (runtime.workspace_for(selected.id) / "archive").exists()
+
+    asyncio.run(scenario())

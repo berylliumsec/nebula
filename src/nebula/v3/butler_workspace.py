@@ -9,12 +9,17 @@ from typing import Any, AsyncIterator
 
 from .domain import RiskClass
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
-from .workspace import WorkspaceRenameRequest, WorkspaceService
+from .workspace import (
+    WorkspaceCreateDirectoryRequest,
+    WorkspaceRenameRequest,
+    WorkspaceService,
+)
 
 
 _PATH = {"type": "string", "minLength": 1, "maxLength": 4096}
 _SHA256 = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
 _TEXT = {"type": "string", "maxLength": 1_048_576}
+_IDENTITY = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
 _MAX_TEXT_BYTES = 1_048_576
 _PAGE_CHARS = 12_000
 
@@ -65,6 +70,34 @@ _SCHEMAS = {
         {"path": _PATH, "expected_sha256": _SHA256}, "path", "expected_sha256"
     ),
     "nebula.workspace.download_file": _schema({"path": _PATH}, "path"),
+    "nebula.workspace.upload_from_device": _schema(
+        {
+            "directory": {"type": "string", "maxLength": 4096},
+            "expected_directory_identity": _IDENTITY,
+        },
+        "directory",
+        "expected_directory_identity",
+    ),
+    "nebula.workspace.create_directory": _schema(
+        {"path": _PATH, "expected_parent_identity": _IDENTITY},
+        "path",
+        "expected_parent_identity",
+    ),
+    "nebula.workspace.rename_directory": _schema(
+        {
+            "path": _PATH,
+            "new_name": {"type": "string", "minLength": 1, "maxLength": 255},
+            "expected_entry_identity": _IDENTITY,
+        },
+        "path",
+        "new_name",
+        "expected_entry_identity",
+    ),
+    "nebula.workspace.delete_directory": _schema(
+        {"path": _PATH, "expected_entry_identity": _IDENTITY},
+        "path",
+        "expected_entry_identity",
+    ),
 }
 
 _DESCRIPTIONS = {
@@ -75,6 +108,10 @@ _DESCRIPTIONS = {
     "rename_file": "Rename a regular file within its current directory using the full SHA-256 from a current read. Core refuses stale content and reads the new path back.",
     "delete_file": "Ask the requesting browser for the same destructive confirmation as Files. Core checks the selected project and full-file SHA-256 before deletion; the browser reports read-back.",
     "download_file": "Ask the requesting browser to download a selected-project regular file. The model receives only path, size, and SHA-256; the file bytes remain on the requesting device.",
+    "upload_from_device": "Ask the requesting browser to select a file and upload it into a listed project directory. Use that directory's current identity from workspace.list. The browser confirms overwrite with a current file digest; Butler never receives device bytes.",
+    "create_directory": "Create a selected-project directory after listing its parent and supplying that parent identity. Core refuses a stale parent or an existing path and reads the new directory back.",
+    "rename_directory": "Rename a selected-project directory within its parent using its current identity from workspace.list. Core refuses stale or replaced directories and reads the new path back.",
+    "delete_directory": "Ask the requesting browser to confirm empty-directory deletion. Core checks the selected directory identity and reads back its absence.",
 }
 
 _READS = frozenset({"list", "read", "download_file"})
@@ -159,7 +196,13 @@ class ButlerWorkspace:
                 offset=arguments.get("offset", 0),
                 limit=50,
             )
-            return listing.model_dump(mode="json")
+            state = await asyncio.to_thread(
+                self.workspace.inspect_entry, self.project_id, path
+            )
+            return {
+                **listing.model_dump(mode="json"),
+                "directory_identity": state.entry_identity,
+            }
         if name == "read":
             return await asyncio.to_thread(self._read, path, arguments.get("offset", 0))
         if name in {"create_text", "replace_text"}:
@@ -182,6 +225,80 @@ class ButlerWorkspace:
             ):
                 raise ValueError("file was renamed but changed before read-back")
             return {**observed, "previous_path": path}
+        if name == "upload_from_device":
+            directory = arguments["directory"]
+            state = await asyncio.to_thread(
+                self.workspace.inspect_entry, self.project_id, directory
+            )
+            if state.kind != "directory" or not hmac.compare_digest(
+                state.entry_identity or "", arguments["expected_directory_identity"]
+            ):
+                raise ValueError("directory changed; list it again before uploading")
+            return {
+                "state": "pending_browser_apply",
+                "client_action": {
+                    "kind": "workspace_upload",
+                    "project_id": self.project_id,
+                    "directory": state.path,
+                    "expected_directory_identity": state.entry_identity,
+                },
+            }
+        if name == "create_directory":
+            parent = path.rpartition("/")[0]
+            state = await asyncio.to_thread(
+                self.workspace.inspect_entry, self.project_id, parent
+            )
+            if state.kind != "directory" or not hmac.compare_digest(
+                state.entry_identity or "", arguments["expected_parent_identity"]
+            ):
+                raise ValueError("parent directory changed; list it again")
+            created = await asyncio.to_thread(
+                self.workspace.create_directory,
+                self.project_id,
+                WorkspaceCreateDirectoryRequest(
+                    path=path,
+                    expected_parent_identity=arguments["expected_parent_identity"],
+                ),
+            )
+            created_state = await asyncio.to_thread(
+                self.workspace.inspect_entry, self.project_id, created.path
+            )
+            if created_state.kind != "directory":
+                raise ValueError("directory was created but changed before read-back")
+            return created_state.model_dump(mode="json")
+        if name in {"rename_directory", "delete_directory"}:
+            state = await asyncio.to_thread(
+                self.workspace.inspect_entry, self.project_id, path
+            )
+            if state.kind != "directory" or not hmac.compare_digest(
+                state.entry_identity or "", arguments["expected_entry_identity"]
+            ):
+                raise ValueError("directory changed; list it again")
+            if name == "delete_directory":
+                return {
+                    "state": "pending_browser_apply",
+                    "client_action": {
+                        "kind": "workspace_delete_directory",
+                        "project_id": self.project_id,
+                        "path": path,
+                        "expected_entry_identity": state.entry_identity,
+                    },
+                }
+            renamed = await asyncio.to_thread(
+                self.workspace.rename,
+                self.project_id,
+                WorkspaceRenameRequest(
+                    path=path,
+                    new_name=arguments["new_name"],
+                    expected_entry_identity=arguments["expected_entry_identity"],
+                ),
+            )
+            renamed_state = await asyncio.to_thread(
+                self.workspace.inspect_entry, self.project_id, renamed.path
+            )
+            if renamed_state.kind != "directory":
+                raise ValueError("directory was renamed but changed before read-back")
+            return {**renamed_state.model_dump(mode="json"), "previous_path": path}
         observed = await asyncio.to_thread(self._file_digest, path)
         if name == "delete_file":
             if not hmac.compare_digest(

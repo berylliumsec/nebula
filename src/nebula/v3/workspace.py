@@ -70,6 +70,15 @@ class WorkspaceEntry(NebulaModel):
     modified_at: datetime
 
 
+class WorkspaceEntryState(NebulaModel):
+    engagement_id: str
+    path: str
+    kind: Literal["file", "directory"]
+    size: int = Field(ge=0)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    entry_identity: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class WorkspaceListing(NebulaModel):
     engagement_id: str
     path: str
@@ -227,6 +236,7 @@ class WorkspaceRenameRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
     new_name: str = Field(min_length=1, max_length=255)
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_entry_identity: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("new_name")
     @classmethod
@@ -246,6 +256,11 @@ class WorkspaceMutationResult(NebulaModel):
     engagement_id: str
     path: str
     previous_path: str | None = None
+
+
+class WorkspaceCreateDirectoryRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    expected_parent_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class WorkspaceResetResult(NebulaModel):
@@ -352,6 +367,133 @@ class WorkspaceService:
             next_offset=next_offset,
             total=len(rows),
         )
+
+    @staticmethod
+    def _directory_identity(metadata: os.stat_result, *, root: bool = False) -> str:
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ExecutionServiceError(
+                "workspace_path_invalid",
+                "workspace entry is not a directory",
+                status_code=422,
+            )
+        # RuntimePlatform re-applies root permissions on every workspace access,
+        # which changes root ctime without changing its entries. A child
+        # directory still includes ctime so a rename invalidates its token.
+        parts = [metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns]
+        if not root:
+            parts.append(metadata.st_ctime_ns)
+        return hashlib.sha256(":".join(map(str, parts)).encode()).hexdigest()
+
+    @classmethod
+    def _require_directory_identity(cls, parent: int, name: str, expected: str) -> None:
+        metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        actual = cls._directory_identity(metadata)
+        if not hmac.compare_digest(actual, expected):
+            raise ExecutionServiceError(
+                "workspace_directory_changed",
+                "workspace directory changed after it was selected",
+                status_code=412,
+            )
+
+    def inspect_entry(self, engagement_id: str, path: str) -> WorkspaceEntryState:
+        """Read an exact regular file digest or opaque directory revision."""
+
+        self.store.get(Engagement, engagement_id)
+        relative = _relative_parts(path)
+        normalized = PurePosixPath(*relative).as_posix() if relative else ""
+        if not relative:
+            descriptor = self._open_directory(engagement_id, ())
+            try:
+                metadata = os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
+            return WorkspaceEntryState(
+                engagement_id=engagement_id,
+                path="",
+                kind="directory",
+                size=metadata.st_size,
+                entry_identity=self._directory_identity(metadata, root=True),
+            )
+        parent = self._open_directory(engagement_id, relative[:-1])
+        try:
+            try:
+                metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError as exc:
+                raise ExecutionServiceError(
+                    "workspace_path_missing",
+                    "workspace entry does not exist",
+                    status_code=404,
+                ) from exc
+            if stat.S_ISDIR(metadata.st_mode):
+                return WorkspaceEntryState(
+                    engagement_id=engagement_id,
+                    path=normalized,
+                    kind="directory",
+                    size=metadata.st_size,
+                    entry_identity=self._directory_identity(metadata),
+                )
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ExecutionServiceError(
+                    "workspace_path_invalid",
+                    "workspace entry is not a regular file or directory",
+                    status_code=422,
+                )
+            descriptor = os.open(
+                relative[-1],
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=parent,
+            )
+            try:
+                before = os.fstat(descriptor)
+                if not stat.S_ISREG(before.st_mode) or (
+                    before.st_dev,
+                    before.st_ino,
+                ) != (metadata.st_dev, metadata.st_ino):
+                    raise ExecutionServiceError(
+                        "workspace_file_changed",
+                        "workspace file changed while reading",
+                        status_code=412,
+                    )
+                digest = hashlib.sha256()
+                size = 0
+                while chunk := os.read(descriptor, 64 * 1024):
+                    digest.update(chunk)
+                    size += len(chunk)
+                after = os.fstat(descriptor)
+                selected = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+
+                def identity(row: os.stat_result) -> tuple[int, int, int, int, int]:
+                    return (
+                        row.st_dev,
+                        row.st_ino,
+                        row.st_size,
+                        row.st_mtime_ns,
+                        row.st_ctime_ns,
+                    )
+
+                if (
+                    identity(before) != identity(after)
+                    or identity(after) != identity(selected)
+                    or size != before.st_size
+                ):
+                    raise ExecutionServiceError(
+                        "workspace_file_changed",
+                        "workspace file changed while reading",
+                        status_code=412,
+                    )
+                return WorkspaceEntryState(
+                    engagement_id=engagement_id,
+                    path=normalized,
+                    kind="file",
+                    size=size,
+                    sha256=digest.hexdigest(),
+                )
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent)
 
     def tasks(self, engagement_id: str) -> WorkspaceTaskList:
         """Discover declarative project tasks without evaluating project code."""
@@ -1443,6 +1585,7 @@ class WorkspaceService:
         overwrite: bool = False,
         expected_sha256: str | None = None,
         expected_content_sha256: str | None = None,
+        expected_parent_identity: str | None = None,
     ) -> WorkspaceUploadResult:
         """Atomically stream one regular file into an engagement workspace."""
 
@@ -1455,6 +1598,7 @@ class WorkspaceService:
                 overwrite=overwrite,
                 expected_sha256=expected_sha256,
                 expected_content_sha256=expected_content_sha256,
+                expected_parent_identity=expected_parent_identity,
             )
 
     async def _upload_locked(
@@ -1466,6 +1610,7 @@ class WorkspaceService:
         overwrite: bool,
         expected_sha256: str | None,
         expected_content_sha256: str | None,
+        expected_parent_identity: str | None,
     ) -> WorkspaceUploadResult:
         """Write an upload while serializing only other API uploads."""
 
@@ -1480,6 +1625,16 @@ class WorkspaceService:
         created = False
         consumed = False
         try:
+            if expected_parent_identity is not None:
+                actual_parent = self._directory_identity(
+                    os.fstat(parent), root=len(relative) == 1
+                )
+                if not hmac.compare_digest(actual_parent, expected_parent_identity):
+                    raise ExecutionServiceError(
+                        "workspace_directory_changed",
+                        "workspace directory changed before upload",
+                        status_code=412,
+                    )
             descriptor = os.open(
                 temporary_name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -1708,6 +1863,38 @@ class WorkspaceService:
             detail=detail,
         )
 
+    def create_directory(
+        self, engagement_id: str, request: WorkspaceCreateDirectoryRequest
+    ) -> WorkspaceMutationResult:
+        self.store.get(Engagement, engagement_id)
+        relative = _relative_parts(request.path, require_value=True)
+        parent = self._open_directory(engagement_id, relative[:-1])
+        try:
+            current = self._directory_identity(
+                os.fstat(parent), root=len(relative) == 1
+            )
+            if not hmac.compare_digest(current, request.expected_parent_identity):
+                raise ExecutionServiceError(
+                    "workspace_directory_changed",
+                    "workspace parent directory changed after it was selected",
+                    status_code=412,
+                )
+            os.mkdir(relative[-1], 0o700, dir_fd=parent)
+            os.fsync(parent)
+        except FileExistsError as exc:
+            raise ExecutionServiceError(
+                "workspace_file_exists",
+                "a workspace entry already has that name",
+                status_code=409,
+            ) from exc
+        finally:
+            os.close(parent)
+        result = WorkspaceMutationResult(
+            engagement_id=engagement_id, path=PurePosixPath(*relative).as_posix()
+        )
+        self._record_mutation(engagement_id, "created_directory", result)
+        return result
+
     def rename(
         self, engagement_id: str, request: WorkspaceRenameRequest
     ) -> WorkspaceMutationResult:
@@ -1725,9 +1912,19 @@ class WorkspaceService:
             )
         parent = self._open_directory(engagement_id, relative[:-1])
         try:
-            os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+            metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
             if request.expected_sha256 is not None:
                 self._require_file_hash(parent, relative[-1], request.expected_sha256)
+            if request.expected_entry_identity is not None:
+                if not stat.S_ISDIR(metadata.st_mode):
+                    raise ExecutionServiceError(
+                        "workspace_path_invalid",
+                        "selected entry is not a directory",
+                        status_code=422,
+                    )
+                self._require_directory_identity(
+                    parent, relative[-1], request.expected_entry_identity
+                )
             try:
                 os.stat(request.new_name, dir_fd=parent, follow_symlinks=False)
             except (
@@ -1760,7 +1957,12 @@ class WorkspaceService:
         return result
 
     def delete(
-        self, engagement_id: str, path: str, *, expected_sha256: str | None = None
+        self,
+        engagement_id: str,
+        path: str,
+        *,
+        expected_sha256: str | None = None,
+        expected_entry_identity: str | None = None,
     ) -> WorkspaceMutationResult:
         self.store.get(Engagement, engagement_id)
         relative = _relative_parts(path, require_value=True)
@@ -1769,6 +1971,10 @@ class WorkspaceService:
             metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
             if expected_sha256 is not None:
                 self._require_file_hash(parent, relative[-1], expected_sha256)
+            if expected_entry_identity is not None:
+                self._require_directory_identity(
+                    parent, relative[-1], expected_entry_identity
+                )
             if stat.S_ISDIR(metadata.st_mode):
                 try:
                     os.rmdir(relative[-1], dir_fd=parent)

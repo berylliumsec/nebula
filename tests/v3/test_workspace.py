@@ -1035,6 +1035,134 @@ def test_workspace_upload_if_match_rejects_deleted_file(tmp_path):
     assert not (platform.workspace_for(engagement.id) / "deleted.py").exists()
 
 
+def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    entry = f"/api/v1/engagements/{engagement.id}/workspace/entry"
+    directory = f"/api/v1/engagements/{engagement.id}/workspace/directory"
+    upload = f"/api/v1/engagements/{engagement.id}/workspace/file"
+    with client:
+        root_state = client.get(entry, headers=AUTH, params={"path": ""})
+        assert root_state.status_code == 200
+        root_identity = root_state.json()["entry_identity"]
+        made = client.post(
+            directory,
+            headers=AUTH,
+            json={
+                "path": "captures",
+                "expected_parent_identity": root_identity,
+            },
+        )
+        assert made.status_code == 201
+        assert (root / "captures").is_dir()
+        stale_create = client.post(
+            directory,
+            headers=AUTH,
+            json={
+                "path": "other",
+                "expected_parent_identity": root_identity,
+            },
+        )
+        assert stale_create.status_code == 412
+        assert not (root / "other").exists()
+
+        folder = client.get(entry, headers=AUTH, params={"path": "captures"}).json()
+        folder_identity = folder["entry_identity"]
+        content = b"\x00\xff binary workspace data"
+        digest = hashlib.sha256(content).hexdigest()
+        saved = client.put(
+            upload,
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "X-Parent-Identity": folder_identity,
+                "X-Content-SHA256": digest,
+            },
+            params={"path": "captures/raw.bin"},
+            content=content,
+        )
+        assert saved.status_code == 201
+        file_state = client.get(
+            entry, headers=AUTH, params={"path": "captures/raw.bin"}
+        )
+        assert file_state.json()["sha256"] == digest
+        assert file_state.json()["size"] == len(content)
+        assert file_state.json()["kind"] == "file"
+
+        stale_upload = client.put(
+            upload,
+            headers={
+                **AUTH,
+                "Content-Type": "application/octet-stream",
+                "X-Parent-Identity": folder_identity,
+                "X-Content-SHA256": digest,
+            },
+            params={"path": "captures/new.bin"},
+            content=content,
+        )
+        assert stale_upload.status_code == 412
+        assert not (root / "captures/new.bin").exists()
+        stale_delete = client.delete(
+            entry,
+            headers={
+                **AUTH,
+                "If-Entry-Identity": folder_identity,
+            },
+            params={"path": "captures"},
+        )
+        assert stale_delete.status_code == 412
+        current_folder = client.get(
+            entry, headers=AUTH, params={"path": "captures"}
+        ).json()
+        nonempty = client.delete(
+            entry,
+            headers={
+                **AUTH,
+                "If-Entry-Identity": current_folder["entry_identity"],
+            },
+            params={"path": "captures"},
+        )
+        assert nonempty.status_code == 409
+        assert nonempty.json()["code"] == "workspace_directory_not_empty"
+
+        removed_file = client.delete(
+            entry,
+            headers={**AUTH, "If-Match": digest},
+            params={"path": "captures/raw.bin"},
+        )
+        assert removed_file.status_code == 200
+        empty = client.get(entry, headers=AUTH, params={"path": "captures"}).json()
+        renamed = client.patch(
+            entry,
+            headers=AUTH,
+            json={
+                "path": "captures",
+                "new_name": "archive",
+                "expected_entry_identity": empty["entry_identity"],
+            },
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["path"] == "archive"
+        assert (
+            client.get(entry, headers=AUTH, params={"path": "captures"}).status_code
+            == 404
+        )
+        archive = client.get(entry, headers=AUTH, params={"path": "archive"}).json()
+        removed = client.delete(
+            entry,
+            headers={
+                **AUTH,
+                "If-Entry-Identity": archive["entry_identity"],
+            },
+            params={"path": "archive"},
+        )
+        assert removed.status_code == 200
+        assert (
+            client.get(entry, headers=AUTH, params={"path": "archive"}).status_code
+            == 404
+        )
+
+
 def test_workspace_entry_mutations_reject_the_workspace_root(tmp_path):
     _store, _artifacts, _platform, _workspace, engagement, client = _services(tmp_path)
 

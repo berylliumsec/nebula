@@ -586,6 +586,8 @@ from .version import __version__, build_metadata
 from .workspace import (
     SourceControlDiff,
     SourceControlStatus,
+    WorkspaceCreateDirectoryRequest,
+    WorkspaceEntryState,
     WorkspaceListing,
     WorkspaceMutationResult,
     WorkspacePreview,
@@ -7080,6 +7082,11 @@ def create_app(
             alias="X-Content-SHA256",
             pattern=r"^[0-9a-f]{64}$",
         ),
+        expected_parent_identity: str | None = Header(
+            default=None,
+            alias="X-Parent-Identity",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
     ) -> WorkspaceUploadResult:
         workspace = require_workspace_service()
 
@@ -7091,6 +7098,7 @@ def create_app(
                 overwrite=overwrite,
                 expected_sha256=if_match,
                 expected_content_sha256=expected_content_sha256,
+                expected_parent_identity=expected_parent_identity,
             )
 
         # Uploads use a private file plus an atomic directory-fd rename and are
@@ -7098,6 +7106,33 @@ def create_app(
         # safely coexist with a user's persistent terminal; destructive reset
         # remains guarded until the terminal stops.
         return await upload()
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
+        response_model=WorkspaceEntryState,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def inspect_workspace_entry(
+        engagement_id: str, path: str = Query(default="", max_length=4096)
+    ) -> WorkspaceEntryState:
+        return await asyncio.to_thread(
+            require_workspace_service().inspect_entry, engagement_id, path
+        )
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/directory",
+        response_model=WorkspaceMutationResult,
+        status_code=201,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_workspace_directory(
+        engagement_id: str, request: WorkspaceCreateDirectoryRequest
+    ) -> WorkspaceMutationResult:
+        return await asyncio.to_thread(
+            require_workspace_service().create_directory, engagement_id, request
+        )
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
@@ -7126,12 +7161,18 @@ def create_app(
             alias="If-Match",
             pattern=r"^[0-9a-f]{64}$",
         ),
+        if_entry_identity: str | None = Header(
+            default=None,
+            alias="If-Entry-Identity",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
     ) -> WorkspaceMutationResult:
         return await asyncio.to_thread(
             require_workspace_service().delete,
             engagement_id,
             path,
             expected_sha256=if_match,
+            expected_entry_identity=if_entry_identity,
         )
 
     @app.post(
