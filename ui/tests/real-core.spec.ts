@@ -6888,6 +6888,115 @@ test("assistant upgrade Butler rewinds a saved chat on production LAN Core", asy
   ]);
 });
 
+test("assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const reindexInstruction = "Reindex the shared Library note.";
+  const removeInstruction = "Remove the shared Library note.";
+  const fileMarker = "Synthetic shared Library note. No commands or private data.";
+  const content = Buffer.from(`${fileMarker}\n`);
+  let itemId = "";
+  let itemRevision = 0;
+  let modelSawKnowledgeExcerpt = false;
+  let modelSawToolFile = false;
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm the shared Library action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = messages[lastUser]?.content;
+    if (typeof prompt !== "string") return undefined;
+    const reindex = prompt.startsWith(reindexInstruction);
+    const remove = prompt.startsWith(removeInstruction);
+    if (!reindex && !remove) return undefined;
+    if (JSON.stringify(messages).includes(fileMarker)) modelSawKnowledgeExcerpt = true;
+    if (JSON.stringify(messages.filter(message => message.role === "tool")).includes(fileMarker)) modelSawToolFile = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "shared Library item reindex remove"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.list"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.library.list", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.detail"}};
+    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.library.detail", arguments: {item_id: itemId}}};
+    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: reindex ? "nebula.library.reindex" : "nebula.library.remove"}};
+    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation: reindex ? "nebula.library.reindex" : "nebula.library.remove",
+      arguments: {item_id: itemId, expected_revision: itemRevision}}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler Library fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler Library model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const createdItem = await api.post("library/items/ingest", {data: {filename: "butler-shared-note.txt", content_base64: content.toString("base64")}});
+    expect(createdItem.ok(), await createdItem.text()).toBe(true);
+    const original = await createdItem.json() as {id: string; revision: number; artifact_id: string; status: string};
+    itemId = original.id;
+    itemRevision = original.revision;
+    expect(original.status).toBe("ready");
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler Library LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (instruction: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(reindexInstruction);
+    await expect(page.getByRole("heading", {name: "Reindex butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("butler-shared-note.txt was not reindexed. No change was saved.")).toBeVisible();
+    expect((await (await api.get(`library/items/${itemId}`)).json() as {revision: number}).revision).toBe(itemRevision);
+    await send(reindexInstruction);
+    await expect(page.getByRole("heading", {name: "Reindex butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Reindex shared item"}).click();
+    await expect(assistant.getByText(/Reindexed butler-shared-note.txt in Core's shared Library at revision/)).toBeVisible({timeout: 45_000});
+    const reindexed = await (await api.get(`library/items/${itemId}`)).json() as {revision: number; status: string; artifact_id: string};
+    expect(reindexed.revision).toBeGreaterThan(itemRevision);
+    expect(reindexed.status).toBe("ready");
+    expect(reindexed.artifact_id).toBe(original.artifact_id);
+    const stale = await api.post(`library/items/${itemId}/reindex?expected_revision=${itemRevision}`);
+    expect(stale.status()).toBe(409);
+    itemRevision = reindexed.revision;
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(/Reindexed butler-shared-note.txt in Core's shared Library/)).toBeVisible();
+    await send(removeInstruction);
+    await expect(page.getByRole("heading", {name: "Remove butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Remove shared item"}).click();
+    await expect(assistant.getByText("Removed butler-shared-note.txt from Core's shared Library. Its original artifact was retained.")).toBeVisible({timeout: 45_000});
+    expect((await api.get(`library/items/${itemId}`)).status()).toBe(404);
+    const retained = await api.get(`artifacts/${original.artifact_id}/content`);
+    expect(retained.ok()).toBe(true);
+    expect(await retained.body()).toEqual(content);
+    await page.goto(`${core.origin}/library`);
+    await expect(page.getByText("Your Library is empty", {exact: true})).toBeVisible();
+    expect(modelSawToolFile).toBe(false);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-library-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], itemId, sourceRevision: original.revision,
+      reindexedRevision: reindexed.revision, knowledgeExcerptObserved: modelSawKnowledgeExcerpt,
+      result: "cancel left Core unchanged; reindex and removal confirmed on requesting browser; stale mutation rejected; artifact retained; action tool did not return file text"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler exports a saved chat on the requesting LAN browser", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
