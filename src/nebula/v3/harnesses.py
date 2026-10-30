@@ -217,6 +217,7 @@ if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents, AutomationToolPlatform
     from .browser_automation import BrowserAutonomyRequestModel
     from .browser_tools import BrowserAutomationToolPlatform
+    from .container_terminal import ContainerTerminalService
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
     from .workspace import WorkspaceService
 
@@ -8804,6 +8805,7 @@ class HarnessRuntimeService:
         self.control_assistant_work: Any = None
         self.butler_memory: Any = None
         self.workspace_service: WorkspaceService | None = None
+        self.container_terminal_service: ContainerTerminalService | None = None
         self.butler_instructions_root: Path | None = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
@@ -8901,6 +8903,13 @@ class HarnessRuntimeService:
         if service.store is not self.store:
             raise ValueError("workspace service must use the harness runtime store")
         self.workspace_service = service
+
+    def bind_container_terminal_service(
+        self, service: ContainerTerminalService
+    ) -> None:
+        if service.store is not self.store:
+            raise ValueError("terminal service must use the harness runtime store")
+        self.container_terminal_service = service
 
     def bind_provider_subagents(self, service: SubagentService) -> None:
         """Bind the provider-chat subagent service harness chats delegate to."""
@@ -14798,6 +14807,7 @@ class HarnessRuntimeService:
                 else None
             ),
             workspace=self.workspace_service,
+            container_terminals=self.container_terminal_service,
         )
 
     def _gateway_catalog(
