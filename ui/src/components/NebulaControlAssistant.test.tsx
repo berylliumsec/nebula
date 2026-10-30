@@ -1515,7 +1515,9 @@ describe("NebulaControlAssistant", () => {
     const hostFolder = "/srv/linked-project";
     const createEngagement = vi.fn().mockResolvedValue({id: createdProjectId, name: "Linked project", workspacePath: hostFolder});
     const listHostWorkspaceFolders = vi.fn().mockResolvedValue({path: hostFolder, parent: "/srv", directories: [], truncated: false});
-    const getProjectLifecycle = vi.fn().mockResolvedValue({id: createdProjectId, name: "Linked project", status: "draft", revision: 1, workspacePath: hostFolder});
+    const savedLifecycle = {id: createdProjectId, name: "Linked project", status: "draft" as const, revision: 1, workspacePath: hostFolder};
+    let resolveLifecycle!: (value: typeof savedLifecycle) => void;
+    const getProjectLifecycle = vi.fn().mockImplementation(() => new Promise<typeof savedLifecycle>(resolve => {resolveLifecycle = resolve;}));
     const getAutomationPolicy = vi.fn().mockResolvedValue({hostAccessAcknowledged: false});
     const onNavigate = vi.fn();
     let reply = 0;
@@ -1528,14 +1530,15 @@ describe("NebulaControlAssistant", () => {
       return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
         message: {id: `linked-reply-${++reply}`, role: "assistant", content: "Choose a folder on the Nebula host."}};
     });
-    vi.mocked(useWorkspace).mockReturnValue({
+    const sourceWorkspace = {
       api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, engagementId: sourceProjectId}),
         getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, listEngagements: vi.fn().mockResolvedValue({items: []}),
         listHostWorkspaceFolders, getProjectLifecycle, getAutomationPolicy},
       coreState: "online", engagement: {id: sourceProjectId, name: "Source project"}, createEngagement,
       providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
         permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
-    } as unknown as ReturnType<typeof useWorkspace>);
+    } as unknown as ReturnType<typeof useWorkspace>;
+    vi.mocked(useWorkspace).mockReturnValue(sourceWorkspace);
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", {name: "Open Butler"}));
     const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
@@ -1553,8 +1556,10 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(createEngagement).toHaveBeenCalledWith(expect.objectContaining({
       name: "Linked project", workspacePath: hostFolder, hostAccessAcknowledged: false,
       requestId: "e02b1f22-7a31-4810-b912-16300357494c",
-    })));
+    }), {select: false}));
     await waitFor(() => expect(getProjectLifecycle).toHaveBeenCalledWith(createdProjectId));
+    expect(onNavigate).not.toHaveBeenCalled();
+    await act(async () => {resolveLifecycle(savedLifecycle);});
     expect(getAutomationPolicy).toHaveBeenCalledWith(createdProjectId);
     await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/${createdProjectId}/workbench?view=chat`));
     expect(JSON.parse(localStorage.getItem(`nebula.control-assistant.session.${sourceProjectId}.action-outcomes`) ?? "{}")["linked-reply-2"])
