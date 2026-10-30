@@ -97,7 +97,9 @@ class ButlerReports:
             for entity_id in changes.get(field, []):
                 entity = self.store.get(model, entity_id)
                 if entity.engagement_id != self.project_id:
-                    raise ValueError(f"{field} includes an item outside the selected project")
+                    raise ValueError(
+                        f"{field} includes an item outside the selected project"
+                    )
 
     def list(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
@@ -123,7 +125,11 @@ class ButlerReports:
                     "id": item.id,
                     "title": item.title,
                     "revision": item.revision,
-                    **({"status": item.status.value} if isinstance(item, Finding) else {}),
+                    **(
+                        {"status": item.status.value}
+                        if isinstance(item, Finding)
+                        else {}
+                    ),
                 }
                 for item in rows[:50]
             ],
@@ -196,7 +202,11 @@ class ButlerReports:
         changes = {
             field: arguments[field]
             for field in (
-                "title", "status", "executive_summary", "finding_ids", "observation_ids"
+                "title",
+                "status",
+                "executive_summary",
+                "finding_ids",
+                "observation_ids",
             )
             if field in arguments
         }
@@ -259,29 +269,78 @@ class ButlerReports:
 
     def actions(self) -> list[AnalysisTool]:
         operations = (
-            ("nebula.reports.list", "Page saved reports in the selected project.",
-             _schema({"offset": _PAGE}), RiskClass.LOCAL_READ, self.list),
-            ("nebula.reports.sources", "Page exact project findings or notes before selecting report references.",
-             _schema({"kind": {"type": "string", "enum": ["finding", "note"]}, "offset": _PAGE}, "kind"),
-             RiskClass.LOCAL_READ, self.sources),
-            ("nebula.reports.detail", "Read an exact report, its current revision, selected references and paged executive summary.",
-             _REPORT, RiskClass.LOCAL_READ, self.detail),
-            ("nebula.reports.create", "Create a draft report through the requesting browser and Core validation after an explicit operator request. Omitted finding IDs default to validated and confirmed project findings. Inspect reports after an uncertain response before retrying.",
-             _CREATE, RiskClass.WORKSPACE_WRITE, self.create),
-            ("nebula.reports.update", "Edit a non-final report through the requesting browser with its current revision; Core validates project references and reads back the saved fields.",
-             _UPDATE, RiskClass.WORKSPACE_WRITE, self.update),
-            ("nebula.reports.signoff", "Open the exact review report's existing signoff form. The operator must personally choose identity and attest; this action does not finalize the report.",
-             _CURRENT, RiskClass.WORKSPACE_WRITE, self.signoff),
-            ("nebula.reports.export_pdf", "Render an exact saved report revision and start a PDF download on the requesting device. Butler receives no PDF bytes.",
-             _CURRENT, RiskClass.WORKSPACE_WRITE, self.export_pdf),
-            ("nebula.reports.export_bundle", "Ask the requesting browser to confirm a sensitive full-project bundle export at the current project revision. Butler receives no bundle bytes.",
-             _schema({"expected_project_revision": _REVISION}, "expected_project_revision"),
-             RiskClass.WORKSPACE_WRITE, self.export_bundle),
+            (
+                "nebula.reports.list",
+                "Page saved reports in the selected project.",
+                _schema({"offset": _PAGE}),
+                RiskClass.LOCAL_READ,
+                self.list,
+            ),
+            (
+                "nebula.reports.sources",
+                "Page exact project findings or notes before selecting report references.",
+                _schema(
+                    {
+                        "kind": {"type": "string", "enum": ["finding", "note"]},
+                        "offset": _PAGE,
+                    },
+                    "kind",
+                ),
+                RiskClass.LOCAL_READ,
+                self.sources,
+            ),
+            (
+                "nebula.reports.detail",
+                "Read an exact report, its current revision, selected references and paged executive summary.",
+                _REPORT,
+                RiskClass.LOCAL_READ,
+                self.detail,
+            ),
+            (
+                "nebula.reports.create",
+                "Create a draft report through the requesting browser and Core validation after an explicit operator request. Omitted finding IDs default to validated and confirmed project findings. Inspect reports after an uncertain response before retrying.",
+                _CREATE,
+                RiskClass.WORKSPACE_WRITE,
+                self.create,
+            ),
+            (
+                "nebula.reports.update",
+                "Edit a non-final report through the requesting browser with its current revision; Core validates project references and reads back the saved fields.",
+                _UPDATE,
+                RiskClass.WORKSPACE_WRITE,
+                self.update,
+            ),
+            (
+                "nebula.reports.signoff",
+                "Open the exact review report's existing signoff form. The operator must personally choose identity and attest; this action does not finalize the report.",
+                _CURRENT,
+                RiskClass.WORKSPACE_WRITE,
+                self.signoff,
+            ),
+            (
+                "nebula.reports.export_pdf",
+                "Render an exact saved report revision and start a PDF download on the requesting device. Butler receives no PDF bytes.",
+                _CURRENT,
+                RiskClass.WORKSPACE_WRITE,
+                self.export_pdf,
+            ),
+            (
+                "nebula.reports.export_bundle",
+                "Ask the requesting browser to confirm a sensitive full-project bundle export at the current project revision. Butler receives no bundle bytes.",
+                _schema(
+                    {"expected_project_revision": _REVISION},
+                    "expected_project_revision",
+                ),
+                RiskClass.WORKSPACE_WRITE,
+                self.export_bundle,
+            ),
         )
         plugins: list[AnalysisTool] = []
         for name, description, schema, risk, handler in operations:
 
-            async def run(arguments: dict[str, Any], *, selected_handler: Any = handler) -> dict[str, Any]:
+            async def run(
+                arguments: dict[str, Any], *, selected_handler: Any = handler
+            ) -> dict[str, Any]:
                 return selected_handler(arguments)
 
             plugins.append(

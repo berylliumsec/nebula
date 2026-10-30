@@ -4869,6 +4869,14 @@ test("stabilization LAN connection keeps the workspace through a transient miss 
   await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toBeVisible();
   await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
 
+  const connection = page.locator(".connection-chip");
+  await expect(connection).toHaveAccessibleName(/Nebula Core failed\. Retry connection/);
+  expect(await connection.evaluate((button) => {
+    const bounds = button.getBoundingClientRect();
+    return button.contains(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2));
+  })).toBe(true);
+  await connection.click();
+
   await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toHaveCount(0, {timeout: 8_000});
   await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
 });
