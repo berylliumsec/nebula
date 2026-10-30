@@ -232,6 +232,16 @@ checks the chat revision again before starting the local Markdown download.
 The model receives no complete transcript. A cancelled or stale handoff is not
 a saved file, and a browser download start does not establish the device's
 final save location.
+For shared Library items, interactive Butler can page bounded metadata and
+read one item's current revision. Reindex and remove are exact browser
+handoffs: the requesting browser rereads the item, names the global impact in
+a confirmation, checks the revision again, sends a revision-guarded request,
+and reads Core's saved result before reporting success. Cancel leaves the item
+unchanged. The control action returns metadata only; the browser owns original
+file transfer. If Butler's Knowledge setting is enabled, Core may separately
+retrieve bounded Library excerpts into the model context as reference data.
+Scheduled Butler has no shared Library mutation action. Upload
+and download require separate browser-owned acceptance.
 The existing Settings controls remain available. Browser and notes mutation
 tools are separate future work; this slice does not grant them.
 The packaged app destination list covers the All projects page, the selected

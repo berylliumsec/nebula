@@ -29,7 +29,7 @@ and reads; these counts are not a coverage percentage.
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create, rename, archive, restore, and permanent delete through the requesting browser; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host folder selection and Host consent remain in their visible controls. |
 | Workspace, Code and terminals | Give a configured main agent a task in its project workspace; with a verified tool-capable provider, use the existing project-scoped `workspace.find`, `workspace.search`, and `workspace.read` tools for bounded file inspection | Butler has no typed file create, edit, rename, delete, or device download journey and no terminal lifecycle action. Linked-host-folder selection is device/host owned. |
-| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells and create or edit a cell with Core read-back | Direct browser page control, Notebook run lifecycle and package installation, resource/library management, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
+| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells and create or edit a cell with Core read-back; page shared Library metadata and request confirmed reindex or removal of an exact item | Direct browser page control, Notebook run lifecycle and package installation, shared Library upload and original-file download, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
 The present gateway is deliberately small: Butler receives
@@ -167,6 +167,41 @@ location were unavailable to this automated run.
 
 ## Remaining work to reach the product goal
 
+### Shared Library control contract
+
+Entry point: an operator asks interactive Butler to find a shared Library item,
+add one from the requesting device, reindex it, download its original file, or
+remove it from retrieval. The Library is global: one change affects every
+project. Core owns the item, revision, immutable artifact, and local index;
+the requesting browser owns file selection, download, and confirmation. The
+Library control actions return bounded item metadata, not the original file.
+When Butler's separate Knowledge setting is enabled, Core may retrieve bounded
+excerpts from ready Library items into the model context as reference data.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Butler pages global item summaries and reads one current revision before acting; a project switch invalidates its pending browser action | Core Library and selected Butler project | Tool and browser |
+| Add | The requesting device chooses a supported file and observes the new item in the Library after Core saves it; no file bytes pass through the model | Browser picker, Core artifact and Library item | Component and real Core |
+| Reindex | The exact item and current revision are checked before rebuilding; saved status and new revision appear after refresh | Core item and index | API, tool and real Core |
+| Download | The requesting browser fetches the original artifact and starts a local download after confirming the selected item; the model receives only an outcome | Core artifact and browser | Component and real Core |
+| Remove | A global-impact confirmation names the exact item; stale revisions fail and a successful removal disappears from the refreshed Library | Core item and browser confirmation | API, tool and real Core |
+| Failure and reconnect | Cancellation has no effect, uncertain responses prompt a fresh Core read, and stale or missing items cannot be retried blindly | Core and browser | Component and real Core |
+
+These actions belong only to an interactive Butler session. Scheduled Butler
+must not mutate the shared Library through project Act authority.
+
+The reindex and removal slice passed 30 cumulative focused Python cases, 73 frontend cases
+in the cumulative PR selection, the production UI build, and the paired LAN
+journey in desktop and compact Chromium plus Chromium and WebKit mobile
+emulation at 320, 390 and 430 px (8/8). The journey verified the served asset
+hash, cancellation with no Core change, a ready item at a new revision,
+stale-request refusal, Core 404 after removal, retained artifact bytes, the
+Library empty state after navigation, no horizontal clipping, and an
+accessibility scan. Physical Safari and the browser-owned upload/download
+handoffs were not exercised by this slice. The model received a bounded Library
+excerpt through its existing Knowledge setting; the action tool returned no
+file text. That is the observed content boundary.
+
 ### Notebook control contract
 
 Entry point: an operator asks the interactive Butler to find a notebook in the
@@ -234,10 +269,10 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 19
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 21
 reviewed actions, including explicit export, workspace, Notebook, Library, and
-storage dispositions. Its source inventory contains 493 distinct `api` call
-signatures in production UI TypeScript, of which 32 are linked to those
+storage dispositions. Its source inventory contains 496 distinct `api` call
+signatures in production UI TypeScript, of which 35 are linked to those
 reviewed actions; 461 still require action-level review. Direct `api.request`
 calls are keyed by route expression and HTTP verb. The guard fails when a call
 is added, removed, or repeated without refreshing the inventory. It does not

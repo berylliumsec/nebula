@@ -77,7 +77,7 @@ function main() {
     throw new Error(`UI API calls changed; review operator workflows and refresh the inventory:\n${changed.slice(0, 30).map((key) => `${key}: ${before.get(key) ?? 0} -> ${after.get(key) ?? 0}`).join("\n")}${changed.length > 30 ? `\n... ${changed.length - 30} more` : ""}`);
   }
   const available = new Set(current.map(({ key }) => key));
-  const catalogs = ["control_assistant_work.py", "butler_projects.py", "butler_chat_export.py"]
+  const catalogs = ["control_assistant_work.py", "butler_projects.py", "butler_chat_export.py", "butler_library.py"]
     .map((name) => readFileSync(resolve(repoRoot, "src/nebula/v3", name), "utf8"))
     .join("\n");
   const ids = new Set();
@@ -106,7 +106,7 @@ function main() {
       if (!testName || !existsSync(absoluteTest) || !readFileSync(absoluteTest, "utf8").includes(testName)) {
         throw new Error(`${action.id}: observed-result test is missing: ${action.observed_result_test}`);
       }
-      for (const operation of Object.values(action.butler).flatMap((value) => value.match(/nebula\.(?:work|projects|chats)\.[a-z_]+/g) ?? [])) {
+      for (const operation of Object.values(action.butler).flatMap((value) => value.match(/nebula\.(?:work|projects|chats|library)\.[a-z_]+/g) ?? [])) {
         if (!catalogs.includes(`"${operation}"`)) throw new Error(`${action.id}: Butler operation is not in the Core catalog: ${operation}`);
       }
     }

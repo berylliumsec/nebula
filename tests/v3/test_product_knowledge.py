@@ -280,6 +280,19 @@ def test_product_search_finds_butler_device_transcript_export(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_shared_library_confirmation(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler reindex or remove a shared Library item?"
+    )
+    assert any(
+        "shared Library" in str(item["text"])
+        and "revision" in str(item["text"])
+        and "confirmation" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_effort_setting(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

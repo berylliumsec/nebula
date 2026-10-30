@@ -302,21 +302,56 @@
     },
     {
       "id": "resources.library",
-      "entry_point": "Library: ingest or remove a project resource",
+      "entry_point": "Shared Library: add a local file or download an original artifact",
       "ui_calls": [
-        "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem",
+        "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem"
+      ],
+      "core_owner": "Global Core Library and artifact store; requesting browser owns the file picker and download",
+      "butler": {
+        "discover": "nebula.navigate.open and nebula.library.list",
+        "read": "nebula.library.detail returns bounded metadata",
+        "change": "missing: browser-owned upload and original-file download handoffs"
+      },
+      "authority": "Global Library identity and revision; local file selection and download stay on the requesting device",
+      "observed_result_test": "missing: Butler upload and download LAN lifecycle regression",
+      "result": "New item or local download must be observed without returning original file bytes through the Butler control action",
+      "status": "gap"
+    },
+    {
+      "id": "library.reindex",
+      "entry_point": "Shared Library: reindex one exact item from its retained artifact",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getLibraryItem",
+        "ui/src/components/NebulaControlAssistant.tsx::reindexLibraryItemAtRevision"
+      ],
+      "core_owner": "Global Core Library item and artifact store",
+      "butler": {
+        "discover": "nebula.library.list",
+        "read": "nebula.library.detail",
+        "change": "nebula.library.reindex"
+      },
+      "authority": "Interactive Butler, requesting-browser confirmation, exact item revision and Core read-back",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core",
+      "result": "Core reports ready at a new revision and Library refresh shows the item",
+      "status": "supported"
+    },
+    {
+      "id": "library.remove",
+      "entry_point": "Shared Library: remove one exact item for every project",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::deleteLibraryItemAtRevision",
         "ui/src/state/WorkspaceContext.tsx::deleteLibraryItem"
       ],
-      "core_owner": "Core library and artifact store",
+      "core_owner": "Global Core Library item and retained artifact store",
       "butler": {
-        "discover": "nebula.navigate.open",
-        "read": "missing: bounded resource list and detail",
-        "change": "missing: typed library actions"
+        "discover": "nebula.library.list",
+        "read": "nebula.library.detail",
+        "change": "nebula.library.remove"
       },
-      "authority": "Selected project, artifact provenance and exact resource revision; local file selection stays device-owned",
-      "observed_result_test": "missing: Butler library action and LAN resource lifecycle regression",
-      "result": "Saved resource appears in Library or disappears after deletion and refresh",
-      "status": "gap"
+      "authority": "Interactive Butler, global-impact browser confirmation, exact item revision and Core 404 read-back",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core",
+      "result": "Item is absent from Core and refreshed Library; original artifact remains",
+      "status": "supported"
     },
     {
       "id": "storage.enrollment",
@@ -948,6 +983,10 @@
       "count": 3
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::deleteLibraryItemAtRevision",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy",
       "count": 2
     },
@@ -972,6 +1011,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getLibraryItem",
+      "count": 4
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getOrCreateControlAssistantSession",
       "count": 1
     },
@@ -989,6 +1032,10 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listEngagements",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::reindexLibraryItemAtRevision",
       "count": 1
     },
     {

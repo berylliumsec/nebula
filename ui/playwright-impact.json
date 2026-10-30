@@ -64,6 +64,7 @@
     {"name": "control-assistant-work", "patterns": ["src/nebula/v3/control_assistant_work.py", "src/nebula/v3/settings_assistant_tools.py", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["control-assistant-work"]},
     {"name": "butler-chat-rewind", "patterns": ["src/nebula/v3/chat.py", "src/nebula/v3/control_assistant_work.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["butler-chat-rewind"]},
     {"name": "butler-chat-export", "patterns": ["src/nebula/v3/butler_chat_export.py", "ui/src/pages/chatTranscriptExport.ts", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-chat-export"]},
+    {"name": "butler-library", "patterns": ["src/nebula/v3/butler_library.py"], "areas": ["butler-library"]},
     {"name": "butler-notebook", "patterns": ["src/nebula/v3/butler_notebook.py", "src/nebula/v3/butler_capabilities.py", "src/nebula/v3/notebook_mcp.py"], "areas": ["butler-notebook"]},
     {"name": "butler-project-lifecycle", "patterns": ["src/nebula/v3/butler_projects.py", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-project-lifecycle"]},
     {"name": "butler-timeline", "patterns": ["src/nebula/v3/butler_timeline.py"], "areas": ["butler-timeline"]},
@@ -223,6 +224,16 @@
       {"area":"butler-project-lifecycle","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-project-lifecycle","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-project-lifecycle","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-library": [
+      {"area":"butler-library","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-chat-export": [
       {"area":"butler-chat-export","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
