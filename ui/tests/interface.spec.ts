@@ -1759,7 +1759,7 @@ reloadTest("automation callback subagent wait keeps the assistant reply and foll
   await page.getByRole("button", { name: "Send message", exact: true }).click();
 
   const status = page.getByRole("status", { name: "Waiting for subagents" });
-  const work = page.locator(".chat-message.assistant").last().getByRole("region", { name: "Work summary" });
+  const work = page.locator(".chat-message.assistant").last().getByRole("region", { name: /^Work summary for reply / });
   await expect(work).toContainText(displaySummary);
   await expect(status).toHaveCount(0);
   await expect(page.getByText("Callback ready")).toHaveCount(0);
@@ -7536,7 +7536,7 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
 
   await openWorkspace(page, "/?view=chat&session=paused-supervisor", "Workbench");
   const reply = page.locator(".chat-message.assistant").last();
-  const work = reply.getByRole("region", { name: "Work summary" });
+  const work = reply.getByRole("region", { name: /^Work summary for reply / });
   await expect(work.locator(".activity-ledger-progress-preview")).toContainText("I have dispatched the command.", { timeout: 20_000 });
   await expect(work.getByText("I checked admission state.")).toBeHidden();
   await expect(reply.getByLabel("Thinking")).toBeHidden();
@@ -7597,7 +7597,7 @@ reloadTest("assistant upgrade keeps parent and subagent final answers clear of s
     const reply = page.locator(".chat-message.assistant").last();
     await expect(reply.locator(".chat-message-body > .assistant-markdown")).toContainText(session.answer, { timeout: 20_000 });
     await expect(reply.locator(".chat-message-body > .assistant-markdown")).not.toContainText("I am checking the evidence.");
-    const work = reply.getByRole("region", { name: "Work summary" });
+    const work = reply.getByRole("region", { name: /^Work summary for reply / });
     await expect(work.getByText("I am checking the evidence.")).toBeHidden();
     await work.getByRole("button", { name: "View work" }).click();
     await expect(work.getByRole("region", { name: "Progress updates" })).toContainText(progress);
@@ -7653,7 +7653,7 @@ reloadTest("assistant upgrade shows each saved running tool and its input on dem
   });
 
   const inspect = async () => {
-    const ledger = page.getByRole("region", { name: "Work summary" });
+    const ledger = page.getByRole("region", { name: /^Work summary for reply / });
     await expect(ledger.locator(".activity-ledger-compact-current")).toContainText("Command on simulation-host");
     await ledger.getByRole("button", { name: "Show activity" }).click();
     const running = ledger.locator(".activity-ledger-audit li").filter({ hasText: "Command on simulation-host" }).locator("details");
@@ -9249,7 +9249,7 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
   });
 
   await openWorkspace(page, "/?view=chat&session=chat-activity-ledger", "Workbench");
-  const ledger = page.getByRole("region", { name: "Work summary" });
+  const ledger = page.getByRole("region", { name: /^Work summary for reply / });
   await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
   expect(activityLoads).toBe(1);
   await expect(ledger.locator(".activity-ledger-header, .activity-ledger-receipt")).toHaveCount(0);
@@ -9376,7 +9376,7 @@ test("native assistant tools use the shared activity ledger", async ({ page }, t
   const composer = page.getByPlaceholder("Ask about this project…");
   await composer.fill("Review the saved evidence.");
   await page.getByRole("button", { name: "Send message" }).click();
-  const ledger = page.getByRole("region", { name: "Work summary" });
+  const ledger = page.getByRole("region", { name: /^Work summary for reply / });
   await expect(ledger.locator(".activity-ledger-compact-current")).toContainText("Search evidence");
   await ledger.getByRole("button", { name: "Show activity" }).click();
   const liveTool = ledger.locator(".activity-ledger-audit > ol > li > .activity-ledger-entry-content > details");
@@ -9391,7 +9391,7 @@ test("native assistant tools use the shared activity ledger", async ({ page }, t
 
   replayDurableReceipt = true;
   await page.goto("/?view=chat&session=native-ledger-session");
-  const restoredLedger = page.getByRole("region", { name: "Work summary" });
+  const restoredLedger = page.getByRole("region", { name: /^Work summary for reply / });
   await expect(restoredLedger.getByText(/1 action/).first()).toBeVisible();
   await expect(restoredLedger).not.toContainText("item upsert");
   await restoredLedger.getByRole("button", { name: "Show activity" }).click();
@@ -9554,7 +9554,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   const runtimeRollover = page.getByRole("status").filter({ hasText: "Command runtime updated" });
   await expect(runtimeRollover).toContainText("preserved the prior session");
   await expect(runtimeRollover).toContainText("current command runtime");
-  const streamingWork = page.getByRole("region", {name: "Work summary"});
+  const streamingWork = page.getByRole("region", {name: /^Work summary for reply /});
   await expect(streamingWork).toContainText("I found the verification path.");
   await streamingWork.getByRole("button", {name: "Show activity"}).click();
   await streamingWork.locator(".activity-ledger-entry-content details > summary").first().click();
@@ -9612,7 +9612,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await expect(planSteps).toBeFocused();
   await collapsePlan.click();
   await expect(page.getByRole("list", { name: "Plan steps" })).toHaveCount(0);
-  const ledger = page.getByRole("region", { name: "Work summary" });
+  const ledger = page.getByRole("region", { name: /^Work summary for reply / });
   await expect(ledger.locator(".activity-ledger-footer > span")).toContainText("Completed", { timeout: 5_000 });
   await ledger.getByRole("button", { name: "Show activity" }).click();
   const activity = ledger.locator(".activity-ledger-entry-content details", { hasText: "Run verification" });
@@ -9750,7 +9750,7 @@ test("completed harness output keeps live commentary in expandable work detail",
   await composer.fill("Inspect the workspace and explain what you are doing");
   await page.getByRole("button", { name: "Send message" }).click();
 
-  const ledger = page.getByRole("region", { name: "Work summary" });
+  const ledger = page.getByRole("region", { name: /^Work summary for reply / });
   await expect(ledger).toBeVisible();
   await expect(ledger).toContainText("Current run");
   await ledger.scrollIntoViewIfNeeded();
