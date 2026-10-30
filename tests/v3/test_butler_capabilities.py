@@ -332,6 +332,75 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
     asyncio.run(scenario())
 
 
+def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_path):
+    store, selected, own_chat, foreign_chat, capabilities = _capabilities(tmp_path)
+    private = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Private side chat",
+            provider_profile_id=own_chat.provider_profile_id,
+            model="model-a",
+            metadata={"side_chat": True},
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "export chat transcript"})
+        assert any(row["operation"] == "nebula.chats.export" for row in found["matches"])
+        described = await capabilities.describe({"operation": "nebula.chats.export"})
+        assert described["invoke_with"] == "nebula.capabilities.change"
+        prepared = await capabilities.invoke(
+            {
+                "operation": "nebula.chats.export",
+                "arguments": {
+                    "session_id": own_chat.id,
+                    "expected_revision": own_chat.revision,
+                },
+            },
+            change=True,
+        )
+        assert prepared["state"] == "pending_browser_apply"
+        assert prepared["client_action"] == {
+            "kind": "chat_export",
+            "project_id": selected.id,
+            "session_id": own_chat.id,
+            "expected_revision": own_chat.revision,
+        }
+        assert "messages" not in prepared and "transcript" not in prepared
+        assert store.get(ChatSession, own_chat.id).revision == own_chat.revision
+        for target in (foreign_chat, private):
+            with pytest.raises(ValueError, match="saved main chat"):
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.chats.export",
+                        "arguments": {
+                            "session_id": target.id,
+                            "expected_revision": target.revision,
+                        },
+                    },
+                    change=True,
+                )
+        store.update(
+            ChatSession,
+            own_chat.id,
+            {"title": "Changed on another device"},
+            expected_revision=own_chat.revision,
+        )
+        with pytest.raises(ValueError, match="chat changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.chats.export",
+                    "arguments": {
+                        "session_id": own_chat.id,
+                        "expected_revision": own_chat.revision,
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
 def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
     _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
 
@@ -342,6 +411,12 @@ def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path
         assert not any(
             row["operation"].startswith("nebula.projects.")
             for row in (await capabilities.search({"query": "archive project"}))[
+                "matches"
+            ]
+        )
+        assert not any(
+            row["operation"] == "nebula.chats.export"
+            for row in (await capabilities.search({"query": "export chat transcript"}))[
                 "matches"
             ]
         )

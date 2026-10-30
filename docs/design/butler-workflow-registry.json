@@ -107,18 +107,20 @@
       "id": "chat.export",
       "entry_point": "Conversation menu: download a Markdown transcript",
       "ui_calls": [
-        "ui/src/pages/SessionsPage.tsx::listChatMessages"
+        "ui/src/pages/SessionsPage.tsx::listChatMessages",
+        "ui/src/components/NebulaControlAssistant.tsx::getChatSession",
+        "ui/src/components/NebulaControlAssistant.tsx::listChatMessages"
       ],
       "core_owner": "ChatService supplies saved messages; browser owns download",
       "butler": {
         "discover": "nebula.work.chats",
-        "read": "nebula.work.chat (bounded recent messages)",
-        "change": "missing: browser export handoff"
+        "read": "nebula.work.chat (bounded recent messages and revision)",
+        "change": "nebula.chats.export"
       },
       "authority": "Requesting browser confirms sensitive transcript export and keeps local download private",
-      "observed_result_test": "missing: Butler export handoff and browser download regression",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler exports a saved chat on the requesting LAN browser",
       "result": "Requesting device downloads complete saved transcript without returning it through the model",
-      "status": "device_handoff"
+      "status": "supported"
     },
     {
       "id": "project.create",
@@ -958,6 +960,10 @@
       "count": 7
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getChatSession",
+      "count": 3
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getControlAssistantSession",
       "count": 3
     },
@@ -979,7 +985,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listChatMessages",
-      "count": 3
+      "count": 4
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listEngagements",

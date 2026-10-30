@@ -1078,6 +1078,54 @@ describe("NebulaControlAssistant", () => {
     expect(getProjectLifecycle).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps Butler transcript export on the requesting device after confirmation and Core readback", async () => {
+    const user = userEvent.setup();
+    const chatId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const chat = {id: chatId, engagementId: "project", title: "Research", revision: 4,
+      backend: "provider", model: "model", createdAt: "2026-10-30T00:00:00Z", updatedAt: "2026-10-30T00:00:00Z"};
+    const getChatSession = vi.fn().mockResolvedValue(chat);
+    const listChatMessages = vi.fn().mockResolvedValue([]);
+    const createObjectURL = vi.fn().mockReturnValue("blob:butler-export");
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: createObjectURL});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "export-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.chats.export", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "chat_export", project_id: "project", session_id: chatId, expected_revision: 4}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked this browser to export the chat."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getChatSession, listChatMessages},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", {name: "Open Butler"}));
+      const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+      await user.type(composer, "Export the Research transcript{enter}");
+      expect(await screen.findByRole("heading", {name: "Export Research?"})).toBeVisible();
+      expect(listChatMessages).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", {name: "Cancel"}));
+      await waitFor(() => expect(screen.getByText("Research was not exported. No download started.")).toBeVisible());
+      expect(createObjectURL).not.toHaveBeenCalled();
+      await user.type(composer, "Export the Research transcript{enter}");
+      await user.click(await screen.findByRole("button", {name: "Export transcript"}));
+      await waitFor(() => expect(listChatMessages).toHaveBeenCalledWith(chatId));
+      await waitFor(() => expect(screen.getByText(/Started a Markdown transcript download for Research/)).toBeVisible());
+      expect(getChatSession).toHaveBeenCalledTimes(4);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(anchorClick).toHaveBeenCalledTimes(1);
+    } finally {
+      anchorClick.mockRestore();
+    }
+  });
+
   it.each([
     {caseName: "an archived project already has the name", projects: [{id: "8c516abd-4d22-4a54-a43a-79923ed66af9", name: "  SAME   NAME ", status: "archived"}], listFails: false, message: "Core already has a project named Same name"},
     {caseName: "Core cannot list projects", projects: [], listFails: true, message: "Core's project list is unavailable"},

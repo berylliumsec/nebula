@@ -107,6 +107,20 @@ describe("settings assistant actions", () => {
       .toEqual({kind: "project_create", name: "New", description: "", clientName: "", requestId});
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: ""}}}, "selected")).toBeUndefined();
   });
+  it("accepts only a scoped transcript export handoff from Core", () => {
+    const sessionId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "export-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.chats.export", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "chat_export", project_id: "selected", session_id: sessionId, expected_revision: 5}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "chat_export", projectId: "selected", sessionId, expectedRevision: 5});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.chat"}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "other", session_id: sessionId, expected_revision: 5}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "selected", session_id: "../other", expected_revision: 5}}}, "selected")).toBeUndefined();
+  });
   it("recognizes explicit project mode changes without treating questions as commands", () => {
     expect(projectModeChange("open project policy and change from dockermode to host mode"))
       .toEqual({ from: "docker", mode: "host" });

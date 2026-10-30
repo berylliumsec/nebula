@@ -17,6 +17,7 @@ import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import { projectSurface } from "../resourceRoutes";
+import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
 import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type VoicePauseSeconds } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
@@ -832,7 +833,39 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setHidden(entry.target !== "butler-oversight");
   };
 
+  const applyChatExport = async (action: Extract<SettingClientAction, {kind: "chat_export"}>): Promise<string> => {
+    if (!api || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Select the original project and ask Butler to export the chat again.");
+    }
+    const current = await api.getChatSession(action.sessionId);
+    if (current.engagementId !== action.projectId || current.isSideChat || current.isSubagent || current.isControlAssistant) {
+      throw new Error("This chat is not a saved main conversation in the selected project.");
+    }
+    if (current.revision !== action.expectedRevision) {
+      throw new Error("The chat changed. Ask Butler to read its current revision before exporting.");
+    }
+    const approved = await confirm({
+      title: `Export ${current.title}?`,
+      message: "The Markdown transcript can contain sensitive prompts, responses, citations, and selected-context hashes. Tool artifacts and raw evidence stay in the project evidence bundle.",
+      confirmLabel: "Export transcript",
+    });
+    if (!approved) return `${current.title} was not exported. No download started.`;
+    if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to export the chat again.");
+    const before = await api.getChatSession(action.sessionId);
+    if (before.engagementId !== action.projectId || before.revision !== action.expectedRevision) {
+      throw new Error("The chat changed during confirmation. Ask Butler to read it again before exporting.");
+    }
+    const messages = await api.listChatMessages(action.sessionId);
+    const observed = await api.getChatSession(action.sessionId);
+    if (activeImageProject.current !== action.projectId || observed.engagementId !== action.projectId || observed.revision !== action.expectedRevision) {
+      throw new Error("The chat changed while preparing the transcript. Ask Butler to read it again before exporting.");
+    }
+    startChatTranscriptDownload({session: observed, engagementName: engagement.name, messages});
+    return `Started a Markdown transcript download for ${observed.title} on this device (${messages.length} saved messages).`;
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
+    if (action.kind === "chat_export") return applyChatExport(action);
     if (action.kind === "project_create" || action.kind === "project_rename" || action.kind === "project_archive"
       || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);

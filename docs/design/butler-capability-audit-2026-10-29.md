@@ -20,8 +20,8 @@ and reads; these counts are not a coverage percentage.
 
 | Operator area | Butler can do now | Gap or boundary |
 | --- | --- | --- |
-| Chats and agents | Discover selected-project work; start, message, steer, stop, fork, rename, archive, restore, delete and retry assistant chats; inspect goals, subagents, queues and schedules | The overview shows at most 30 main chats. Side chats, temporary assistants and Butler's own session are excluded from Work actions. Chat rewind and export are UI-only. |
-| Chat priority | Open the conversation list and see pinned and flagged chats in the UI | Before this branch, `nebula.work.update_chat` had no pin or flag arguments or read-back. |
+| Chats and agents | Discover selected-project work; page saved main chats; start, message, steer, stop, fork, rename, archive, restore, delete and retry assistant chats; inspect goals, subagents, queues and schedules; rewind an exact saved user message at a current revision; request a confirmed transcript download in the current browser | Side chats, temporary assistants and Butler's own session are excluded from Work actions. The operating system controls the final save location for a transcript. |
+| Chat priority | Page and read pinned and flagged chats; pin, unpin, set or clear a flag with the current revision and Core read-back | The browser sidebar shows Core's saved state after refresh; this branch's paired LAN journey covers that path. |
 | Goals, missions and approvals | Read and change Core-owned goals, missions, follow-up queues, schedules, plans, approvals and nonsecret harness questions through typed Work actions | Native harness goals only expose the controls the harness actually supports. A saved queue or approval receipt does not prove the downstream task completed. |
 | Project work board | Main agents can receive and update assigned work through the agent Work gateway | This branch adds Butler's project-scoped item list, read, create, edit, check-in, agent-access setting, and paged check-in history. Browser and real-Core proof is tracked separately below. |
 | Butler memory | List and search visible preferences and lessons; save a quoted memory; edit or forget one on operator request with its current revision | Memory is context with provenance, not authority to change another project or certify a result. |
@@ -29,7 +29,7 @@ and reads; these counts are not a coverage percentage.
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create, rename, archive, restore, and permanent delete through the requesting browser; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host folder selection and Host consent remain in their visible controls. |
 | Workspace, Code and terminals | Give a configured main agent a task in its project workspace | Butler has no direct bounded file browser/editor or terminal lifecycle action. Linked-host-folder selection is device/host owned. |
-| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device | Direct browser page control, notebook content operations, resource/library management, evidence, reports and exports lack typed Butler actions. Security testing remains under the project's scope and approval policy. |
+| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells and create or edit a cell with Core read-back | Direct browser page control, Notebook run lifecycle and package installation, resource/library management, evidence, reports and exports still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
 The present gateway is deliberately small: Butler receives
@@ -133,6 +133,38 @@ creates when two browsers pass the preflight together. Other project creation
 paths retain their existing name semantics. A retry of a deleted project's
 request ID fails closed instead of recreating it.
 
+## Branch slice: chat transcript export
+
+Entry point: the operator asks interactive Butler to export one saved main chat
+in the selected project. Butler finds the exact chat and current revision through
+its project roster, then requests a handoff to the requesting browser. The
+browser shows the existing sensitive-transcript confirmation and obtains the
+full active transcript through its authenticated Core API. The model receives
+only the pending action and short outcome, never the full export. Core owns the
+chat, revision, and messages; the browser owns confirmation and the local
+download. The URL keeps the selected project identity.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Butler's catalog names export and resolves an exact listed main chat and current revision | Core capability catalog and chat store | Tool test |
+| Confirm and prepare | Cancellation makes no download; a changed or other-project chat fails before data is downloaded | Browser confirmation and Core revision | Component and real Core |
+| Download and read back | The requesting browser fetches all active messages, checks the chat again for a stable revision, and starts a Markdown download with the same filename and content as the chat menu | Core transcript and browser | Component and production LAN browser |
+| Refresh and retry | No server-side export state is created; a new request reads a fresh chat revision and requires confirmation again | Core chat and browser | Tool and real Core |
+| Failure | Fetch, stale revision, or device download failure reports a recoverable error without claiming a saved file | Core error contract and browser | Component and real Core |
+
+Streaming, interruption, fork, and deletion do not apply to a local snapshot
+download. A browser download event is evidence that the file transfer started;
+the operating system's final save location remains device-owned.
+
+The selected Python and frontend checks passed. A disposable paired LAN Core
+served the production bundle for the export journey, and the browser downloaded
+the complete synthetic transcript after confirmation in desktop Chromium,
+compact Chromium, Android Chromium 320/390/430 px, and iPhone WebKit
+320/390/430 px emulation. Cancellation started no download. The model stub
+never received the synthetic transcript marker; a refresh showed Butler's
+reported device action. Physical Safari and the operating system's final save
+location were unavailable to this automated run.
+
 ## Remaining work to reach the product goal
 
 ### Notebook control contract
@@ -203,10 +235,10 @@ proof that every click has been catalogued.
 
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
 checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 19
-reviewed actions, including explicit rewind, export, workspace, Notebook,
-Library, and storage gaps. Its source inventory contains 492 distinct `api`
-call signatures in production UI TypeScript, of which 30 are linked to those
-reviewed actions; 462 still require action-level review. Direct `api.request`
+reviewed actions, including explicit export, workspace, Notebook, Library, and
+storage dispositions. Its source inventory contains 493 distinct `api` call
+signatures in production UI TypeScript, of which 32 are linked to those
+reviewed actions; 461 still require action-level review. Direct `api.request`
 calls are keyed by route expression and HTTP verb. The guard fails when a call
 is added, removed, or repeated without refreshing the inventory. It does not
 see calls through other receiver names or UI actions with no API call, so the
@@ -222,7 +254,7 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Add typed conversation rewind/export and bounded workspace, Notebook, and resource
+2. Add bounded workspace, Notebook run lifecycle, and resource
    actions in their owning services. Each needs target discovery, optimistic
    revisions where applicable, and durable read-back.
 3. Add specialized device and administration handoffs for local file selection,

@@ -268,6 +268,18 @@ def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypa
     )
 
 
+def test_product_search_finds_butler_device_transcript_export(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does Butler export a chat transcript on my browser?"
+    )
+    assert any(
+        "nebula.chats.export" in str(item["text"])
+        and "requesting browser" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_effort_setting(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

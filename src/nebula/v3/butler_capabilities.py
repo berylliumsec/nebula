@@ -66,6 +66,7 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.set_project_mode",
         "nebula.settings.set_project_scope",
         "nebula.settings.headless_session",
+        "nebula.chats.export",
     }
 )
 _BACKGROUND_CHANGES = frozenset(
@@ -210,10 +211,17 @@ class ButlerCapabilities:
             )
         }
         if background_case_id is None:
+            from .butler_chat_export import ButlerChatExport
             from .butler_projects import ButlerProjects
 
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in ButlerProjects(store).plugins()}
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerChatExport(store, project_id).actions()
+                }
             )
             if notebooks is not None:
                 from .butler_notebook import ButlerNotebook

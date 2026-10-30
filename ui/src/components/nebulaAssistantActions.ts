@@ -15,7 +15,8 @@ export type SettingClientAction =
   | { kind: "headless_session"; action: "start" | "stop" }
   | { kind: "project_create"; name: string; description: string; clientName: string; requestId: string }
   | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
-  | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string };
+  | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string }
+  | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number };
 
 export interface AssistantWorkReceipt { url: string; content: string }
 
@@ -78,6 +79,13 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (projectAction && operation === "nebula.chats.export" && value.kind === "chat_export"
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.session_id === "string"
+      && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.session_id)
+      && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1) {
+    return {kind: "chat_export", projectId, sessionId: value.session_id, expectedRevision: Number(value.expected_revision)};
+  }
   if (projectAction && operation.startsWith("nebula.projects.")) {
     const name = value.name;
     const validName = typeof name === "string" && name.trim().length > 0 && name.length <= 300;
