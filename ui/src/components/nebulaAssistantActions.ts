@@ -19,6 +19,8 @@ export type SettingClientAction =
   | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
+  | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
+  | { kind: "workspace_delete_directory"; projectId: string; path: string; expectedEntryIdentity: string }
   | { kind: "library_add"; projectId: string }
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
 
@@ -28,6 +30,10 @@ function validWorkspacePath(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096
     && !value.startsWith("/") && !value.includes("\\") && !value.includes("\0")
     && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+function validWorkspaceDirectory(value: unknown): value is string {
+  return value === "" || validWorkspacePath(value);
 }
 
 function butlerGatewayOperation(event: Extract<ChatStreamEvent, {type: "tool_completed"}>, projectId?: string): string | undefined {
@@ -106,6 +112,21 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
         && Number.isSafeInteger(value.size) && Number(value.size) >= 0) {
       return {kind: "workspace_download", projectId, path: value.path,
         expectedSha256: value.expected_sha256, size: Number(value.size)};
+    }
+  }
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    if (operation === "nebula.workspace.upload_from_device" && value.kind === "workspace_upload"
+        && validWorkspaceDirectory(value.directory)
+        && typeof value.expected_directory_identity === "string"
+        && /^[0-9a-f]{64}$/.test(value.expected_directory_identity)) {
+      return {kind: "workspace_upload", projectId, directory: value.directory,
+        expectedDirectoryIdentity: value.expected_directory_identity};
+    }
+    if (operation === "nebula.workspace.delete_directory" && value.kind === "workspace_delete_directory"
+        && validWorkspacePath(value.path) && typeof value.expected_entry_identity === "string"
+        && /^[0-9a-f]{64}$/.test(value.expected_entry_identity)) {
+      return {kind: "workspace_delete_directory", projectId, path: value.path,
+        expectedEntryIdentity: value.expected_entry_identity};
     }
   }
   if (projectAction && operation === "nebula.library.add" && value.kind === "library_add"

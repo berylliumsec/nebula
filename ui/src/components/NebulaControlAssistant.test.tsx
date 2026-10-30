@@ -1185,6 +1185,65 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it("lets the requesting browser upload binary workspace bytes after a scoped Butler handoff", async () => {
+    const user = userEvent.setup();
+    const {sha256Hex} = await import("../sha256");
+    const bytes = new Uint8Array([0, 255, 42, 1]);
+    const digest = sha256Hex(bytes);
+    const identity = "a".repeat(64);
+    const directory = {engagementId: "project", path: "captures", kind: "directory", size: 0,
+      entryIdentity: identity};
+    let saved = false;
+    const getWorkspaceEntryState = vi.fn().mockImplementation(async (_project: string, path: string) => {
+      if (path === "captures") return directory;
+      if (path === "captures/sample.bin" && saved) return {engagementId: "project", path,
+        kind: "file", size: bytes.length, sha256: digest};
+      throw new ApiError("Missing", 404);
+    });
+    const uploadWorkspaceFile = vi.fn().mockImplementation(async () => {
+      saved = true;
+      return {engagementId: "project", path: "captures/sample.bin", size: bytes.length,
+        sha256: digest, overwritten: false};
+    });
+    let calls = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `upload-${++calls}`,
+        capability: "nebula.capabilities.change", status: "complete", summary: "Pending on browser",
+        evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.workspace.upload_from_device", butler_project_id: "project",
+          state: "pending_browser_apply", client_action: {kind: "workspace_upload", project_id: "project",
+            directory: "captures", expected_directory_identity: identity}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "Choose the file in this browser."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat,
+        getWorkspaceEntryState, uploadWorkspaceFile},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Upload a binary file{enter}");
+    expect(await screen.findByRole("region", {name: "Upload to project workspace"})).toBeVisible();
+    await user.click(screen.getByRole("button", {name: "Cancel"}));
+    expect(uploadWorkspaceFile).not.toHaveBeenCalled();
+    await user.type(composer, "Upload a binary file{enter}");
+    const input = await screen.findByLabelText("Choose project workspace file");
+    const file = new File([bytes], "sample.bin", {type: "application/octet-stream"});
+    Object.defineProperty(file, "stream", {value: () => new ReadableStream<Uint8Array>({
+      start(controller) {controller.enqueue(bytes); controller.close();},
+    })});
+    fireEvent.change(input, {target: {files: [file]}});
+    await waitFor(() => expect(uploadWorkspaceFile).toHaveBeenCalledWith("project", "captures/sample.bin",
+      file, false, expect.any(AbortSignal), undefined, digest, identity));
+    expect(await screen.findByText(/Uploaded \/workspace\/captures\/sample.bin in Core/)).toBeVisible();
+    expect(getWorkspaceEntryState).toHaveBeenCalledWith("project", "captures/sample.bin");
+  });
+
   it("confirms an exact shared Library reindex, rereads Core, and refreshes the Library", async () => {
     const user = userEvent.setup();
     const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";

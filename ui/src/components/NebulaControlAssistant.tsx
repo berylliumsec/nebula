@@ -18,7 +18,7 @@ import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import { projectSurface } from "../resourceRoutes";
-import { sha256Hex } from "../sha256";
+import { sha256BlobHex, sha256Hex } from "../sha256";
 import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
 import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type VoicePauseSeconds } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
@@ -95,6 +95,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [uploadingImage, setUploadingImage] = useState(false);
   const [pendingLibraryAdd, setPendingLibraryAdd] = useState<Extract<SettingClientAction, {kind: "library_add"}>>();
   const [uploadingLibrary, setUploadingLibrary] = useState(false);
+  const [pendingWorkspaceUpload, setPendingWorkspaceUpload] = useState<Extract<SettingClientAction, {kind: "workspace_upload"}>>();
+  const [uploadingWorkspace, setUploadingWorkspace] = useState(false);
   const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -136,6 +138,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const input = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const libraryInput = useRef<HTMLInputElement>(null);
+  const workspaceInput = useRef<HTMLInputElement>(null);
+  const workspaceUploadAbort = useRef<AbortController | undefined>(undefined);
   const activeImageProject = useRef(engagement?.id);
   activeImageProject.current = engagement?.id;
   const panel = useRef<HTMLDivElement>(null);
@@ -217,7 +221,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return { session, config };
   };
 
-  useEffect(() => () => { abort.current?.abort(); }, [engagement?.id]);
+  useEffect(() => () => { abort.current?.abort(); workspaceUploadAbort.current?.abort(); }, [engagement?.id]);
 
   useEffect(() => {
     setSessionId(undefined);
@@ -236,6 +240,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setUploadingImage(false);
     setPendingLibraryAdd(undefined);
     setUploadingLibrary(false);
+    workspaceUploadAbort.current?.abort();
+    setPendingWorkspaceUpload(undefined);
+    setUploadingWorkspace(false);
     setImageHelp(false);
     setPendingTurn(undefined);
     setPendingCheckedSessionId(undefined);
@@ -915,6 +922,131 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `Started a download of ${action.path} on this device (${bytes.length} bytes).`;
   };
 
+  const applyWorkspaceUpload = async (action: Extract<SettingClientAction, {kind: "workspace_upload"}>): Promise<string> => {
+    if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before choosing a workspace file.");
+    }
+    const directory = await api.getWorkspaceEntryState(action.projectId, action.directory);
+    if (directory.kind !== "directory" || directory.entryIdentity !== action.expectedDirectoryIdentity) {
+      throw new Error("The workspace directory changed. Ask Butler to list it again before uploading.");
+    }
+    setPendingWorkspaceUpload(action);
+    setView("chat");
+    return `Choose a file on this device for /workspace/${action.directory}. Core will confirm the saved bytes before Butler reports success.`;
+  };
+
+  const applyWorkspaceDeleteDirectory = async (action: Extract<SettingClientAction, {kind: "workspace_delete_directory"}>): Promise<string> => {
+    if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before deleting the directory.");
+    }
+    const before = await api.getWorkspaceEntryState(action.projectId, action.path);
+    if (before.kind !== "directory" || before.entryIdentity !== action.expectedEntryIdentity) {
+      throw new Error("The directory changed. Ask Butler to list it again before deleting.");
+    }
+    const approved = await confirm({
+      title: `Delete ${action.path.split("/").at(-1)}?`,
+      message: "Only an empty project workspace folder can be deleted. Its promoted evidence remains unchanged.",
+      confirmLabel: "Delete folder", tone: "danger",
+    });
+    if (!approved) return `${action.path} was not deleted.`;
+    if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to list the directory again.");
+    await api.deleteWorkspaceEntry(action.projectId, action.path, undefined, action.expectedEntryIdentity);
+    try {
+      await api.getWorkspaceEntryState(action.projectId, action.path);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) {
+        return `Deleted empty folder ${action.path}. Core no longer lists that entry.`;
+      }
+      throw caught;
+    }
+    throw new Error("Core still serves the folder. Refresh Files before retrying.");
+  };
+
+  const uploadWorkspaceFile = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    const action = pendingWorkspaceUpload;
+    if (!file || !action) return;
+    if (!file.name || file.name === "." || file.name === ".." || file.name.includes("/") || file.name.includes("\\")
+        || file.name.includes("\0") || file.name.length > 255) {
+      setError("Choose a file with a valid single-segment name.");
+      return;
+    }
+    const destination = action.directory ? `${action.directory}/${file.name}` : file.name;
+    if (destination.length > 4096) {
+      setError("The selected file path is too long for this workspace.");
+      return;
+    }
+    if (!api || coreState !== "online" || activeImageProject.current !== action.projectId) {
+      setPendingWorkspaceUpload(undefined);
+      setError("Reconnect to Core and select the original project before choosing the file again.");
+      return;
+    }
+    const controller = new AbortController();
+    workspaceUploadAbort.current = controller;
+    setUploadingWorkspace(true);
+    setError("");
+    try {
+      const directory = await api.getWorkspaceEntryState(action.projectId, action.directory);
+      if (directory.kind !== "directory" || directory.entryIdentity !== action.expectedDirectoryIdentity) {
+        throw new Error("The destination directory changed. Ask Butler to list it again.");
+      }
+      let existing;
+      try {
+        existing = await api.getWorkspaceEntryState(action.projectId, destination);
+      } catch (caught) {
+        if (!(caught instanceof ApiError) || caught.status !== 404) throw caught;
+      }
+      if (existing && (existing.kind !== "file" || !existing.sha256)) {
+        throw new Error("An entry with this name exists and is not a regular file. Choose a different file name.");
+      }
+      if (existing) {
+        const approved = await confirm({
+          title: `Replace ${file.name}?`,
+          message: `This device will replace /workspace/${destination} in the selected project after Core checks its current SHA-256. Butler will not receive the file bytes.`,
+          confirmLabel: "Replace file", tone: "danger",
+        });
+        if (!approved) {
+          setPendingWorkspaceUpload(undefined);
+          setMessages((current) => [...current, {role: "assistant", content: `${destination} was not replaced.`}]);
+          return;
+        }
+        const current = await api.getWorkspaceEntryState(action.projectId, destination);
+        if (current.kind !== "file" || current.sha256 !== existing.sha256) {
+          throw new Error("The existing file changed during confirmation. Ask Butler to list the directory again.");
+        }
+      }
+      if (controller.signal.aborted || activeImageProject.current !== action.projectId) {
+        throw new DOMException("Upload cancelled", "AbortError");
+      }
+      const expectedContentSha256 = await sha256BlobHex(file, controller.signal);
+      const saved = await api.uploadWorkspaceFile(action.projectId, destination, file,
+        Boolean(existing), controller.signal, existing?.sha256, expectedContentSha256,
+        action.expectedDirectoryIdentity);
+      const observed = await api.getWorkspaceEntryState(action.projectId, destination);
+      if (activeImageProject.current !== action.projectId || observed.kind !== "file"
+          || saved.path !== destination || saved.size !== file.size || saved.sha256 !== expectedContentSha256
+          || observed.size !== file.size || observed.sha256 !== expectedContentSha256) {
+        throw new Error("Core did not confirm the exact file bytes. Inspect Files before retrying.");
+      }
+      setPendingWorkspaceUpload(undefined);
+      setMessages((current) => [...current, {role: "assistant",
+        content: `${saved.overwritten ? "Replaced" : "Uploaded"} /workspace/${destination} in Core (${file.size} bytes, SHA-256 ${expectedContentSha256}).`}]);
+    } catch (caught) {
+      void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.workspace_upload_failed",
+        message: "Butler could not confirm the workspace file upload.", outcome: "failure",
+        stage: "workspace-upload", retryable: true, exception: caught});
+      setPendingWorkspaceUpload(undefined);
+      setError(controller.signal.aborted
+        ? "Upload cancelled. Inspect Files before choosing it again; Core may already have saved the file."
+        : caught instanceof Error && caught.message.startsWith("The ") ? caught.message
+        : "Core did not confirm the file upload. Inspect Files before choosing it again; it may already have been saved.");
+    } finally {
+      if (workspaceUploadAbort.current === controller) workspaceUploadAbort.current = undefined;
+      setUploadingWorkspace(false);
+    }
+  };
+
   const applyLibraryAction = async (action: Extract<SettingClientAction, {kind: "library_download" | "library_reindex" | "library_remove"}>): Promise<string> => {
     if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
       throw new Error("Reconnect to Core and select the original project before changing the shared Library.");
@@ -1061,6 +1193,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "chat_export") return applyChatExport(action);
     if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
     if (action.kind === "workspace_download") return applyWorkspaceDownload(action);
+    if (action.kind === "workspace_upload") return applyWorkspaceUpload(action);
+    if (action.kind === "workspace_delete_directory") return applyWorkspaceDeleteDirectory(action);
     if (action.kind === "project_create" || action.kind === "project_rename" || action.kind === "project_archive"
       || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
@@ -1670,6 +1804,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <div className={styles.libraryHandoffActions}>
         <button className="button quiet" type="button" disabled={uploadingLibrary || coreState !== "online"} onClick={() => libraryInput.current?.click()}><Upload size={16} aria-hidden="true" />{uploadingLibrary ? "Adding…" : "Choose file"}</button>
         <button className="button quiet" type="button" disabled={uploadingLibrary} onClick={() => { setPendingLibraryAdd(undefined); setMessages((current) => [...current, {role: "assistant", content: "No file was added to the shared Library."}]); }}>Cancel</button>
+      </div>
+    </section>}
+    {pendingWorkspaceUpload && pendingWorkspaceUpload.projectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Upload to project workspace">
+      <div><strong>Upload to project workspace</strong><small>Choose a file on this device for /workspace/{pendingWorkspaceUpload.directory}. Core will confirm the saved bytes.</small></div>
+      <input ref={workspaceInput} type="file" hidden aria-label="Choose project workspace file" onChange={(event) => void uploadWorkspaceFile(event)} />
+      <div className={styles.libraryHandoffActions}>
+        <button className="button quiet" type="button" disabled={uploadingWorkspace || coreState !== "online"} onClick={() => workspaceInput.current?.click()}><Upload size={16} aria-hidden="true" />{uploadingWorkspace ? "Uploading…" : "Choose file"}</button>
+        <button className="button quiet" type="button" onClick={() => {
+          if (uploadingWorkspace) workspaceUploadAbort.current?.abort();
+          else {setPendingWorkspaceUpload(undefined); setMessages((current) => [...current, {role: "assistant", content: "No workspace file was selected or uploaded."}]);}
+        }}>{uploadingWorkspace ? "Cancel upload" : "Cancel"}</button>
       </div>
     </section>}
     {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}

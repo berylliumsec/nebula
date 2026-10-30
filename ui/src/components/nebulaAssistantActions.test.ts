@@ -146,6 +146,31 @@ describe("settings assistant actions", () => {
       path: "notes/research.txt", expectedSha256: hash});
   });
 
+  it("accepts only scoped device uploads and empty-folder deletion receipts", () => {
+    const identity = "a".repeat(64);
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "folder-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.workspace.upload_from_device", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "workspace_upload", project_id: "selected",
+          directory: "captures", expected_directory_identity: identity}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "workspace_upload", projectId: "selected",
+      directory: "captures", expectedDirectoryIdentity: identity});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_upload", project_id: "selected", directory: "../escape", expected_directory_identity: identity,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_upload", project_id: "selected", directory: "captures", expected_directory_identity: "bad",
+    }}}, "selected")).toBeUndefined();
+    const deletion = {...event, receipt: {...event.receipt, butler_operation: "nebula.workspace.delete_directory",
+      client_action: {kind: "workspace_delete_directory", project_id: "selected", path: "captures",
+        expected_entry_identity: identity}}} as ChatStreamEvent;
+    expect(settingClientAction(deletion, "selected")).toEqual({kind: "workspace_delete_directory",
+      projectId: "selected", path: "captures", expectedEntryIdentity: identity});
+  });
+
   it("accepts only exact shared Library actions for the requesting project", () => {
     const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const event: ChatStreamEvent = {

@@ -3526,6 +3526,15 @@ export interface WorkspaceEntry {
   modifiedAt: string;
 }
 
+export interface WorkspaceEntryState {
+  engagementId: Identifier;
+  path: string;
+  kind: "file" | "directory";
+  size: number;
+  sha256?: string;
+  entryIdentity?: string;
+}
+
 export interface WorkspaceListing {
   engagementId: Identifier;
   path: string;

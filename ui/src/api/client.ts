@@ -178,6 +178,7 @@ import type {
   ToolOutputReadResult,
   ToolOutputSearchResult,
   WorkspaceListing,
+  WorkspaceEntryState,
   WorkspacePreview,
   WorkspaceResetResult,
   WorkspaceResetStatus,
@@ -9333,10 +9334,14 @@ export class ApiClient {
     overwrite = false,
     signal?: AbortSignal,
     expectedSha256?: string,
+    expectedContentSha256?: string,
+    expectedParentIdentity?: string,
   ): Promise<WorkspaceUploadResult> {
     const headers = new Headers({ "Content-Type": "application/octet-stream" });
     this.authorizeHeaders(headers, "PUT");
     if (expectedSha256) headers.set("If-Match", expectedSha256);
+    if (expectedContentSha256) headers.set("X-Content-SHA256", expectedContentSha256);
+    if (expectedParentIdentity) headers.set("X-Parent-Identity", expectedParentIdentity);
     const parameters = new URLSearchParams({
       path,
       overwrite: String(overwrite),
@@ -9388,10 +9393,12 @@ export class ApiClient {
     engagementId: string,
     path: string,
     newName: string,
+    expectedEntryIdentity?: string,
   ): Promise<{ path: string; previousPath?: string }> {
     return this.request<{ path: string; previous_path?: string | null }>(
       `engagements/${encodeURIComponent(engagementId)}/workspace/entry`,
-      { method: "PATCH", body: JSON.stringify({ path, new_name: newName }) },
+      { method: "PATCH", body: JSON.stringify({ path, new_name: newName,
+        ...(expectedEntryIdentity ? {expected_entry_identity: expectedEntryIdentity} : {}) }) },
     ).then((value) => ({ path: value.path, previousPath: value.previous_path ?? undefined }));
   }
 
@@ -9399,10 +9406,31 @@ export class ApiClient {
     engagementId: string,
     path: string,
     expectedSha256?: string,
+    expectedEntryIdentity?: string,
   ): Promise<{ path: string }> {
     return this.request<{ path: string }>(
       `engagements/${encodeURIComponent(engagementId)}/workspace/entry?path=${encodeURIComponent(path)}`,
-      { method: "DELETE", headers: expectedSha256 ? {"If-Match": expectedSha256} : undefined },
+      { method: "DELETE", headers: {
+        ...(expectedSha256 ? {"If-Match": expectedSha256} : {}),
+        ...(expectedEntryIdentity ? {"If-Entry-Identity": expectedEntryIdentity} : {}),
+      } },
+    );
+  }
+
+  getWorkspaceEntryState(engagementId: string, path: string): Promise<WorkspaceEntryState> {
+    return this.request<{
+      engagement_id: string; path: string; kind: "file" | "directory";
+      size: number; sha256?: string | null; entry_identity?: string | null;
+    }>(`engagements/${encodeURIComponent(engagementId)}/workspace/entry?path=${encodeURIComponent(path)}`)
+      .then((value) => ({engagementId: value.engagement_id, path: value.path,
+        kind: value.kind, size: value.size, sha256: value.sha256 ?? undefined,
+        entryIdentity: value.entry_identity ?? undefined}));
+  }
+
+  createWorkspaceDirectory(engagementId: string, path: string, expectedParentIdentity: string): Promise<{path: string}> {
+    return this.request<{path: string}>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/directory`,
+      {method: "POST", body: JSON.stringify({path, expected_parent_identity: expectedParentIdentity})},
     );
   }
 
