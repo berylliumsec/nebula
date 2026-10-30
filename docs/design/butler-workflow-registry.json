@@ -289,22 +289,42 @@
     },
     {
       "id": "workspace.device_and_directory",
-      "entry_point": "Files or Code: choose a local binary file, change directories or linked host folder, or control a terminal",
+      "entry_point": "Butler and Files: choose a device file for the selected project, create or rename a folder, or delete an empty folder",
       "ui_calls": [
         "ui/src/components/WorkspacePanel.tsx::uploadWorkspaceFile",
         "ui/src/components/WorkspacePanel.tsx::renameWorkspaceEntry",
         "ui/src/components/WorkspacePanel.tsx::deleteWorkspaceEntry",
-        "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile"
+        "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile",
+        "ui/src/components/NebulaControlAssistant.tsx::getWorkspaceEntryState",
+        "ui/src/components/NebulaControlAssistant.tsx::uploadWorkspaceFile",
+        "ui/src/components/NebulaControlAssistant.tsx::deleteWorkspaceEntry"
       ],
-      "core_owner": "WorkspaceService, browser file picker, linked-folder policy and terminal session",
+      "core_owner": "WorkspaceService and requesting browser file picker",
+      "butler": {
+        "discover": "nebula.navigate.open and nebula.workspace.list",
+        "read": "nebula.workspace.list returns the current directory identity",
+        "change": "nebula.workspace.upload_from_device, nebula.workspace.create_directory, nebula.workspace.rename_directory, nebula.workspace.delete_directory"
+      },
+      "authority": "Selected project, contained path, current directory identity, full-file digest for overwrite, browser-owned file bytes and destructive confirmation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages a workspace text file on production LAN Core",
+      "result": "Core returns exact saved file size and SHA-256 after browser upload, folder paths after create or rename, and 404 after confirmed empty deletion",
+      "status": "supported"
+    },
+    {
+      "id": "workspace.linked_folder_and_terminal",
+      "entry_point": "Project setup or Workbench: link a host folder and manage terminal sessions",
+      "ui_calls": [
+        "ui/src/components/ContainerTerminalPanel.tsx::terminalCommandHistoryStatus"
+      ],
+      "core_owner": "Project linked-host-folder policy and terminal session service",
       "butler": {
         "discover": "nebula.navigate.open",
-        "read": "nebula.workspace.list for visible entries",
-        "change": "missing: typed binary upload, directory mutation, linked-folder selection and terminal lifecycle controls"
+        "read": "nebula.workspace.list shows selected workspace entries only",
+        "change": "missing: linked host folder selection and terminal lifecycle controls"
       },
-      "authority": "Selected project plus device or host consent, path containment, exact revision and observed session or file result",
-      "observed_result_test": "missing: Butler device upload, directory, linked-folder and terminal LAN journeys",
-      "result": "The browser or host selects local files and linked folders; Core must report saved bytes, paths and terminal state",
+      "authority": "Host folder consent and exact terminal session identity with Core read-back",
+      "observed_result_test": "missing: Butler linked-folder and terminal LAN journey",
+      "result": "Core and Workbench must agree on selected folder and live terminal state",
       "status": "gap"
     },
     {
@@ -1093,7 +1113,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::deleteWorkspaceEntry",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::downloadWorkspaceFile",
@@ -1142,6 +1162,10 @@
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
       "count": 5
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getWorkspaceEntryState",
+      "count": 7
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listChatMessages",
@@ -1193,6 +1217,10 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::uploadChatImage",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::uploadWorkspaceFile",
       "count": 1
     },
     {

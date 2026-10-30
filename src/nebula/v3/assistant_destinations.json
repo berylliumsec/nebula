@@ -15,7 +15,7 @@
   {"id":"browser","label":"Browser","path":"/projects/{project_id}/workbench?view=browser","aliases":["browser","web browser","project browser"]},
   {"id":"missions","label":"Missions","path":"/projects/{project_id}/workbench?view=missions","aliases":["missions","agents","agent missions"]},
   {"id":"activity","label":"Activity","path":"/projects/{project_id}/workbench?view=activity","aliases":["activity","activity log","execution history"]},
-  {"id":"files","label":"Files","path":"/projects/{project_id}/workbench?view=workspace","aliases":["files","workspace files","file browser"]},
+  {"id":"files","label":"Files","path":"/projects/{project_id}/workbench?view=workspace","aliases":["files","workspace files","file browser","upload a workspace file","create a workspace folder","rename a workspace folder","delete an empty workspace folder"],"guide":"Open the selected project's Files view to browse folders and verify saved entries. Butler can list exact directories, create or rename folders with current directory identities, request empty-folder deletion with confirmation, and ask this browser to choose a file for an authenticated upload. Device file bytes are never sent through Butler's tool result."},
   {"id":"notebook","label":"Notebook","path":"/projects/{project_id}/workbench?view=notebook","aliases":["notebook","project notebook","python notebook","notebook cells","run notebook cell","edit notebook cell","interrupt notebook run","recent notebook runs"]},
   {"id":"notes","label":"Notes","path":"/projects/{project_id}/workbench?view=notes","aliases":["notes","project notes"]},
   {"id":"library","label":"Library","path":"/library","aliases":["library","shared library","documents library"]},

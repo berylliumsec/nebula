@@ -183,8 +183,16 @@ from a current read before replacing, renaming, or deleting a regular file.
 | Download | Only the requesting browser receives file bytes and starts the local download; a changed or wrong-project target fails before the browser reports success | Core download and browser device | Component and production LAN browser |
 | Refresh and retry | Files and Code show the Core result after reload; an uncertain write is reconciled by reading the exact path and hash before another attempt | Workspace file, URL, browser state | Real-Core browser |
 
-Binary upload still requires the device file picker. Directory mutation, terminal
-lifecycle, and linked host folder selection require separate controls and evidence.
+For device files, Butler issues a scoped pending action for one listed directory.
+The browser checks its current opaque identity, selects and incrementally hashes
+one local file, confirms an overwrite against the current destination SHA-256,
+and sends the content hash and directory identity with the upload. Core returns
+the exact saved file state before Butler reports success. Cancellation and
+uncertain responses require inspecting Files before retrying. Folder creation,
+rename and empty-folder deletion use current directory identities; deletion
+also uses Files' confirmation and a Core 404 read-back. A folder with children
+cannot be removed through this action. Terminal lifecycle and linked host folder
+selection require separate controls and evidence.
 Streaming and fork do not apply to one file operation. A browser download event
 proves the transfer started, not the operating system's final save location.
 
@@ -196,6 +204,18 @@ cancelled one deletion, confirmed another, and restored Butler's result after
 refresh. Physical Safari and the operating system's final save location were
 not observed. The file-hash check is a Core precondition before mutation;
 external terminal writes are outside the workspace API's serialization.
+
+The subsequent device-upload and folder extension passed the cumulative 61
+selected Python and 98 frontend cases, Ruff, mypy, the production UI build,
+the workflow registry guard, and product-help source-digest verification. Its
+expanded workspace journey passed 8/8 paired, authenticated non-loopback LAN
+profiles: desktop Chromium at 1440/1024 px, Android Chromium at 320/390/430 px,
+and iPhone WebKit emulation at 320/390/430 px. The browser cancelled a device
+file choice without a Core change, then uploaded synthetic binary bytes through
+its picker; Core returned the same size and SHA-256 by entry-state and download
+read-back. Folder create, rename, cancelled delete, confirmed empty delete and
+refresh agreed with Core. The model received metadata and a browser handoff,
+not the binary payload. Physical Safari and a live Core rollout were not run.
 
 ## Control contracts and remaining work to reach the product goal
 
@@ -303,11 +323,11 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 26
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 27
 reviewed actions, including explicit export, workspace, Notebook, Library, and
-storage dispositions. Its source inventory contains 505 distinct `api` call
-signatures in production UI TypeScript, of which 55 are linked to those
-reviewed actions; 450 still require action-level review. The new Workbench bulk
+storage dispositions. Its source inventory contains 507 distinct `api` call
+signatures in production UI TypeScript, of which 58 are linked to those
+reviewed actions; 449 still require action-level review. The new Workbench bulk
 chat calls map to the existing per-chat archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
 calls are keyed by route expression and HTTP verb. The guard fails when a call

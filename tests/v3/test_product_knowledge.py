@@ -306,10 +306,21 @@ def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     matches = search_product_knowledge(
         "How can Butler edit and download a project workspace file?"
     )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.workspace.list" in text
+    assert "nebula.workspace.download_file" in text
+    assert "file picker" in text
+
+
+def test_product_search_finds_butler_device_upload_and_folder_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler upload a binary workspace file and create or delete a folder?"
+    )
     assert any(
-        "nebula.workspace.list" in str(item["text"])
-        and "nebula.workspace.download_file" in str(item["text"])
-        and "file picker" in str(item["text"])
+        "nebula.workspace.upload_from_device" in str(item["text"])
+        and "nebula.workspace.create_directory" in str(item["text"])
+        and "directory identities" in str(item["text"])
         for item in matches
     )
 
