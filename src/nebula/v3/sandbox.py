@@ -2299,7 +2299,8 @@ class ContainerSandboxRunner(SandboxRunner):
             if cleanup is not None and cleanup.returncode is None:
                 try:
                     cleanup.kill()
-                except ProcessLookupError:  # diagnostic-expected: cleanup exited after the return-code check.
+                except ProcessLookupError:
+                    # diagnostic-expected: cleanup exited between check and kill.
                     pass
                 await cleanup.wait()
             if not require_removed:
