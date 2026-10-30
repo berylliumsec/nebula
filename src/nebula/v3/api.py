@@ -198,6 +198,7 @@ from .conditional_reads import conditional, content_etag, revision_etag
 from .container_terminal import (
     ContainerTerminalCapacity,
     ContainerTerminalCapabilities,
+    ContainerTerminalCloseRequest,
     ContainerTerminalError,
     ContainerTerminalExit,
     ContainerTerminalOutput,
@@ -207,6 +208,7 @@ from .container_terminal import (
     ContainerTerminalRecoveryListResponse,
     ContainerTerminalRecoveryResponse,
     ContainerTerminalService,
+    ContainerTerminalSessionList,
     ContainerTerminalStartRequest,
     ContainerTerminalStartResponse,
     MAX_TERMINAL_INPUT_BYTES,
@@ -2742,11 +2744,15 @@ def create_app(
         tool_platform.bind_butler_memory(butler_memory_service)
         if workspaces is not None:
             tool_platform.bind_workspace_service(workspaces)
+        if container_terminals is not None:
+            tool_platform.bind_container_terminal_service(container_terminals)
     harness_runtime.bind_settings_assistant_api(settings_assistant_api)
     harness_runtime.bind_control_assistant_work(control_assistant_work)
     harness_runtime.bind_butler_memory(butler_memory_service)
     if workspaces is not None:
         harness_runtime.bind_workspace_service(workspaces)
+    if container_terminals is not None:
+        harness_runtime.bind_container_terminal_service(container_terminals)
     app.state.store = store
     app.state.butler_oversight = butler_oversight
     app.state.butler_authority = butler_authority
@@ -5414,6 +5420,39 @@ def create_app(
             store.get(Engagement, engagement_id)
             return ContainerTerminalRecoveryListResponse()
         return await container_terminals.recover_all(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminals",
+        response_model=ContainerTerminalSessionList,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_project_container_terminals(
+        engagement_id: str,
+        response: Response,
+    ) -> ContainerTerminalSessionList:
+        response.headers["Cache-Control"] = "private, no-store"
+        if container_terminals is None:
+            store.get(Engagement, engagement_id)
+            return ContainerTerminalSessionList(engagement_id=engagement_id)
+        return await container_terminals.list_sessions(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminals/{{session_id}}/close",
+        response_model=ContainerTerminalSessionList,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def close_project_container_terminal(
+        engagement_id: str,
+        session_id: str,
+        request: ContainerTerminalCloseRequest,
+        response: Response,
+    ) -> ContainerTerminalSessionList:
+        response.headers["Cache-Control"] = "private, no-store"
+        return await require_container_terminal_service().close_project_session(
+            engagement_id, session_id, request.expected_created_at
+        )
 
     @app.delete(
         f"{API_PREFIX}/container-terminals/{{session_id}}",
