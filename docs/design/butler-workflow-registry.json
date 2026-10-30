@@ -301,21 +301,40 @@
       "status": "gap"
     },
     {
-      "id": "resources.library",
-      "entry_point": "Shared Library: add a local file or download an original artifact",
+      "id": "library.add",
+      "entry_point": "Shared Library: add a local file from the requesting device",
       "ui_calls": [
         "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem"
       ],
-      "core_owner": "Global Core Library and artifact store; requesting browser owns the file picker and download",
+      "core_owner": "Global Core Library and artifact store; requesting browser owns the file picker",
       "butler": {
         "discover": "nebula.navigate.open and nebula.library.list",
-        "read": "nebula.library.detail returns bounded metadata",
-        "change": "missing: browser-owned upload and original-file download handoffs"
+        "read": "nebula.library.list",
+        "change": "nebula.library.add"
       },
-      "authority": "Global Library identity and revision; local file selection and download stay on the requesting device",
-      "observed_result_test": "missing: Butler upload and download LAN lifecycle regression",
-      "result": "New item or local download must be observed without returning original file bytes through the Butler control action",
-      "status": "gap"
+      "authority": "Interactive Butler and requesting-browser file selection and global-impact confirmation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core",
+      "result": "Core saves a ready item and the refreshed Library lists it; the control action carries no file bytes",
+      "status": "supported"
+    },
+    {
+      "id": "library.download",
+      "entry_point": "Shared Library: download one original artifact to the requesting device",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getLibraryItem",
+        "ui/src/components/NebulaControlAssistant.tsx::getArtifactContent",
+        "ui/src/pages/LibraryPage.tsx::getArtifactContent"
+      ],
+      "core_owner": "Global Core Library item and immutable artifact store; requesting browser owns download",
+      "butler": {
+        "discover": "nebula.library.list",
+        "read": "nebula.library.detail",
+        "change": "nebula.library.download"
+      },
+      "authority": "Interactive Butler, exact item revision, browser confirmation and stable Core read-back",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core",
+      "result": "The requesting browser downloads original bytes; Butler sees only a short outcome",
+      "status": "supported"
     },
     {
       "id": "library.reindex",
@@ -331,7 +350,7 @@
         "change": "nebula.library.reindex"
       },
       "authority": "Interactive Butler, requesting-browser confirmation, exact item revision and Core read-back",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core",
       "result": "Core reports ready at a new revision and Library refresh shows the item",
       "status": "supported"
     },
@@ -349,7 +368,7 @@
         "change": "nebula.library.remove"
       },
       "authority": "Interactive Butler, global-impact browser confirmation, exact item revision and Core 404 read-back",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reindexes and removes one shared Library item on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core",
       "result": "Item is absent from Core and refreshed Library; original artifact remains",
       "status": "supported"
     },
@@ -987,6 +1006,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getArtifactContent",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy",
       "count": 2
     },
@@ -1012,7 +1035,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getLibraryItem",
-      "count": 4
+      "count": 6
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getOrCreateControlAssistantSession",
@@ -1032,6 +1055,10 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listEngagements",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::listLibraryItems",
       "count": 1
     },
     {

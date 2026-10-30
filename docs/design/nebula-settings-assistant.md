@@ -43,6 +43,7 @@ Settings assistant and the complete destination catalog.
 | Edit a saved conversation message | Interactive Butler can page active message previews with `nebula.work.chat_messages`, then use `nebula.work.rewind_chat` with the selected user message ID and current chat revision after an explicit request. Core retracts that message and later replies in the same chat and reports the saved revision. A replacement is a separate `nebula.work.message_chat` action; Butler must verify that turn separately. Scheduled Butler cannot rewind. The Workbench edit control uses the same Core retraction path | Core transcript, chat revision and harness replay; URL selects the chat | Core API, Butler tool and real Core browser |
 | Export a saved conversation | Interactive Butler discovers `nebula.chats.export` for one listed main chat and passes its current revision. The requesting browser confirms sensitive transcript content, rereads the chat, fetches the complete active transcript through authenticated Core, verifies that the revision stayed stable, and starts a Markdown download using the chat menu's formatter. Butler receives only a short outcome, never the transcript bytes. Cancellation starts no download; scheduled Butler has no device export action | Core chat and messages; requesting browser owns confirmation and local download | Butler tool, component and production LAN browser |
 | Edit a project Notebook | Interactive Butler can open the Notebook destination and discover typed `nebula.notebook.*` actions. It pages project paths and cell previews, reads exact source, then creates or edits with a current document revision or cell source hash. Core checks the live Notebook grant and project path before each call. A saved edit is reported after Core read-back; a stale hash preserves the existing cell. Butler can inspect existing run events and look up packages under Host consent and project network policy; execution, interruption, restart and package installation await separate acceptance | Core Notebook grant, workspace file, cell hashes and run store; URL selects the Workbench view | Butler tool, Core API and real Core browser for editing; run and package acceptance pending |
+| Add or download a shared Library file | Interactive Butler discovers `nebula.library.add` or selects an exact item and revision before `nebula.library.download`. The requesting browser owns its file picker or sensitive-download confirmation. It sends file bytes directly to authenticated Core, reads the new item back from Core, or checks that the original item stayed at the selected revision before starting a local download. The control tool returns no original file bytes. A cancelled choice has no effect, and an uncertain upload requires Library inspection before retrying | Core global Library and artifact store; requesting browser owns local file selection and download | Butler tool, component and production LAN browser |
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
@@ -233,15 +234,21 @@ The model receives no complete transcript. A cancelled or stale handoff is not
 a saved file, and a browser download start does not establish the device's
 final save location.
 For shared Library items, interactive Butler can page bounded metadata and
-read one item's current revision. Reindex and remove are exact browser
+read one item's current revision. Add uses a picker and global-impact
+confirmation on the requesting browser, followed by Core detail and list
+read-back. An uncertain upload response is not a success receipt: inspect the
+shared Library before selecting the file again. Download uses exact item and
+revision checks before and after Core artifact retrieval, then starts a local
+browser download. The model receives no original file bytes through these
+control actions. Reindex and remove are exact browser
 handoffs: the requesting browser rereads the item, names the global impact in
 a confirmation, checks the revision again, sends a revision-guarded request,
 and reads Core's saved result before reporting success. Cancel leaves the item
 unchanged. The control action returns metadata only; the browser owns original
 file transfer. If Butler's Knowledge setting is enabled, Core may separately
 retrieve bounded Library excerpts into the model context as reference data.
-Scheduled Butler has no shared Library mutation action. Upload
-and download require separate browser-owned acceptance.
+Scheduled Butler has no shared Library mutation action. The operating system
+owns the final download save location.
 The existing Settings controls remain available. Browser and notes mutation
 tools are separate future work; this slice does not grant them.
 The packaged app destination list covers the All projects page, the selected
