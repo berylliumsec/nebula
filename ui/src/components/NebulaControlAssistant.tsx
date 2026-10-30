@@ -1,10 +1,11 @@
-import { memo, useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { ChevronDown, GripHorizontal, Image, Minimize2, Send, Settings2, Square, X } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { ChevronDown, GripHorizontal, Image, Minimize2, Send, Settings2, Square, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import { ApiError } from "../api/client";
+import { ACCEPTED_LIBRARY_FILES, encodeLibraryFile, MAX_LIBRARY_ITEM_BYTES, startLibraryArtifactDownload } from "../api/libraryFiles";
 import { isNebulaShell } from "../hooks/useCompactLayout";
 import { startVisiblePoll } from "../api/visiblePoll";
 import { logDiagnostic } from "../diagnostics";
@@ -77,7 +78,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, retryResource } = useWorkspace();
+  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, ingestLibraryItem, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -91,6 +92,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [draft, setDraft] = useState("");
   const [pendingImages, setPendingImages] = useState<ChatContentBlock[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [pendingLibraryAdd, setPendingLibraryAdd] = useState<Extract<SettingClientAction, {kind: "library_add"}>>();
+  const [uploadingLibrary, setUploadingLibrary] = useState(false);
   const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -131,6 +134,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const historyRead = useRef(0);
   const input = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
+  const libraryInput = useRef<HTMLInputElement>(null);
   const activeImageProject = useRef(engagement?.id);
   activeImageProject.current = engagement?.id;
   const panel = useRef<HTMLDivElement>(null);
@@ -229,6 +233,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     lastScroll.current = { visible: false, messages: [], attentionCount: 0, loadingHistory: false };
     setPendingImages([]);
     setUploadingImage(false);
+    setPendingLibraryAdd(undefined);
+    setUploadingLibrary(false);
     setImageHelp(false);
     setPendingTurn(undefined);
     setPendingCheckedSessionId(undefined);
@@ -864,7 +870,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `Started a Markdown transcript download for ${observed.title} on this device (${messages.length} saved messages).`;
   };
 
-  const applyLibraryAction = async (action: Extract<SettingClientAction, {kind: "library_reindex" | "library_remove"}>): Promise<string> => {
+  const applyLibraryAction = async (action: Extract<SettingClientAction, {kind: "library_download" | "library_reindex" | "library_remove"}>): Promise<string> => {
     if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
       throw new Error("Reconnect to Core and select the original project before changing the shared Library.");
     }
@@ -873,20 +879,39 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       throw new Error("The shared Library item changed. Ask Butler to read it again before acting.");
     }
     const removing = action.kind === "library_remove";
-    if (!removing && !current.artifactId) throw new Error("This Library item has no original file to reindex.");
+    const downloading = action.kind === "library_download";
+    if ((downloading || !removing) && !current.artifactId) throw new Error("This Library item has no original file for this action.");
     const approved = await confirm({
-      title: `${removing ? "Remove" : "Reindex"} ${current.name}?`,
-      message: removing
+      title: `${removing ? "Remove" : downloading ? "Download" : "Reindex"} ${current.name}?`,
+      message: downloading
+        ? "The original file may contain sensitive data. It will download to this device; Butler will not receive its bytes."
+        : removing
         ? "This removes the item from the Library shared by every project. The original artifact remains stored. This change cannot be undone from Butler."
         : "This rebuilds the Library item from its original artifact and changes retrieval for every project.",
-      confirmLabel: removing ? "Remove shared item" : "Reindex shared item",
+      confirmLabel: removing ? "Remove shared item" : downloading ? "Download original" : "Reindex shared item",
       ...(removing ? {tone: "danger" as const} : {}),
     });
-    if (!approved) return `${current.name} was not ${removing ? "removed" : "reindexed"}. No change was saved.`;
+    if (!approved) return downloading
+      ? `${current.name} was not downloaded. No file transfer started.`
+      : `${current.name} was not ${removing ? "removed" : "reindexed"}. No change was saved.`;
     if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to read the Library item again.");
     const before = await api.getLibraryItem(action.itemId);
     if (before.revision !== action.expectedRevision || before.name !== action.name) {
       throw new Error("The shared Library item changed during confirmation. Ask Butler to read it again.");
+    }
+    if (downloading) {
+      if (!before.artifactId) throw new Error("This Library item no longer has an original file. Ask Butler to read it again.");
+      const blob = await api.getArtifactContent(before.artifactId);
+      const observed = await api.getLibraryItem(action.itemId);
+      if (activeImageProject.current !== action.projectId || observed.revision !== action.expectedRevision
+          || observed.artifactId !== before.artifactId) {
+        throw new Error("The shared Library item changed during download. Ask Butler to read it again.");
+      }
+      if (observed.metadata.size !== undefined && blob.size !== observed.metadata.size) {
+        throw new Error("The downloaded file size did not match Core's Library record. Inspect the item before retrying.");
+      }
+      startLibraryArtifactDownload(blob, observed.metadata.filename || observed.name);
+      return `Started a download of ${observed.name}'s original file on this device.`;
     }
     if (removing) {
       try {
@@ -918,8 +943,76 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return `Reindexed ${observed.name} in Core's shared Library at revision ${observed.revision}.`;
   };
 
+  const applyLibraryAdd = async (action: Extract<SettingClientAction, {kind: "library_add"}>): Promise<string> => {
+    if (!api || coreState !== "online" || !engagement || engagement.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before adding to the shared Library.");
+    }
+    setPendingLibraryAdd(action);
+    setView("chat");
+    return "Choose a file on this device in Butler's Library control. Core will make a confirmed item available to every project.";
+  };
+
+  const uploadLibraryFile = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    const request = pendingLibraryAdd;
+    if (!file || !request) return;
+    if (file.size > MAX_LIBRARY_ITEM_BYTES) {
+      setError(`${file.name} is larger than the 20 MB Library limit. Choose a smaller file.`);
+      return;
+    }
+    if (!api || coreState !== "online" || activeImageProject.current !== request.projectId) {
+      setPendingLibraryAdd(undefined);
+      setError("Reconnect to Core and select the original project before adding a Library file.");
+      return;
+    }
+    const approved = await confirm({
+      title: `Add ${file.name} to the shared Library?`,
+      message: "This device will send the file to Core. It becomes available for retrieval from every project. Butler will not receive the file bytes through this control action.",
+      confirmLabel: "Add shared file",
+    });
+    if (!approved) {
+      setPendingLibraryAdd(undefined);
+      setMessages((current) => [...current, {role: "assistant", content: `${file.name} was not added to the shared Library.`}]);
+      return;
+    }
+    if (activeImageProject.current !== request.projectId) {
+      setPendingLibraryAdd(undefined);
+      setError("The selected project changed. Ask Butler to add the file again from the original project.");
+      return;
+    }
+    setUploadingLibrary(true);
+    setError("");
+    try {
+      const created = await ingestLibraryItem({
+        filename: file.name,
+        mediaType: file.type || undefined,
+        contentBase64: encodeLibraryFile(await file.arrayBuffer()),
+      });
+      const observed = await api.getLibraryItem(created.id);
+      const listed = await api.listLibraryItems();
+      if (observed.id !== created.id || observed.revision < created.revision
+          || !listed.items.some((item) => item.id === created.id)) {
+        throw new Error("Core did not confirm the new Library item in its current list.");
+      }
+      await retryResource("library");
+      setPendingLibraryAdd(undefined);
+      if (activeImageProject.current === request.projectId) {
+        setMessages((current) => [...current, {role: "assistant", content: observed.status === "ready"
+          ? `Added ${observed.name} to Core's shared Library. It is available to every project.`
+          : `Core saved ${observed.name}, but its index is ${observed.status}. Inspect it in Library and reindex when ready.`}]);
+      }
+    } catch (caught) {
+      void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.library_add_failed", message: "Butler could not confirm the shared Library upload.", outcome: "failure", stage: "library-upload", retryable: true, exception: caught});
+      setError("Core did not confirm the upload. Inspect the shared Library before choosing the file again; it may already have been saved.");
+    } finally {
+      setUploadingLibrary(false);
+    }
+  };
+
   const applyClientAction = async (action: SettingClientAction): Promise<string> => {
-    if (action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
+    if (action.kind === "library_add") return applyLibraryAdd(action);
+    if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "chat_export") return applyChatExport(action);
     if (action.kind === "project_create" || action.kind === "project_rename" || action.kind === "project_archive"
       || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
@@ -1524,6 +1617,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     </section>}
     {pendingImages.length > 0 && <div className={styles.imageTray} role="list" aria-label="Butler image attachments">{pendingImages.map((block, index) => <div className={styles.imageItem} role="listitem" key={`${block.artifactId}-${index}`}>{api && <AuthenticatedChatImage api={api} block={block} className={styles.attachedImage} />}<span title={block.alt}>{block.alt}</span><button className="icon-button subtle" type="button" aria-label={`Remove ${block.alt ?? "image"}`} disabled={activeBusy} onClick={() => setPendingImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}><X size={16} /></button></div>)}</div>}
     {uploadingImage && <p className={styles.imageStatus} role="status">Attaching image…</p>}
+    {pendingLibraryAdd?.projectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Add to shared Library">
+      <div><strong>Add to shared Library</strong><small>Choose a file from this device. Core will make it available to every project after confirmation.</small></div>
+      <input ref={libraryInput} type="file" hidden accept={ACCEPTED_LIBRARY_FILES} aria-label="Choose shared Library file" onChange={(event) => void uploadLibraryFile(event)} />
+      <div className={styles.libraryHandoffActions}>
+        <button className="button quiet" type="button" disabled={uploadingLibrary || coreState !== "online"} onClick={() => libraryInput.current?.click()}><Upload size={16} aria-hidden="true" />{uploadingLibrary ? "Adding…" : "Choose file"}</button>
+        <button className="button quiet" type="button" disabled={uploadingLibrary} onClick={() => { setPendingLibraryAdd(undefined); setMessages((current) => [...current, {role: "assistant", content: "No file was added to the shared Library."}]); }}>Cancel</button>
+      </div>
+    </section>}
     {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>
       <input ref={imageInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp" aria-label="Choose images for Butler" onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; void attachImageFiles(files); }} />

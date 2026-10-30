@@ -28,6 +28,7 @@ _CHANGE = {
     "required": ["item_id", "expected_revision"],
     "additionalProperties": False,
 }
+_ADD = {"type": "object", "properties": {}, "additionalProperties": False}
 
 
 class ButlerLibrary:
@@ -75,8 +76,8 @@ class ButlerLibrary:
             raise ValueError(
                 "Library item changed; read its current revision before acting"
             )
-        if kind == "library_reindex" and not item.artifact_id:
-            raise ValueError("Library item has no original artifact to reindex")
+        if kind in {"library_reindex", "library_download"} and not item.artifact_id:
+            raise ValueError("Library item has no original artifact for this action")
         return {
             "state": "pending_browser_apply",
             "client_action": {
@@ -94,6 +95,18 @@ class ButlerLibrary:
     def remove(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self._pending(arguments, "library_remove")
 
+    def add(self, _arguments: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "state": "pending_browser_apply",
+            "client_action": {
+                "kind": "library_add",
+                "project_id": self.project_id,
+            },
+        }
+
+    def download(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._pending(arguments, "library_download")
+
     def actions(self) -> list[AnalysisTool]:
         operations = (
             (
@@ -109,6 +122,20 @@ class ButlerLibrary:
                 _TARGET,
                 RiskClass.LOCAL_READ,
                 self.detail,
+            ),
+            (
+                "nebula.library.add",
+                "Ask the requesting browser to choose a supported local file for the Library shared by every project. Only the browser sends file bytes to Core; the model receives no file content.",
+                _ADD,
+                RiskClass.WORKSPACE_WRITE,
+                self.add,
+            ),
+            (
+                "nebula.library.download",
+                "Ask the requesting browser to confirm and download one exact shared Library item's original artifact at its current revision. No file bytes are returned to the model.",
+                _CHANGE,
+                RiskClass.WORKSPACE_WRITE,
+                self.download,
             ),
             (
                 "nebula.library.reindex",

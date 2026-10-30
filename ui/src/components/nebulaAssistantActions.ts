@@ -17,7 +17,8 @@ export type SettingClientAction =
   | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
   | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string }
   | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
-  | { kind: "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
+  | { kind: "library_add"; projectId: string }
+  | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string };
 
 export interface AssistantWorkReceipt { url: string; content: string }
 
@@ -87,7 +88,12 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
       && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1) {
     return {kind: "chat_export", projectId, sessionId: value.session_id, expectedRevision: Number(value.expected_revision)};
   }
-  const libraryKind = operation === "nebula.library.reindex" ? "library_reindex"
+  if (projectAction && operation === "nebula.library.add" && value.kind === "library_add"
+      && typeof projectId === "string" && value.project_id === projectId) {
+    return {kind: "library_add", projectId};
+  }
+  const libraryKind = operation === "nebula.library.download" ? "library_download"
+    : operation === "nebula.library.reindex" ? "library_reindex"
     : operation === "nebula.library.remove" ? "library_remove" : undefined;
   if (projectAction && libraryKind && value.kind === libraryKind
       && typeof projectId === "string" && value.project_id === projectId

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -1198,6 +1198,103 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(deleteLibraryItemAtRevision).toHaveBeenCalledWith(itemId, 4));
     await waitFor(() => expect(retryResource).toHaveBeenCalledWith("library"));
     expect(await screen.findByText("Removed Shared note from Core's shared Library. Its original artifact was retained.")).toBeVisible();
+  });
+
+  it("keeps shared Library file bytes in the requesting browser and confirms Core's saved item", async () => {
+    const user = userEvent.setup();
+    const item = {id: "9482d86e-2ddc-436b-90be-30b878f68537", name: "note.txt", revision: 1,
+      status: "ready", artifactId: "artifact", metadata: {size: 14}};
+    const ingestLibraryItem = vi.fn().mockResolvedValue(item);
+    const getLibraryItem = vi.fn().mockResolvedValue(item);
+    const listLibraryItems = vi.fn().mockResolvedValue({items: [item]});
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "add-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.add", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_add", project_id: "project"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "Choose a file on the requesting device."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, listLibraryItems},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [], ingestLibraryItem, retryResource,
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    const file = new File(["synthetic note"], "note.txt", {type: "text/plain"});
+    Object.defineProperty(file, "arrayBuffer", {value: async () => new TextEncoder().encode("synthetic note").buffer});
+    await user.type(composer, "Add a shared Library file{enter}");
+    expect(await screen.findByRole("region", {name: "Add to shared Library"})).toBeVisible();
+    expect(ingestLibraryItem).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Choose shared Library file"), {target: {files: [file]}});
+    const firstDialog = await screen.findByRole("dialog", {name: "Add note.txt to the shared Library?"});
+    await user.click(within(firstDialog).getByRole("button", {name: "Cancel"}));
+    expect(ingestLibraryItem).not.toHaveBeenCalled();
+    await user.type(composer, "Add a shared Library file{enter}");
+    await screen.findByRole("region", {name: "Add to shared Library"});
+    fireEvent.change(screen.getByLabelText("Choose shared Library file"), {target: {files: [file]}});
+    const dialog = await screen.findByRole("dialog", {name: "Add note.txt to the shared Library?"});
+    await user.click(within(dialog).getByRole("button", {name: "Add shared file"}));
+    await waitFor(() => expect(ingestLibraryItem).toHaveBeenCalledWith({
+      filename: "note.txt", mediaType: "text/plain", contentBase64: btoa("synthetic note"),
+    }));
+    expect(await screen.findByText("Added note.txt to Core's shared Library. It is available to every project.")).toBeVisible();
+    expect(getLibraryItem).toHaveBeenCalledWith(item.id);
+    expect(listLibraryItems).toHaveBeenCalled();
+    expect(retryResource).toHaveBeenCalledWith("library");
+    expect(screen.queryByRole("region", {name: "Add to shared Library"})).not.toBeInTheDocument();
+  });
+
+  it("downloads a shared Library artifact only after confirmation and stable Core readback", async () => {
+    const user = userEvent.setup();
+    const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const current = {id: itemId, name: "Shared note", revision: 4, status: "ready",
+      artifactId: "artifact", metadata: {filename: "note.txt", size: 4}};
+    const getLibraryItem = vi.fn().mockResolvedValue(current);
+    const getArtifactContent = vi.fn().mockResolvedValue(new Blob(["note"]));
+    const createObjectURL = vi.fn().mockReturnValue("blob:library-file");
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: createObjectURL});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "download-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.download", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_download", project_id: "project", item_id: itemId, expected_revision: 4, name: "Shared note"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "The browser will confirm the download."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, getArtifactContent},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", {name: "Open Butler"}));
+      const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+      await user.type(composer, "Download the shared note{enter}");
+      expect(await screen.findByRole("dialog", {name: "Download Shared note?"})).toBeVisible();
+      expect(getArtifactContent).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", {name: "Cancel"}));
+      await waitFor(() => expect(screen.getByText("Shared note was not downloaded. No file transfer started.")).toBeVisible());
+      await user.type(composer, "Download the shared note{enter}");
+      await user.click(await screen.findByRole("button", {name: "Download original"}));
+      await waitFor(() => expect(getArtifactContent).toHaveBeenCalledWith("artifact"));
+      expect(await screen.findByText("Started a download of Shared note's original file on this device.")).toBeVisible();
+      expect(getLibraryItem).toHaveBeenCalledTimes(4);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(anchorClick).toHaveBeenCalledTimes(1);
+    } finally {
+      anchorClick.mockRestore();
+    }
   });
 
   it.each([

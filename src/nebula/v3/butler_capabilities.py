@@ -67,6 +67,8 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.set_project_scope",
         "nebula.settings.headless_session",
         "nebula.chats.export",
+        "nebula.library.add",
+        "nebula.library.download",
         "nebula.library.reindex",
         "nebula.library.remove",
     }
@@ -132,7 +134,7 @@ _CATEGORIES = (
     },
     {
         "id": "library",
-        "description": "Bounded shared Library item discovery and requesting-browser reindex or removal",
+        "description": "Bounded shared Library item discovery and requesting-browser upload, download, reindex or removal",
     },
     {
         "id": "settings",

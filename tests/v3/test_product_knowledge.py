@@ -291,6 +291,15 @@ def test_product_search_finds_butler_shared_library_confirmation(monkeypatch):
         and "confirmation" in str(item["text"])
         for item in matches
     )
+    handoffs = search_product_knowledge(
+        "How does Butler add a file from my device or download the shared Library original?"
+    )
+    assert any(
+        "shared Library" in str(item["text"])
+        and "picker" in str(item["text"])
+        and "download" in str(item["text"])
+        for item in handoffs
+    )
 
 
 def test_product_search_finds_butler_effort_setting(monkeypatch):

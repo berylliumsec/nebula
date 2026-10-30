@@ -133,6 +133,14 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.reindex",
       client_action: {kind: "library_reindex", project_id: "selected", item_id: itemId, expected_revision: 5, name: "Shared note"}}}, "selected"))
       .toEqual({kind: "library_reindex", projectId: "selected", itemId, expectedRevision: 5, name: "Shared note"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.download",
+      client_action: {kind: "library_download", project_id: "selected", item_id: itemId, expected_revision: 5, name: "Shared note"}}}, "selected"))
+      .toEqual({kind: "library_download", projectId: "selected", itemId, expectedRevision: 5, name: "Shared note"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.add",
+      client_action: {kind: "library_add", project_id: "selected"}}}, "selected"))
+      .toEqual({kind: "library_add", projectId: "selected"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.add",
+      client_action: {kind: "library_add", project_id: "other"}}}, "selected")).toBeUndefined();
     expect(settingClientAction(event, "other")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.reindex"}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "library_remove", project_id: "other", item_id: itemId, expected_revision: 5, name: "Shared note"}}}, "selected")).toBeUndefined();

@@ -52,6 +52,9 @@ def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp_path)
         assert (await capabilities.describe({"operation": "nebula.library.remove"}))[
             "invoke_with"
         ] == "nebula.capabilities.change"
+        assert (await capabilities.describe({"operation": "nebula.library.add"}))[
+            "invoke_with"
+        ] == "nebula.capabilities.change"
         first = await invoke("list")
         assert len(first["items"]) == 50
         assert first["next_offset"] == 50
@@ -62,6 +65,25 @@ def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp_path)
         assert detail["revision"] == item.revision
         assert detail["scope"] == "shared across every project"
         assert "metadata" not in detail and "artifact_id" not in detail
+        add = await invoke("add", change=True)
+        assert add["client_action"] == {
+            "kind": "library_add",
+            "project_id": selected.id,
+        }
+        assert "private document bytes" not in str(add)
+        download = await invoke(
+            "download",
+            {"item_id": item.id, "expected_revision": item.revision},
+            change=True,
+        )
+        assert download["client_action"] == {
+            "kind": "library_download",
+            "project_id": selected.id,
+            "item_id": item.id,
+            "expected_revision": item.revision,
+            "name": item.name,
+        }
+        assert "artifact_id" not in str(download)
         prepared = await invoke(
             "remove",
             {"item_id": item.id, "expected_revision": item.revision},
@@ -95,6 +117,12 @@ def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp_path)
         with pytest.raises(ValueError, match="changed"):
             await invoke(
                 "reindex",
+                {"item_id": item.id, "expected_revision": item.revision},
+                change=True,
+            )
+        with pytest.raises(ValueError, match="changed"):
+            await invoke(
+                "download",
                 {"item_id": item.id, "expected_revision": item.revision},
                 change=True,
             )

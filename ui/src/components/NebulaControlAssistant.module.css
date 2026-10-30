@@ -73,6 +73,11 @@
 .attachedImage { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; }
 .transcriptImage { display: block; max-width: min(100%, 360px); max-height: 300px; object-fit: contain; border-radius: 8px; }
 .imageStatus { margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
+.libraryHandoff { display: grid; gap: 6px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
+.libraryHandoff strong, .libraryHandoff small { display: block; overflow-wrap: anywhere; }
+.libraryHandoff small { margin-top: 2px; color: var(--muted); }
+.libraryHandoffActions { display: flex; flex-wrap: wrap; gap: 6px; }
+.libraryHandoffActions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .turnStatus { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); }
 .turnStatusDot { flex: 0 0 7px; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; background: var(--blue); }
 .turnStatus[data-state="attention"] .turnStatusDot, .turnStatus[data-state="error"] .turnStatusDot { background: var(--danger, var(--text)); }
