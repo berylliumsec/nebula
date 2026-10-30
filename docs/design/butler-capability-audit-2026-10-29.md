@@ -9,7 +9,7 @@ grant to call arbitrary API routes or return credentials to a model. A device
 action still needs the requesting browser; a Core action still needs Core's
 authorization; a long-running action still needs an observed result.
 
-This is a source audit of `origin/main` at `aa797c9` and the capability registry,
+This is a source audit of `origin/main` at `b5bb47c` and the capability registry,
 not a claim that every action was exercised in a running Core. `api.py` contains
 373 HTTP route decorators across 41 tags. Route count is an inventory aid: some
 routes are internal, some are read-only, and several implement one workflow.
@@ -303,10 +303,10 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 22
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 23
 reviewed actions, including explicit export, workspace, Notebook, Library, and
-storage dispositions. Its source inventory contains 502 distinct `api` call
-signatures in production UI TypeScript, of which 41 are linked to those
+storage dispositions. Its source inventory contains 505 distinct `api` call
+signatures in production UI TypeScript, of which 44 are linked to those
 reviewed actions; 461 still require action-level review. The new Workbench bulk
 chat calls map to the existing per-chat archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`

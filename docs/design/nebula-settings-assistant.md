@@ -131,6 +131,10 @@ check-ins use stable request IDs; edits and check-ins use the current item
 revision. Butler reports the saved Core result and board link. A Work check-in
 does not run or complete an assigned assistant chat.
 
+### Project workspace files
+
+Interactive Butler uses `nebula.workspace.list` to find a selected-project file and reads its current hash before replacing or renaming text. `nebula.workspace.download_file` asks the requesting browser to verify bytes and start a local download. The browser owns the file picker for uploads; Butler does not receive a device path or choose the final save location.
+
 ### Project lifecycle
 
 Interactive Butler also discovers `nebula.projects.list` and

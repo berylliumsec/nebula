@@ -1033,6 +1033,14 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::deleteWorkspaceEntry",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::downloadWorkspaceFile",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getArtifactContent",
       "count": 1
     },
@@ -1086,6 +1094,10 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listLibraryItems",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::previewWorkspaceFile",
       "count": 1
     },
     {
