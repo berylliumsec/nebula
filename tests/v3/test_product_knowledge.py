@@ -278,6 +278,14 @@ def test_product_search_finds_butler_notebook_guidance(monkeypatch):
         and "name==version" in str(item["text"])
         for item in resources
     )
+    file_index = search_product_knowledge(
+        "Can Butler connect and remove the project's Notebook file index without seeing the host path?"
+    )
+    assert any(
+        "file_index_status" in str(item["text"])
+        and "requesting browser" in str(item["text"])
+        for item in file_index
+    )
 
 
 def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):

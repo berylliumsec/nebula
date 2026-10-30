@@ -393,18 +393,21 @@
       "ui_calls": [
         "ui/src/components/NotebookFileIndexSettings.tsx::notebookFileIndex",
         "ui/src/components/NotebookFileIndexSettings.tsx::setNotebookFileIndex",
-        "ui/src/components/NotebookFileIndexSettings.tsx::removeNotebookFileIndex"
+        "ui/src/components/NotebookFileIndexSettings.tsx::removeNotebookFileIndex",
+        "ui/src/components/NebulaControlAssistant.tsx::notebookFileIndex",
+        "ui/src/components/NebulaControlAssistant.tsx::setNotebookFileIndex",
+        "ui/src/components/NebulaControlAssistant.tsx::removeNotebookFileIndex"
       ],
-      "core_owner": "Notebook file-index service and linked host path policy",
+      "core_owner": "Notebook file-index service and selected-project repository root check",
       "butler": {
-        "discover": "nebula.navigate.open (Notebook destination)",
-        "read": "missing: bounded project file-index status and source-path discovery",
-        "change": "missing: typed connect and remove file-index actions"
+        "discover": "nebula.capabilities.search and nebula.navigate.open (Notebook destination)",
+        "read": "nebula.notebook.file_index_status returns configured state and project revision without a host path",
+        "change": "nebula.notebook.connect_file_index and remove_file_index request a scoped browser handoff"
       },
-      "authority": "Selected project, linked host path containment and current file-index revision",
-      "observed_result_test": "missing: Butler file-index LAN lifecycle",
-      "result": "Core must read back the selected index and removal without disclosing unrelated host files",
-      "status": "gap"
+      "authority": "Selected project, current project revision, requesting-browser host picker and exact index repository root",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler connects and removes a Notebook file index on production LAN Core",
+      "result": "Core confirms a valid selected host index and then no selection after removal; the host file remains and Butler receives no host path",
+      "status": "supported"
     },
     {
       "id": "library.add",
@@ -1180,11 +1183,23 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::notebookFileIndex",
+      "count": 5
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::previewWorkspaceFile",
       "count": 1
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::reindexLibraryItemAtRevision",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::removeNotebookFileIndex",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::setNotebookFileIndex",
       "count": 1
     },
     {
