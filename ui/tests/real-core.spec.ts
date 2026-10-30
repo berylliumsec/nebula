@@ -7734,7 +7734,13 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
     expect((await linkedPolicy.json() as {host_access_acknowledged: boolean}).host_access_acknowledged).toBe(false);
     await expect(page).toHaveURL(new RegExp(`/projects/${linkedProjectId}/workbench`));
     await page.reload();
-    await clickWorkbenchTab(page, "Workspace files");
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "More workbench views", exact: true}).click();
+      await page.getByRole("dialog", {name: "More"}).getByRole("group", {name: "Workspace tools"})
+        .getByRole("button", {name: "Files", exact: true}).click();
+    } else {
+      await clickWorkbenchTab(page, "Workspace files");
+    }
     await expect(page.getByText("linked-marker.txt", {exact: true})).toBeVisible();
     await page.goto(sourceUrl);
     await openNebulaAssistantFromShell(page);
