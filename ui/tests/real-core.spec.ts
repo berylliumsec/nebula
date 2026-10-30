@@ -6793,6 +6793,101 @@ test("assistant upgrade control assistant starts project work on production LAN 
   ]);
 });
 
+test("assistant upgrade Butler rewinds a saved chat on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  let chatId = "";
+  let targetMessageId = "";
+  let sourceRevision = 0;
+  const instruction = "Rewind the second user message in the Research chat.";
+  const stub = await startLocalModelStub({responseContent: "The saved chat was rewound in Core.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (messages[lastUser]?.content !== instruction) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "rewind chat message"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chat_messages"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.chat_messages", arguments: {session_id: chatId}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.rewind_chat"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.rewind_chat", arguments: {
+      session_id: chatId, expected_revision: sourceRevision, before_message_id: targetMessageId,
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler rewind fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler rewind model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const send = async (content: string, sessionId?: string) => {
+      const response = await api.post("chat/completions", {data: {
+        backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+        session_id: sessionId, messages: [{role: "user", content}], include_knowledge: false, stream: false,
+      }});
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {session_id: string}).session_id;
+    };
+    chatId = await send("First research question");
+    expect(await send("Second research question", chatId)).toBe(chatId);
+    const original = await (await api.get(`chat/sessions/${chatId}/messages`)).json() as Array<{id: string; content: string; metadata: Record<string, unknown>}>;
+    expect(original.map(item => item.content)).toContain("Second research question");
+    targetMessageId = original.find(item => item.content === "Second research question")?.id ?? "";
+    expect(targetMessageId).toBeTruthy();
+    await expect.poll(async () => {
+      const saved = await (await api.get(`chat-sessions/${chatId}`)).json() as {revision: number; metadata: {initial_title_state?: string}};
+      sourceRevision = saved.revision;
+      return saved.metadata.initial_title_state;
+    }, {timeout: 20_000}).toMatch(/^(generated|failed)$/);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler rewind LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+    await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    await expect.poll(async () => (await (await api.get(`chat/sessions/${chatId}/messages`)).json() as Array<{id: string}>).map(item => item.id), {timeout: 45_000})
+      .toEqual(original.slice(0, 2).map(item => item.id));
+    const saved = await (await api.get(`chat-sessions/${chatId}`)).json() as {revision: number; metadata: {message_retractions?: unknown[]}};
+    expect(saved.revision).toBeGreaterThan(sourceRevision);
+    expect(saved.metadata.message_retractions).toHaveLength(1);
+    const all = await (await api.get(`chat/sessions/${chatId}/messages?include_replaced=true`)).json() as Array<{id: string; metadata: {retracted_at?: string}}>;
+    expect(all.filter(item => item.metadata.retracted_at).map(item => item.id)).toEqual(original.slice(2).map(item => item.id));
+    const stale = await api.post(`chat/sessions/${chatId}/rewind`, {data: {before_message_id: original[0].id, expected_revision: sourceRevision}});
+    expect(stale.status()).toBe(409);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${chatId}`);
+    const operator = page.locator(".chat-message.operator");
+    await expect(operator).toHaveCount(1, {timeout: 20_000});
+    await expect(operator.first()).toContainText("First research question");
+    await expect(page.locator(".chat-replaced-group summary")).toContainText("2 replaced messages");
+    await page.reload();
+    await expect(operator).toHaveCount(1, {timeout: 20_000});
+    await expect(page.locator(".chat-replaced-group summary")).toContainText("2 replaced messages");
+    expect((await new AxeBuilder({page}).include(".chat-replaced-group").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-chat-rewind-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], chatId, sourceRevision, savedRevision: saved.revision,
+      result: "Butler catalog action retracted exact user message; Core and refreshed transcript agree; stale revision rejected"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("Butler project lifecycle confirms and reads back changes on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(300_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
