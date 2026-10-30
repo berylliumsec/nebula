@@ -207,6 +207,18 @@ def test_product_search_explains_pins_flags_and_butler_archive(monkeypatch):
     )
 
 
+def test_product_search_explains_bulk_chat_actions(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I select multiple chats and bulk archive or delete them?"
+    )
+    assert any(
+        "Select conversations loads the full project chat list" in str(item["text"])
+        and "Delete permanently" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge("Where do I edit a goal resume instruction?")

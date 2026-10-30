@@ -591,6 +591,18 @@ kbd { font-size: 11px; }
 .session-list-search input { min-width: 0; height: 42px; flex: 1; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; color: var(--text); background: transparent; appearance: none; font: inherit; font-size: 12px; }
 .session-list-search input::-webkit-search-cancel-button { display: none; }
 .session-list-search .icon-button { width: 44px; height: 44px; }
+.session-bulk-toolbar { display: grid; gap: 7px; margin: 7px 8px 0; padding: 8px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); }
+.session-bulk-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.session-bulk-summary strong { flex: 1 0 100%; color: var(--text); font-size: 12px; }
+.session-bulk-summary button, .session-bulk-toolbar p button { min-height: 44px; padding: 3px 5px; border: 0; border-radius: 6px; color: var(--blue); background: transparent; font-size: 11px; cursor: pointer; }
+.session-bulk-summary button:hover, .session-bulk-summary button:focus-visible, .session-bulk-toolbar p button:hover, .session-bulk-toolbar p button:focus-visible { background: var(--surface-hover); }
+.session-bulk-toolbar button:disabled { opacity: .45; cursor: default; }
+.session-bulk-apply { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.session-bulk-apply select { min-width: 0; min-height: 44px; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface); font: inherit; font-size: 12px; }
+.session-bulk-apply > button { min-height: 44px; padding-inline: 11px; }
+.session-bulk-toolbar p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.4; }
+.session-bulk-toolbar p.error { color: var(--red); }
+.session-bulk-toolbar p.success { color: var(--green); }
 .session-new-chat { display: grid; min-height: 46px; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; margin: 8px 8px 0; padding: 7px 10px; border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border)); border-radius: var(--radius-control); color: var(--action-primary-text); background: var(--action-primary); text-align: left; cursor: pointer; }
 .session-new-chat:hover, .session-new-chat:focus-visible { background: var(--action-primary-hover); }
 .session-new-chat:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -620,6 +632,12 @@ kbd { font-size: 11px; }
 .session-list nav > button > span { display: flex; min-width: 0; flex-direction: column; }
 .session-list-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 36px; min-height: 46px; align-items: center; border-radius: 8px; color: var(--muted); }
 .session-list-item.has-subagents { grid-template-columns: minmax(0, 1fr) 34px 36px; }
+.session-list-item.selecting { grid-template-columns: 44px minmax(0, 1fr); }
+.session-list-item.selecting.has-subagents { grid-template-columns: 44px minmax(0, 1fr) 34px; }
+.session-list-item.bulk-selected { background: var(--blue-muted); color: var(--text); }
+.session-bulk-selector { display: grid; width: 44px; min-height: 46px; place-items: center; cursor: pointer; }
+.session-bulk-selector input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); cursor: pointer; }
+.session-list-item.selecting .session-item-actions { display: none; }
 .session-list-item.nested-subagent { margin-left: 16px; }
 .session-list-item.nested-subagent::before { position: absolute; top: 0; bottom: 0; left: -8px; width: 1px; background: var(--border); content: ""; }
 .session-list-item.nested-subagent-deep { margin-left: 32px; }
@@ -672,6 +690,8 @@ kbd { font-size: 11px; }
   .session-new-chat { min-height: 48px; }
   .session-list-item { grid-template-columns: minmax(0, 1fr) 44px; }
   .session-list-item.has-subagents { grid-template-columns: minmax(0, 1fr) 44px 44px; }
+  .session-list-item.selecting { grid-template-columns: 44px minmax(0, 1fr); }
+  .session-list-item.selecting.has-subagents { grid-template-columns: 44px minmax(0, 1fr) 44px; }
   .session-subagents-toggle { width: 44px; min-height: 44px; }
   .session-actions-trigger { width: 44px; height: 44px; opacity: 1; pointer-events: auto; }
   .session-actions-menu > button { min-height: 44px; }
