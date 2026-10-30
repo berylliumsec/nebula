@@ -1451,6 +1451,13 @@ class ContainerTerminalService:
                 try:
                     await finishing.process.close()
                 except Exception as exc:
+                    record_caught_exception(
+                        "terminal",
+                        "terminal.container_terminal.cleanup_retry_failed",
+                        "Terminal container removal retry could not be verified.",
+                        exc,
+                        stage="cleanup",
+                    )
                     finishing.cleanup_error = exc
                 else:
                     finishing.cleanup_error = None

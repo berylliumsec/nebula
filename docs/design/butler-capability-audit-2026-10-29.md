@@ -28,7 +28,7 @@ and reads; these counts are not a coverage percentage.
 | Assistant runtimes | List available runtimes; change chat defaults and next-turn Assistant settings; inspect model and quota information | A next-turn setting does not rebind a running turn. Some runtime lifecycle controls remain in the visible settings screens. |
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host consent remains in its visible control; relinking an existing project remains a gap. |
-| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back | Terminal lifecycle and existing-project host-folder relinking remain gaps. Scheduled Butler has no file actions. |
+| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Existing-project host-folder relinking remains a gap. Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, evidence capture, and other research-data control still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Report deletion, note-transform authoring, and the operating system's final download save location remain outside this slice. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
@@ -225,8 +225,8 @@ the exact saved file state before Butler reports success. Cancellation and
 uncertain responses require inspecting Files before retrying. Folder creation,
 rename and empty-folder deletion use current directory identities; deletion
 also uses Files' confirmation and a Core 404 read-back. A folder with children
-cannot be removed through this action. Terminal lifecycle and linked host folder
-selection require separate controls and evidence.
+cannot be removed through this action. Existing-project linked host folder
+selection requires separate controls and evidence.
 Streaming and fork do not apply to one file operation. A browser download event
 proves the transfer started, not the operating system's final save location.
 
@@ -250,6 +250,38 @@ its picker; Core returned the same size and SHA-256 by entry-state and download
 read-back. Folder create, rename, cancelled delete, confirmed empty delete and
 refresh agreed with Core. The model received metadata and a browser handoff,
 not the binary payload. Physical Safari and a live Core rollout were not run.
+
+## Branch slice: selected-project terminal lifecycle
+
+Entry point: an operator asks interactive Butler to list or stop a live Project
+terminal. Opening Terminal through the existing Workbench destination starts or
+reconnects a shell on the requesting browser. Butler's `nebula.terminal.list`
+returns only session ID, creation time, state and attachment status; it never
+issues a WebSocket ticket or reads process output. `nebula.terminal.stop` prepares
+an exact browser action for a listed session. The browser confirms loss of
+running commands and container-only packages, sends the conditional close to
+Core, then reads Core again before reporting success.
+
+| Step | Observable invariant | State authority | Check |
+| --- | --- | --- | --- |
+| Discover | Interactive Butler finds list and stop; background Butler cannot | Core capability catalog | Tool test |
+| Select | List is scoped to the selected Project and contains no ticket | ContainerTerminalService | Core unit and API test |
+| Stop | Stale creation time or wrong Project cannot close a session; cancellation leaves it running | Core session table and requesting browser | Core API, component and paired LAN browser |
+| Read back | A confirmed stop disappears only after exact container removal; a failed cleanup remains visible as stopping and can be retried | Core session table and Podman | Component, paired LAN browser and Podman smoke |
+
+Terminal sessions are process-local and a stopped container is disposable.
+Core owns session state; the browser owns confirmation and the WebSocket ticket.
+The paired browser test passed 8/8 authenticated non-loopback LAN profiles with
+the production bundle, real Core terminal service and a synthetic terminal
+process. It checked cancellation, one confirmed close, Core read-back, refresh,
+mobile layout and the touched dialogs' accessibility. A separate local Podman
+smoke used the cached Kali image: it observed a running container and Core
+session, then verified that Core's conditional stop returned only after the
+exact Podman container disappeared. The cleanup-failure regression keeps an
+unverified removal visible as `stopping` and permits an exact retry. The paired
+browser test does not exercise OCI image preparation; the Podman smoke used a
+cached image rather than a registry pull. Physical devices and a live Core
+rollout were not run.
 
 ## Control contracts and remaining work to reach the product goal
 
@@ -393,7 +425,7 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Complete terminal lifecycle, existing-project host-folder relinking, and the
+2. Complete existing-project host-folder relinking and the
    remaining resource actions in their owning services. Each needs target
    discovery, optimistic revisions where applicable, and observed Core read-back.
 3. Add specialized device and administration handoffs for local file selection, pairing, storage
