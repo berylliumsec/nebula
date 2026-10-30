@@ -12030,7 +12030,7 @@ test("assistant upgrade Butler connects and removes a Notebook file index on pro
   ]);
 });
 
-test("notebook real Core uses a supplied file index on LAN", async ({page}) => {
+test("notebook real Core uses a supplied file index on LAN", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const api = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
@@ -12050,14 +12050,24 @@ with sqlite3.connect(db) as connection:
     expect(create.status, create.stderr).toBe(0);
     const response = await api.post("engagements", {data: {name: "Indexed project", workspace_path: workspace}});
     expect(response.ok(), await response.text()).toBe(true);
-    const project = await response.json() as {id: string};
+    const project = await response.json() as {id: string; revision: number};
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
     await pairRealCoreBrowser(page, core, "Indexed notebook LAN browser");
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notebook&notebook=indexed.ipynb`);
     const panel = page.getByRole("region", {name: "Project notebook"});
     await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
     await panel.locator("summary", {hasText: "File index"}).click();
+    await expect(panel.getByRole("button", {name: "Browse index files"})).toBeEnabled();
     await panel.getByRole("button", {name: "Browse index files"}).click();
     const dialog = page.getByRole("dialog", {name: "Choose file index"});
+    await expect(dialog).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".host-folder-dialog").analyze()).violations).toEqual([]);
+    await dialog.getByRole("button", {name: "Close folder browser"}).click();
+    expect((await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null}).path).toBeNull();
+    await panel.getByRole("button", {name: "Browse index files"}).click();
     for (let i = 0; i < 6; i++) {
       const current = await dialog.locator(".host-folder-location code").textContent();
       if (current === "/") break;
@@ -12068,12 +12078,23 @@ with sqlite3.connect(db) as connection:
     await dialog.getByRole("button", {name: path.basename(core.dataDir)}).click();
     await dialog.getByRole("button", {name: "inventory.db"}).click();
     await expect(panel.getByText("File index connected")).toBeVisible();
+    const connected = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; project_revision: number};
+    expect(connected.path).toBe(index);
+    expect(connected.project_revision).toBeGreaterThan(project.revision);
     await expect(panel.getByRole("combobox", {name: "Notebook"})).not.toContainText("scan-only.ipynb");
     await page.reload();
     await panel.locator("summary", {hasText: "File index"}).click();
     await expect(panel.getByText("File index connected")).toBeVisible();
     await panel.getByRole("button", {name: "Remove index"}).click();
     await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
+    const removed = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; project_revision: number};
+    expect(removed.path).toBeNull();
+    expect(removed.project_revision).toBeGreaterThan(connected.project_revision);
+    expect(existsSync(index)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("notebook-manual-file-index-lan", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId: project.id,
+      result: "Manual Notebook picker cancellation left Core unchanged; selection and removal used current project revisions, survived refresh, and retained the host index file"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core process", dispose: () => stopRealCore(core)},
