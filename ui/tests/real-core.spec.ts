@@ -6881,12 +6881,17 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
     await page.goto(sourceUrl);
     await openNebulaAssistantFromShell(page);
     let browserCreatePosts = 0;
+    let uncertainCreateBody: Record<string, unknown> | undefined;
+    let uncertainProjectId = "";
     await page.route("**/api/v1/engagements", async (route) => {
       if (route.request().method() !== "POST") return route.continue();
       browserCreatePosts += 1;
       if (browserCreatePosts > 1) return route.continue();
+      uncertainCreateBody = route.request().postDataJSON() as Record<string, unknown>;
+      expect(uncertainCreateBody.request_id).toMatch(/^[a-f0-9-]{36}$/i);
       const response = await route.fetch();
       expect(response.status()).toBe(201);
+      uncertainProjectId = (await response.json() as {id: string}).id;
       await route.abort("failed");
     });
     await send("Create the uncertain Butler project");
@@ -6897,6 +6902,15 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
       return (await response.json() as Array<{name: string}>).filter((project) => project.name === "Butler uncertain project").length;
     };
     await expect.poll(uncertainCount, {timeout: 45_000}).toBe(1);
+    if (!uncertainCreateBody) throw new Error("Butler create body was not captured");
+    const replay = await api.post("engagements", {data: uncertainCreateBody});
+    expect(replay.status(), await replay.text()).toBe(201);
+    expect((await replay.json() as {id: string}).id).toBe(uncertainProjectId);
+    const changedRequest = await api.post("engagements", {data: {...uncertainCreateBody, description: "Changed retry"}});
+    expect(changedRequest.status()).toBe(409);
+    const otherRequest = await api.post("engagements", {data: {...uncertainCreateBody, request_id: "dc11cf90-f748-4906-9b34-27b245efae9a"}});
+    expect(otherRequest.status()).toBe(409);
+    expect(await uncertainCount()).toBe(1);
     await send("Create the uncertain Butler project");
     await expect(assistant.getByRole("alert")).toContainText("Core already has a project named Butler uncertain project", {timeout: 45_000});
     expect(browserCreatePosts).toBe(1);
@@ -6952,7 +6966,7 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
     await expect.poll(async () => (await api.get(`engagements/${targetId}`)).status(), {timeout: 45_000}).toBe(404);
     await page.reload();
     await testInfo.attach("butler-project-lifecycle", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry,
-      assetSha256: build.assets[entry!], steps: ["create", "uncertain create response", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
+      assetSha256: build.assets[entry!], steps: ["create", "uncertain create response", "Core retry receipt readback", "changed-key conflict", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
