@@ -9812,6 +9812,93 @@ reliabilityTest("assistant upgrade real Core groups Butler initiated chats after
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
+reliabilityTest("assistant upgrade bulk chat actions persist and retry on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Bulk chat actions acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await expect(page).toHaveURL(/session=/);
+    const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+    await page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true}).click();
+    const sidebar = page.getByRole("complementary", {name: "Conversations"});
+    await expect(sidebar.getByRole("button", {name: "Select conversations"})).toBeVisible();
+    await sidebar.getByRole("button", {name: "Select conversations"}).click();
+    await expect(sidebar.getByRole("button", {name: "Select all chats (7)"})).toBeEnabled();
+    await sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"}).check();
+    await sidebar.getByRole("checkbox", {name: "Select conversation Recover ordinary goal"}).check();
+    await expect(sidebar.getByText("2 selected")).toBeVisible();
+    const bulkToolbar = sidebar.locator(".session-bulk-toolbar");
+    expect(await bulkToolbar.evaluate(element => Math.round(element.getBoundingClientRect().height))).toBeLessThanOrEqual(100);
+    expect(await bulkToolbar.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"}).evaluate(input => Math.round(input.parentElement!.getBoundingClientRect().width))).toBeGreaterThanOrEqual(44);
+    expect(await sidebar.getByLabel("Action for selected conversations").evaluate(select => Math.round(select.getBoundingClientRect().height))).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({page}).include(".session-bulk-toolbar").analyze()).violations).toEqual([]);
+
+    let refuseOnce = true;
+    await page.route("**/api/v1/chat-sessions/sidebar-branch", async route => {
+      if (route.request().method() === "PATCH" && refuseOnce) {
+        refuseOnce = false;
+        await route.fulfill({status: 409, json: {detail: "Conversation changed on another device", error_id: "err_stale_revision", retryable: true}});
+      } else await route.fallback();
+    });
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("alert")).toContainText("1 of 2 conversations could not be updated");
+    await expect(sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"})).toBeChecked();
+    await expect(sidebar.getByText("1 selected")).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-ordinary-recovery")).json()).metadata.archived_at).toBeTruthy();
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation archived"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.archived_at).toBeTruthy();
+
+    await sidebar.getByRole("searchbox", {name: "Search conversations"}).fill("Ordinary branch");
+    await expect(sidebar.getByRole("button", {name: "Select all matches (1)"})).toBeEnabled();
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("restore");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation restored"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.archived_at).toBeUndefined();
+
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("pin");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation pinned"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.pinned).toBe(true);
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("flag:blue");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation flagged"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.flag_color).toBe("blue");
+
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("delete");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    const confirmation = page.getByRole("dialog", {name: "Delete 1 selected conversation?"});
+    await expect(confirmation).toContainText("Ordinary branch");
+    await confirmation.getByRole("button", {name: "Cancel"}).click();
+    expect((await core.api.get("chat-sessions/sidebar-branch")).ok()).toBe(true);
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await page.getByRole("dialog", {name: "Delete 1 selected conversation?"}).getByRole("button", {name: "Delete 1 conversation"}).click();
+    await expect(sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"})).toHaveCount(0);
+    expect((await core.api.get("chat-sessions/sidebar-branch")).status()).toBe(404);
+    await page.reload();
+    const reopen = page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true});
+    await expect(sidebar.or(reopen).first()).toBeVisible({timeout: 20_000});
+    if (await reopen.isVisible()) await reopen.click();
+    await sidebar.getByRole("searchbox", {name: "Search conversations"}).fill("Ordinary branch");
+    await expect(sidebar.getByText("No conversations match")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await testInfo.attach("bulk-chat-actions-real-core", {body: JSON.stringify({origin: core.origin, build: "production", buildCommit: build.commit, builtAt: build.builtAt, asset: entry, assetSha256: build.assets[entry!], viewport: page.viewportSize()}), contentType: "application/json"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
 reliabilityTest("assistant upgrade conversation bulk delete clears rows already absent from real Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
