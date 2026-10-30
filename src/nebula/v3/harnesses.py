@@ -218,6 +218,7 @@ if TYPE_CHECKING:
     from .browser_automation import BrowserAutonomyRequestModel
     from .browser_tools import BrowserAutomationToolPlatform
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
+    from .workspace import WorkspaceService
 
 MAX_NORMALIZED_TEXT = 200_000
 MAX_TOOL_ARGUMENT_TEXT = 64_000
@@ -8802,6 +8803,7 @@ class HarnessRuntimeService:
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
         self.butler_memory: Any = None
+        self.workspace_service: WorkspaceService | None = None
         self.butler_instructions_root: Path | None = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
@@ -8894,6 +8896,11 @@ class HarnessRuntimeService:
 
     def bind_butler_memory(self, memory: Any) -> None:
         self.butler_memory = memory
+
+    def bind_workspace_service(self, service: WorkspaceService) -> None:
+        if service.store is not self.store:
+            raise ValueError("workspace service must use the harness runtime store")
+        self.workspace_service = service
 
     def bind_provider_subagents(self, service: SubagentService) -> None:
         """Bind the provider-chat subagent service harness chats delegate to."""
@@ -14790,6 +14797,7 @@ class HarnessRuntimeService:
                 and self.mcp_service.notebook_tools is not None
                 else None
             ),
+            workspace=self.workspace_service,
         )
 
     def _gateway_catalog(
