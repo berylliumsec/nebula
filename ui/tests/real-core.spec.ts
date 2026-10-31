@@ -6890,6 +6890,119 @@ test("assistant upgrade control assistant starts project work on production LAN 
   ]);
 });
 
+test("assistant upgrade Butler starts a scoped browser mission on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(240_000);
+  const coreStartupStarted = Date.now();
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    startupTimeoutMs: 90_000, env: {NEBULA_ONE_BROWSER_CUTOVER: "0"}});
+  const coreStartupMs = Date.now() - coreStartupStarted;
+  let browserSessionId = "";
+  let providerId = "";
+  const instruction = "Start a passive browser assessment of https://example.test/ using the active project browser.";
+  const stub = await startLocalModelStub({responseContent: "The scoped browser mission is saved. Open Missions to follow it.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (typeof messages[lastUser]?.content !== "string" || !messages[lastUser].content.startsWith(instruction)) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "browser automation mission"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.browser_sessions"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.browser_sessions", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.start_mission"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.start_mission", arguments: {
+      name: "Scoped browser survey", objective: "Inspect the synthetic in-scope host", backend: "provider",
+      profile_id: providerId, model: "security-model", max_tool_calls: 4,
+      browser_autonomy: {session_id: browserSessionId, targets: ["https://example.test/"],
+        allowed_risk_classes: ["passive"], duration_seconds: 60,
+        max_commands: 4, max_requests: 10, max_body_bytes: 4096},
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const created = await api.post("engagements", {data: {name: "Browser mission LAN acceptance", description: "Synthetic project",
+      client_name: null, status: "active", tags: [], workspace_path: null, metadata: {}}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = ((await created.json()) as {id: string}).id;
+    const scopeResponse = await api.get(`engagements/${projectId}/scope`);
+    expect(scopeResponse.ok(), await scopeResponse.text()).toBe(true);
+    const scope = await scopeResponse.json() as {revision: number};
+    const scoped = await api.put(`engagements/${projectId}/scope`, {data: {
+      expected_revision: scope.revision, allowed_domains: ["example.test"],
+    }});
+    expect(scoped.ok(), await scoped.text()).toBe(true);
+    const identity = await api.post(`engagements/${projectId}/browser-identities`, {data: {name: "Synthetic browser"}});
+    expect(identity.ok(), await identity.text()).toBe(true);
+    const identityId = ((await identity.json()) as {id: string}).id;
+    const browserSession = await api.post(`engagements/${projectId}/browser-sessions`, {data: {
+      name: "Synthetic security session", identity_id: identityId,
+    }});
+    expect(browserSession.ok(), await browserSession.text()).toBe(true);
+    browserSessionId = ((await browserSession.json()) as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Browser mission fixture", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    providerId = provider.id;
+    const verified = await api.post(`providers/${encodeURIComponent(providerId)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Browser mission acceptance", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=browser`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const composer = assistant.getByRole("textbox", {name: "Ask Butler a question"});
+    await composer.fill(instruction);
+    await composer.press("Enter");
+    await expect(assistant.getByText("The scoped browser mission is saved. Open Missions to follow it.")).toBeVisible({timeout: 45_000});
+    const missionLink = assistant.getByRole("link", {name: "Open mission"});
+    const modelRoute = stub.requests.map(body => ({
+      roles: (Array.isArray(body.messages) ? body.messages : []).map((message: {role?: string}) => message.role),
+      userStartsInstruction: String((Array.isArray(body.messages) ? body.messages : []).filter((message: {role?: string; content?: unknown}) => message.role === "user").at(-1)?.content ?? "").startsWith(instruction),
+      tools: (Array.isArray(body.tools) ? body.tools : []).map((tool: {function?: {name?: string}}) => tool.function?.name),
+      lastToolResult: String((Array.isArray(body.messages) ? body.messages : []).filter((message: {role?: string; content?: unknown}) => message.role === "tool").at(-1)?.content ?? "").slice(0, 500),
+    }));
+    await expect(missionLink, JSON.stringify(modelRoute)).toBeVisible();
+    const missionId = new URL((await missionLink.getAttribute("href"))!, core.origin).searchParams.get("mission");
+    expect(missionId).toBeTruthy();
+    const runResponse = await api.get(`runs/${missionId}`);
+    expect(runResponse.ok(), await runResponse.text()).toBe(true);
+    const run = await runResponse.json() as {engagement_id: string; metadata: {browser_autonomy?: Record<string, unknown>}};
+    expect(run.engagement_id).toBe(projectId);
+    expect(run.metadata.browser_autonomy).toMatchObject({session_id: browserSessionId,
+      targets: ["https://example.test/"], allowed_risk_classes: ["passive"],
+      duration_seconds: 60, max_commands: 4, max_requests: 10, max_body_bytes: 4096});
+    const automationResponse = await api.get(`runs/${missionId}/browser-automation`);
+    expect(automationResponse.ok(), await automationResponse.text()).toBe(true);
+    const automation = await automationResponse.json() as {leases: Array<{session_id?: string; target_urls?: string[]}>};
+    expect(automation.leases).toEqual(expect.arrayContaining([expect.objectContaining({session_id: browserSessionId,
+      target_urls: ["https://example.test/"], allowed_risk_classes: ["passive"],
+      max_commands: 4, max_requests: 10, max_body_bytes: 4096})]));
+    expect(await assistant.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The scoped browser mission is saved. Open Missions to follow it.")).toBeVisible();
+    await testInfo.attach("butler-browser-mission", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name,
+      asset: entry, assetSha256: build.assets[entry!], missionId, browserSessionId, coreStartupMs}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler rewinds a saved chat on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(180_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
