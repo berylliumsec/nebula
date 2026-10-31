@@ -360,6 +360,17 @@ def test_product_search_finds_butler_report_deletion_boundary(monkeypatch):
     assert "signed" in text
 
 
+def test_product_search_finds_butler_report_note_transform_review(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler transform a linked report note with AI and save the reviewed section?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "nebula.reports.transform_note" in text
+    assert "cloud consent" in text
+    assert "review" in text
+
+
 def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

@@ -20,6 +20,7 @@ from nebula.v3.domain import (
     ReportRender,
     ReportStatus,
 )
+from nebula.v3.relations import ResourceRelationService
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError
 
@@ -177,11 +178,235 @@ def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tmp_path
     asyncio.run(scenario())
 
 
+def test_butler_report_note_transform_tracks_authoritative_relation_changes(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    selected = store.create(Engagement(name="Selected"))
+    note = store.create(
+        Observation(
+            engagement_id=selected.id,
+            observation_type="manual",
+            title="TLS note",
+            body="Port 443 was observed.",
+        )
+    )
+    report = store.create(Report(engagement_id=selected.id, title="Assessment"))
+    capabilities = ButlerCapabilities(
+        store, ArtifactStore(tmp_path / "artifacts"), selected.id
+    )
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=ArtifactStore(tmp_path / "artifacts"),
+            auth_token="test-token",
+        )
+    )
+    auth = {"Authorization": "Bearer test-token"}
+    arguments = {
+        "report_id": report.id,
+        "expected_revision": report.revision,
+        "observation_id": note.id,
+        "expected_source_revision": note.revision,
+        "instruction": "Rewrite this note as a report section.",
+    }
+
+    def invoke(operation: str, params: dict):
+        return asyncio.run(
+            capabilities.invoke(
+                {"operation": f"nebula.reports.{operation}", "arguments": params},
+                change=operation == "transform_note",
+            )
+        )
+
+    relation = client.post(
+        f"/api/v1/projects/{selected.id}/relations",
+        headers=auth,
+        json={
+            "source": {"project_id": selected.id, "kind": "report", "id": report.id},
+            "predicate": "includes",
+            "target": {"project_id": selected.id, "kind": "note", "id": note.id},
+        },
+    )
+    assert relation.status_code == 201, relation.text
+    assert client.get(f"/api/v1/reports/{report.id}", headers=auth).json()[
+        "observation_ids"
+    ] == [note.id]
+    assert invoke("detail", {"report_id": report.id})["observation_ids"] == [note.id]
+    assert invoke("list", {})["reports"][0]["note_count"] == 1
+    assert (
+        invoke("transform_note", arguments)["client_action"]["observation_id"]
+        == note.id
+    )
+
+    removed = client.delete(
+        f"/api/v1/projects/{selected.id}/relations/{relation.json()['id']}",
+        headers=auth,
+        params={"expected_revision": relation.json()["revision"]},
+    )
+    assert removed.status_code == 204, removed.text
+    current = client.get(f"/api/v1/reports/{report.id}", headers=auth).json()
+    assert current["revision"] == report.revision
+    assert current["observation_ids"] == []
+    assert invoke("detail", {"report_id": report.id})["observation_ids"] == []
+    assert invoke("list", {})["reports"][0]["note_count"] == 0
+    with pytest.raises(ValueError, match="select the note"):
+        invoke("transform_note", arguments)
+
+
+def test_butler_report_note_transform_requires_linked_current_source_and_review(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "core.db")
+    selected = store.create(Engagement(name="Selected"))
+    foreign = store.create(Engagement(name="Foreign"))
+    note = store.create(
+        Observation(
+            engagement_id=selected.id,
+            observation_type="manual",
+            title="TLS note",
+            body="port 443 observed; certificate review pending. " * 250,
+        )
+    )
+    unlinked = store.create(
+        Observation(
+            engagement_id=selected.id,
+            observation_type="manual",
+            title="Unlinked",
+            body="Unlinked source",
+        )
+    )
+    foreign_note = store.create(
+        Observation(
+            engagement_id=foreign.id,
+            observation_type="manual",
+            title="Foreign",
+            body="Foreign private body",
+        )
+    )
+    report = ResourceRelationService(store).create_legacy_entity(
+        Report(engagement_id=selected.id, title="Assessment", observation_ids=[note.id])
+    )
+    assert isinstance(report, Report)
+    final = store.create(
+        Report(
+            engagement_id=selected.id,
+            title="Signed",
+            status=ReportStatus.FINAL,
+            observation_ids=[note.id],
+            signed_off_by="Operator",
+            signed_off_at=datetime.now(timezone.utc),
+        )
+    )
+    capabilities = ButlerCapabilities(
+        store, ArtifactStore(tmp_path / "artifacts"), selected.id
+    )
+
+    async def invoke(name, arguments, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.reports.{name}", "arguments": arguments},
+            change=change,
+        )
+
+    async def scenario():
+        assert any(
+            row["operation"] == "nebula.reports.transform_note"
+            for row in (
+                await capabilities.search({"query": "transform linked report note"})
+            )["matches"]
+        )
+        first = await invoke("source_note", {"observation_id": note.id})
+        assert first["revision"] == note.revision
+        assert len(first["body"]) == 8000
+        assert first["next_body_offset"] == 8000
+        assert (
+            await invoke(
+                "source_note", {"observation_id": note.id, "body_offset": 8000}
+            )
+        )["body"]
+        with pytest.raises(ValueError, match="outside the selected project"):
+            await invoke("source_note", {"observation_id": foreign_note.id})
+        arguments = {
+            "report_id": report.id,
+            "expected_revision": report.revision,
+            "observation_id": note.id,
+            "expected_source_revision": note.revision,
+            "instruction": "Rewrite for a technical stakeholder.",
+        }
+        with pytest.raises(
+            CapabilityInputError, match="use nebula.capabilities.change"
+        ):
+            await invoke("transform_note", arguments)
+        pending = await invoke("transform_note", arguments, change=True)
+        assert pending == {
+            "state": "pending_browser_apply",
+            "butler_operation": "nebula.reports.transform_note",
+            "butler_project_id": selected.id,
+            "client_action": {
+                "kind": "report_transform_note",
+                "project_id": selected.id,
+                "report_id": report.id,
+                "expected_revision": report.revision,
+                "observation_id": note.id,
+                "expected_source_revision": note.revision,
+                "instruction": "Rewrite for a technical stakeholder.",
+            },
+        }
+        assert note.body[:100] not in str(pending)
+        assert store.get(Report, report.id).revision == report.revision
+        with pytest.raises(ValueError, match="report changed"):
+            await invoke(
+                "transform_note",
+                {**arguments, "expected_revision": report.revision + 1},
+                change=True,
+            )
+        with pytest.raises(ValueError, match="source note changed"):
+            await invoke(
+                "transform_note",
+                {**arguments, "expected_source_revision": note.revision + 1},
+                change=True,
+            )
+        with pytest.raises(ValueError, match="select the note"):
+            await invoke(
+                "transform_note",
+                {**arguments, "observation_id": unlinked.id},
+                change=True,
+            )
+        with pytest.raises(ValueError, match="outside the selected project"):
+            await invoke(
+                "transform_note",
+                {**arguments, "observation_id": foreign_note.id},
+                change=True,
+            )
+        with pytest.raises(ValueError, match="final reports are immutable"):
+            await invoke(
+                "transform_note",
+                {
+                    **arguments,
+                    "report_id": final.id,
+                    "expected_revision": final.revision,
+                },
+                change=True,
+            )
+        with pytest.raises(ValueError, match="provide an instruction"):
+            await invoke(
+                "transform_note", {**arguments, "instruction": "  "}, change=True
+            )
+
+    asyncio.run(scenario())
+
+
 def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     selected = store.create(Engagement(name="Selected"))
     foreign = store.create(Engagement(name="Foreign"))
     finding = store.create(Finding(engagement_id=selected.id, title="Selected finding"))
+    note = store.create(
+        Observation(
+            engagement_id=selected.id,
+            observation_type="manual",
+            title="Selected note",
+            body="Observed",
+        )
+    )
     foreign_finding = store.create(
         Finding(engagement_id=foreign.id, title="Foreign finding")
     )
@@ -210,7 +435,11 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
         prepared.invoke(
             {
                 "operation": "nebula.reports.create",
-                "arguments": {"title": "Stable draft", "finding_ids": [finding.id]},
+                "arguments": {
+                    "title": "Stable draft",
+                    "finding_ids": [finding.id],
+                    "observation_ids": [note.id],
+                },
             },
             change=True,
         )
@@ -270,10 +499,33 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
             "engagement_id": selected.id,
             "title": action["title"],
             "finding_ids": action["finding_ids"],
+            "observation_ids": action["observation_ids"],
         },
     )
     assert created.status_code == 201, created.text
     assert created.json()["id"] == action["report_id"]
+    current = client.get(f"/api/v1/reports/{action['report_id']}", headers=auth)
+    assert current.status_code == 200, current.text
+    assert current.json()["finding_ids"] == [finding.id]
+    assert current.json()["observation_ids"] == [note.id]
+    listed = client.get(
+        "/api/v1/reports", headers=auth, params={"engagement_id": selected.id}
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()[0]["observation_ids"] == [note.id]
+    edges = client.get(
+        f"/api/v1/projects/{selected.id}/relations",
+        headers=auth,
+        params={"resource_kind": "report", "resource_id": action["report_id"]},
+    )
+    assert edges.status_code == 200, edges.text
+    assert {
+        (edge["predicate"], edge["target"]["kind"], edge["target"]["id"])
+        for edge in edges.json()
+    } == {
+        ("includes", "finding", finding.id),
+        ("includes", "note", note.id),
+    }
     assert (
         client.post(
             "/api/v1/reports/butler-drafts",
@@ -307,6 +559,8 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
     report = client.get(f"/api/v1/reports/{action['report_id']}", headers=auth).json()
     assert report["revision"] == saved.json()["revision"]
     assert report["status"] == "review"
+    assert report["finding_ids"] == [finding.id]
+    assert report["observation_ids"] == [note.id]
     signoff = asyncio.run(
         prepared.invoke(
             {

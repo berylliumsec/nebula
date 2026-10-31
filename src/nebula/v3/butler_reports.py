@@ -14,6 +14,7 @@ from .domain import (
     ReportStatus,
     RiskClass,
 )
+from .relations import ResourceRelationService
 from .storage import NebulaStore
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -22,8 +23,10 @@ _ID = {"type": "string", "minLength": 1, "maxLength": 200}
 _REVISION = {"type": "integer", "minimum": 1}
 _PAGE = {"type": "integer", "minimum": 0, "maximum": 1000000}
 _SUMMARY_OFFSET = {"type": "integer", "minimum": 0, "maximum": 100000}
+_NOTE_OFFSET = {"type": "integer", "minimum": 0, "maximum": 100000}
 _TITLE = {"type": "string", "minLength": 1, "maxLength": 500}
 _SUMMARY = {"type": "string", "maxLength": 100000}
+_INSTRUCTION = {"type": "string", "minLength": 1, "maxLength": 4000}
 _REFERENCES = {"type": "array", "items": _ID, "maxItems": 500, "uniqueItems": True}
 
 
@@ -41,6 +44,23 @@ _CURRENT = _schema(
     {"report_id": _ID, "expected_revision": _REVISION},
     "report_id",
     "expected_revision",
+)
+_SOURCE_NOTE = _schema(
+    {"observation_id": _ID, "body_offset": _NOTE_OFFSET}, "observation_id"
+)
+_TRANSFORM_NOTE = _schema(
+    {
+        "report_id": _ID,
+        "expected_revision": _REVISION,
+        "observation_id": _ID,
+        "expected_source_revision": _REVISION,
+        "instruction": _INSTRUCTION,
+    },
+    "report_id",
+    "expected_revision",
+    "observation_id",
+    "expected_source_revision",
+    "instruction",
 )
 _CREATE = _schema(
     {
@@ -72,6 +92,7 @@ class ButlerReports:
     def __init__(self, store: NebulaStore, project_id: str) -> None:
         self.store = store
         self.project_id = project_id
+        self.relations = ResourceRelationService(store)
 
     @staticmethod
     def _summary(report: Report) -> dict[str, Any]:
@@ -85,17 +106,28 @@ class ButlerReports:
             "url": f"/projects/{report.engagement_id}/reports/{report.id}",
         }
 
+    def _project_report(self, report: Report) -> Report:
+        projected = self.relations.project_legacy(report)
+        assert isinstance(projected, Report)
+        return projected
+
     def _report(self, report_id: str) -> Report:
         report = self.store.get(Report, report_id)
         if report.engagement_id != self.project_id:
             raise ValueError("report is outside the selected project")
-        return report
+        return self._project_report(report)
 
     def _current(self, arguments: dict[str, Any]) -> Report:
         report = self._report(arguments["report_id"])
         if report.revision != arguments["expected_revision"]:
             raise ValueError("report changed; read its current revision before acting")
         return report
+
+    def _note(self, observation_id: str) -> Observation:
+        note = self.store.get(Observation, observation_id)
+        if note.engagement_id != self.project_id:
+            raise ValueError("note is outside the selected project")
+        return note
 
     def _references(self, changes: dict[str, Any]) -> None:
         for field in ("finding_ids", "observation_ids"):
@@ -116,7 +148,9 @@ class ButlerReports:
             Report, engagement_id=self.project_id, offset=offset, limit=51
         )
         return {
-            "reports": [self._summary(item) for item in rows[:50]],
+            "reports": [
+                self._summary(self._project_report(item)) for item in rows[:50]
+            ],
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
@@ -173,6 +207,19 @@ class ButlerReports:
             "signed_off_at": (
                 report.signed_off_at.isoformat() if report.signed_off_at else None
             ),
+        }
+
+    def source_note(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        note = self._note(arguments["observation_id"])
+        offset = arguments.get("body_offset", 0)
+        end = min(offset + 8000, len(note.body))
+        return {
+            "observation_id": note.id,
+            "title": note.title,
+            "revision": note.revision,
+            "body": note.body[offset:end],
+            "body_offset": offset,
+            "next_body_offset": end if end < len(note.body) else None,
         }
 
     def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -242,6 +289,34 @@ class ButlerReports:
                 "report_id": report.id,
                 "expected_revision": report.revision,
                 **changes,
+            }
+        )
+
+    def transform_note(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = self._current(arguments)
+        if report.status == ReportStatus.FINAL:
+            raise ValueError("final reports are immutable; create a new draft")
+        note = self._note(arguments["observation_id"])
+        if note.id not in report.observation_ids:
+            raise ValueError("select the note in this report before transforming it")
+        if note.revision != arguments["expected_source_revision"]:
+            raise ValueError(
+                "source note changed; read its current revision before acting"
+            )
+        if not note.body.strip():
+            raise ValueError("source note has no body to transform")
+        instruction = arguments["instruction"].strip()
+        if not instruction:
+            raise ValueError("provide an instruction for the report section")
+        return self._pending(
+            {
+                "kind": "report_transform_note",
+                "project_id": self.project_id,
+                "report_id": report.id,
+                "expected_revision": report.revision,
+                "observation_id": note.id,
+                "expected_source_revision": note.revision,
+                "instruction": instruction,
             }
         )
 
@@ -336,6 +411,13 @@ class ButlerReports:
                 self.detail,
             ),
             (
+                "nebula.reports.source_note",
+                "Read one selected-project note and its current revision in bounded chunks before requesting a report section transform. Project note content may be sensitive; do not send it to a cloud runtime without the operator's confirmation.",
+                _SOURCE_NOTE,
+                RiskClass.LOCAL_READ,
+                self.source_note,
+            ),
+            (
                 "nebula.reports.create",
                 "Create a draft report through the requesting browser and Core validation after an explicit operator request. Omitted finding IDs default to validated and confirmed project findings. Inspect reports after an uncertain response before retrying.",
                 _CREATE,
@@ -348,6 +430,13 @@ class ButlerReports:
                 _UPDATE,
                 RiskClass.WORKSPACE_WRITE,
                 self.update,
+            ),
+            (
+                "nebula.reports.transform_note",
+                "Prepare an AI report-section transformation for a linked project note at exact report and source revisions. The requesting browser selects a permitted writing runtime, obtains cloud consent when needed, and lets the operator edit the draft before saving it. Butler sees only the saved Core result after review.",
+                _TRANSFORM_NOTE,
+                RiskClass.WORKSPACE_WRITE,
+                self.transform_note,
             ),
             (
                 "nebula.reports.signoff",

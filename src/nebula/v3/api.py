@@ -7316,7 +7316,9 @@ def create_app(
             observation_ids=request.observation_ids,
         )
         entity_validator.validate_create(report)
-        return store.create(report)
+        created = relation_service.create_legacy_entity(report)
+        assert isinstance(created, Report)
+        return created
 
     @app.post(
         f"{API_PREFIX}/reports/{{report_id}}/sign-off",
