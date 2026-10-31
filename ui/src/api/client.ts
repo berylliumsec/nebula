@@ -7832,6 +7832,10 @@ export class ApiClient {
     ).then((items) => page(items.map(mapObservation)));
   }
 
+  getObservation(id: string, signal?: AbortSignal): Promise<ObservationSummary> {
+    return this.request<WireObservation>(`observations/${encodeURIComponent(id)}`, { signal }).then(mapObservation);
+  }
+
   createObservation(
     body: ObservationCreateRequest,
   ): Promise<ObservationSummary> {

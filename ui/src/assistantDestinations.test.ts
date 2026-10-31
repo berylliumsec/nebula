@@ -18,6 +18,7 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("open check-in history")?.id).toBe("project-work");
     expect(destinationToOpen("open notebook file index")?.id).toBe("notebook");
     expect(destinationToOpen("open delete report")?.id).toBe("reports");
+    expect(destinationToOpen("open transform report note")?.id).toBe("reports");
     expect(destinationToOpen("open Knowledge")?.id).toBe("sources");
     expect(destinationToOpen("show storage devices")?.id).toBe("storage");
     expect(destinationToOpen("How do projects work?")).toBeUndefined();

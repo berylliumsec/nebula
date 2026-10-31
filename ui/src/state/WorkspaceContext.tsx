@@ -139,6 +139,7 @@ interface WorkspaceContextValue {
   deleteOperatorProfile: (id: string, expectedRevision?: number) => Promise<void>;
   createReport: (request: ReportCreateRequest) => Promise<ReportSummary>;
   updateReport: (id: string, request: ReportUpdateRequest) => Promise<ReportSummary>;
+  adoptConfirmedReport: (report: ReportSummary) => void;
   deleteReport: (id: string, engagementId: string, expectedRevision: number) => Promise<void>;
   signOffReport: (id: string, expectedRevision: number, operatorId: string, attestation?: string) => Promise<ReportSummary>;
   ingestKnowledgeSource: (request: KnowledgeIngestRequest) => Promise<KnowledgeSource>;
@@ -1003,6 +1004,15 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return updated;
   }, [api, coreState]);
 
+  const adoptConfirmedReport = useCallback((report: ReportSummary) => {
+    if (engagement?.id !== report.engagementId) return;
+    setReports((current) => {
+      const existing = current.find((item) => item.id === report.id);
+      if (existing && existing.revision > report.revision) return current;
+      return [report, ...current.filter((item) => item.id !== report.id)];
+    });
+  }, [engagement?.id]);
+
   const deleteReport = useCallback(async (id: string, engagementId: string, expectedRevision: number) => {
     if (coreState !== "online" || !api || engagement?.id !== engagementId) {
       throw new Error("Reconnect and select the report's project before deleting it.");
@@ -1166,6 +1176,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteOperatorProfile,
       createReport,
       updateReport,
+      adoptConfirmedReport,
       deleteReport,
       signOffReport,
       ingestKnowledgeSource,
@@ -1228,6 +1239,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteOperatorProfile,
       createReport,
       updateReport,
+      adoptConfirmedReport,
       deleteReport,
       retryResource,
       signOffReport,

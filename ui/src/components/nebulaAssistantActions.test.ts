@@ -171,6 +171,18 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.update",
       client_action: {kind: "report_update", project_id: "selected", report_id: reportId,
         expected_revision: 3, status: "final"}}}, "selected")).toBeUndefined();
+    const noteId = "4d99ec94-0c52-47ca-89de-9792f67ecf6b";
+    const transformAction = {kind: "report_transform_note", project_id: "selected", report_id: reportId,
+      expected_revision: 3, observation_id: noteId, expected_source_revision: 2,
+      instruction: "Keep uncertainty visible."};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.transform_note",
+      client_action: transformAction}}, "selected"))
+      .toEqual({kind: "report_transform_note", projectId: "selected", reportId, expectedRevision: 3,
+        observationId: noteId, expectedSourceRevision: 2, instruction: "Keep uncertainty visible."});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.transform_note",
+      client_action: {...transformAction, expected_source_revision: 0}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.transform_note",
+      client_action: {...transformAction, project_id: "other"}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff",
       client_action: {kind: "report_signoff", project_id: "selected", report_id: reportId, expected_revision: 3}}}, "selected"))
       .toEqual({kind: "report_signoff", projectId: "selected", reportId, expectedRevision: 3});

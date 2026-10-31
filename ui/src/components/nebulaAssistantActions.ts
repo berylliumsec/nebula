@@ -27,6 +27,7 @@ export type SettingClientAction =
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string }
   | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
   | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
+  | { kind: "report_transform_note"; projectId: string; reportId: string; expectedRevision: number; observationId: string; expectedSourceRevision: number; instruction: string }
   | { kind: "report_signoff" | "report_export_pdf"; projectId: string; reportId: string; expectedRevision: number }
   | { kind: "report_delete"; projectId: string; reportId: string; expectedRevision: number; title: string }
   | { kind: "report_export_bundle"; projectId: string; expectedProjectRevision: number }
@@ -151,6 +152,14 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
         ...(value.executive_summary !== undefined ? {executiveSummary: value.executive_summary as string} : {}),
         ...(value.finding_ids !== undefined ? {findingIds: value.finding_ids as string[]} : {}),
         ...(value.observation_ids !== undefined ? {observationIds: value.observation_ids as string[]} : {})};
+    }
+    if (operation === "nebula.reports.transform_note" && value.kind === "report_transform_note" && revision
+        && typeof value.observation_id === "string" && uuidPattern.test(value.observation_id)
+        && Number.isInteger(value.expected_source_revision) && Number(value.expected_source_revision) >= 1
+        && typeof value.instruction === "string" && value.instruction.trim().length > 0 && value.instruction.length <= 4000) {
+      return {kind: "report_transform_note", projectId, reportId, expectedRevision: revision,
+        observationId: value.observation_id, expectedSourceRevision: Number(value.expected_source_revision),
+        instruction: value.instruction.trim()};
     }
     if (revision && operation === "nebula.reports.signoff" && value.kind === "report_signoff") {
       return {kind: "report_signoff", projectId, reportId, expectedRevision: revision};

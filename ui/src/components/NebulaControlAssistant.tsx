@@ -20,7 +20,7 @@ import { assistantDestinations, assistantDestinationPath, destinationToOpen, typ
 import { projectSurface, resourcePath } from "../resourceRoutes";
 import { sha256BlobHex, sha256Hex } from "../sha256";
 import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
-import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type VoicePauseSeconds } from "../api/types";
+import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type ObservationSummary, type VoicePauseSeconds, type WritingTransformResponse } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
@@ -31,6 +31,8 @@ import { ButlerOversight } from "./ButlerOversight";
 import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
 import { HostFolderPicker } from "./HostFolderPicker";
 import { applyButlerTerminalStop } from "./butlerTerminalStop";
+import { AIWritingDialog } from "./AIWritingDialog";
+import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
 import styles from "./NebulaControlAssistant.module.css";
@@ -81,7 +83,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
+  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, adoptConfirmedReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -103,6 +105,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [connectingNotebookIndex, setConnectingNotebookIndex] = useState(false);
   const [pendingLinkedProject, setPendingLinkedProject] = useState<(Extract<SettingClientAction, {kind: "project_create_linked"}> & {sourceMessageId?: string})>();
   const [creatingLinkedProject, setCreatingLinkedProject] = useState(false);
+  const [pendingReportTransform, setPendingReportTransform] = useState<(ButlerReportTransformAction & {note: ObservationSummary; sourceMessageId?: string; saveAttempted?: boolean})>();
   const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -251,6 +254,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setUploadingWorkspace(false);
     setPendingNotebookIndex(undefined);
     setConnectingNotebookIndex(false);
+    setPendingReportTransform(undefined);
     setImageHelp(false);
     setPendingTurn(undefined);
     setPendingCheckedSessionId(undefined);
@@ -1193,6 +1197,24 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   const appendNotebookIndexOutcome = appendBrowserActionOutcome;
 
+  const saveReviewedReportTransform = async (result: WritingTransformResponse): Promise<void> => {
+    const action = pendingReportTransform;
+    if (!action || !api || coreState !== "online" || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect and select the original project before saving this report section.");
+    }
+    setPendingReportTransform({...action, saveAttempted: true});
+    const {report: observed, refreshFailed} = await settleButlerReportTransform(
+      api, action, result, adoptConfirmedReport, () => retryResource("reports"),
+    );
+    if (activeImageProject.current !== action.projectId) {
+      throw new Error("The selected project changed during save. Inspect Reports before retrying.");
+    }
+    appendBrowserActionOutcome(action, `Saved the reviewed ${action.note.title} section in ${observed.title} at Core revision ${observed.revision}. The source note remains unchanged.${refreshFailed ? " The Reports list could not refresh; use Retry reports to update the list." : ""}`);
+    setPendingReportTransform(undefined);
+    setHidden(true);
+    onNavigate(resourcePath(action.projectId, "report", observed.id));
+  };
+
   const connectNotebookIndex = async (path: string): Promise<void> => {
     const action = pendingNotebookIndex;
     if (!action || action.kind !== "notebook_index_connect") return;
@@ -1495,6 +1517,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         tone: "danger",
       }));
     }
+    if (action.kind === "report_transform_note") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId || activeImageProject.current !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before transforming its report note.");
+      }
+      if (pendingReportTransform) throw new Error("Review or close the open report section before requesting another transform.");
+      const {note} = await readButlerReportTransform(api, action);
+      if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to read the report again.");
+      setPendingReportTransform({...action, note});
+      setView("chat");
+      return `Opened ${note.title} for an AI report-section draft. The requesting browser will choose a permitted runtime and review the text before Core saves it.`;
+    }
     if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_delete" || action.kind === "report_signoff"
         || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
@@ -1781,6 +1814,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const workReceipts: { url: string; content: string }[] = [];
     let notebookIndexConnectRequested = false;
     let linkedProjectRequested = false;
+    let reportTransformRequested = false;
     let actionQueue = Promise.resolve();
     try {
       const result = await api.streamChat({
@@ -1821,6 +1855,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           appliedCallIds.add(event.toolCallId);
           if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
           if (action.kind === "project_create_linked") linkedProjectRequested = true;
+          if (action.kind === "report_transform_note") reportTransformRequested = true;
           actionQueue = actionQueue.then(async () => {
             if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
           });
@@ -1857,6 +1892,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           setPendingLinkedProject((current) => current?.sourceProjectId === engagement.id && result.message!.id
             ? {...current, sourceMessageId: result.message!.id} : undefined);
           if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
+        }
+        if (reportTransformRequested) {
+          setPendingReportTransform((current) => current?.projectId === engagement.id && result.message!.id
+            ? {...current, sourceMessageId: result.message!.id} : undefined);
+          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Reports before requesting a transform again.");
         }
         setPendingImages([]);
         if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
@@ -1947,6 +1987,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const applied = new Set<string>();
     let notebookIndexConnectRequested = false;
     let linkedProjectRequested = false;
+    let reportTransformRequested = false;
     let actionQueue = Promise.resolve();
     setMessages((current) => [...current, { role: "user", content: prompt }]);
     const result = await api.streamChat({
@@ -1982,6 +2023,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         applied.add(event.toolCallId);
         if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
         if (action.kind === "project_create_linked") linkedProjectRequested = true;
+        if (action.kind === "report_transform_note") reportTransformRequested = true;
         actionQueue = actionQueue.then(async () => { confirmations.push(await applyClientAction(action)); });
       }
       const receipt = assistantWorkReceipt(event, engagement.id);
@@ -2006,6 +2048,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setPendingLinkedProject((current) => current?.sourceProjectId === engagement.id && result.message!.id
         ? {...current, sourceMessageId: result.message!.id} : undefined);
       if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
+    }
+    if (reportTransformRequested) {
+      setPendingReportTransform((current) => current?.projectId === engagement.id && result.message!.id
+        ? {...current, sourceMessageId: result.message!.id} : undefined);
+      if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect Reports before requesting a transform again.");
     }
     confirmations.push(...workReceipts.filter(({ url }) => !result.message!.content.includes(url)).map(({ content }) => content));
     if (result.message.id && confirmations.length && actionOutcomesKey) {
@@ -2194,5 +2241,28 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={`${hidden ? "Show Butler" : "Open Butler"}${attentionCount ? `; ${attentionLabel}` : ""}`} title={attentionCount ? attentionLabel : "Butler"} onClick={() => { setOpen(true); setHidden(false); }}><img src="/nebula-logo.svg" width="22" height="36" alt="" aria-hidden="true" />{attentionCount > 0 && <span className={styles.launcherAttention} aria-hidden="true" />}</button> : null}
     {panelContent && createPortal(panelContent, document.body)}
     {voiceStart && api && engagement && createPortal(<NebulaVoice api={api} project={{ id: engagement.id, name: engagement.name }} initialMicrophone={voiceStart.microphone} onDelegate={delegateVoice} onExit={() => { setVoiceStart(undefined); setHidden(false); }} />, document.body)}
+    {pendingReportTransform?.sourceMessageId && api && engagement?.id === pendingReportTransform.projectId && createPortal(<AIWritingDialog
+      api={api}
+      engagementId={pendingReportTransform.projectId}
+      providers={providers}
+      harnesses={harnesses}
+      purpose="report_section"
+      title={`Transform ${pendingReportTransform.note.title} for the report`}
+      description="Choose a permitted runtime, review and edit its draft, then save this section to the selected report. The source note remains unchanged."
+      sourceLabel={pendingReportTransform.note.title}
+      sourceText={pendingReportTransform.note.body.slice(0, 100_000)}
+      initialInstruction={pendingReportTransform.instruction}
+      applyLabel="Save report section"
+      reviewNotice="Core saves this section only after you review and select Save report section"
+      onApply={saveReviewedReportTransform}
+      onClose={() => {
+        const action = pendingReportTransform;
+        if (!action || activeImageProject.current !== action.projectId) return;
+        appendBrowserActionOutcome(action, action.saveAttempted
+          ? "The report section was not confirmed. Inspect the exact report in Core before asking Butler to retry."
+          : "No reviewed report section was saved. The source note and report are unchanged.");
+        setPendingReportTransform(undefined);
+      }}
+    />, document.body)}
   </NebulaAssistantLauncherContext.Provider>;
 }
