@@ -18,6 +18,7 @@ from .domain import (
     ChatQueue,
     ChatSession,
     ChatBackend,
+    Engagement,
     HarnessProfile,
     ProviderProfile,
     PairedDeviceSession,
@@ -209,6 +210,9 @@ class ChatQueueService:
 
     def write(self, session_id, body, device_id=None):
         session = self.store.get(ChatSession, session_id)
+        project_workspace_path = self.store.get(
+            Engagement, session.engagement_id
+        ).workspace_path
         present = self.exists(session_id)
         queue = self.get(session_id)
         items = [dict(item) for item in queue.items]
@@ -394,11 +398,18 @@ class ChatQueueService:
             items.append(retry)
             changes["paused"] = True
         changes["items"] = retire_settled_items(items)
-        if present:
-            return self.store.update(
-                ChatQueue, queue.id, changes, expected_revision=body.expected_revision
+        with self.store.transaction(immediate=True) as transaction:
+            transaction.assert_project_workspace(
+                session.engagement_id, project_workspace_path
             )
-        return self.store.create(queue.model_copy(update=changes))
+            if present:
+                return transaction.update(
+                    ChatQueue,
+                    queue.id,
+                    changes,
+                    expected_revision=body.expected_revision,
+                )
+            return transaction.add(queue.model_copy(update=changes))
 
     def review(self, queue, item_id, detail):
         items = [dict(item) for item in queue.items]
