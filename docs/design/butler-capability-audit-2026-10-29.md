@@ -13,7 +13,7 @@ This is a source audit of `origin/main` at `b5bb47c` and the capability registry
 not a claim that every action was exercised in a running Core. `api.py` contains
 373 HTTP route decorators across 41 tags. Route count is an inventory aid: some
 routes are internal, some are read-only, and several implement one workflow.
-The branch's project Work catalog has 57 named operations, including discovery
+The branch's project Work catalog has 60 named operations, including discovery
 and reads; these counts are not a coverage percentage.
 
 ## Current coverage
@@ -29,9 +29,35 @@ and reads; these counts are not a coverage percentage.
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, relink an existing project through a browser-selected host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms folder choice and removal, and reads back results. Core refuses a relink while old-workspace work can be reused and disconnects a stale Notebook file index. Host consent remains in its visible control. |
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
-| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page project Evidence metadata and request browser-owned upload or verified original-file download | Direct browser page control, evidence capture, and other research-data control still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
+| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; discover active security browser sessions and start a scoped browser automation mission with explicit targets and lease limits; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page selected-project evidence and link targets and request a browser-owned immutable evidence upload with exact Core read-back | Direct control of the visible browser page, browser evidence capture, and other research-data control still lack accepted Butler journeys. A saved browser mission is not an assessment result. Device file bytes stay in the requesting browser. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; prepare an exact linked-note AI section transform for browser runtime choice and operator review; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. The operating system's final download save location remains device-owned. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
+
+## Branch slice: scoped browser automation mission
+
+Entry point: an operator asks interactive Butler to assess an in-scope target
+through the project's headless security browser. Butler pages active eligible
+sessions, selects one exact session, and starts a mission with explicit targets,
+risk classes and a bounded browser lease. Core owns the session identity, scope,
+mission and lease; Butler receives no browser cookies, page body or credential
+secret. A cross-project session, out-of-scope target or ungranted high-risk class
+is refused by Core. The mission's saved status and ID are a start receipt;
+completion, findings and any browser effects require later read-back. The Browser
+and Missions views own the operator's ongoing observation. Refresh and retry use
+the saved mission roster so an uncertain start is inspected before another start.
+Streaming, interruption and report export belong to the existing mission and
+research-data controls; this slice adds no direct visible-tab command.
+
+The focused Core regression covers browser-tool budget, specialist routing,
+planning context and saved lease. Butler's tool and product-help checks passed.
+The production-bundle journey passed in all eight selected authenticated,
+non-loopback LAN profiles: desktop and compact Chromium, Chromium at 320/390/430
+px, and WebKit at 320/390/430 px. It verified the served asset hash, project
+scope, mission link, exact saved session and targets, lease, refresh, accessibility
+and mobile width with synthetic data. Chromium 430 twice timed out before its
+fixture Core emitted a ready line at the default 30-second limit, then passed
+the exact rerun with a 90-second startup limit. The cause of that startup delay
+is unresolved. No live target browsing or physical device was exercised.
 
 ## Branch slice: existing-project folder relink
 
@@ -444,10 +470,10 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 38
-reviewed actions: 36 supported, one gap, and one device handoff. Its source
-inventory contains 525 distinct `api` call signatures in production UI
-TypeScript, of which 84 are linked to reviewed actions; 441 still require
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 39
+reviewed actions. Its source inventory contains 527 distinct `api` call
+signatures in production UI TypeScript, of which 88 are linked to reviewed
+actions; 439 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
@@ -466,15 +492,13 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Complete existing-project host-folder relinking and the
-   remaining resource actions in their owning services. Each needs target
-   discovery, optimistic revisions where applicable, and observed Core read-back.
-   Generic Engagement PATCH/PUT now rejects a path change or clear because live
-   consumers can retain the old workspace. A typed relink must fence new
-   work, account for terminals, reviewed executions, automation and harness
-   sessions, warm Notebook kernels, debugger sessions, stale previews and the
-   saved file index, then switch and refresh the same-project UI. The generic
-   path edit must close when this transition is implemented.
+2. Complete remaining resource actions in their owning services. Each needs
+   target discovery, optimistic revisions where applicable, and observed Core
+   read-back. The typed existing-project folder relink now fences same-process
+   work admission, rejects reusable old-workspace consumers, clears a stale
+   Notebook file index, and refreshes the selected project. Generic Engagement
+   PATCH/PUT rejects path changes. Shared admission across multiple Core server
+   processes remains outside the standard single-process CLI contract.
 3. Add specialized device and administration handoffs for local file selection, pairing, storage
    enrollment, credentials, release updates and service state.
    Keep one-time values on the requesting device and preserve existing
