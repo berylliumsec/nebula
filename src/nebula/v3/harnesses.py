@@ -10076,10 +10076,18 @@ class HarnessRuntimeService:
             metadata=metadata,
         )
         if transaction is not None:
+            transaction.assert_project_workspace(
+                engagement_id, engagement.workspace_path
+            )
             transaction.add(session)
             created = session
         else:
-            created = self.store.create(session)
+            with self.store.transaction(immediate=True) as admission:
+                admission.assert_project_workspace(
+                    engagement_id, engagement.workspace_path
+                )
+                admission.add(session)
+            created = session
         if components is not None:
             self._gateway_oci_components[created.id] = components
         return created
@@ -10836,6 +10844,9 @@ class HarnessRuntimeService:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
+        project_workspace_path = self.store.get(
+            Engagement, engagement_id
+        ).workspace_path
         profile = self.store.get(HarnessProfile, profile_id)
         from .chat_agent_messages import resolve_agent_messaging_choice
 
@@ -11567,7 +11578,8 @@ class HarnessRuntimeService:
         prior_messages = self._chat_messages(
             engagement_id, chat.id, include_replaced=True
         )
-        with self.store.transaction() as transaction:
+        with self.store.transaction(immediate=True) as transaction:
+            transaction.assert_project_workspace(engagement_id, project_workspace_path)
             # Serialize competing sends on PostgreSQL and recheck in the same
             # transaction that saves the turn. SQLite writes are serialized by
             # its single-writer transaction boundary.
@@ -13172,6 +13184,9 @@ class HarnessRuntimeService:
         allow_remote_mcp: bool = False,
         browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
+        project_workspace_path = self.store.get(
+            Engagement, engagement_id
+        ).workspace_path
         profile = self.store.get(HarnessProfile, profile_id)
         # Standing profile consent stands in for the per-turn confirmation.
         allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
@@ -13372,7 +13387,8 @@ class HarnessRuntimeService:
             )
             for index, stage in enumerate(stage_prompts)
         ]
-        with self.store.transaction() as transaction:
+        with self.store.transaction(immediate=True) as transaction:
+            transaction.assert_project_workspace(engagement_id, project_workspace_path)
             transaction.add(run)
             for turn in turns:
                 transaction.add(turn)
