@@ -67,6 +67,7 @@ from .domain import (
     ChatQueue,
     ChatTurn,
     ENTITY_MODEL_BY_KIND,
+    Engagement,
     Entity,
     HarnessInteraction,
     OperationEvent,
@@ -305,6 +306,25 @@ class StoreTransaction:
                 {"operation_id": operation_id},
             )
         self._locked_operation_streams.add(operation_id)
+
+    def assert_project_workspace(
+        self, engagement_id: str, expected_path: str | None
+    ) -> None:
+        """Serialize work admission with a project folder relink.
+
+        The caller must capture the folder before preparing work and commit its
+        busy row in this transaction. A lock alone would admit a stale binding
+        if the relink committed before this transaction began.
+        """
+
+        row = self.session.get(EntityRow, engagement_id, with_for_update=True)
+        if row is None or row.kind != Engagement.entity_kind:
+            raise NotFoundError(f"engagements entity not found: {engagement_id}")
+        project = _row_to_entity(row, Engagement)
+        if project.workspace_path != expected_path:
+            raise ConflictError(
+                "Project workspace changed while preparing work; read the project and retry"
+            )
 
     def add(self, entity: Entity) -> Entity:
         row = EntityRow(
@@ -886,6 +906,7 @@ class NebulaStore:
         event_payload: dict[str, Any] | None = None,
         actor_id: str | None = None,
         idempotency_key: str | None = None,
+        project_workspace_binding: tuple[str, str | None] | None = None,
     ) -> tuple[EntityT, RunEvent]:
         """Atomically create an entity and append its initial audit event."""
 
@@ -894,6 +915,22 @@ class NebulaStore:
         connection = self.database.engine.connect()
         try:
             self._begin_run_write(connection, run_id)
+            if project_workspace_binding is not None:
+                project_id, expected_path = project_workspace_binding
+                project_row = connection.execute(
+                    select(EntityRow.kind, EntityRow.payload)
+                    .where(EntityRow.id == project_id)
+                    .with_for_update()
+                ).one_or_none()
+                if project_row is None or project_row.kind != Engagement.entity_kind:
+                    raise NotFoundError(f"engagements entity not found: {project_id}")
+                if (
+                    Engagement.model_validate(project_row.payload).workspace_path
+                    != expected_path
+                ):
+                    raise ConflictError(
+                        "Project workspace changed while preparing work; read the project and retry"
+                    )
             connection.execute(
                 insert(EntityRow).values(
                     id=entity.id,
@@ -931,6 +968,9 @@ class NebulaStore:
             raise ConflictError(
                 f"entity or initial run event already exists: {entity.id}"
             ) from exc
+        except (ConflictError, NotFoundError):
+            connection.rollback()
+            raise
         except Exception as caught_error:
             record_caught_exception(
                 "storage",
@@ -1468,6 +1508,155 @@ class NebulaStore:
                 model,
                 entity_id,
                 changes,
+                expected_revision=expected_revision,
+            )
+
+    def relink_project_workspace(
+        self, engagement_id: str, workspace_path: str, *, expected_revision: int
+    ) -> Engagement:
+        """Change one project's folder only when no old workspace can be reused.
+
+        SQLite takes the writer lock before the preflight. PostgreSQL locks the
+        project row, and the optimistic revision protects the final write.
+        Terminal and reviewed-execution process locks are held by the API route.
+        """
+
+        in_use = (
+            (
+                "chat_turns",
+                {
+                    "queued",
+                    "routing",
+                    "waiting_approval",
+                    "waiting_callback",
+                    "finalizing",
+                },
+                "chat turn",
+            ),
+            ("chat_goals", {"running", "blocked"}, "resumable goal"),
+            (
+                "runs",
+                {
+                    "queued",
+                    "planning",
+                    "running",
+                    "waiting_approval",
+                    "paused",
+                    "cancelling",
+                },
+                "mission",
+            ),
+            (
+                "harness_sessions",
+                {"starting", "idle", "running", "waiting_approval", "interrupted"},
+                "harness session",
+            ),
+            (
+                "automation_sessions",
+                {"starting", "ready", "closing"},
+                "command session",
+            ),
+            ("notebook_runs", {"queued", "running"}, "Notebook run"),
+            (
+                "operator_executions",
+                {"queued", "running", "cancelling"},
+                "reviewed execution",
+            ),
+            ("native_hook_executions", {"running"}, "native hook"),
+        )
+        with self.transaction(immediate=True) as transaction:
+            row = transaction.session.get(
+                EntityRow, engagement_id, with_for_update=True
+            )
+            if row is None or row.kind != Engagement.entity_kind:
+                raise NotFoundError(f"engagements entity not found: {engagement_id}")
+            project = _row_to_entity(row, Engagement)
+            if project.revision != expected_revision:
+                raise ConflictError(
+                    f"revision conflict: expected {expected_revision}, found {project.revision}"
+                )
+            if project.workspace_path == workspace_path:
+                return project
+            for kind, statuses, label in in_use:
+                active = transaction.session.scalar(
+                    select(EntityRow.id)
+                    .where(
+                        EntityRow.kind == kind,
+                        EntityRow.engagement_id == engagement_id,
+                        EntityRow.payload["status"].as_string().in_(statuses),
+                    )
+                    .limit(1)
+                )
+                if active is not None:
+                    raise ConflictError(
+                        f"project has a {label} that can still use its current folder; "
+                        "complete or close it before relinking"
+                    )
+            interrupted_turns = transaction.session.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == ChatTurn.entity_kind,
+                    EntityRow.engagement_id == engagement_id,
+                    EntityRow.payload["status"].as_string() == "interrupted",
+                )
+            )
+            if any(_recovery_pending(item.payload) for item in interrupted_turns):
+                raise ConflictError(
+                    "project has an interrupted chat turn awaiting recovery; "
+                    "complete or close it before relinking"
+                )
+            paused_goals = transaction.session.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == ChatGoal.entity_kind,
+                    EntityRow.engagement_id == engagement_id,
+                    EntityRow.payload["status"].as_string() == "paused",
+                )
+            )
+            if any(
+                not item.payload.get("metadata", {}).get("handoff_target_session_id")
+                for item in paused_goals
+            ):
+                raise ConflictError(
+                    "project has a paused goal that can resume; "
+                    "complete or close it before relinking"
+                )
+            interrupted_runs = transaction.session.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == AgentRun.entity_kind,
+                    EntityRow.engagement_id == engagement_id,
+                    EntityRow.payload["status"].as_string() == "interrupted",
+                )
+            )
+            if any(
+                item.payload.get("backend") == RunBackend.NATIVE.value
+                for item in interrupted_runs
+            ):
+                raise ConflictError(
+                    "project has an interrupted native mission that can resume; "
+                    "complete or close it before relinking"
+                )
+            queues = transaction.session.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == ChatQueue.entity_kind,
+                    EntityRow.engagement_id == engagement_id,
+                )
+            )
+            if any(
+                any(
+                    item.get("status") not in {"complete", "cancelled"}
+                    for item in queue.payload.get("items", [])
+                )
+                for queue in queues
+            ):
+                raise ConflictError(
+                    "project has a queued or reviewable chat follow-up; "
+                    "complete or remove it before relinking"
+                )
+            metadata = dict(project.metadata)
+            metadata.pop("notebook_file_index", None)
+            return transaction.update(
+                Engagement,
+                engagement_id,
+                {"workspace_path": workspace_path, "metadata": metadata},
                 expected_revision=expected_revision,
             )
 
