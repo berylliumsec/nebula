@@ -312,6 +312,14 @@ def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypa
         and "host folder picker" in str(item["text"])
         for item in linked
     )
+    relink = search_product_knowledge(
+        "Can Butler relink an existing project to another host folder?"
+    )
+    assert any(
+        "nebula.projects.relink" in str(item["text"])
+        and "existing project" in str(item["text"])
+        for item in relink
+    )
 
 
 def test_product_search_finds_butler_device_transcript_export(monkeypatch):

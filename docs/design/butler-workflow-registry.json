@@ -334,18 +334,20 @@
       "id": "workspace.relink",
       "entry_point": "Existing project: relink a host folder",
       "ui_calls": [
-        "ui/src/components/HostFolderPicker.tsx::listHostWorkspaceFolders"
+        "ui/src/components/HostFolderPicker.tsx::listHostWorkspaceFolders",
+        "ui/src/components/NebulaControlAssistant.tsx::relinkProjectWorkspace",
+        "ui/src/state/WorkspaceContext.tsx::getProjectLifecycle"
       ],
       "core_owner": "Project linked-host-folder policy",
       "butler": {
         "discover": "nebula.navigate.open",
-        "read": "nebula.workspace.list shows selected workspace entries only",
-        "change": "missing: existing-project relink control"
+        "read": "nebula.projects.detail gives the exact target and current revision",
+        "change": "nebula.projects.relink prepares a requesting-browser host-folder choice"
       },
-      "authority": "Host folder consent and exact project revision with Core read-back",
-      "observed_result_test": "missing: Butler existing-project relink LAN journey",
-      "result": "Core and Workbench must agree on selected folder",
-      "status": "gap"
+      "authority": "Interactive browser host-folder selection and confirmation, exact project revision, no reusable old-workspace work, and Core read-back",
+      "observed_result_test": "ui/tests/real-core.spec.ts::Butler project lifecycle confirms and reads back changes on production LAN Core",
+      "result": "Core and Workbench agree on the new folder; files in the old folder remain",
+      "status": "supported"
     },
     {
       "id": "terminal.lifecycle",
@@ -1395,7 +1397,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
-      "count": 7
+      "count": 9
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getReport",
@@ -1431,6 +1433,10 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::reindexLibraryItemAtRevision",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::relinkProjectWorkspace",
       "count": 1
     },
     {
@@ -2659,6 +2665,10 @@
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::deleteRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::getProjectLifecycle",
       "count": 1
     },
     {
