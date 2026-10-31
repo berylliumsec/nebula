@@ -394,6 +394,7 @@ def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kerne
             restart_uncertain=False,
             active_run=None,
             policy_revision=runtime.policy.revision,
+            workspace_path=notebooks._workspace_path(selected.id),
             command=command,
         )
         notebooks.workers[(selected.id, "kernel.ipynb")] = worker
