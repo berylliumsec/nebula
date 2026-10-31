@@ -7122,6 +7122,150 @@ test("assistant upgrade Butler adds, downloads, reindexes and removes one shared
   ]);
 });
 
+test("assistant upgrade Butler stores and downloads project evidence on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  page.setDefaultTimeout(30_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const uploadInstruction = "Add a synthetic evidence file from this device.";
+  const downloadInstruction = "Download the synthetic project evidence original.";
+  const content = Buffer.from("Synthetic Butler project evidence. No private data.\n");
+  let evidenceId = "";
+  let evidenceRevision = 0;
+  let modelSawFile = false;
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will review the evidence file action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = messages[lastUser]?.content;
+    if (typeof prompt !== "string") return undefined;
+    const upload = prompt.startsWith(uploadInstruction);
+    const download = prompt.startsWith(downloadInstruction);
+    if (!upload && !download) return undefined;
+    if (JSON.stringify(messages.filter(message => message.role === "tool")).includes(content.toString().trim())) modelSawFile = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "project evidence upload download original"}};
+    if (upload) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.upload"}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.evidence.upload", arguments: {}}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.list"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.evidence.list", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.detail"}};
+    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.evidence.detail", arguments: {evidence_id: evidenceId}}};
+    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.download"}};
+    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.evidence.download",
+      arguments: {evidence_id: evidenceId, expected_revision: evidenceRevision}}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler Evidence fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdFinding = await api.post("findings", {data: {engagement_id: projectId, title: "Synthetic finding", description: "Local fixture", severity: "info", status: "candidate"}});
+    expect(createdFinding.ok(), await createdFinding.text()).toBe(true);
+    const findingId = (await createdFinding.json() as {id: string}).id;
+    const createdAsset = await api.post("assets", {data: {engagement_id: projectId, name: "Synthetic server"}});
+    expect(createdAsset.ok(), await createdAsset.text()).toBe(true);
+    const assetId = (await createdAsset.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler Evidence model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler Evidence LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (instruction: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(uploadInstruction);
+    let handoff = assistant.getByRole("region", {name: "Add project evidence"});
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    await handoff.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("No evidence file was selected or stored.")).toBeVisible();
+    expect(await (await api.get("evidence", {params: {engagement_id: projectId}})).json()).toEqual([]);
+    await send(uploadInstruction);
+    handoff = assistant.getByRole("region", {name: "Add project evidence"});
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    const landscapeProfile = testInfo.project.name === "assistant-real-chromium-390"
+      || testInfo.project.name === "assistant-real-webkit-390";
+    const portraitViewport = page.viewportSize();
+    if (landscapeProfile) {
+      await page.setViewportSize({width: 844, height: 390});
+      await expect(handoff).toBeVisible();
+    }
+    await handoff.getByLabel("Choose project evidence file").setInputFiles({name: "butler-proof.txt", mimeType: "text/plain", buffer: content});
+    await handoff.getByRole("textbox", {name: "Title"}).fill("Synthetic proof");
+    await handoff.getByRole("textbox", {name: "Description"}).fill("Synthetic device artifact");
+    await handoff.getByRole("combobox", {name: "Finding"}).selectOption(findingId);
+    await handoff.getByRole("checkbox", {name: "Synthetic server"}).check();
+    const storeButton = handoff.getByRole("button", {name: "Store evidence"});
+    if (landscapeProfile) {
+      await storeButton.scrollIntoViewIfNeeded();
+      expect(await storeButton.evaluate((button) => {
+        const viewport = window.visualViewport;
+        const bounds = button.getBoundingClientRect();
+        return Boolean(viewport && bounds.top >= viewport.offsetTop - 1
+          && bounds.bottom <= viewport.offsetTop + viewport.height + 1
+          && document.documentElement.scrollWidth <= viewport.width + 1);
+      })).toBe(true);
+    }
+    await storeButton.click();
+    await expect(assistant.getByText(/Stored Synthetic proof in Core's project Evidence at revision/)).toBeVisible({timeout: 45_000});
+    if (landscapeProfile && portraitViewport) await page.setViewportSize(portraitViewport);
+    const records = await (await api.get("evidence", {params: {engagement_id: projectId}})).json() as Array<{id: string; revision: number; artifact_id: string; sha256: string; finding_id: string; asset_ids: string[]}>;
+    expect(records).toHaveLength(1);
+    const saved = records[0];
+    expect(saved.finding_id).toBe(findingId);
+    expect(saved.asset_ids).toContain(assetId);
+    expect(saved.sha256).toBe(createHash("sha256").update(content).digest("hex"));
+    expect(await (await api.get(`artifacts/${saved.artifact_id}/content`)).body()).toEqual(content);
+    evidenceId = saved.id;
+    evidenceRevision = saved.revision;
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(/Stored Synthetic proof in Core's project Evidence/)).toBeVisible();
+    await send(downloadInstruction);
+    await expect(page.getByRole("dialog", {name: "Download Synthetic proof?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("dialog", {name: "Download Synthetic proof?"}).getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("Synthetic proof was not downloaded. No file transfer started.")).toBeVisible();
+    await send(downloadInstruction);
+    await expect(page.getByRole("dialog", {name: "Download Synthetic proof?"})).toBeVisible({timeout: 45_000});
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("dialog", {name: "Download Synthetic proof?"}).getByRole("button", {name: "Download original"}).click();
+    const downloaded = await downloading;
+    expect(downloaded.suggestedFilename()).toBe("butler-proof.txt");
+    expect(await readFile(await downloaded.path())).toEqual(content);
+    await expect(assistant.getByText("Started a verified download of Synthetic proof's original file on this device.")).toBeVisible();
+    await page.goto(`${core.origin}/projects/${projectId}/evidence/${evidenceId}`);
+    await expect(page.getByRole("heading", {name: "Synthetic proof", level: 2})).toBeVisible();
+    expect(modelSawFile).toBe(false);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-evidence-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), landscapeViewport: landscapeProfile ? {width: 844, height: 390} : null,
+      asset: entry, assetSha256: build.assets[entry!], evidenceId, evidenceRevision,
+      sha256: saved.sha256, result: "browser-owned file choice and cancellation; exact Core and list read-back; project links; verified original download; refreshed evidence; no file bytes returned to model"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(480_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
