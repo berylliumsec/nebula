@@ -9467,6 +9467,7 @@ def create_app(
         if (
             request.backend == RunBackend.NATIVE
             and request.max_tool_calls is None
+            and request.browser_autonomy is None
             and automation_runtime is not None
         ):
             default_command_runtime_ready = (
@@ -9474,7 +9475,7 @@ def create_app(
                     engagement_id=request.engagement_id
                 )
             ).ready
-        wants_command_tools = (
+        wants_command_tools = request.browser_autonomy is None and (
             default_command_runtime_ready
             if request.max_tool_calls is None
             else request.max_tool_calls > 0
@@ -9513,7 +9514,7 @@ def create_app(
                 8
                 if request.allow_subagents
                 else 1
-                if command_tools or request.mcp_server_ids
+                if command_tools or request.mcp_server_ids or browser_tools
                 else 0
             ),
             max_duration_seconds=request.max_duration_seconds,
