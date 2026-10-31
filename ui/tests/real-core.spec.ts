@@ -7186,7 +7186,11 @@ test("assistant upgrade Butler uploads one immutable evidence file on production
     await send();
     await assistant.getByLabel("Choose project evidence file").setInputFiles({name: "proof.txt", mimeType: "text/plain", buffer: content});
     const confirmation = page.getByRole("dialog", {name: "Store proof.txt as evidence?"});
+    await expect(confirmation).toContainText("Synthetic proof");
+    await expect(confirmation).toContainText("operator_upload");
+    await expect(confirmation).toContainText("Linked fixture");
     await expect(confirmation).toContainText("Selected finding");
+    await expect(confirmation).toContainText("Selected asset");
     await confirmation.getByRole("button", {name: "Store evidence"}).click();
     const expectedHash = createHash("sha256").update(content).digest("hex");
     await expect(assistant.getByText(new RegExp(`Stored Synthetic proof as evidence in Core.*${expectedHash}`))).toBeVisible({timeout: 45_000});
