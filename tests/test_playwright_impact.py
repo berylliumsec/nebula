@@ -37,6 +37,8 @@ def areas(result):
         ("ui/src/components/ProjectPicker.tsx", "project-lifecycle"),
         ("src/nebula/v3/api.py", "core-api"),
         ("ui/src/components/ThemePicker.tsx", "themes"),
+        ("src/nebula/v3/butler_devices.py", "butler-device-pairing"),
+        ("ui/src/devicePairingLink.ts", "butler-device-pairing"),
         ("ui/src-tauri/src/main.rs", "desktop-shell"),
     ],
 )

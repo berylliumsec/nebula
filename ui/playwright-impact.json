@@ -94,6 +94,7 @@
     {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
     {"name": "file-navigation-search", "patterns": ["src/nebula/v3/workspace.py", "ui/src/components/WorkspacePanel*", "ui/src/components/EditorWorkspaceSearch*", "ui/src/components/CodeEditorPanel*", "ui/src/api/types.ts"], "areas": ["editor-files-scroll", "file-search-real-core"]},
     {"name": "code-editor", "patterns": ["ui/src/components/CodeEditorPanel*", "ui/src/components/CodeMirrorSurface*", "ui/src/components/Editor*", "ui/src/components/editor*", "ui/src/components/fileIcons*", "ui/src/components/useEditorSidebarWidth*"], "areas": ["coding-makeover", "editor-files-scroll"]},
+    {"name": "butler-device-pairing", "patterns": ["src/nebula/v3/butler_devices.py", "ui/src/components/ButlerDeviceHandoff.tsx", "ui/src/components/DevicePairingSettings.tsx", "ui/src/devicePairingLink.ts", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-device-pairing"]},
     {"name": "butler-terminal", "patterns": ["src/nebula/v3/butler_terminal.py", "src/nebula/v3/container_terminal.py", "ui/src/components/butlerTerminalStop.ts", "ui/src/api/terminalTypes.ts", "ui/tests/fixtures/terminal_core.py", "ui/tests/fixtures/terminal-core.ts"], "areas": ["butler-terminal"]},
     {"name": "remaining-ui-components", "fallback": true, "patterns": ["ui/src/components/**", "ui/src/pages/**", "ui/src/hooks/**", "ui/src/lib/**"], "areas": ["desktop-interface", "mobile-layout"]},
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
@@ -2483,6 +2484,16 @@
     "desktop-interface": [
       {"area":"desktop-interface","project":"desktop","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
       {"area":"desktop-interface","project":"compact","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
+    ],
+    "butler-device-pairing": [
+      {"area":"butler-device-pairing","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-pairing","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-pairing","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-pairing","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-pairing","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-pairing","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-pairing","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-pairing","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh","runtime":"real-core","shard":"1/1"}
     ],
     "butler-terminal": [
       {"area":"butler-terminal","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
