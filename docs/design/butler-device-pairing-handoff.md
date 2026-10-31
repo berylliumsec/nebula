@@ -1,0 +1,16 @@
+# Butler device-pairing handoff contract
+
+Journey: the operator asks a project-scoped Butler to inspect paired browsers, prepare a new pairing offer, or revoke one exact device. The requesting browser handles the one-time offer and destructive confirmation. Core remains the authority for authentication and revocation; its local-machine restriction for creating pairing offers still applies.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Entry/discovery | Butler lists bounded nonsecret device metadata and names the target and action; no token hash, session cookie, pairing secret, or confirmation code enters a model receipt | Core device records, selected Butler project | Tool, component, real-Core browser |
+| Create/mutate | A host browser with bearer access can deliberately create a five-minute, single-use offer; a remote paired browser is told to use the host. Creating an offer does not claim that another device redeemed it | Core local-machine guard and transient offer; requesting browser | Core API, component, production LAN browser |
+| Select/use | The operator sees the pairing QR and code only in transient browser state. Revocation compares the exact device ID, immutable creation time, and name with a fresh Core list before showing a confirmation | Core device list and browser transient state | Tool, component, real-Core browser |
+| Stream/interrupt | Not applicable: these are individual requests. Cancelling before creation or revocation changes no Core state | Browser transient state | Component, real-Core browser |
+| Background | Scheduled Butler cannot prepare a requesting-browser pairing or revocation action | Butler capability boundary | Tool |
+| Refresh/reconnect | Revoked devices remain absent from a fresh list. A pairing secret disappears on reload; an uncertain offer is allowed to expire rather than being replayed automatically | Core device records and ephemeral offers; browser memory | Real-Core browser |
+| Failure/retry | An uncertain pairing response does not automatically create a second offer. An uncertain revoke requires a fresh list; a missing target is reported as observed absence, not silently retried | Core readback and browser error state | Component, real-Core browser |
+| Delete/revoke | A named confirmation precedes exact device revocation. For another device, a fresh Core list proves absence; revoking this browser uses Core's successful response and then its authentication loss | Core device store and browser authentication state | Core API, real-Core browser |
+
+The host-only creation rule is an authority boundary. Butler may prepare a handoff for a remote operator, but the requesting browser must report that Core refuses creation from a remote address; it must not proxy or bypass the request through the host. Pairing secrets and codes must never enter Butler messages, browser storage, or logs. The redemption page must promptly remove the one-time fragment from its URL. The QR shown to the operator necessarily contains the secret and must be dismissed when the offer is no longer needed. A companion must still reach the host origin for redemption; displaying a QR alone is not proof of pairing.
