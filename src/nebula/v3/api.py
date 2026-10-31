@@ -14606,9 +14606,9 @@ def _output_page_end(data: bytes, offset: int, limit: int, *, raw: bool) -> int:
 def _resolve_engagement_workspace_path(workspace_path: str) -> str:
     """Return the canonical folder a project links, or reject an unusable one.
 
-    Create, replace and patch all store this resolved form so a later
-    workspace read never resolves a relative or missing path against Core's
-    working directory.
+    Creation stores this resolved form so a later workspace read never resolves
+    a relative or missing path against Core's working directory. Generic
+    replacement and patch cannot change a project's folder.
     """
 
     try:
@@ -15603,19 +15603,6 @@ def _register_crud_routes(
                 raise ConflictError(
                     f"revision conflict: expected {if_match}, found {current.revision}"
                 )
-            if (
-                isinstance(current, Engagement)
-                and isinstance(entity, Engagement)
-                and entity.workspace_path
-                and entity.workspace_path != current.workspace_path
-            ):
-                entity = entity.model_copy(
-                    update={
-                        "workspace_path": _resolve_engagement_workspace_path(
-                            entity.workspace_path
-                        )
-                    }
-                )
             entity_validator.validate_update(current, entity)
             if isinstance(current, ProviderProfile) and isinstance(
                 entity, ProviderProfile
@@ -15673,18 +15660,6 @@ def _register_crud_routes(
                 changes["grants"] = [
                     grant.model_dump(mode="python") for grant in candidate.grants
                 ]
-            if (
-                isinstance(current, Engagement)
-                and isinstance(candidate, Engagement)
-                and candidate.workspace_path
-                and candidate.workspace_path != current.workspace_path
-            ):
-                changes["workspace_path"] = _resolve_engagement_workspace_path(
-                    candidate.workspace_path
-                )
-                candidate = candidate.model_copy(
-                    update={"workspace_path": changes["workspace_path"]}
-                )
             if isinstance(current, ProviderProfile) and isinstance(
                 candidate, ProviderProfile
             ):

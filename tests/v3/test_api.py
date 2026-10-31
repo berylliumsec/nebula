@@ -2560,7 +2560,7 @@ def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
     )
 
 
-def test_engagement_updates_validate_workspace_path_like_create(api, tmp_path):
+def test_generic_engagement_updates_cannot_relink_or_clear_workspace(api, tmp_path):
     client, store, _ = api
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2587,20 +2587,24 @@ def test_engagement_updates_validate_workspace_path_like_create(api, tmp_path):
 
     moved = tmp_path / "moved"
     moved.mkdir()
-    patched = client.patch(
-        url,
-        headers=_auth(),
-        json={"changes": {"workspace_path": str(workspace / ".." / "moved")}},
+    for path in (str(moved), None):
+        patched = client.patch(
+            url, headers=_auth(), json={"changes": {"workspace_path": path}}
+        )
+        assert patched.status_code == 422, patched.text
+        replaced = client.put(
+            url, headers=_auth(), json={**project, "workspace_path": path}
+        )
+        assert replaced.status_code == 422, replaced.text
+        assert store.get(Engagement, project["id"]).workspace_path == str(
+            workspace.resolve()
+        )
+    renamed = client.patch(
+        url, headers=_auth(), json={"changes": {"name": "Renamed"}}
     )
-    assert patched.status_code == 200, patched.text
-    assert patched.json()["workspace_path"] == str(moved.resolve())
-    replaced = client.put(
-        url,
-        headers=_auth(),
-        json={**patched.json(), "workspace_path": str(moved / ".." / "workspace")},
-    )
-    assert replaced.status_code == 200, replaced.text
-    assert replaced.json()["workspace_path"] == str(workspace.resolve())
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Renamed"
+    assert renamed.json()["workspace_path"] == str(workspace.resolve())
 
 
 def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(api):

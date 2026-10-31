@@ -455,8 +455,8 @@ tool catalog.
 2. Complete existing-project host-folder relinking and the
    remaining resource actions in their owning services. Each needs target
    discovery, optimistic revisions where applicable, and observed Core read-back.
-   Generic Engagement PATCH/PUT currently permits a path change or clear while
-   live consumers can retain the old workspace. A typed relink must fence new
+   Generic Engagement PATCH/PUT now rejects a path change or clear because live
+   consumers can retain the old workspace. A typed relink must fence new
    work, account for terminals, reviewed executions, automation and harness
    sessions, warm Notebook kernels, debugger sessions, stale previews and the
    saved file index, then switch and refresh the same-project UI. The generic
