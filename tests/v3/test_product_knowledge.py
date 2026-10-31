@@ -322,6 +322,18 @@ def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypa
     )
 
 
+def test_product_search_finds_butler_scoped_browser_mission(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler start a scoped browser automation mission for my project?"
+    )
+    assert any(
+        "nebula.work.browser_sessions" in str(item["text"])
+        and "nebula.work.start_mission" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_device_transcript_export(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

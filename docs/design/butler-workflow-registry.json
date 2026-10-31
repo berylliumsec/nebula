@@ -656,6 +656,24 @@
       "status": "supported"
     },
     {
+      "id": "browser.scoped_automation_mission",
+      "entry_point": "Browser: start a scoped autonomous assessment in an active security session",
+      "ui_calls": [
+        "ui/src/components/WorkbenchBrowser.tsx::createMission",
+        "ui/src/components/WorkbenchBrowser.tsx::getSecurityBrowserAutomation"
+      ],
+      "core_owner": "Core BrowserAutomationService, project scope, browser session and mission run",
+      "butler": {
+        "discover": "nebula.work.browser_sessions",
+        "read": "nebula.work.mission",
+        "change": "nebula.work.start_mission"
+      },
+      "authority": "Interactive selected project, exact active security session, in-scope targets, risk grants and bounded lease",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_butler_discovers_project_browser_and_starts_scoped_mission",
+      "result": "Core saves the mission with the selected browser session; completion must be read separately",
+      "status": "supported"
+    },
+    {
       "id": "storage.enrollment",
       "entry_point": "Storage settings: enroll, rotate or revoke a source",
       "ui_calls": [

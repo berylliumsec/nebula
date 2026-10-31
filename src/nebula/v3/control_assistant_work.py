@@ -6,6 +6,7 @@ This is a project-bound control plane over Core's chat and mission services.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
@@ -37,12 +38,19 @@ from .chat_goals import (
 from .chat_queue import ChatQueueService, QueueWrite
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
 from .chat_subagents import is_subagent_session
+from .browser_automation import (
+    BrowserAutonomyRequestModel,
+    LEASE_MAX_DURATION_SECONDS,
+)
 from .butler_timeline import ButlerTimeline
 from .domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
     AssistantDefaults,
+    BrowserIdentity,
+    BrowserSession,
+    BrowserSessionStatus,
     ChatBackend,
     ChatGoal,
     ChatMessage,
@@ -288,7 +296,67 @@ START_MISSION_SCHEMA: dict[str, Any] = {
         "backend": {"type": "string", "enum": ["provider", "harness"]},
         "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "model": {"type": "string", "minLength": 1, "maxLength": 500},
-        "max_tool_calls": {"type": "integer", "minimum": 0, "maximum": 100},
+        "max_tool_calls": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Total mission tool-call budget. With browser_autonomy, this budgets browser tools and does not request the Kali command runtime; browser_autonomy.max_commands separately limits the lease.",
+        },
+        "browser_autonomy": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "targets": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 256,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "uniqueItems": True,
+                },
+                "allowed_risk_classes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "passive",
+                            "active_scan",
+                            "credential_use",
+                            "exploitation",
+                            "persistence",
+                            "destructive",
+                            "scope_change",
+                        ],
+                    },
+                },
+                "credential_refs": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "uniqueItems": True,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                },
+                "duration_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": LEASE_MAX_DURATION_SECONDS,
+                },
+                "max_commands": {"type": "integer", "minimum": 1, "maximum": 100},
+                "max_requests": {"type": "integer", "minimum": 1, "maximum": 1000000},
+                "max_body_bytes": {"type": "integer", "minimum": 0, "maximum": 8388608},
+            },
+            "required": [
+                "session_id",
+                "targets",
+                "allowed_risk_classes",
+                "duration_seconds",
+                "max_commands",
+                "max_requests",
+                "max_body_bytes",
+            ],
+        },
     },
     "required": ["name", "objective"],
 }
@@ -2250,12 +2318,53 @@ class ControlAssistantWork:
             "status": run.status.value,
             "revision": run.revision,
             "backend": run.backend.value,
+            "browser_session_id": (
+                run.metadata["browser_autonomy"].get("session_id")
+                if isinstance(run.metadata.get("browser_autonomy"), dict)
+                else None
+            ),
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
             "tasks": [
                 {"id": task.id, "title": task.title, "status": task.status.value}
                 for task in tasks
             ],
+        }
+
+    def browser_sessions(self, project_id: str, offset: int = 0) -> dict[str, Any]:
+        """Page project-owned active sessions without disclosing browser contents."""
+        self._project(project_id)
+        filters = {"status": BrowserSessionStatus.ACTIVE.value}
+        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+            filters["runtime_kind"] = "agent_security"
+        rows = self.store.find_entities(
+            BrowserSession,
+            filters,
+            engagement_id=project_id,
+            offset=offset,
+            limit=51,
+        )
+        sessions = []
+        for session in rows[:50]:
+            try:
+                identity = self.store.get(BrowserIdentity, session.identity_id)
+                available = identity.engagement_id == project_id
+            except NotFoundError:
+                available = False
+            sessions.append(
+                {
+                    "id": session.id,
+                    "name": session.name,
+                    "runtime_kind": session.runtime_kind,
+                    "revision": session.revision,
+                    "tab_count": len(session.tabs),
+                    "last_seen_at": session.last_seen_at.isoformat(),
+                    "eligible_for_autonomy": available,
+                }
+            )
+        return {
+            "sessions": sessions,
+            "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
     def _approval(self, project_id: str, action_id: Any) -> tuple[Approval, str, str]:
@@ -3246,6 +3355,35 @@ class ControlAssistantWork:
             type(max_tool_calls) is not int or not 0 <= max_tool_calls <= 100
         ):
             raise ValueError("max_tool_calls must be from 0 to 100")
+        autonomy = None
+        if "browser_autonomy" in arguments:
+            raw_autonomy = arguments["browser_autonomy"]
+            if not isinstance(raw_autonomy, dict):
+                raise ValueError("browser_autonomy must name a session and targets")
+            required_lease = START_MISSION_SCHEMA["properties"]["browser_autonomy"][
+                "required"
+            ]
+            missing_lease = [
+                field for field in required_lease if field not in raw_autonomy
+            ]
+            if missing_lease:
+                raise ValueError(
+                    "browser_autonomy requires explicit " + ", ".join(missing_lease)
+                )
+            risk_classes = raw_autonomy["allowed_risk_classes"]
+            offered_risks = START_MISSION_SCHEMA["properties"]["browser_autonomy"][
+                "properties"
+            ]["allowed_risk_classes"]["items"]["enum"]
+            if not isinstance(risk_classes, list) or not risk_classes:
+                raise ValueError("browser_autonomy requires explicit risk classes")
+            if any(risk not in offered_risks for risk in risk_classes):
+                raise ValueError(
+                    "browser_autonomy contains an unsupported browser risk class"
+                )
+            autonomy = BrowserAutonomyRequestModel.model_validate(raw_autonomy)
+            session = self.store.get(BrowserSession, autonomy.session_id)
+            if session.engagement_id != project_id:
+                raise ValueError("browser session is outside the selected project")
         body: dict[str, Any] = {
             "engagement_id": project_id,
             "name": name,
@@ -3260,13 +3398,21 @@ class ControlAssistantWork:
         }
         if max_tool_calls is not None:
             body["max_tool_calls"] = max_tool_calls
+        if autonomy is not None:
+            body["browser_autonomy"] = autonomy.model_dump(mode="json")
         result = await self._request("POST", "/api/v1/missions", body)
         run = self._run(project_id, result["id"])
+        saved_autonomy = run.metadata.get("browser_autonomy")
+        if autonomy is not None and saved_autonomy != autonomy.model_dump(mode="json"):
+            raise ValueError(
+                "mission was saved without the requested browser lease; inspect Core before retrying"
+            )
         return {
             "run_id": run.id,
             "url": _mission_url(project_id, run.id),
             "name": str(run.metadata.get("name") or name),
             "status": run.status.value,
+            "browser_session_id": autonomy.session_id if autonomy is not None else None,
             "result": "mission is saved in Core",
         }
 
@@ -3546,6 +3692,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.browser_sessions",
+        "Page this project's active browser sessions before starting a scoped browser automation mission. The listing excludes page content and secrets; only sessions marked eligible can be used.",
+        PAGE_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.start_chat",
         "Start a separate Core-owned assistant chat for this project. Use a listed runtime. For provider chats, tools_enabled grants the usual project tools; use only when the operator requested work. Peer messaging starts off. The result means started, not finished.",
         START_CHAT_SCHEMA,
@@ -3571,7 +3723,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.start_mission",
-        "Start a Core-owned mission for this project using a listed runtime. The result means saved and queued or running, not finished.",
+        "Start a Core-owned mission for this project using a listed runtime. For browser automation, first list active browser sessions and provide the exact session, in-scope targets, risk classes, and lease limits; Core checks scope and creates the lease. The result means saved and queued or running, not finished.",
         START_MISSION_SCHEMA,
         False,
     ),
@@ -3695,6 +3847,8 @@ async def dispatch_work_tool(
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
         return work.overview(project_id)
+    if name == "nebula.work.browser_sessions":
+        return work.browser_sessions(project_id, arguments.get("offset", 0))
     if name == "nebula.work.chats":
         return work.chats(project_id, arguments.get("offset", 0))
     if name == "nebula.work.chat_messages":

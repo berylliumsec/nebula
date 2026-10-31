@@ -13,11 +13,17 @@ from nebula.v3.chat import (
     ChatRequestMessage,
 )
 from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES
-from nebula.v3.control_assistant_work import WORK_TOOLS, dispatch_work_tool
+from nebula.v3.control_assistant_work import (
+    START_MISSION_SCHEMA,
+    WORK_TOOLS,
+    dispatch_work_tool,
+)
 from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    BrowserIdentity,
+    BrowserSession,
     ChatBackend,
     ChatGoal,
     ChatMessage,
@@ -2434,6 +2440,181 @@ def test_mission_start_uses_existing_core_route_and_reads_back(tmp_path, monkeyp
         assert calls[0]["engagement_id"] == selected.id
         assert calls[0]["tool_names"] == []
         assert work.mission_detail(selected.id, result["run_id"])["name"] == "Survey"
+
+    asyncio.run(scenario())
+
+
+def test_butler_discovers_project_browser_and_starts_scoped_mission(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    scope = store.create(
+        ScopePolicy(engagement_id=selected.id, allowed_domains=["example.test"])
+    )
+    store.update(
+        Engagement,
+        selected.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=selected.revision,
+    )
+    store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    identity = store.create(BrowserIdentity(engagement_id=selected.id, name="Research"))
+    session = store.create(
+        BrowserSession(
+            engagement_id=selected.id,
+            identity_id=identity.id,
+            name="Security browser",
+            runtime_kind="agent_security",
+        )
+    )
+    foreign_identity = store.create(
+        BrowserIdentity(engagement_id=other.id, name="Other identity")
+    )
+    foreign = store.create(
+        BrowserSession(
+            engagement_id=other.id,
+            identity_id=foreign_identity.id,
+            name="Other browser",
+            runtime_kind="agent_security",
+        )
+    )
+    started = []
+
+    async def start_mission(**kwargs):
+        started.append(kwargs)
+        saved_autonomy = kwargs["browser_autonomy"].model_dump(mode="json")
+        if kwargs["name"] == "Mismatched lease":
+            saved_autonomy["allowed_risk_classes"] = ["passive", "active_scan"]
+        return store.create(
+            AgentRun(
+                engagement_id=kwargs["engagement_id"],
+                objective=kwargs["objective"],
+                metadata={
+                    "name": kwargs["name"],
+                    "browser_autonomy": saved_autonomy,
+                },
+            )
+        )
+
+    monkeypatch.setattr(app.state.mission_service, "start_mission", start_mission)
+    work = app.state.control_assistant_work
+    mission_requests = []
+    original_request = work._request
+
+    async def tracked_request(*args, **kwargs):
+        mission_requests.append(args)
+        return await original_request(*args, **kwargs)
+
+    monkeypatch.setattr(work, "_request", tracked_request)
+    request = {
+        "name": "Bounded survey",
+        "objective": "Inspect this test host",
+        "browser_autonomy": {
+            "session_id": session.id,
+            "targets": ["https://example.test/"],
+            "allowed_risk_classes": ["passive"],
+            "duration_seconds": 60,
+            "max_commands": 4,
+            "max_requests": 10,
+            "max_body_bytes": 4096,
+        },
+    }
+
+    async def scenario():
+        schema = START_MISSION_SCHEMA["properties"]["browser_autonomy"]
+        assert set(schema["required"]) == set(request["browser_autonomy"])
+        assert schema["properties"]["allowed_risk_classes"]["minItems"] == 1
+        assert (
+            "local_read"
+            not in schema["properties"]["allowed_risk_classes"]["items"]["enum"]
+        )
+        for missing in schema["required"]:
+            invalid = {
+                **request,
+                "browser_autonomy": {
+                    key: value
+                    for key, value in request["browser_autonomy"].items()
+                    if key != missing
+                },
+            }
+            with pytest.raises(ValueError, match="requires explicit"):
+                await work.start_mission(selected.id, invalid)
+        for risks in ([], ["local_read"]):
+            invalid = {
+                **request,
+                "browser_autonomy": {
+                    **request["browser_autonomy"],
+                    "allowed_risk_classes": risks,
+                },
+            }
+            with pytest.raises(ValueError, match="risk class"):
+                await work.start_mission(selected.id, invalid)
+        assert mission_requests == []
+        assert started == []
+        descriptor = await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.catalog",
+            {"operation": "nebula.work.browser_sessions"},
+        )
+        assert descriptor["read_only"] is True
+        assert await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.manage",
+            {"operation": "nebula.work.browser_sessions", "arguments": {}},
+        ) == work.browser_sessions(selected.id)
+        listed = work.browser_sessions(selected.id)
+        assert [item["id"] for item in listed["sessions"]] == [session.id]
+        assert listed["sessions"][0]["eligible_for_autonomy"] is True
+        result = await work.start_mission(selected.id, request)
+        assert result["browser_session_id"] == session.id
+        assert result["status"] == "queued"
+        assert (
+            work.mission_detail(selected.id, result["run_id"])["browser_session_id"]
+            == session.id
+        )
+        assert started[0]["browser_autonomy"].targets == ["https://example.test/"]
+        assert started[0]["browser_autonomy"].model_dump(mode="json") == {
+            **request["browser_autonomy"],
+            "credential_refs": [],
+        }
+        with pytest.raises(ValueError, match="outside the selected project"):
+            await work.start_mission(
+                selected.id,
+                {
+                    **request,
+                    "browser_autonomy": {
+                        **request["browser_autonomy"],
+                        "session_id": foreign.id,
+                    },
+                },
+            )
+        with pytest.raises(ValueError, match="Core rejected.*409"):
+            await work.start_mission(
+                selected.id,
+                {
+                    **request,
+                    "browser_autonomy": {
+                        **request["browser_autonomy"],
+                        "targets": ["https://outside.test/"],
+                    },
+                },
+            )
+        assert len(started) == 1
+        with pytest.raises(ValueError, match="without the requested browser lease"):
+            await work.start_mission(
+                selected.id, {**request, "name": "Mismatched lease"}
+            )
 
     asyncio.run(scenario())
 
