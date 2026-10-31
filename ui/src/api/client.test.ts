@@ -2329,6 +2329,7 @@ describe("ApiClient", () => {
       if (path.endsWith("/reports/report-1")) return new Response(JSON.stringify({ ...entity, revision: 2, id: "report-1", engagement_id: "engagement-1", title: "Assessment", status: "review", executive_summary: "Updated", finding_ids: ["finding-1"], artifact_ids: [], metadata: {} }), { status: 200 });
       if (path.endsWith("/reports")) return new Response(JSON.stringify({ ...entity, id: "report-1", engagement_id: "engagement-1", title: "Assessment", status: "draft", executive_summary: "", finding_ids: [], artifact_ids: [], metadata: {} }), { status: 201 });
       if (path.endsWith("/evidence/upload")) return new Response(JSON.stringify({ ...entity, id: "evidence-1", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "proof.txt", description: "Proof", artifact_id: "artifact-1", finding_id: null, asset_ids: ["asset-1"], sha256: "a".repeat(64), captured_at: entity.created_at, captured_by: "operator", source_version: null, metadata: { filename: "proof.txt", media_type: "text/plain", size: 5, source: "operator_upload" } }), { status: 201 });
+      if (path.endsWith("/evidence/evidence-1")) return new Response(JSON.stringify({ ...entity, id: "evidence-1", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "proof.txt", description: "Proof", artifact_id: "artifact-1", finding_id: null, asset_ids: ["asset-1"], sha256: "a".repeat(64), captured_at: entity.created_at, captured_by: "operator", source_version: null, metadata: { filename: "proof.txt", media_type: "text/plain", size: 5, source: "operator_upload" } }), { status: 200 });
       if (path.endsWith("/missions")) return new Response(JSON.stringify({ ...entity, id: "run-1", engagement_id: "engagement-1", objective: "Review scope", status: "queued", started_at: null, completed_at: null, metadata: {} }), { status: 202 });
       if (path.endsWith("/runs/run-1/stop")) return new Response(JSON.stringify({ ...entity, id: "run-1", engagement_id: "engagement-1", objective: "Review scope", status: "cancelled", started_at: null, completed_at: entity.updated_at, metadata: {} }), { status: 200 });
       return new Response(JSON.stringify({ detail: `${init?.method} ${path} not mocked` }), { status: 500 });
@@ -2340,6 +2341,7 @@ describe("ApiClient", () => {
     const report = await client.createReport({ engagementId: engagement.id, title: "  Assessment  " });
     const updatedReport = await client.updateReport(report.id, { status: "review", executiveSummary: "Updated", findingIds: ["finding-1"], expectedRevision: 1 });
     const evidence = await client.uploadEvidence({ engagementId: engagement.id, filename: "proof.txt", title: "proof.txt", evidenceType: "operator_upload", contentBase64: "cHJvb2Y=", mediaType: "text/plain", description: "Proof", assetIds: [asset.id] });
+    const savedEvidence = await client.getEvidence(evidence.id);
     const run = await client.createMission({ engagementId: engagement.id, name: "Scope review", objective: "Review scope", providerId: "provider-1", model: "model-1", maxDurationSeconds: 600, maxTokens: 2000, maxCostUsd: 2, maxRetries: 1 });
     const stopped = await client.stopRun(run.id, { reason: "Operator requested" });
 
@@ -2347,6 +2349,7 @@ describe("ApiClient", () => {
     expect(asset).toMatchObject({ hostname: "api.example.test", criticality: "high", exposure: "external", tags: ["api"] });
     expect(updatedReport).toMatchObject({ revision: 2, status: "review", executiveSummary: "Updated" });
     expect(evidence).toMatchObject({ artifactId: "artifact-1", metadata: { filename: "proof.txt", mediaType: "text/plain", size: 5 } });
+    expect(savedEvidence).toMatchObject({ id: evidence.id, revision: 1, sha256: "a".repeat(64) });
     expect(stopped.status).toBe("cancelled");
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/assets"))?.[1]?.body)).name).toBe("api.example.test");
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/reports"))?.[1]?.body)).title).toBe("Assessment");

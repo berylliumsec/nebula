@@ -38,6 +38,7 @@ def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
 
 
 TEXT = {"type": "string"}
+SOURCE_HASH = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
 PATH = {
     "type": "string",
     "minLength": 1,
@@ -48,6 +49,12 @@ TOOLS = (
     (
         "status",
         "Read the project notebook runtime and consent state.",
+        _schema({}),
+        True,
+    ),
+    (
+        "file_index_status",
+        "Read whether the current project has a file index and its revision without a host path.",
         _schema({}),
         True,
     ),
@@ -83,9 +90,19 @@ TOOLS = (
     ),
     (
         "execute",
-        "Queue a saved code cell for execution and return a run ID immediately.",
-        _schema({"path": PATH, "cell_id": TEXT}, "path", "cell_id"),
+        "Queue a saved code cell for execution and return a run ID immediately. An expected source hash prevents running a changed cell.",
+        _schema(
+            {"path": PATH, "cell_id": TEXT, "expected_source_hash": SOURCE_HASH},
+            "path",
+            "cell_id",
+        ),
         False,
+    ),
+    (
+        "recent_runs",
+        "List recent runs for one exact project notebook path before retrying an uncertain execution.",
+        _schema({"path": PATH}, "path"),
+        True,
     ),
     (
         "wait",
@@ -115,10 +132,29 @@ TOOLS = (
         False,
     ),
     (
-        "restart",
-        "Restart an idle notebook kernel.",
+        "kernel_status",
+        "Read the current worker instance, generation, and run state for one project notebook.",
         _schema({"path": PATH}, "path"),
+        True,
+    ),
+    (
+        "restart",
+        "Restart an idle notebook kernel, optionally requiring its current instance and generation.",
+        _schema(
+            {
+                "path": PATH,
+                "expected_instance_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+                "expected_generation": {"type": "integer", "minimum": 1},
+            },
+            "path",
+        ),
         False,
+    ),
+    (
+        "installed_package",
+        "Read one exact package name and version from this project's selected notebook environment.",
+        _schema({"path": PATH, "name": TEXT}, "path", "name"),
+        True,
     ),
     (
         "install_package",
@@ -240,7 +276,10 @@ class NotebookMcpTools:
             "create",
             "edit_cell",
             "execute",
+            "recent_runs",
+            "kernel_status",
             "restart",
+            "installed_package",
             "install_package",
             "search_package",
         }
@@ -329,7 +368,10 @@ class NotebookMcpTools:
                 "create",
                 "edit_cell",
                 "execute",
+                "recent_runs",
+                "kernel_status",
                 "restart",
+                "installed_package",
                 "install_package",
                 "search_package",
             }
@@ -339,6 +381,13 @@ class NotebookMcpTools:
         value: Any
         if name == "status":
             value = self.notebooks.status(project_id)
+        elif name == "file_index_status":
+            status = self.notebooks.file_index_status(project_id)
+            value = {
+                "configured": isinstance(status["path"], str),
+                "state": status["state"],
+                "project_revision": status["project_revision"],
+            }
         elif name == "list":
             value = await self.notebooks.list_async(project_id)
         elif name == "read":
@@ -357,8 +406,15 @@ class NotebookMcpTools:
             )
         elif name == "execute":
             value = (
-                await self.notebooks.start_run(project_id, path, arguments["cell_id"])
+                await self.notebooks.start_run(
+                    project_id,
+                    path,
+                    arguments["cell_id"],
+                    expected_source_hash=arguments.get("expected_source_hash"),
+                )
             ).model_dump(mode="json")
+        elif name == "recent_runs":
+            value = self.notebooks.recent_runs(project_id, path)
         elif name == "wait":
             value = await self.notebooks.wait_run(
                 arguments["run_id"],
@@ -377,9 +433,19 @@ class NotebookMcpTools:
                     arguments["run_id"], engagement_id=project_id
                 )
             ).model_dump(mode="json")
+        elif name == "kernel_status":
+            value = self.notebooks.kernel_status(project_id, path)
         elif name == "restart":
-            await self.notebooks.restart(project_id, path)
-            value = {"restarted": True}
+            value = await self.notebooks.restart(
+                project_id,
+                path,
+                expected_instance_id=arguments.get("expected_instance_id"),
+                expected_generation=arguments.get("expected_generation"),
+            )
+        elif name == "installed_package":
+            value = await self.notebooks.installed_package(
+                project_id, path, arguments["name"]
+            )
         elif name == "install_package":
             value = await self.notebooks.install_package(
                 project_id, path, arguments["requirement"]

@@ -6,6 +6,7 @@ This is a project-bound control plane over Core's chat and mission services.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
@@ -13,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI
+from jsonschema import Draft202012Validator, ValidationError
 
 from .chat import (
     ChatCompletionRequest,
@@ -36,12 +38,19 @@ from .chat_goals import (
 from .chat_queue import ChatQueueService, QueueWrite
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
 from .chat_subagents import is_subagent_session
+from .browser_automation import (
+    BrowserAutonomyRequestModel,
+    LEASE_MAX_DURATION_SECONDS,
+)
 from .butler_timeline import ButlerTimeline
 from .domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
     AssistantDefaults,
+    BrowserIdentity,
+    BrowserSession,
+    BrowserSessionStatus,
     ChatBackend,
     ChatGoal,
     ChatMessage,
@@ -69,12 +78,14 @@ from .domain import (
     ScopePolicy,
     Task,
     ToolCallOrigin,
+    message_is_replaced,
 )
 from .harnesses import HarnessRuntimeService, _session_native_capabilities
 from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
 from .storage import NebulaStore, NotFoundError
+from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService, WorkSettingPatch
 
 
 EMPTY_SCHEMA: dict[str, Any] = {
@@ -285,7 +296,67 @@ START_MISSION_SCHEMA: dict[str, Any] = {
         "backend": {"type": "string", "enum": ["provider", "harness"]},
         "profile_id": {"type": "string", "minLength": 1, "maxLength": 200},
         "model": {"type": "string", "minLength": 1, "maxLength": 500},
-        "max_tool_calls": {"type": "integer", "minimum": 0, "maximum": 100},
+        "max_tool_calls": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Total mission tool-call budget. With browser_autonomy, this budgets browser tools and does not request the Kali command runtime; browser_autonomy.max_commands separately limits the lease.",
+        },
+        "browser_autonomy": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "targets": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 256,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "uniqueItems": True,
+                },
+                "allowed_risk_classes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "passive",
+                            "active_scan",
+                            "credential_use",
+                            "exploitation",
+                            "persistence",
+                            "destructive",
+                            "scope_change",
+                        ],
+                    },
+                },
+                "credential_refs": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "uniqueItems": True,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                },
+                "duration_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": LEASE_MAX_DURATION_SECONDS,
+                },
+                "max_commands": {"type": "integer", "minimum": 1, "maximum": 100},
+                "max_requests": {"type": "integer", "minimum": 1, "maximum": 1000000},
+                "max_body_bytes": {"type": "integer", "minimum": 0, "maximum": 8388608},
+            },
+            "required": [
+                "session_id",
+                "targets",
+                "allowed_risk_classes",
+                "duration_seconds",
+                "max_commands",
+                "max_requests",
+                "max_body_bytes",
+            ],
+        },
     },
     "required": ["name", "objective"],
 }
@@ -334,8 +405,32 @@ UPDATE_CHAT_SCHEMA: dict[str, Any] = {
         "expected_revision": {"type": "integer", "minimum": 1},
         "title": {"type": "string", "minLength": 1, "maxLength": 300},
         "archived": {"type": "boolean"},
+        "pinned": {"type": "boolean"},
+        "flag_color": {
+            "type": ["string", "null"],
+            "enum": [None, "red", "orange", "yellow", "green", "blue", "purple"],
+        },
     },
     "required": ["session_id", "expected_revision"],
+}
+CHAT_MESSAGES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "before_message_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["session_id"],
+}
+REWIND_CHAT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "before_message_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["session_id", "expected_revision", "before_message_id"],
 }
 FORK_CHAT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -383,6 +478,100 @@ PAGE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {"offset": {"type": "integer", "minimum": 0}},
 }
+WORK_ITEM_TARGET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "description_offset": {"type": "integer", "minimum": 0},
+    },
+    "required": ["item_id"],
+}
+WORK_ITEM_CREATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "description": {"type": "string", "maxLength": 20000},
+        "status": {
+            "type": "string",
+            "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done"],
+        },
+        "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+        "assignee_session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["title", "request_id"],
+}
+WORK_ITEM_UPDATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "description": {"type": "string", "maxLength": 20000},
+        "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+        "assignee_session_id": {"type": ["string", "null"], "maxLength": 200},
+    },
+    "required": ["item_id", "expected_revision"],
+}
+WORK_ITEM_CHECK_IN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "next_step": {"type": "string", "maxLength": 2000},
+        "blocker": {"type": "string", "maxLength": 2000},
+        "status": WORK_ITEM_CREATE_SCHEMA["properties"]["status"],
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    "required": ["item_id", "expected_revision", "summary", "request_id"],
+}
+WORK_SETTING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "enabled": {"type": "boolean"},
+        "expected_revision": {"type": "integer", "minimum": 1},
+    },
+    "required": ["enabled", "expected_revision"],
+}
+WORK_UPDATES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "offset": {"type": "integer", "minimum": 0},
+    },
+    "required": ["item_id"],
+}
+WORK_UPDATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_id": WORK_ITEM_TARGET_SCHEMA["properties"]["item_id"],
+        "update_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "field": {"type": "string", "enum": ["summary", "next_step", "blocker"]},
+        "content_offset": {"type": "integer", "minimum": 0},
+    },
+    "required": ["item_id", "update_id"],
+}
+
+
+def _validate_work_item_arguments(
+    arguments: dict[str, Any], schema: dict[str, Any]
+) -> None:
+    """Enforce the catalog schema when a model calls the managed Work gateway."""
+
+    try:
+        Draft202012Validator(schema).validate(arguments)
+    except ValidationError as exc:
+        raise ValueError(f"invalid Work item arguments: {exc.message}") from exc
+
+
 GOAL_CREATE_FIELDS: dict[str, Any] = {
     "objective": {"type": "string", "minLength": 1, "maxLength": 20000},
     "completion_criteria": {
@@ -560,6 +749,10 @@ def _chat_url(project_id: str, session_id: str) -> str:
     return f"/projects/{quote(project_id, safe='')}/workbench?view=chat&session={quote(session_id, safe='')}"
 
 
+def _work_item_url(project_id: str, item_id: str) -> str:
+    return f"/projects/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}"
+
+
 def _mission_url(project_id: str, run_id: str) -> str:
     return f"/projects/{quote(project_id, safe='')}/workbench?view=missions&mission={quote(run_id, safe='')}"
 
@@ -581,6 +774,7 @@ class ControlAssistantWork:
         harness: HarnessRuntimeService,
         app: FastAPI,
         token: str,
+        work_service: WorkService,
         quota_observer: Any | None = None,
     ) -> None:
         self.store = store
@@ -589,6 +783,7 @@ class ControlAssistantWork:
         self.harness = harness
         self.app = app
         self.token = token
+        self.work_service = work_service
         self.quota_observer = quota_observer
         self.goals = ChatGoalService(store, harness)
         self.schedules = ChatScheduleService(store)
@@ -1078,6 +1273,8 @@ class ControlAssistantWork:
                     "goal": self._goal_summary(item.id),
                     "native_harness_goal": self._native_goal(item),
                     "archived": isinstance(item.metadata.get("archived_at"), str),
+                    "pinned": item.metadata.get("pinned") is True,
+                    "flag_color": item.metadata.get("flag_color"),
                     "turn_id": pending[item.id].id if item.id in pending else None,
                     "url": _chat_url(project_id, item.id),
                 }
@@ -1102,6 +1299,192 @@ class ControlAssistantWork:
             "more_missions": len(runs) > 30,
             "attention": attention[:5],
             "more_attention": len(attention) > 5,
+        }
+
+    def chats(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
+        """Page project conversations beyond the bounded overview roster."""
+
+        self._project(project_id)
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        rows = self.store.find_entities(
+            ChatSession,
+            {},
+            engagement_id=project_id,
+            newest_first=True,
+            offset=offset,
+            limit=31,
+        )
+        chats = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "revision": item.revision,
+                "archived": isinstance(item.metadata.get("archived_at"), str),
+                "pinned": item.metadata.get("pinned") is True,
+                "flag_color": item.metadata.get("flag_color"),
+                "url": _chat_url(project_id, item.id),
+            }
+            for item in rows[:30]
+            if item.metadata.get("control_assistant") is not True
+            and item.metadata.get("side_chat") is not True
+            and item.metadata.get("temporary_assistant") is not True
+            and _chat_kind(item) == "main"
+        ]
+        return {
+            "project_id": project_id,
+            "chats": chats,
+            "next_offset": offset + 30 if len(rows) > 30 else None,
+        }
+
+    def work_items(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
+        """Page saved Work board items inside the selected project."""
+
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        return self.work_service.agent_list_page(
+            project_id, offset=offset, envelope={"project_id": project_id}
+        )
+
+    def work_item(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        offset = arguments.get("description_offset", 0)
+        if type(offset) is not int or offset < 0:
+            raise ValueError("description_offset must be a nonnegative integer")
+        return self.work_service.agent_get_item(
+            project_id,
+            item_id,
+            description_offset=offset,
+            envelope={
+                "project_id": project_id,
+                "url": _work_item_url(project_id, item_id),
+            },
+        )
+
+    def work_setting(self, project_id: str) -> dict[str, Any]:
+        project = self._project(project_id)
+        return {
+            "project_id": project_id,
+            "enabled": project.work_enabled,
+            "revision": project.revision,
+            "url": f"/projects/{quote(project_id, safe='')}/work",
+        }
+
+    async def set_work_setting(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_SETTING_SCHEMA)
+        current = self._project(project_id)
+        if current.revision != arguments["expected_revision"]:
+            raise ValueError(
+                "project Work setting changed; read its current revision before updating"
+            )
+        request = WorkSettingPatch.model_validate(arguments)
+        saved = await self._request(
+            "PATCH",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/setting",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        observed = self.work_setting(project_id)
+        return {
+            **observed,
+            "saved": observed["enabled"] == request.enabled
+            and observed["revision"] == saved["revision"],
+        }
+
+    def work_updates(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_UPDATES_SCHEMA)
+        item_id = _text(arguments["item_id"], "item_id", 200)
+        return self.work_service.agent_updates_page(
+            project_id,
+            item_id,
+            offset=arguments.get("offset", 0),
+            envelope={
+                "project_id": project_id,
+                "item_id": item_id,
+                "url": _work_item_url(project_id, item_id),
+            },
+        )
+
+    def work_update(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_UPDATE_SCHEMA)
+        item_id = _text(arguments["item_id"], "item_id", 200)
+        update_id = _text(arguments["update_id"], "update_id", 200)
+        return self.work_service.agent_get_update(
+            project_id,
+            item_id,
+            update_id,
+            field=arguments.get("field", "summary"),
+            content_offset=arguments.get("content_offset", 0),
+            envelope={
+                "project_id": project_id,
+                "item_id": item_id,
+                "url": _work_item_url(project_id, item_id),
+            },
+        )
+
+    async def create_work_item(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._project(project_id)
+        _validate_work_item_arguments(arguments, WORK_ITEM_CREATE_SCHEMA)
+        request = WorkCreate.model_validate(
+            {**arguments, "status": arguments.get("status", "ready")}
+        )
+        created = await self._request(
+            "POST",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work",
+            request.model_dump(mode="json"),
+        )
+        return self.work_item(project_id, {"item_id": created["id"]})
+
+    async def update_work_item(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_ITEM_UPDATE_SCHEMA)
+        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        current = self.work_service.get(project_id, item_id)
+        expected = arguments.get("expected_revision")
+        if type(expected) is not int or current.revision != expected:
+            raise ValueError(
+                "work item changed; read its current revision before updating"
+            )
+        changes = {key: value for key, value in arguments.items() if key != "item_id"}
+        if set(changes) == {"expected_revision"}:
+            raise ValueError("provide a Work item field to update")
+        request = WorkPatch.model_validate(changes)
+        await self._request(
+            "PATCH",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        return self.work_item(project_id, {"item_id": item_id})
+
+    async def check_in_work_item(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_ITEM_CHECK_IN_SCHEMA)
+        item_id = _text(arguments.get("item_id"), "item_id", 200)
+        self.work_service.get(project_id, item_id)
+        request = WorkCheckIn.model_validate(
+            {key: value for key, value in arguments.items() if key != "item_id"}
+        )
+        saved = await self._request(
+            "POST",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}/updates",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        current = self.work_service.get(project_id, item_id)
+        return {
+            "project_id": project_id,
+            "item_id": item_id,
+            "update_id": saved["id"],
+            "status": current.status,
+            "revision": current.revision,
+            "url": _work_item_url(project_id, item_id),
+            "saved": True,
         }
 
     async def harness_quota(
@@ -1166,6 +1549,8 @@ class ControlAssistantWork:
             "native_harness_goal": self._native_goal(session),
             "revision": session.revision,
             "archived": isinstance(session.metadata.get("archived_at"), str),
+            "pinned": session.metadata.get("pinned") is True,
+            "flag_color": session.metadata.get("flag_color"),
             "task_plans": [
                 item.model_dump(mode="json")
                 for item in self.store.list_session_entities(
@@ -1208,6 +1593,41 @@ class ControlAssistantWork:
                 }
                 for item in harness_turns
             ],
+        }
+
+    def chat_messages(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Page active transcript previews to choose an exact saved user message."""
+
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        cursor = arguments.get("before_message_id")
+        if cursor is not None:
+            cursor = _text(cursor, "before_message_id", 200)
+        page = self.chat.session_messages_page(
+            session.id, limit=30, before_message_id=cursor
+        )
+        active = [
+            item
+            for item in page
+            if item.role in {ChatRole.USER, ChatRole.ASSISTANT}
+            and not message_is_replaced(item)
+        ]
+        return {
+            "session_id": session.id,
+            "revision": session.revision,
+            "url": _chat_url(project_id, session.id),
+            "messages": [
+                {
+                    "id": item.id,
+                    "sequence": item.sequence,
+                    "role": item.role.value,
+                    "content_preview": item.content[:500],
+                    "content_truncated": len(item.content) > 500,
+                }
+                for item in active
+            ],
+            "next_before_message_id": page[0].id if len(page) == 30 else None,
         }
 
     def _goal_summary(self, session_id: str) -> dict[str, Any] | None:
@@ -1898,12 +2318,53 @@ class ControlAssistantWork:
             "status": run.status.value,
             "revision": run.revision,
             "backend": run.backend.value,
+            "browser_session_id": (
+                run.metadata["browser_autonomy"].get("session_id")
+                if isinstance(run.metadata.get("browser_autonomy"), dict)
+                else None
+            ),
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
             "tasks": [
                 {"id": task.id, "title": task.title, "status": task.status.value}
                 for task in tasks
             ],
+        }
+
+    def browser_sessions(self, project_id: str, offset: int = 0) -> dict[str, Any]:
+        """Page project-owned active sessions without disclosing browser contents."""
+        self._project(project_id)
+        filters = {"status": BrowserSessionStatus.ACTIVE.value}
+        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+            filters["runtime_kind"] = "agent_security"
+        rows = self.store.find_entities(
+            BrowserSession,
+            filters,
+            engagement_id=project_id,
+            offset=offset,
+            limit=51,
+        )
+        sessions = []
+        for session in rows[:50]:
+            try:
+                identity = self.store.get(BrowserIdentity, session.identity_id)
+                available = identity.engagement_id == project_id
+            except NotFoundError:
+                available = False
+            sessions.append(
+                {
+                    "id": session.id,
+                    "name": session.name,
+                    "runtime_kind": session.runtime_kind,
+                    "revision": session.revision,
+                    "tab_count": len(session.tabs),
+                    "last_seen_at": session.last_seen_at.isoformat(),
+                    "eligible_for_autonomy": available,
+                }
+            )
+        return {
+            "sessions": sessions,
+            "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
     def _approval(self, project_id: str, action_id: Any) -> tuple[Approval, str, str]:
@@ -2128,8 +2589,24 @@ class ControlAssistantWork:
             if type(arguments["archived"]) is not bool:
                 raise ValueError("archived must be true or false")
             body["archived"] = arguments["archived"]
+        if "pinned" in arguments:
+            if type(arguments["pinned"]) is not bool:
+                raise ValueError("pinned must be true or false")
+            body["pinned"] = arguments["pinned"]
+        if "flag_color" in arguments:
+            if arguments["flag_color"] not in (
+                None,
+                "red",
+                "orange",
+                "yellow",
+                "green",
+                "blue",
+                "purple",
+            ):
+                raise ValueError("choose a listed flag color or null to clear it")
+            body["flag_color"] = arguments["flag_color"]
         if len(body) == 1:
-            raise ValueError("provide a title or archived choice")
+            raise ValueError("provide a title, archived state, pin, or flag color")
         await self._request(
             "PATCH", f"/api/v1/chat-sessions/{quote(session.id, safe='')}", body
         )
@@ -2138,8 +2615,49 @@ class ControlAssistantWork:
             "session_id": saved.id,
             "title": saved.title,
             "archived": isinstance(saved.metadata.get("archived_at"), str),
+            "pinned": saved.metadata.get("pinned") is True,
+            "flag_color": saved.metadata.get("flag_color"),
             "revision": saved.revision,
             "url": _chat_url(project_id, saved.id),
+        }
+
+    async def rewind_chat(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        revision = arguments.get("expected_revision")
+        if type(revision) is not int or revision < 1:
+            raise ValueError("read the chat and pass its current revision")
+        if session.revision != revision:
+            raise ValueError("chat changed; read its current revision before rewinding")
+        message_id = _text(arguments.get("before_message_id"), "before_message_id", 200)
+        try:
+            target = self.store.get(ChatMessage, message_id)
+        except NotFoundError as exc:
+            raise ValueError("choose an active user message from this chat") from exc
+        if (
+            target.session_id != session.id
+            or target.role != ChatRole.USER
+            or message_is_replaced(target)
+        ):
+            raise ValueError("choose an active user message from this chat")
+        result = await self._request(
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/rewind",
+            {"before_message_id": message_id, "expected_revision": revision},
+        )
+        saved = self._messageable_chat(project_id, session.id)
+        retracted = self.store.get(ChatMessage, message_id)
+        if not message_is_replaced(retracted):
+            raise RuntimeError("Core did not save the requested message retraction")
+        return {
+            "session_id": saved.id,
+            "revision": saved.revision,
+            "url": _chat_url(project_id, saved.id),
+            "retracted_from_message_id": message_id,
+            "active_message_count": len(result["messages"]),
+            "retracted_message_count": len(result["replaced"]),
+            "result": "history retracted in Core; sending replacement text is a separate action",
         }
 
     async def fork_chat(
@@ -2837,6 +3355,35 @@ class ControlAssistantWork:
             type(max_tool_calls) is not int or not 0 <= max_tool_calls <= 100
         ):
             raise ValueError("max_tool_calls must be from 0 to 100")
+        autonomy = None
+        if "browser_autonomy" in arguments:
+            raw_autonomy = arguments["browser_autonomy"]
+            if not isinstance(raw_autonomy, dict):
+                raise ValueError("browser_autonomy must name a session and targets")
+            required_lease = START_MISSION_SCHEMA["properties"]["browser_autonomy"][
+                "required"
+            ]
+            missing_lease = [
+                field for field in required_lease if field not in raw_autonomy
+            ]
+            if missing_lease:
+                raise ValueError(
+                    "browser_autonomy requires explicit " + ", ".join(missing_lease)
+                )
+            risk_classes = raw_autonomy["allowed_risk_classes"]
+            offered_risks = START_MISSION_SCHEMA["properties"]["browser_autonomy"][
+                "properties"
+            ]["allowed_risk_classes"]["items"]["enum"]
+            if not isinstance(risk_classes, list) or not risk_classes:
+                raise ValueError("browser_autonomy requires explicit risk classes")
+            if any(risk not in offered_risks for risk in risk_classes):
+                raise ValueError(
+                    "browser_autonomy contains an unsupported browser risk class"
+                )
+            autonomy = BrowserAutonomyRequestModel.model_validate(raw_autonomy)
+            session = self.store.get(BrowserSession, autonomy.session_id)
+            if session.engagement_id != project_id:
+                raise ValueError("browser session is outside the selected project")
         body: dict[str, Any] = {
             "engagement_id": project_id,
             "name": name,
@@ -2851,13 +3398,21 @@ class ControlAssistantWork:
         }
         if max_tool_calls is not None:
             body["max_tool_calls"] = max_tool_calls
+        if autonomy is not None:
+            body["browser_autonomy"] = autonomy.model_dump(mode="json")
         result = await self._request("POST", "/api/v1/missions", body)
         run = self._run(project_id, result["id"])
+        saved_autonomy = run.metadata.get("browser_autonomy")
+        if autonomy is not None and saved_autonomy != autonomy.model_dump(mode="json"):
+            raise ValueError(
+                "mission was saved without the requested browser lease; inspect Core before retrying"
+            )
         return {
             "run_id": run.id,
             "url": _mission_url(project_id, run.id),
             "name": str(run.metadata.get("name") or name),
             "status": run.status.value,
+            "browser_session_id": autonomy.session_id if autonomy is not None else None,
             "result": "mission is saved in Core",
         }
 
@@ -2903,6 +3458,66 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.chats",
+        "Page this project's saved main conversations, including archived, pinned, and flagged chats. Use next_offset to continue past the first page before concluding a named chat is absent.",
+        PAGE_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.work_items",
+        "Page saved Work board items in the selected project. Use next_offset to find older tasks. Read an exact item before changing it.",
+        PAGE_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.work_item",
+        "Read one selected-project Work item, its revision, assignment, status, priority and description. Use next_description_offset to read a long description fully.",
+        WORK_ITEM_TARGET_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.work_setting",
+        "Read whether agents may use this project's built-in Work tools and the current project revision before changing access.",
+        EMPTY_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.set_work_setting",
+        "Enable or disable this project's built-in agent Work tools after explicit operator instruction. Read the setting first and pass its current project revision. Existing Work records remain visible.",
+        WORK_SETTING_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.work_updates",
+        "Page saved check-ins for one selected-project Work item, including older updates. Use next_offset until the desired update is found, then read its exact text.",
+        WORK_UPDATES_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.work_update",
+        "Read one saved Work check-in's exact summary, next step, or blocker. Use next_content_offset to retrieve a long field fully.",
+        WORK_UPDATE_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.create_work_item",
+        "Create a manual Work item in this project after explicit operator instruction. Use a stable request_id for retry; a saved item and its Work board URL are returned.",
+        WORK_ITEM_CREATE_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.update_work_item",
+        "Change the title, description, priority or assignment of one Work item after explicit operator instruction. Read it first and pass its current revision; use assignee_session_id=null to unassign.",
+        WORK_ITEM_UPDATE_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.check_in_work_item",
+        "Post a progress update and optionally change status on one Work item after explicit operator instruction. Read it first, pass its revision and a stable request_id, then verify the saved status. A blocker sets status to blocked.",
+        WORK_ITEM_CHECK_IN_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.harness_quota",
         "Read one enabled harness's vendor-reported included quota windows and separate credit balances by profile ID from the runtime catalog. Grok and Codex credits may remain usable after included usage is exhausted; unavailable is unknown, not zero. Set refresh true for a new vendor read.",
         HARNESS_QUOTA_SCHEMA,
@@ -2912,6 +3527,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         "nebula.work.chat",
         "Read recent messages and pending activity for one listed assistant chat. After a follow-up, inspect this and the queue before reporting what the agent achieved.",
         CHAT_TARGET_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.chat_messages",
+        "Page active user and assistant message previews in one listed main chat. Use next_before_message_id to find an older exact user message before a rewind; retracted messages are omitted.",
+        CHAT_MESSAGES_SCHEMA,
         True,
     ),
     (
@@ -3071,6 +3692,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.browser_sessions",
+        "Page this project's active browser sessions before starting a scoped browser automation mission. The listing excludes page content and secrets; only sessions marked eligible can be used.",
+        PAGE_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.start_chat",
         "Start a separate Core-owned assistant chat for this project. Use a listed runtime. For provider chats, tools_enabled grants the usual project tools; use only when the operator requested work. Peer messaging starts off. The result means started, not finished.",
         START_CHAT_SCHEMA,
@@ -3096,7 +3723,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.start_mission",
-        "Start a Core-owned mission for this project using a listed runtime. The result means saved and queued or running, not finished.",
+        "Start a Core-owned mission for this project using a listed runtime. For browser automation, first list active browser sessions and provide the exact session, in-scope targets, risk classes, and lease limits; Core checks scope and creates the lease. The result means saved and queued or running, not finished.",
         START_MISSION_SCHEMA,
         False,
     ),
@@ -3144,8 +3771,14 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.update_chat",
-        "Rename, archive, or restore one listed assistant chat. Read nebula.work.chat first and pass its revision. Active turns must finish or stop before changing title or archive state.",
+        "Rename, archive, restore, pin, unpin, or flag one listed assistant chat. Use flag_color=null to clear a flag. Read nebula.work.chat first and pass its revision. Active turns must finish or stop before changing title or archive state.",
         UPDATE_CHAT_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.rewind_chat",
+        "Retract one exact saved user message and every later message in the same main chat after explicit operator instruction. Read nebula.work.chat_messages and pass its current revision. Core refuses active responses and stale revisions. Sending edited text is a separate nebula.work.message_chat action; verify each result separately. Interactive Butler only.",
+        REWIND_CHAT_SCHEMA,
         False,
     ),
     (
@@ -3192,7 +3825,7 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     *(item for item in _ALL_WORK_TOOLS if item[0] not in _MANAGED_WORK_NAMES),
     (
         "nebula.work.manage",
-        "Read or change a project chat, its Assistant settings and MCP tools, mission, goal, subagent, follow-up queue, or schedule. Use nebula.work.catalog for the chosen operation's exact fields, then pass operation and arguments here. Read before writes, use saved revisions, and check a delegated result before claiming completion.",
+        "Read or change this project's chats, Work board items, Assistant settings, missions, goals, subagents, follow-up queues, or schedules. Use nebula.work.catalog for exact fields, then pass operation and arguments here. Read before writes, use saved revisions, and check the saved result before claiming completion.",
         MANAGE_SCHEMA,
         False,
     ),
@@ -3214,6 +3847,30 @@ async def dispatch_work_tool(
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
         return work.overview(project_id)
+    if name == "nebula.work.browser_sessions":
+        return work.browser_sessions(project_id, arguments.get("offset", 0))
+    if name == "nebula.work.chats":
+        return work.chats(project_id, arguments.get("offset", 0))
+    if name == "nebula.work.chat_messages":
+        return work.chat_messages(project_id, arguments)
+    if name == "nebula.work.work_items":
+        return work.work_items(project_id, arguments.get("offset", 0))
+    if name == "nebula.work.work_item":
+        return work.work_item(project_id, arguments)
+    if name == "nebula.work.work_setting":
+        return work.work_setting(project_id)
+    if name == "nebula.work.set_work_setting":
+        return await work.set_work_setting(project_id, arguments)
+    if name == "nebula.work.work_updates":
+        return work.work_updates(project_id, arguments)
+    if name == "nebula.work.work_update":
+        return work.work_update(project_id, arguments)
+    if name == "nebula.work.create_work_item":
+        return await work.create_work_item(project_id, arguments)
+    if name == "nebula.work.update_work_item":
+        return await work.update_work_item(project_id, arguments)
+    if name == "nebula.work.check_in_work_item":
+        return await work.check_in_work_item(project_id, arguments)
     if name == "nebula.work.harness_quota":
         return await work.harness_quota(project_id, arguments)
     if name == "nebula.work.chat":
@@ -3296,6 +3953,8 @@ async def dispatch_work_tool(
         return await work.answer_question(project_id, arguments)
     if name == "nebula.work.update_chat":
         return await work.update_chat(project_id, arguments)
+    if name == "nebula.work.rewind_chat":
+        return await work.rewind_chat(project_id, arguments)
     if name == "nebula.work.fork_chat":
         return await work.fork_chat(project_id, arguments)
     if name == "nebula.work.delete_chat":

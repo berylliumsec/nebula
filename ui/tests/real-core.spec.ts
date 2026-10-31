@@ -9,6 +9,7 @@ import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { expect, request as playwrightRequest, test, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import {startApprovalCore} from "./fixtures/approval-core";
+import {startTerminalCore} from "./fixtures/terminal-core";
 import {OwnedCleanupError, withOwnedCleanup} from "./fixtures/owned-cleanup";
 import {settingCatalog} from "../src/settingsCatalog";
 import {assistantDestinations, assistantDestinationPath} from "../src/assistantDestinations";
@@ -5339,7 +5340,8 @@ for (const decision of ["Approve", "Reject"] as const) {
 }
 
 test("stabilization real Core outage retains the conversation and exposes reconnect", async ({page}, testInfo) => {
-  test.setTimeout(70_000);
+  // This journey starts the paired Core twice, once before and once after a hard outage.
+  test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "single");
   await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
@@ -5379,6 +5381,101 @@ test("stabilization real Core outage retains the conversation and exposes reconn
     expect(await core.receipts()).toEqual([]);
     await testInfo.attach("core-outage-recovered", {body: JSON.stringify({origin: core.origin, durable}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
+test("assistant upgrade Butler stops a selected project terminal on paired LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  const core = await startTerminalCore(localNetworkIpv4());
+  let sessionId = "";
+  let createdAt = "";
+  let modelSawTicket = false;
+  const prompts = ["Stop this project terminal after checking it.", "Stop this project terminal now."];
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm this terminal stop.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const content = String(messages[lastUser]?.content ?? "");
+    if (!prompts.some(prompt => content === prompt || content.startsWith(`${prompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))) return undefined;
+    if (JSON.stringify(messages).includes("websocket_ticket")) modelSawTicket = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    return [
+      {name: "nebula_capabilities_search", arguments: {query: "stop terminal session"}},
+      {name: "nebula_capabilities_describe", arguments: {operation: "nebula.terminal.list"}},
+      {name: "nebula_capabilities_read", arguments: {operation: "nebula.terminal.list", arguments: {}}},
+      {name: "nebula_capabilities_describe", arguments: {operation: "nebula.terminal.stop"}},
+      {name: "nebula_capabilities_change", arguments: {operation: "nebula.terminal.stop", arguments: {
+        session_id: sessionId, expected_created_at: createdAt,
+      }}},
+    ][replies];
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler terminal fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler terminal model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const seeded = await api.post("fixture/terminal-seed", {data: {engagement_id: projectId}});
+    expect(seeded.ok(), await seeded.text()).toBe(true);
+    const identity = await seeded.json() as {session_id: string; created_at: string};
+    sessionId = identity.session_id;
+    createdAt = identity.created_at;
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler terminal LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    const terminalPath = `engagements/${projectId}/container-terminals`;
+    await expect.poll(async () => {
+      const response = await api.get(terminalPath);
+      const current = await response.json() as {sessions: Array<{session_id: string; created_at: string; state: string}>};
+      const running = current.sessions.find(session => session.session_id === sessionId && session.created_at === createdAt);
+      return running?.state;
+    }, {timeout: 90_000, intervals: [500, 1_000]}).toBe("running");
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts[0]);
+    const stopDialog = page.getByRole("dialog", {name: new RegExp(`Stop terminal ${sessionId.slice(0, 8)}`)});
+    await expect(stopDialog).toBeVisible({timeout: 45_000});
+    expect((await new AxeBuilder({page}).include('[role="dialog"]').analyze()).violations).toEqual([]);
+    await stopDialog.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(/Stop cancelled; Core was not asked/)).toBeVisible();
+    expect((await (await api.get(terminalPath)).json() as {sessions: Array<{session_id: string}>}).sessions.map(item => item.session_id)).toContain(sessionId);
+    await send(prompts[1]);
+    await expect(stopDialog).toBeVisible({timeout: 45_000});
+    await stopDialog.getByRole("button", {name: "Stop terminal", exact: true}).click();
+    await expect(assistant.getByText(new RegExp(`Stopped terminal ${sessionId.slice(0, 8)}`))).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => (await (await api.get(terminalPath)).json() as {sessions: Array<{session_id: string}>}).sessions.length).toBe(0);
+    expect((await (await api.get("fixture/terminal-processes")).json() as {close_counts: number[]}).close_counts).toEqual([1]);
+    expect(modelSawTicket).toBe(false);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await page.reload();
+    expect((await (await api.get(terminalPath)).json() as {sessions: Array<{session_id: string}>}).sessions).toEqual([]);
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"})).toBeVisible();
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-terminal-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      sessionId, runner: "synthetic process", result: "Running session listed without a ticket; cancellation retained it; confirmed browser action closed the process once; Core readback and refresh show absence"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "two_requests", "restart_waiting", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress", "late_response_switch"] as const) {
@@ -6433,10 +6530,21 @@ test("project execution mode Nebula help answers a Docker host-file question and
 });
 
 test("assistant upgrade control assistant starts project work on production LAN Core", async ({ page }, testInfo) => {
-  test.setTimeout(180_000);
-  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  test.setTimeout(300_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
   let providerId = "";
+  let priorityChatId = "";
+  let priorityChatRevision = 0;
+  let workItemId = "";
+  let workItemRevision = 0;
+  let workUpdateId = "";
+  let workSettingRevision = 0;
   const requestText = "Start a mission named LAN control mission to inspect this synthetic project.";
+  const priorityRequest = "Pin the Priority fixture chat and give it a blue flag.";
+  const createWorkRequest = "Create a ready Work item named LAN Butler task.";
+  const checkWorkRequest = "Post a review check-in on LAN Butler task.";
+  const historyRequest = "Read the review check-in history on LAN Butler task.";
+  const disableWorkRequest = "Disable agent Work tools for this project.";
   const preference = "Remember that I want time in Eastern and not UTC.";
   const savedPreference = "The operator prefers times in Eastern Time, not UTC.";
   const stub = await startLocalModelStub({
@@ -6446,6 +6554,53 @@ test("assistant upgrade control assistant starts project work on production LAN 
       const lastUser = messages.map(message => message.role).lastIndexOf("user");
       const userText = messages[lastUser]?.content;
       const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+      if (userText === createWorkRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "create a Work board item"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.create_work_item"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.create_work_item", arguments: {
+          title: "LAN Butler task", status: "ready", request_id: "lan-butler-task-1",
+        }}};
+        return undefined;
+      }
+      if (userText === checkWorkRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "post a Work item check-in"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_item"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_item", arguments: {item_id: workItemId}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.check_in_work_item"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.check_in_work_item", arguments: {
+          item_id: workItemId, expected_revision: workItemRevision, summary: "Ready for review", status: "review",
+          request_id: "lan-butler-check-1",
+        }}};
+        return undefined;
+      }
+      if (userText === historyRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "read Work check-in history"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_updates"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_updates", arguments: {item_id: workItemId}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_update"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_update", arguments: {item_id: workItemId, update_id: workUpdateId}}};
+        return undefined;
+      }
+      if (userText === disableWorkRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "disable Work agent tools"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.work_setting"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.work_setting", arguments: {}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.set_work_setting"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.set_work_setting", arguments: {enabled: false, expected_revision: workSettingRevision}}};
+        return undefined;
+      }
+      if (userText === priorityRequest) {
+        if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "pin and flag a chat"}};
+        if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chats"}};
+        if (toolReplies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.chats", arguments: {}}};
+        if (toolReplies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chat"}};
+        if (toolReplies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.chat", arguments: {session_id: priorityChatId}}};
+        if (toolReplies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.update_chat"}};
+        if (toolReplies === 6) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.update_chat", arguments: {
+          session_id: priorityChatId, expected_revision: priorityChatRevision, pinned: true, flag_color: "blue",
+        }}};
+        return undefined;
+      }
       if (userText === preference) {
         if (toolReplies === 0) return {name: "nebula_capabilities_search", arguments: {query: "remember long-term memory preference"}};
         if (toolReplies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.memory.remember"}};
@@ -6491,6 +6646,21 @@ test("assistant upgrade control assistant starts project work on production LAN 
       data: {model: "security-model", expected_revision: provider.revision},
     });
     expect(verified.ok(), await verified.text()).toBe(true);
+    const seedResponse = await api.post("chat/completions", {data: {
+      backend: "provider", provider_id: providerId, model: "security-model", engagement_id: projectId,
+      messages: [{role: "user", content: "Priority fixture"}], include_knowledge: false, stream: false,
+    }});
+    expect(seedResponse.ok(), await seedResponse.text()).toBe(true);
+    priorityChatId = ((await seedResponse.json()) as {session_id: string}).session_id;
+    let settledRevision = 0;
+    await expect.poll(async () => {
+      const saved = await (await api.get(`chat-sessions/${priorityChatId}`)).json() as {revision: number; metadata: {initial_title_state?: string}};
+      settledRevision = saved.revision;
+      return saved.metadata.initial_title_state;
+    }, {timeout: 20_000}).toMatch(/^(generated|failed)$/);
+    const renamed = await api.patch(`chat-sessions/${priorityChatId}`, {data: {title: "Priority fixture", expected_revision: settledRevision}});
+    expect(renamed.ok(), await renamed.text()).toBe(true);
+    priorityChatRevision = ((await renamed.json()) as {revision: number}).revision;
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -6551,6 +6721,62 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await composer.fill(requestText);
     await composer.press("Enter");
     await expect(assistant.getByText("The mission was started in this project. Open Missions to follow its progress.")).toBeVisible({timeout: 45_000});
+    stub.responseContent = "I pinned Priority fixture and set its blue flag.";
+    await composer.fill(priorityRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const saved = await (await api.get(`chat-sessions/${priorityChatId}`)).json() as {metadata: Record<string, unknown>};
+      return {pinned: saved.metadata.pinned, flag_color: saved.metadata.flag_color};
+    }).toEqual({pinned: true, flag_color: "blue"});
+    stub.responseContent = "I created LAN Butler task on the Work board.";
+    await composer.fill(createWorkRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/work`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const items = await response.json() as Array<{id: string; revision: number; title: string}>;
+      const item = items.find(candidate => candidate.title === "LAN Butler task");
+      workItemId = item?.id ?? "";
+      workItemRevision = item?.revision ?? 0;
+      return items.filter(candidate => candidate.title === "LAN Butler task").length;
+    }).toBe(1);
+    stub.responseContent = "I posted the review check-in on LAN Butler task.";
+    await composer.fill(checkWorkRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/work/${workItemId}`);
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {status: string}).status;
+    }).toBe("review");
+    const updateResponse = await api.get(`engagements/${projectId}/work/${workItemId}/updates`);
+    expect(updateResponse.ok(), await updateResponse.text()).toBe(true);
+    workUpdateId = (await updateResponse.json() as Array<{id: string}>)[0].id;
+    stub.responseContent = "I read the saved review check-in.";
+    await composer.fill(historyRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    const historyModelCalls = stub.requests.filter(body => {
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+      const lastUser = messages.map(message => message.role).lastIndexOf("user");
+      return messages[lastUser]?.content === historyRequest;
+    });
+    expect(JSON.stringify(historyModelCalls.at(-1)?.messages)).toContain("Ready for review");
+    const projectSettingResponse = await api.get(`engagements/${projectId}`);
+    expect(projectSettingResponse.ok(), await projectSettingResponse.text()).toBe(true);
+    workSettingRevision = (await projectSettingResponse.json() as {revision: number}).revision;
+    stub.responseContent = "I disabled agent Work tools for this project.";
+    await composer.fill(disableWorkRequest);
+    await composer.press("Enter");
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}`);
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {work_enabled: boolean}).work_enabled;
+    }).toBe(false);
+    stub.responseContent = "The mission was started in this project. Open Missions to follow its progress.";
     const controlSession = await (await api.get(`chat/control-assistant/session?engagement_id=${projectId}`)).json() as {id: string};
     await assistant.getByRole("button", {name: "Butler settings"}).click();
     const settings = assistant.getByRole("region", {name: "Butler settings"});
@@ -6565,15 +6791,29 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await expect(settings).toContainText("Saved. Applies to Butler’s next message.");
     await page.reload();
     await openNebulaAssistantFromShell(page);
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await expect(assistant).toBeHidden();
+    const mobileConversations = (page.viewportSize()?.width ?? 1440) <= 760;
+    await page.getByRole("button", {name: mobileConversations ? "Open conversations" : "Show conversations", exact: true}).click();
+    const conversations = page.getByRole("complementary", {name: "Conversations"});
+    const priorityRow = conversations.locator(`[data-session-id="${priorityChatId}"]`);
+    await expect(priorityRow).toBeVisible({timeout: 20_000});
+    await expect(priorityRow.locator(".conversation-pin-marker")).toBeVisible();
+    await expect(priorityRow.locator(".conversation-flag-marker")).toHaveAttribute("data-color", "blue");
+    await conversations.getByRole("button", {name: "Hide conversations"}).click();
+    await openNebulaAssistantFromShell(page);
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Butler settings"}).click();
     await expect(page.getByRole("region", {name: "Butler settings"}).getByRole("combobox", {name: "Butler effort"})).toHaveValue("high");
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Butler settings"}).click();
+    const statusReply = "Butler checked current work status.";
+    stub.responseContent = statusReply;
     const statusRequest = page.waitForRequest(request => request.url().endsWith("/chat/completions")
       && request.method() === "POST" && request.postData()?.includes("Check current work status") === true);
     await page.getByRole("dialog", {name: "Butler"}).getByRole("textbox", {name: "Ask Butler a question"}).fill("Check current work status");
     await page.getByRole("dialog", {name: "Butler"}).getByRole("button", {name: "Send to Butler"}).click();
     await expect(statusRequest.then(request => request.postDataJSON() as {reasoning_effort?: string})).resolves.toMatchObject({reasoning_effort: "high"});
-    await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The mission was started in this project. Open Missions to follow its progress.").last()).toBeVisible({timeout: 45_000});
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(statusReply, {exact: true})).toBeVisible({timeout: 45_000});
+    await expect(assistant.getByRole("textbox", {name: "Ask Butler a question"})).toBeEnabled();
     await assistant.getByRole("button", {name: "More"}).click();
     await memoryToggle.click();
     stub.responseContent = "I saved your preference for Eastern Time.";
@@ -6631,11 +6871,1597 @@ test("assistant upgrade control assistant starts project work on production LAN 
     else { await savedMissionLink.focus(); await savedMissionLink.press("Enter"); }
     await expect(page).toHaveURL(new RegExp(`view=missions&mission=${savedMissionId}`));
     await expect(page.getByRole("navigation", {name: "Mission history"}).getByRole("button", {name: /LAN control mission/})).toHaveAttribute("aria-current", "true");
+    await page.goto(`${core.origin}/projects/${projectId}/work/${workItemId}`);
+    const boardItem = page.getByRole("complementary", {name: "LAN Butler task"});
+    await expect(boardItem.getByRole("heading", {name: "LAN Butler task"})).toBeVisible();
+    await expect(boardItem.locator(".work-status")).toHaveText("Review");
+    await expect(boardItem.getByText("Ready for review")).toBeVisible();
+    await expect(page.getByRole("button", {name: "Enable agent tools"})).toBeVisible();
+    await expect(page.getByText("Agent tools are off. Existing Work records remain visible.", {exact: false})).toBeVisible();
+    await page.reload();
+    await expect(boardItem.getByRole("heading", {name: "LAN Butler task"})).toBeVisible();
+    await expect(boardItem.locator(".work-status")).toHaveText("Review");
+    await expect(page.getByRole("button", {name: "Enable agent tools"})).toBeVisible();
     await testInfo.attach("control-assistant-work", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry, assetSha256: build.assets[entry!]}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler starts a scoped browser mission on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(240_000);
+  const coreStartupStarted = Date.now();
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    startupTimeoutMs: 90_000, env: {NEBULA_ONE_BROWSER_CUTOVER: "0"}});
+  const coreStartupMs = Date.now() - coreStartupStarted;
+  let browserSessionId = "";
+  let providerId = "";
+  const instruction = "Start a passive browser assessment of https://example.test/ using the active project browser.";
+  const stub = await startLocalModelStub({responseContent: "The scoped browser mission is saved. Open Missions to follow it.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (typeof messages[lastUser]?.content !== "string" || !messages[lastUser].content.startsWith(instruction)) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "browser automation mission"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.browser_sessions"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.browser_sessions", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.start_mission"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.start_mission", arguments: {
+      name: "Scoped browser survey", objective: "Inspect the synthetic in-scope host", backend: "provider",
+      profile_id: providerId, model: "security-model", max_tool_calls: 4,
+      browser_autonomy: {session_id: browserSessionId, targets: ["https://example.test/"],
+        allowed_risk_classes: ["passive"], duration_seconds: 60,
+        max_commands: 4, max_requests: 10, max_body_bytes: 4096},
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const created = await api.post("engagements", {data: {name: "Browser mission LAN acceptance", description: "Synthetic project",
+      client_name: null, status: "active", tags: [], workspace_path: null, metadata: {}}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = ((await created.json()) as {id: string}).id;
+    const scopeResponse = await api.get(`engagements/${projectId}/scope`);
+    expect(scopeResponse.ok(), await scopeResponse.text()).toBe(true);
+    const scope = await scopeResponse.json() as {revision: number};
+    const scoped = await api.put(`engagements/${projectId}/scope`, {data: {
+      expected_revision: scope.revision, allowed_domains: ["example.test"],
+    }});
+    expect(scoped.ok(), await scoped.text()).toBe(true);
+    const identity = await api.post(`engagements/${projectId}/browser-identities`, {data: {name: "Synthetic browser"}});
+    expect(identity.ok(), await identity.text()).toBe(true);
+    const identityId = ((await identity.json()) as {id: string}).id;
+    const browserSession = await api.post(`engagements/${projectId}/browser-sessions`, {data: {
+      name: "Synthetic security session", identity_id: identityId,
+    }});
+    expect(browserSession.ok(), await browserSession.text()).toBe(true);
+    browserSessionId = ((await browserSession.json()) as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Browser mission fixture", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    providerId = provider.id;
+    const verified = await api.post(`providers/${encodeURIComponent(providerId)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Browser mission acceptance", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=browser`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const composer = assistant.getByRole("textbox", {name: "Ask Butler a question"});
+    await composer.fill(instruction);
+    await composer.press("Enter");
+    await expect(assistant.getByText("The scoped browser mission is saved. Open Missions to follow it.")).toBeVisible({timeout: 45_000});
+    const missionLink = assistant.getByRole("link", {name: "Open mission"});
+    const modelRoute = stub.requests.map(body => ({
+      roles: (Array.isArray(body.messages) ? body.messages : []).map((message: {role?: string}) => message.role),
+      userStartsInstruction: String((Array.isArray(body.messages) ? body.messages : []).filter((message: {role?: string; content?: unknown}) => message.role === "user").at(-1)?.content ?? "").startsWith(instruction),
+      tools: (Array.isArray(body.tools) ? body.tools : []).map((tool: {function?: {name?: string}}) => tool.function?.name),
+      lastToolResult: String((Array.isArray(body.messages) ? body.messages : []).filter((message: {role?: string; content?: unknown}) => message.role === "tool").at(-1)?.content ?? "").slice(0, 500),
+    }));
+    await expect(missionLink, JSON.stringify(modelRoute)).toBeVisible();
+    const missionId = new URL((await missionLink.getAttribute("href"))!, core.origin).searchParams.get("mission");
+    expect(missionId).toBeTruthy();
+    const runResponse = await api.get(`runs/${missionId}`);
+    expect(runResponse.ok(), await runResponse.text()).toBe(true);
+    const run = await runResponse.json() as {engagement_id: string; metadata: {browser_autonomy?: Record<string, unknown>}};
+    expect(run.engagement_id).toBe(projectId);
+    expect(run.metadata.browser_autonomy).toMatchObject({session_id: browserSessionId,
+      targets: ["https://example.test/"], allowed_risk_classes: ["passive"],
+      duration_seconds: 60, max_commands: 4, max_requests: 10, max_body_bytes: 4096});
+    const automationResponse = await api.get(`runs/${missionId}/browser-automation`);
+    expect(automationResponse.ok(), await automationResponse.text()).toBe(true);
+    const automation = await automationResponse.json() as {leases: Array<{session_id?: string; target_urls?: string[]}>};
+    expect(automation.leases).toEqual(expect.arrayContaining([expect.objectContaining({session_id: browserSessionId,
+      target_urls: ["https://example.test/"], allowed_risk_classes: ["passive"],
+      max_commands: 4, max_requests: 10, max_body_bytes: 4096})]));
+    expect(await assistant.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText("The scoped browser mission is saved. Open Missions to follow it.")).toBeVisible();
+    await testInfo.attach("butler-browser-mission", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name,
+      asset: entry, assetSha256: build.assets[entry!], missionId, browserSessionId, coreStartupMs}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler rewinds a saved chat on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  let chatId = "";
+  let targetMessageId = "";
+  let sourceRevision = 0;
+  const instruction = "Rewind the second user message in the Research chat.";
+  const stub = await startLocalModelStub({responseContent: "The saved chat was rewound in Core.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (messages[lastUser]?.content !== instruction) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "rewind chat message"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chat_messages"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.chat_messages", arguments: {session_id: chatId}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.rewind_chat"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.work.rewind_chat", arguments: {
+      session_id: chatId, expected_revision: sourceRevision, before_message_id: targetMessageId,
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler rewind fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler rewind model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const send = async (content: string, sessionId?: string) => {
+      const response = await api.post("chat/completions", {data: {
+        backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+        session_id: sessionId, messages: [{role: "user", content}], include_knowledge: false, stream: false,
+      }});
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {session_id: string}).session_id;
+    };
+    chatId = await send("First research question");
+    expect(await send("Second research question", chatId)).toBe(chatId);
+    const original = await (await api.get(`chat/sessions/${chatId}/messages`)).json() as Array<{id: string; content: string; metadata: Record<string, unknown>}>;
+    expect(original.map(item => item.content)).toContain("Second research question");
+    targetMessageId = original.find(item => item.content === "Second research question")?.id ?? "";
+    expect(targetMessageId).toBeTruthy();
+    await expect.poll(async () => {
+      const saved = await (await api.get(`chat-sessions/${chatId}`)).json() as {revision: number; metadata: {initial_title_state?: string}};
+      sourceRevision = saved.revision;
+      return saved.metadata.initial_title_state;
+    }, {timeout: 20_000}).toMatch(/^(generated|failed)$/);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler rewind LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+    await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    await expect.poll(async () => (await (await api.get(`chat/sessions/${chatId}/messages`)).json() as Array<{id: string}>).map(item => item.id), {timeout: 45_000})
+      .toEqual(original.slice(0, 2).map(item => item.id));
+    const saved = await (await api.get(`chat-sessions/${chatId}`)).json() as {revision: number; metadata: {message_retractions?: unknown[]}};
+    expect(saved.revision).toBeGreaterThan(sourceRevision);
+    expect(saved.metadata.message_retractions).toHaveLength(1);
+    const all = await (await api.get(`chat/sessions/${chatId}/messages?include_replaced=true`)).json() as Array<{id: string; metadata: {retracted_at?: string}}>;
+    expect(all.filter(item => item.metadata.retracted_at).map(item => item.id)).toEqual(original.slice(2).map(item => item.id));
+    const stale = await api.post(`chat/sessions/${chatId}/rewind`, {data: {before_message_id: original[0].id, expected_revision: sourceRevision}});
+    expect(stale.status()).toBe(409);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${chatId}`);
+    const operator = page.locator(".chat-message.operator");
+    await expect(operator).toHaveCount(1, {timeout: 20_000});
+    await expect(operator.first()).toContainText("First research question");
+    await expect(page.locator(".chat-replaced-group summary")).toContainText("2 replaced messages");
+    await page.reload();
+    await expect(operator).toHaveCount(1, {timeout: 20_000});
+    await expect(page.locator(".chat-replaced-group summary")).toContainText("2 replaced messages");
+    expect((await new AxeBuilder({page}).include(".chat-replaced-group").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-chat-rewind-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], chatId, sourceRevision, savedRevision: saved.revision,
+      result: "Butler catalog action retracted exact user message; Core and refreshed transcript agree; stale revision rejected"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const addInstruction = "Add a file to the shared Library.";
+  const downloadInstruction = "Download the shared Library note.";
+  const reindexInstruction = "Reindex the shared Library note.";
+  const removeInstruction = "Remove the shared Library note.";
+  const fileMarker = "Synthetic shared Library note. No commands or private data.";
+  const content = Buffer.from(`${fileMarker}\n`);
+  let itemId = "";
+  let itemRevision = 0;
+  let modelSawKnowledgeExcerpt = false;
+  let modelSawToolFile = false;
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm the shared Library action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = messages[lastUser]?.content;
+    if (typeof prompt !== "string") return undefined;
+    const add = prompt.startsWith(addInstruction);
+    const download = prompt.startsWith(downloadInstruction);
+    const reindex = prompt.startsWith(reindexInstruction);
+    const remove = prompt.startsWith(removeInstruction);
+    if (!add && !download && !reindex && !remove) return undefined;
+    if (JSON.stringify(messages).includes(fileMarker)) modelSawKnowledgeExcerpt = true;
+    if (JSON.stringify(messages.filter(message => message.role === "tool")).includes(fileMarker)) modelSawToolFile = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: add ? "add file to shared Library" : "shared Library item download reindex remove"}};
+    if (add) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.add"}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.library.add", arguments: {}}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.list"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.library.list", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.library.detail"}};
+    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.library.detail", arguments: {item_id: itemId}}};
+    const operation = download ? "nebula.library.download" : reindex ? "nebula.library.reindex" : "nebula.library.remove";
+    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation}};
+    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation,
+      arguments: {item_id: itemId, expected_revision: itemRevision}}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler Library fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler Library model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler Library LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (instruction: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(addInstruction);
+    await expect(assistant.getByRole("region", {name: "Add to shared Library"})).toBeVisible({timeout: 45_000});
+    await assistant.getByLabel("Choose shared Library file").setInputFiles({name: "butler-shared-note.txt", mimeType: "text/plain", buffer: content});
+    await page.getByRole("dialog", {name: "Add butler-shared-note.txt to the shared Library?"}).getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("butler-shared-note.txt was not added to the shared Library.")).toBeVisible();
+    expect(await (await api.get("library/items")).json()).toEqual([]);
+    await send(addInstruction);
+    await expect(assistant.getByRole("region", {name: "Add to shared Library"})).toBeVisible({timeout: 45_000});
+    await assistant.getByLabel("Choose shared Library file").setInputFiles({name: "butler-shared-note.txt", mimeType: "text/plain", buffer: content});
+    await page.getByRole("dialog", {name: "Add butler-shared-note.txt to the shared Library?"}).getByRole("button", {name: "Add shared file"}).click();
+    await expect(assistant.getByText("Added butler-shared-note.txt to Core's shared Library. It is available to every project.")).toBeVisible({timeout: 45_000});
+    const [original] = await (await api.get("library/items")).json() as Array<{id: string; revision: number; artifact_id: string; status: string}>;
+    expect(original?.status).toBe("ready");
+    itemId = original.id;
+    itemRevision = original.revision;
+    await send(downloadInstruction);
+    await expect(page.getByRole("dialog", {name: "Download butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Download original"}).click();
+    const downloaded = await downloading;
+    expect(downloaded.suggestedFilename()).toBe("butler-shared-note.txt");
+    expect(await readFile(await downloaded.path())).toEqual(content);
+    await expect(assistant.getByText("Started a download of butler-shared-note.txt's original file on this device.")).toBeVisible();
+    expect((await (await api.get(`library/items/${itemId}`)).json() as {revision: number}).revision).toBe(itemRevision);
+    await send(reindexInstruction);
+    await expect(page.getByRole("heading", {name: "Reindex butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("butler-shared-note.txt was not reindexed. No change was saved.")).toBeVisible();
+    expect((await (await api.get(`library/items/${itemId}`)).json() as {revision: number}).revision).toBe(itemRevision);
+    await send(reindexInstruction);
+    await expect(page.getByRole("heading", {name: "Reindex butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Reindex shared item"}).click();
+    await expect(assistant.getByText(/Reindexed butler-shared-note.txt in Core's shared Library at revision/)).toBeVisible({timeout: 45_000});
+    const reindexed = await (await api.get(`library/items/${itemId}`)).json() as {revision: number; status: string; artifact_id: string};
+    expect(reindexed.revision).toBeGreaterThan(itemRevision);
+    expect(reindexed.status).toBe("ready");
+    expect(reindexed.artifact_id).toBe(original.artifact_id);
+    const stale = await api.post(`library/items/${itemId}/reindex?expected_revision=${itemRevision}`);
+    expect(stale.status()).toBe(409);
+    itemRevision = reindexed.revision;
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(/Reindexed butler-shared-note.txt in Core's shared Library/)).toBeVisible();
+    await send(removeInstruction);
+    await expect(page.getByRole("heading", {name: "Remove butler-shared-note.txt?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Remove shared item"}).click();
+    await expect(assistant.getByText("Removed butler-shared-note.txt from Core's shared Library. Its original artifact was retained.")).toBeVisible({timeout: 45_000});
+    expect((await api.get(`library/items/${itemId}`)).status()).toBe(404);
+    const retained = await api.get(`artifacts/${original.artifact_id}/content`);
+    expect(retained.ok()).toBe(true);
+    expect(await retained.body()).toEqual(content);
+    await page.goto(`${core.origin}/library`);
+    await expect(page.getByText("Your Library is empty", {exact: true})).toBeVisible();
+    expect(modelSawToolFile).toBe(false);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-library-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], itemId, sourceRevision: original.revision,
+      reindexedRevision: reindexed.revision, knowledgeExcerptObserved: modelSawKnowledgeExcerpt,
+      result: "cancel left Core unchanged; browser-owned upload and original-file download; reindex and removal confirmed; stale mutation rejected; artifact retained; action tool did not return file text"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler stores and downloads project evidence on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  page.setDefaultTimeout(30_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const uploadInstruction = "Add a synthetic evidence file from this device.";
+  const downloadInstruction = "Download the synthetic project evidence original.";
+  const content = Buffer.from("Synthetic Butler project evidence. No private data.\n");
+  let evidenceId = "";
+  let evidenceRevision = 0;
+  let modelSawFile = false;
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will review the evidence file action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = messages[lastUser]?.content;
+    if (typeof prompt !== "string") return undefined;
+    const upload = prompt.startsWith(uploadInstruction);
+    const download = prompt.startsWith(downloadInstruction);
+    if (!upload && !download) return undefined;
+    if (JSON.stringify(messages.filter(message => message.role === "tool")).includes(content.toString().trim())) modelSawFile = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "project evidence upload download original"}};
+    if (upload) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.upload"}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.evidence.upload", arguments: {}}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.list"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.evidence.list", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.detail"}};
+    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.evidence.detail", arguments: {evidence_id: evidenceId}}};
+    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.evidence.download"}};
+    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.evidence.download",
+      arguments: {evidence_id: evidenceId, expected_revision: evidenceRevision}}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler Evidence fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdFinding = await api.post("findings", {data: {engagement_id: projectId, title: "Synthetic finding", description: "Local fixture", severity: "info", status: "candidate"}});
+    expect(createdFinding.ok(), await createdFinding.text()).toBe(true);
+    const findingId = (await createdFinding.json() as {id: string}).id;
+    const createdAsset = await api.post("assets", {data: {engagement_id: projectId, name: "Synthetic server"}});
+    expect(createdAsset.ok(), await createdAsset.text()).toBe(true);
+    const assetId = (await createdAsset.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler Evidence model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler Evidence LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (instruction: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(uploadInstruction);
+    let handoff = assistant.getByRole("region", {name: "Add project evidence"});
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    await handoff.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("No evidence file was selected or stored.")).toBeVisible();
+    expect(await (await api.get("evidence", {params: {engagement_id: projectId}})).json()).toEqual([]);
+    await send(uploadInstruction);
+    handoff = assistant.getByRole("region", {name: "Add project evidence"});
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    const landscapeProfile = testInfo.project.name === "assistant-real-chromium-390"
+      || testInfo.project.name === "assistant-real-webkit-390";
+    const portraitViewport = page.viewportSize();
+    if (landscapeProfile) {
+      await page.setViewportSize({width: 844, height: 390});
+      await expect(handoff).toBeVisible();
+    }
+    await handoff.getByLabel("Choose project evidence file").setInputFiles({name: "butler-proof.txt", mimeType: "text/plain", buffer: content});
+    await handoff.getByRole("textbox", {name: "Title"}).fill("Synthetic proof");
+    await handoff.getByRole("textbox", {name: "Description"}).fill("Synthetic device artifact");
+    await handoff.getByRole("combobox", {name: "Finding"}).selectOption(findingId);
+    await handoff.getByRole("checkbox", {name: "Synthetic server"}).check();
+    const storeButton = handoff.getByRole("button", {name: "Store evidence"});
+    if (landscapeProfile) {
+      await storeButton.scrollIntoViewIfNeeded();
+      expect(await storeButton.evaluate((button) => {
+        const viewport = window.visualViewport;
+        const bounds = button.getBoundingClientRect();
+        return Boolean(viewport && bounds.top >= viewport.offsetTop - 1
+          && bounds.bottom <= viewport.offsetTop + viewport.height + 1
+          && document.documentElement.scrollWidth <= viewport.width + 1);
+      })).toBe(true);
+    }
+    await storeButton.click();
+    await expect(assistant.getByText(/Stored Synthetic proof in Core's project Evidence at revision/)).toBeVisible({timeout: 45_000});
+    if (landscapeProfile && portraitViewport) await page.setViewportSize(portraitViewport);
+    const records = await (await api.get("evidence", {params: {engagement_id: projectId}})).json() as Array<{id: string; revision: number; artifact_id: string; sha256: string; finding_id: string; asset_ids: string[]}>;
+    expect(records).toHaveLength(1);
+    const saved = records[0];
+    expect(saved.finding_id).toBe(findingId);
+    expect(saved.asset_ids).toContain(assetId);
+    expect(saved.sha256).toBe(createHash("sha256").update(content).digest("hex"));
+    expect(await (await api.get(`artifacts/${saved.artifact_id}/content`)).body()).toEqual(content);
+    evidenceId = saved.id;
+    evidenceRevision = saved.revision;
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(/Stored Synthetic proof in Core's project Evidence/)).toBeVisible();
+    await send(downloadInstruction);
+    await expect(page.getByRole("dialog", {name: "Download Synthetic proof?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("dialog", {name: "Download Synthetic proof?"}).getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("Synthetic proof was not downloaded. No file transfer started.")).toBeVisible();
+    await send(downloadInstruction);
+    await expect(page.getByRole("dialog", {name: "Download Synthetic proof?"})).toBeVisible({timeout: 45_000});
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("dialog", {name: "Download Synthetic proof?"}).getByRole("button", {name: "Download original"}).click();
+    const downloaded = await downloading;
+    expect(downloaded.suggestedFilename()).toBe("butler-proof.txt");
+    expect(await readFile(await downloaded.path())).toEqual(content);
+    await expect(assistant.getByText("Started a verified download of Synthetic proof's original file on this device.")).toBeVisible();
+    await page.goto(`${core.origin}/projects/${projectId}/evidence/${evidenceId}`);
+    await expect(page.getByRole("heading", {name: "Synthetic proof", level: 2})).toBeVisible();
+    expect(modelSawFile).toBe(false);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-evidence-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), landscapeViewport: landscapeProfile ? {width: 844, height: 390} : null,
+      asset: entry, assetSha256: build.assets[entry!], evidenceId, evidenceRevision,
+      sha256: saved.sha256, result: "browser-owned file choice and cancellation; exact Core and list read-back; project links; verified original download; refreshed evidence; no file bytes returned to model"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(480_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const prompts = {
+    create: "Create the synthetic Butler report draft.",
+    createDisposable: "Create a temporary report draft to delete.",
+    update: "Move the synthetic Butler report into review with a summary.",
+    transform: "Transform the linked TLS note into a reviewed report section.",
+    delete: "Delete the temporary report draft.",
+    signoff: "Open sign-off for the synthetic Butler report.",
+    pdf: "Export the synthetic Butler report PDF.",
+    bundle: "Export the synthetic engagement bundle.",
+  };
+  let reportId = "";
+  let reportRevision = 0;
+  let disposableId = "";
+  let disposableRevision = 0;
+  let projectId = "";
+  let projectRevision = 0;
+  let noteId = "";
+  let noteRevision = 0;
+  const noteBody = "Port 443 was observed; certificate review remains pending.";
+  const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm the report action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = String(messages[lastUser]?.content ?? "");
+    const action = Object.entries(prompts).find(([, instruction]) => prompt.startsWith(instruction))?.[0];
+    if (!action) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const operation = action === "create" || action === "createDisposable" ? "nebula.reports.create"
+      : action === "update" ? "nebula.reports.update"
+      : action === "transform" ? "nebula.reports.transform_note"
+      : action === "delete" ? "nebula.reports.delete"
+      : action === "signoff" ? "nebula.reports.signoff"
+      : action === "pdf" ? "nebula.reports.export_pdf" : "nebula.reports.export_bundle";
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: `${action} project report`}};
+    if (action === "create" || action === "createDisposable") {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation,
+        arguments: {title: action === "createDisposable" ? "Temporary Butler draft" : "Synthetic Butler assessment",
+          executive_summary: "Draft summary", ...(action === "create" ? {observation_ids: [noteId]} : {})}}};
+      return undefined;
+    }
+    if (action === "bundle") {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.projects.detail"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.projects.detail", arguments: {project_id: projectId}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation,
+        arguments: {expected_project_revision: projectRevision}}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.list"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.list", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.detail"}};
+    if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.detail",
+      arguments: {report_id: action === "delete" ? disposableId : reportId}}};
+    if (action === "transform") {
+      if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.source_note"}};
+      if (replies === 6) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.source_note",
+        arguments: {observation_id: noteId}}};
+      if (replies === 7) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 8) return {name: "nebula_capabilities_change", arguments: {operation,
+        arguments: {report_id: reportId, expected_revision: reportRevision,
+          observation_id: noteId, expected_source_revision: noteRevision,
+          instruction: "Preserve the observed fact and label certificate uncertainty."}}};
+      return undefined;
+    }
+    if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation}};
+    if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation,
+      arguments: {report_id: action === "delete" ? disposableId : reportId,
+        expected_revision: action === "delete" ? disposableRevision : reportRevision,
+        ...(action === "update" ? {status: "review", executive_summary: "Reviewed synthetic evidence."} : {})}}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler report fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string; revision: number};
+    projectId = project.id;
+    projectRevision = project.revision;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler report model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const noteResponse = await api.post("observations", {data: {engagement_id: projectId,
+      observation_type: "manual", title: "TLS note", body: noteBody}});
+    expect(noteResponse.ok(), await noteResponse.text()).toBe(true);
+    const note = await noteResponse.json() as {id: string; revision: number};
+    noteId = note.id;
+    noteRevision = note.revision;
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler report LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/reports`);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (instruction: string) => {
+      if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts.create);
+    await expect.poll(async () => {
+      const rows = await (await api.get(`reports?engagement_id=${projectId}`)).json() as Array<{id: string}>;
+      reportId = rows[0]?.id ?? "";
+      return rows.length;
+    }, {timeout: 45_000}).toBe(1);
+    const created = await (await api.get(`reports/${reportId}`)).json() as {id: string; revision: number; executive_summary: string; status: string; observation_ids: string[]};
+    reportRevision = created.revision;
+    expect(created).toMatchObject({id: reportId, status: "draft", executive_summary: "Draft summary"});
+    expect(created.observation_ids).toEqual([noteId]);
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${reportId}$`));
+    await expect(page.getByRole("textbox", {name: "Report title"})).toHaveValue("Synthetic Butler assessment");
+    await send(prompts.update);
+    await expect(assistant.getByText(/Saved Synthetic Butler assessment in Core as review/)).toBeVisible({timeout: 45_000});
+    const reviewed = await (await api.get(`reports/${reportId}`)).json() as {revision: number; status: string; executive_summary: string; observation_ids: string[]};
+    reportRevision = reviewed.revision;
+    expect(reviewed.status).toBe("review");
+    expect(reviewed.executive_summary).toBe("Reviewed synthetic evidence.");
+    expect(reviewed.observation_ids).toEqual([noteId]);
+    await send(prompts.transform);
+    const writingDialog = page.getByRole("dialog", {name: "Transform TLS note for the report"});
+    await expect(writingDialog).toBeVisible({timeout: 45_000});
+    await writingDialog.getByRole("button", {name: "Close", exact: true}).click();
+    await expect(assistant.getByText(/No reviewed report section was saved/)).toBeVisible();
+    expect((await (await api.get(`reports/${reportId}`)).json() as {revision: number}).revision).toBe(reportRevision);
+    await send(prompts.transform);
+    await expect(writingDialog).toBeVisible({timeout: 45_000});
+    await writingDialog.getByRole("button", {name: "Generate draft"}).click();
+    const reviewedDraft = writingDialog.getByRole("textbox", {name: "AI writing draft"});
+    await expect(reviewedDraft).toBeVisible({timeout: 45_000});
+    await reviewedDraft.fill("Port 443 was observed; certificate posture remains under review.");
+    await expect(page.getByRole("toolbar", {name: "Selected text actions"})).toHaveCount(0);
+    await writingDialog.getByRole("button", {name: "Save report section"}).click();
+    await expect(writingDialog).toBeHidden({timeout: 45_000});
+    const transformed = await (await api.get(`reports/${reportId}`)).json() as {revision: number;
+      note_transforms: Array<{observation_id: string; source_revision: number; body: string; provenance: {provider_profile_id: string}}>};
+    reportRevision = transformed.revision;
+    expect(transformed.note_transforms).toEqual([expect.objectContaining({observation_id: noteId,
+      source_revision: noteRevision, body: "Port 443 was observed; certificate posture remains under review.",
+      provenance: expect.objectContaining({provider_profile_id: provider.id})})]);
+    expect((await (await api.get(`observations/${noteId}`)).json() as {body: string}).body).toBe(noteBody);
+    await page.reload();
+    await expect(page.getByRole("textbox", {name: "Report section for TLS note"}))
+      .toHaveValue("Port 443 was observed; certificate posture remains under review.");
+    await send(prompts.signoff);
+    const signoff = page.getByRole("dialog", {name: "Sign off final report"});
+    await expect(signoff).toBeVisible({timeout: 45_000});
+    expect((await (await api.get(`reports/${reportId}`)).json() as {status: string}).status).toBe("review");
+    await signoff.getByRole("textbox", {name: "Your display name"}).fill("Synthetic operator");
+    await signoff.getByRole("button", {name: "Sign off report"}).click();
+    await expect(signoff).toBeHidden({timeout: 45_000});
+    const final = await (await api.get(`reports/${reportId}`)).json() as {revision: number; status: string; signed_off_by: string};
+    reportRevision = final.revision;
+    expect(final.status).toBe("final");
+    expect(final.signed_off_by).toBeTruthy();
+    await page.reload();
+    await expect(page.getByText(/Final · read-only/)).toBeVisible();
+    await send(prompts.pdf);
+    await expect(page.getByRole("dialog", {name: "Export Synthetic Butler assessment as PDF?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(/was not exported. No download started/)).toBeVisible();
+    await send(prompts.pdf);
+    await expect(page.getByRole("dialog", {name: "Export Synthetic Butler assessment as PDF?"})).toBeVisible({timeout: 45_000});
+    const pdfStarted = page.waitForEvent("download");
+    await page.getByRole("dialog", {name: "Export Synthetic Butler assessment as PDF?"})
+      .getByRole("button", {name: "Export PDF", exact: true}).click();
+    const pdf = await pdfStarted;
+    expect(pdf.suggestedFilename()).toBe("Synthetic-Butler-assessment.pdf");
+    expect((await readFile((await pdf.path())!)).subarray(0, 4).toString()).toBe("%PDF");
+    await send(prompts.bundle);
+    await expect(page.getByRole("dialog", {name: "Export Butler report fixture's sensitive bundle?"})).toBeVisible({timeout: 45_000});
+    const bundleStarted = page.waitForEvent("download");
+    await page.getByRole("dialog", {name: "Export Butler report fixture's sensitive bundle?"})
+      .getByRole("button", {name: "Export bundle", exact: true}).click();
+    const bundle = await bundleStarted;
+    expect(bundle.suggestedFilename()).toBe("Butler-report-fixture.nebula.zip");
+    expect((await readFile((await bundle.path())!)).subarray(0, 2).toString()).toBe("PK");
+    expect((await (await api.get(`reports/${reportId}`)).json() as {revision: number}).revision).toBe(reportRevision);
+    await send(prompts.createDisposable);
+    await expect.poll(async () => {
+      const rows = await (await api.get(`reports?engagement_id=${projectId}`)).json() as Array<{id: string; title: string; revision: number}>;
+      const row = rows.find(item => item.title === "Temporary Butler draft");
+      disposableId = row?.id ?? "";
+      disposableRevision = row?.revision ?? 0;
+      return disposableId;
+    }, {timeout: 45_000}).not.toBe("");
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${disposableId}$`));
+    await send(prompts.delete);
+    const deletePrompt = page.getByRole("dialog", {name: "Permanently delete Temporary Butler draft?"});
+    await expect(deletePrompt).toBeVisible({timeout: 45_000});
+    await deletePrompt.getByRole("button", {name: "Cancel"}).click();
+    expect((await api.get(`reports/${disposableId}`)).status()).toBe(200);
+    await send(prompts.delete);
+    await expect(deletePrompt).toBeVisible({timeout: 45_000});
+    await deletePrompt.getByRole("button", {name: "Delete report"}).click();
+    await expect.poll(async () => (await api.get(`reports/${disposableId}`)).status(), {timeout: 45_000}).toBe(404);
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${reportId}$`));
+    await page.reload();
+    await expect(page.getByRole("navigation", {name: "Reports"}).getByRole("button", {name: /Temporary Butler draft/})).toHaveCount(0);
+    const screenDraft = await api.post("reports", {data: {
+      engagement_id: projectId, title: "Reports screen draft", status: "draft", executive_summary: "Disposable",
+    }});
+    expect(screenDraft.ok(), await screenDraft.text()).toBe(true);
+    const screenReport = await screenDraft.json() as {id: string; revision: number};
+    await page.goto(`${core.origin}/projects/${projectId}/reports/${screenReport.id}`);
+    const screenDelete = page.getByRole("button", {name: "Delete report"});
+    await expect(screenDelete).toBeEnabled();
+    await screenDelete.click();
+    const screenPrompt = page.getByRole("dialog", {name: "Permanently delete Reports screen draft?"});
+    await expect(screenPrompt).toBeVisible();
+    await screenPrompt.getByRole("button", {name: "Delete report"}).click();
+    await expect.poll(async () => (await api.get(`reports/${screenReport.id}`)).status()).toBe(404);
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${reportId}$`));
+    expect((await (await api.get(`reports?engagement_id=${projectId}`)).json() as Array<{id: string}>).map(item => item.id))
+      .toEqual([reportId]);
+    expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-report-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      reportId, revision: reportRevision,
+      result: "Butler draft and edit read back from Core; reviewed AI note transform saved and source retained; operator attested final report; cancelled PDF started no download; PDF and sensitive bundle downloaded on requesting browser; Butler and Reports screen confirmed draft deletion and Core absence"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler exports a saved chat on the requesting LAN browser", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const instruction = "Export the Research export chat transcript to this browser.";
+  const secret = "synthetic transcript marker 7302";
+  let chatId = "";
+  let sourceRevision = 0;
+  let modelSawSecret = false;
+  const stub = await startLocalModelStub({responseContent: "The browser will confirm this export.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const userContent = messages[lastUser]?.content;
+    if (typeof userContent !== "string" || (userContent !== instruction &&
+      !userContent.startsWith(`${instruction}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))) return undefined;
+    if (JSON.stringify(messages).includes(secret)) modelSawSecret = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "export chat transcript"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.work.chats"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.work.chats", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.chats.export"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.chats.export", arguments: {
+      session_id: chatId, expected_revision: sourceRevision,
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler export fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler export model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const source = await api.post("chat/completions", {data: {
+      backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+      messages: [{role: "user", content: secret}], include_knowledge: false, stream: false,
+    }});
+    expect(source.ok(), await source.text()).toBe(true);
+    chatId = (await source.json() as {session_id: string}).session_id;
+    await expect.poll(async () => (await (await api.get(`chat-sessions/${chatId}`)).json() as {metadata: {initial_title_state?: string}}).metadata.initial_title_state,
+      {timeout: 20_000}).toMatch(/^(generated|failed)$/);
+    const before = await (await api.get(`chat-sessions/${chatId}`)).json() as {revision: number};
+    const renamed = await api.patch(`chat-sessions/${chatId}`, {data: {title: "Research export", expected_revision: before.revision}});
+    expect(renamed.ok(), await renamed.text()).toBe(true);
+    sourceRevision = (await renamed.json() as {revision: number}).revision;
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler export LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    let downloadCount = 0;
+    page.on("download", () => { downloadCount += 1; });
+    const send = async () => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send();
+    await expect(page.getByRole("heading", {name: "Export Research export?"})).toBeVisible({timeout: 45_000});
+    await page.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("Research export was not exported. No download started.")).toBeVisible();
+    expect(downloadCount).toBe(0);
+    await send();
+    await expect(page.getByRole("heading", {name: "Export Research export?"})).toBeVisible({timeout: 45_000});
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Export transcript"}).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe(`Research-export-${chatId.slice(-8)}.md`);
+    const markdown = await readFile((await download.path())!, "utf8");
+    expect(markdown).toContain("# Research export");
+    expect(markdown).toContain(secret);
+    expect(markdown).toContain(`Nebula session: \`${chatId}\``);
+    expect(downloadCount).toBe(1);
+    await expect(assistant.getByText(/Started a Markdown transcript download for Research export/)).toBeVisible();
+    expect(modelSawSecret).toBe(false);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(page.getByRole("dialog", {name: "Butler"}).getByText(/Started a Markdown transcript download for Research export/)).toBeVisible();
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-chat-export-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], chatId, revision: sourceRevision,
+      result: "Butler handoff confirmed locally; cancel started no download; complete Core transcript downloaded without model exposure"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler manages a workspace text file on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const original = "Butler original text\n";
+  const revised = "Butler revised text\n";
+  const originalHash = createHash("sha256").update(original).digest("hex");
+  const revisedHash = createHash("sha256").update(revised).digest("hex");
+  const binary = Buffer.from([0, 255, 42, 1]);
+  const binaryHash = createHash("sha256").update(binary).digest("hex");
+  let rootIdentity = "";
+  let folderIdentity = "";
+  const prompts = {
+    create: "Create a workspace text file named research.txt.",
+    edit: "Replace research.txt with the revised text.",
+    rename: "Rename research.txt to final.txt.",
+    download: "Download final.txt to this browser.",
+    delete: "Delete final.txt from the workspace.",
+    createFolder: "Create a workspace folder named captures.",
+    uploadBinary: "Ask this browser to upload a binary file into captures.",
+    renameFolder: "Rename captures to archive.",
+    deleteFolder: "Delete the empty archive folder.",
+  };
+  const stub = await startLocalModelStub({responseContent: "I checked the workspace action in Core.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const content = messages[lastUser]?.content;
+    if (typeof content !== "string") return undefined;
+    const instruction = Object.values(prompts).find(prompt => content === prompt || content.startsWith(`${prompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`));
+    if (!instruction) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const describe = (operation: string) => ({name: "nebula_capabilities_describe", arguments: {operation}});
+    const read = (operation: string, args: Record<string, unknown>) => ({name: "nebula_capabilities_read", arguments: {operation, arguments: args}});
+    const change = (operation: string, args: Record<string, unknown>) => ({name: "nebula_capabilities_change", arguments: {operation, arguments: args}});
+    if (instruction === prompts.create) return [
+      {name: "nebula_capabilities_search", arguments: {query: "workspace file create text"}},
+      describe("nebula.workspace.list"), read("nebula.workspace.list", {}),
+      describe("nebula.workspace.create_text"), change("nebula.workspace.create_text", {path: "research.txt", content: original}),
+    ][replies];
+    if (instruction === prompts.edit) return [
+      describe("nebula.workspace.read"), read("nebula.workspace.read", {path: "research.txt"}),
+      describe("nebula.workspace.replace_text"), change("nebula.workspace.replace_text", {path: "research.txt", content: revised, expected_sha256: originalHash}),
+    ][replies];
+    if (instruction === prompts.rename) return [
+      read("nebula.workspace.read", {path: "research.txt"}), describe("nebula.workspace.rename_file"),
+      change("nebula.workspace.rename_file", {path: "research.txt", new_name: "final.txt", expected_sha256: revisedHash}),
+    ][replies];
+    if (instruction === prompts.download) return [
+      describe("nebula.workspace.download_file"), change("nebula.workspace.download_file", {path: "final.txt"}),
+    ][replies];
+    if (instruction === prompts.createFolder) return [
+      {name: "nebula_capabilities_search", arguments: {query: "workspace create directory"}},
+      read("nebula.workspace.list", {}),
+      describe("nebula.workspace.create_directory"),
+      change("nebula.workspace.create_directory", {path: "captures", expected_parent_identity: rootIdentity}),
+    ][replies];
+    if (instruction === prompts.uploadBinary) return [
+      read("nebula.workspace.list", {path: "captures"}),
+      describe("nebula.workspace.upload_from_device"),
+      change("nebula.workspace.upload_from_device", {directory: "captures", expected_directory_identity: folderIdentity}),
+    ][replies];
+    if (instruction === prompts.renameFolder) return [
+      read("nebula.workspace.list", {path: "captures"}),
+      describe("nebula.workspace.rename_directory"),
+      change("nebula.workspace.rename_directory", {path: "captures", new_name: "archive", expected_entry_identity: folderIdentity}),
+    ][replies];
+    if (instruction === prompts.deleteFolder) return [
+      read("nebula.workspace.list", {path: "archive"}),
+      describe("nebula.workspace.delete_directory"),
+      change("nebula.workspace.delete_directory", {path: "archive", expected_entry_identity: folderIdentity}),
+    ][replies];
+    return [
+      read("nebula.workspace.read", {path: "final.txt"}), describe("nebula.workspace.delete_file"),
+      change("nebula.workspace.delete_file", {path: "final.txt", expected_sha256: revisedHash}),
+    ][replies];
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler workspace fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler workspace model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler workspace LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    let resultCount = 0;
+    const awaitReply = async () => {
+      await expect(assistant.getByText("I checked the workspace action in Core.", {exact: true})).toHaveCount(++resultCount, {timeout: 45_000});
+    };
+    const send = async (instruction: string, waitForReply = true) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      if (waitForReply) await awaitReply();
+    };
+    const saved = async (name: string) => {
+      const result = await api.get(`engagements/${projectId}/workspace/download?path=${name}`);
+      expect(result.ok(), await result.text()).toBe(true);
+      return (await result.body()).toString("utf8");
+    };
+    await send(prompts.create);
+    expect(await saved("research.txt")).toBe(original);
+    await send(prompts.edit);
+    expect(await saved("research.txt")).toBe(revised);
+    await send(prompts.rename);
+    expect((await api.get(`engagements/${projectId}/workspace/download?path=research.txt`)).status()).toBe(404);
+    expect(await saved("final.txt")).toBe(revised);
+    const downloading = page.waitForEvent("download");
+    await send(prompts.download);
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe("final.txt");
+    expect(await readFile((await download.path())!, "utf8")).toBe(revised);
+    await send(prompts.delete, false);
+    const deleteDialog = page.getByRole("dialog", {name: "Delete final.txt?"});
+    await expect(deleteDialog).toBeVisible();
+    await deleteDialog.getByRole("button", {name: "Cancel"}).click();
+    await awaitReply();
+    await expect(assistant.getByText("final.txt was not deleted.")).toBeVisible();
+    expect(await saved("final.txt")).toBe(revised);
+    await send(prompts.delete, false);
+    await expect(deleteDialog).toBeVisible();
+    await deleteDialog.getByRole("button", {name: "Delete"}).click();
+    await awaitReply();
+    await expect(assistant.getByText(/Core no longer serves the file/)).toBeVisible();
+    expect((await api.get(`engagements/${projectId}/workspace/download?path=final.txt`)).status()).toBe(404);
+    const rootState = await api.get(`engagements/${projectId}/workspace/entry?path=`);
+    expect(rootState.ok(), await rootState.text()).toBe(true);
+    rootIdentity = (await rootState.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.createFolder);
+    const folder = await api.get(`engagements/${projectId}/workspace/entry?path=captures`);
+    expect(folder.ok(), await folder.text()).toBe(true);
+    folderIdentity = (await folder.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.uploadBinary);
+    await expect(assistant.getByRole("region", {name: "Upload to project workspace"})).toBeVisible();
+    await assistant.getByRole("region", {name: "Upload to project workspace"}).getByRole("button", {name: "Cancel"}).click();
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=captures/sample.bin`)).status()).toBe(404);
+    await send(prompts.uploadBinary);
+    await assistant.locator('input[aria-label="Choose project workspace file"]').setInputFiles({
+      name: "sample.bin", mimeType: "application/octet-stream", buffer: binary,
+    });
+    await expect(assistant.getByText(/Uploaded \/workspace\/captures\/sample.bin in Core/)).toBeVisible({timeout: 30_000});
+    const fileState = await api.get(`engagements/${projectId}/workspace/entry?path=captures/sample.bin`);
+    expect(fileState.ok(), await fileState.text()).toBe(true);
+    expect(await fileState.json()).toMatchObject({kind: "file", size: binary.length, sha256: binaryHash});
+    expect(await (await api.get(`engagements/${projectId}/workspace/download?path=captures/sample.bin`)).body()).toEqual(binary);
+    const afterUpload = await api.get(`engagements/${projectId}/workspace/entry?path=captures`);
+    folderIdentity = (await afterUpload.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.renameFolder);
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=captures`)).status()).toBe(404);
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=archive/sample.bin`)).status()).toBe(200);
+    const removedBinary = await api.delete(`engagements/${projectId}/workspace/entry?path=archive/sample.bin`, {
+      headers: {"If-Match": binaryHash},
+    });
+    expect(removedBinary.ok(), await removedBinary.text()).toBe(true);
+    const emptyFolder = await api.get(`engagements/${projectId}/workspace/entry?path=archive`);
+    folderIdentity = (await emptyFolder.json() as {entry_identity: string}).entry_identity;
+    await send(prompts.deleteFolder, false);
+    const folderDialog = page.getByRole("dialog", {name: "Delete archive?"});
+    await expect(folderDialog).toBeVisible();
+    await folderDialog.getByRole("button", {name: "Cancel"}).click();
+    await awaitReply();
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=archive`)).status()).toBe(200);
+    await send(prompts.deleteFolder, false);
+    await expect(folderDialog).toBeVisible();
+    await folderDialog.getByRole("button", {name: "Delete folder"}).click();
+    await awaitReply();
+    expect((await api.get(`engagements/${projectId}/workspace/entry?path=archive`)).status()).toBe(404);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    const restoredButler = page.getByRole("dialog", {name: "Butler"});
+    await expect(restoredButler.getByText(/Core no longer serves the file/)).toBeVisible();
+    await restoredButler.getByRole("button", {name: "Close Butler"}).click();
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "More workbench views", exact: true}).click();
+      await page.getByRole("dialog", {name: "More"}).getByRole("group", {name: "Workspace tools"})
+        .getByRole("button", {name: "Files", exact: true}).click();
+    } else {
+      await clickWorkbenchTab(page, "Workspace files");
+    }
+    await expect(page.locator(".workspace-browser")).toBeVisible();
+    await expect(page.locator(".workspace-browser").getByText("final.txt")).toHaveCount(0);
+    expect((await new AxeBuilder({page}).include(".workspace-browser").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-workspace-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId,
+      result: "Butler created, replaced and renamed Core text; downloaded verified bytes; browser selected binary bytes, Core confirmed SHA-256; folder create, rename and confirmed empty delete read back; cancellations preserved state; refresh cleared deleted entries"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  const repository = path.resolve(import.meta.dirname, "../..");
+  const runtimeDir = path.join(repository, "ui/src-tauri/resources/notebook-runtime");
+  if (!existsSync(path.join(runtimeDir, "nebula-notebook-runtime.json"))) {
+    const stage = spawnSync("python3", ["scripts/stage_notebook_runtime.py", runtimeDir, "--target", "x86_64-unknown-linux-gnu"], {cwd: repository, encoding: "utf8", timeout: 120_000});
+    expect(stage.status, stage.stderr).toBe(0);
+  }
+  const wheelDir = await mkdtemp(path.join(tmpdir(), "nebula-notebook-wheel-"));
+  const wheel = spawnSync("python3", ["-c", `
+import base64, hashlib, pathlib, sys, zipfile
+root = pathlib.Path(sys.argv[1])
+dist = "nebula_notebook_fixture-1.0.0.dist-info"
+files = {
+    "nebula_notebook_fixture/__init__.py": b"VALUE = 'fixture package loaded'\\n",
+    f"{dist}/METADATA": b"Metadata-Version: 2.1\\nName: nebula-notebook-fixture\\nVersion: 1.0.0\\n\\n",
+    f"{dist}/WHEEL": b"Wheel-Version: 1.0\\nGenerator: nebula-test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n",
+}
+record = []
+for name, data in files.items():
+    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+    record.append(f"{name},sha256={digest},{len(data)}")
+record.append(f"{dist}/RECORD,,")
+with zipfile.ZipFile(root / "nebula_notebook_fixture-1.0.0-py3-none-any.whl", "w", zipfile.ZIP_DEFLATED) as archive:
+    for name, data in files.items():
+        archive.writestr(name, data)
+    archive.writestr(f"{dist}/RECORD", "\\n".join(record) + "\\n")
+`, wheelDir], {cwd: repository, encoding: "utf8"});
+  expect(wheel.status, wheel.stderr).toBe(0);
+  let core: RealCore;
+  try {
+    core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000,
+      env: {NEBULA_NOTEBOOK_RUNTIME_DIR: runtimeDir, PATH: "/usr/bin:/bin", UV_FIND_LINKS: wheelDir}});
+  } catch (error) {
+    await rm(wheelDir, {recursive: true, force: true});
+    throw error;
+  }
+  let cellId = "";
+  let sourceHash = "";
+  let runId = "";
+  const editInstruction = "Edit the saved research notebook cell to print 43.";
+  const runInstruction = "Run the exact saved research notebook cell.";
+  const interruptInstruction = "Interrupt the current research notebook run.";
+  const packageInstruction = "Install nebula-notebook-fixture==1.0.0 in the research notebook.";
+  const restartInstruction = "Restart the exact research notebook kernel.";
+  const stub = await startLocalModelStub({responseContent: "I checked Core's Notebook state.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const instruction = messages[lastUser]?.content;
+    if (instruction !== editInstruction && instruction !== runInstruction && instruction !== interruptInstruction && instruction !== packageInstruction && instruction !== restartInstruction) return undefined;
+    const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool");
+    const replies = toolReplies.length;
+    if (instruction === packageInstruction) {
+      if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "notebook install pinned package"}};
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.installed_package"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.installed_package", arguments: {path: "research.ipynb", name: "nebula-notebook-fixture"}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.install_package"}};
+      if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.install_package", arguments: {path: "research.ipynb", requirement: "nebula-notebook-fixture==1.0.0"}}};
+      if (replies === 5) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.installed_package", arguments: {path: "research.ipynb", name: "nebula-notebook-fixture"}}};
+      return undefined;
+    }
+    if (instruction === restartInstruction) {
+      if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "notebook restart exact kernel"}};
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.kernel_status"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.kernel_status", arguments: {path: "research.ipynb"}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.restart"}};
+      if (replies === 4) {
+        const findKernel = (value: unknown): {instance_id: string; generation: number} | null => {
+          if (typeof value === "string") {try {return findKernel(JSON.parse(value));} catch {return null;}}
+          if (Array.isArray(value)) return value.map(findKernel).find(Boolean) ?? null;
+          if (value && typeof value === "object") {
+            const row = value as Record<string, unknown>;
+            if (typeof row.instance_id === "string" && typeof row.generation === "number") return {instance_id: row.instance_id, generation: row.generation};
+            return Object.values(row).map(findKernel).find(Boolean) ?? null;
+          }
+          return null;
+        };
+        const kernel = findKernel(toolReplies[2]?.content);
+        if (!kernel) throw new Error("Butler did not read the current kernel identity");
+        return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.restart", arguments: {path: "research.ipynb", expected_instance_id: kernel.instance_id, expected_generation: kernel.generation}}};
+      }
+      if (replies === 5) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.kernel_status", arguments: {path: "research.ipynb"}}};
+      return undefined;
+    }
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: instruction === editInstruction ? "notebook edit cell" : instruction === runInstruction ? "notebook execute cell" : "notebook interrupt run"}};
+    if (instruction === interruptInstruction) {
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.run"}};
+      if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.run", arguments: {run_id: runId}}};
+      if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.interrupt"}};
+      if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.interrupt", arguments: {run_id: runId}}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.read"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.read", arguments: {path: "research.ipynb"}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: instruction === editInstruction ? "nebula.notebook.edit_cell" : "nebula.notebook.execute"}};
+    if (replies === 4) return instruction === editInstruction
+      ? {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.edit_cell", arguments: {
+        path: "research.ipynb", cell_id: cellId, source: "print(43)", cell_type: "code", expected_source_hash: sourceHash,
+      }}}
+      : {name: "nebula_capabilities_change", arguments: {operation: "nebula.notebook.execute", arguments: {
+        path: "research.ipynb", cell_id: cellId, expected_source_hash: sourceHash,
+      }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler Notebook fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const policy = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as Record<string, unknown>;
+    const consent = await api.put(`engagements/${projectId}/automation-policy`, {data: {
+      execution_mode: "host", host_access_acknowledged: true, approval_policy: policy.approval_policy,
+      network_enabled: false, runner_profile_id: policy.runner_profile_id, vpn_profile_id: policy.vpn_profile_id,
+      max_timeout_ms: policy.max_timeout_ms, expected_revision: policy.revision,
+    }});
+    expect(consent.ok(), await consent.text()).toBe(true);
+    const createdProvider = await api.post("providers", {data: {
+      name: "Butler Notebook model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const provider = await createdProvider.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const created = await api.post(`engagements/${projectId}/notebooks`, {data: {path: "research.ipynb"}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const file = await created.json() as {revision: string};
+    const added = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", source: "print(42)", cell_type: "code", expected_revision: file.revision,
+    }});
+    expect(added.ok(), await added.text()).toBe(true);
+    const savedFile = await added.json() as {cell_id: string; cell_revisions: Record<string, string>};
+    cellId = savedFile.cell_id;
+    sourceHash = savedFile.cell_revisions[cellId];
+    const coldKernel = await api.get(`engagements/${projectId}/notebooks/kernel?path=research.ipynb`);
+    expect(coldKernel.ok(), await coldKernel.text()).toBe(true);
+    expect((await coldKernel.json() as {state: string}).state).toBe("absent");
+    const coldRestart = await api.post(`engagements/${projectId}/notebooks/kernel/restart`, {data: {path: "research.ipynb"}});
+    expect(coldRestart.ok(), await coldRestart.text()).toBe(true);
+    expect((await coldRestart.json() as {restarted: boolean}).restarted).toBe(false);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler Notebook LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
+    const coldNotebook = page.getByRole("region", {name: "Project notebook"});
+    await expect(coldNotebook.getByRole("button", {name: "Restart"})).toBeVisible();
+    await coldNotebook.getByRole("button", {name: "Restart"}).click();
+    await expect(coldNotebook.getByRole("status")).toContainText("No active kernel; one will start when you run a cell.");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (text: string) => {
+      const button = assistant.getByRole("button", {name: "Send to Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(text);
+      await expect(button).toBeEnabled({timeout: 45_000});
+      await button.click();
+    };
+    await send(editInstruction);
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`);
+      const current = await response.json() as {document: {cells: Array<{source: string}>}};
+      return current.document.cells[0].source;
+    }, {timeout: 45_000}).toBe("print(43)");
+    const stale = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", cell_id: cellId, source: "stale overwrite", cell_type: "code", expected_source_hash: sourceHash,
+    }});
+    expect(stale.status()).toBe(409);
+    const edited = await (await api.get(`engagements/${projectId}/notebooks/file?path=research.ipynb`)).json() as {cell_revisions: Record<string, string>};
+    const oldHash = sourceHash;
+    sourceHash = edited.cell_revisions[cellId];
+    const staleRun = await api.post(`engagements/${projectId}/notebooks/runs`, {data: {
+      path: "research.ipynb", cell_id: cellId, expected_source_hash: oldHash,
+    }});
+    expect(staleRun.status()).toBe(409);
+    expect(await (await api.get(`engagements/${projectId}/notebooks/runs?path=research.ipynb`)).json()).toEqual([]);
+    await send(runInstruction);
+    await expect.poll(async () => {
+      const runs = await (await api.get(`engagements/${projectId}/notebooks/runs?path=research.ipynb`)).json() as Array<{id: string; source_hash: string; status: string}>;
+      const matching = runs.find(run => run.source_hash === sourceHash);
+      if (matching) runId = matching.id;
+      return matching?.status;
+    }, {timeout: 90_000}).toBe("succeeded");
+    const completed = await (await api.get(`engagements/${projectId}/notebooks/runs/${runId}`)).json() as {run: {source_hash: string}; events: Array<{event_type: string; payload: unknown}>};
+    expect(completed.run.source_hash).toBe(sourceHash);
+    expect(completed.events.some(event => event.event_type === "notebook.output" && JSON.stringify(event.payload).includes("43"))).toBe(true);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
+    const notebook = page.getByRole("region", {name: "Project notebook"});
+    await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
+    await expect(notebook.locator(".notebook-outputs").getByText("43", {exact: false})).toBeVisible();
+    await page.reload();
+    await expect(notebook.getByRole("textbox", {name: "code cell editor"})).toContainText("print(43)");
+    await expect(notebook.locator(".notebook-outputs").getByText("43", {exact: false})).toBeVisible();
+    const packageQuery = `engagements/${projectId}/notebooks/packages/installed?path=research.ipynb&name=nebula-notebook-fixture`;
+    const beforePackage = await api.get(packageQuery);
+    expect(beforePackage.ok(), await beforePackage.text()).toBe(true);
+    expect((await beforePackage.json() as {installed: boolean}).installed).toBe(false);
+    await openNebulaAssistantFromShell(page);
+    await send(packageInstruction);
+    await expect.poll(async () => {
+      const response = await api.get(packageQuery);
+      return (await response.json() as {version: string | null}).version;
+    }, {timeout: 60_000}).toBe("1.0.0");
+    await assistant.getByRole("button", {name: "Close Butler"}).click();
+    const imported = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", cell_id: cellId,
+      source: "import nebula_notebook_fixture\nfixture_value = 77\nprint(nebula_notebook_fixture.VALUE)",
+      cell_type: "code", expected_source_hash: sourceHash,
+    }});
+    expect(imported.ok(), await imported.text()).toBe(true);
+    sourceHash = (await imported.json() as {cell_revisions: Record<string, string>}).cell_revisions[cellId];
+    await notebook.getByRole("button", {name: "Refresh notebook"}).click();
+    await notebook.getByRole("button", {name: "Run cell"}).click();
+    await expect(notebook.locator(".notebook-outputs").getByText("fixture package loaded", {exact: false})).toBeVisible({timeout: 60_000});
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/notebooks/kernel?path=research.ipynb`);
+      return (await response.json() as {state: string}).state;
+    }, {timeout: 30_000}).toBe("idle");
+    const kernelBefore = await (await api.get(`engagements/${projectId}/notebooks/kernel?path=research.ipynb`)).json() as {state: string; instance_id: string; generation: number};
+    await openNebulaAssistantFromShell(page);
+    await send(restartInstruction);
+    await expect.poll(async () => {
+      const response = await api.get(`engagements/${projectId}/notebooks/kernel?path=research.ipynb`);
+      const status = await response.json() as {instance_id: string; generation: number};
+      expect(status.instance_id).toBe(kernelBefore.instance_id);
+      return status.generation;
+    }, {timeout: 60_000}).toBe(kernelBefore.generation + 1);
+    await assistant.getByRole("button", {name: "Close Butler"}).click();
+    const cleared = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", cell_id: cellId,
+      source: "print('cleared' if 'fixture_value' not in globals() else 'retained')",
+      cell_type: "code", expected_source_hash: sourceHash,
+    }});
+    expect(cleared.ok(), await cleared.text()).toBe(true);
+    sourceHash = (await cleared.json() as {cell_revisions: Record<string, string>}).cell_revisions[cellId];
+    await notebook.getByRole("button", {name: "Refresh notebook"}).click();
+    await notebook.getByRole("button", {name: "Run cell"}).click();
+    await expect(notebook.locator(".notebook-outputs").getByText("cleared", {exact: false})).toBeVisible({timeout: 60_000});
+    await page.reload();
+    await expect(notebook.locator(".notebook-outputs").getByText("cleared", {exact: false})).toBeVisible();
+    const longCell = await api.put(`engagements/${projectId}/notebooks/cell`, {data: {
+      path: "research.ipynb", cell_id: cellId, source: "import time\ntime.sleep(30)", cell_type: "code", expected_source_hash: sourceHash,
+    }});
+    expect(longCell.ok(), await longCell.text()).toBe(true);
+    sourceHash = (await longCell.json() as {cell_revisions: Record<string, string>}).cell_revisions[cellId];
+    await openNebulaAssistantFromShell(page);
+    await send(runInstruction);
+    const completedRunId = runId;
+    await expect.poll(async () => {
+      const runs = await (await api.get(`engagements/${projectId}/notebooks/runs?path=research.ipynb`)).json() as Array<{id: string; source_hash: string; status: string}>;
+      const matching = runs.find(run => run.id !== completedRunId && run.source_hash === sourceHash);
+      if (matching) runId = matching.id;
+      return matching?.status;
+    }, {timeout: 90_000}).toBe("running");
+    await send(interruptInstruction);
+    await expect.poll(async () => {
+      const run = await (await api.get(`engagements/${projectId}/notebooks/runs/${runId}`)).json() as {run: {status: string}};
+      return run.run.status;
+    }, {timeout: 45_000}).toBe("interrupted");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notebook&notebook=research.ipynb`);
+    await expect(notebook.getByText("interrupted", {exact: true})).toBeVisible();
+    await page.reload();
+    await expect(notebook.getByText("interrupted", {exact: true})).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".notebook-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-notebook-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId, cellId, completedRunId, interruptedRunId: runId,
+      installedPackage: "nebula-notebook-fixture==1.0.0", kernelInstance: kernelBefore.instance_id, kernelGeneration: kernelBefore.generation + 1,
+      result: "Butler saved and ran exact cells, installed a pinned local package with environment read-back, restarted an exact idle kernel and cleared its variables, interrupted a run, and refreshed Notebook agreed"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "local wheel fixture", dispose: () => rm(wheelDir, {recursive: true, force: true})},
+  ]);
+});
+
+test("Butler project lifecycle confirms and reads back changes on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(420_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const linkedFolder = await mkdtemp(path.join(homedir(), ".nebula-butler-linked-"));
+  const relinkFolder = await mkdtemp(path.join(homedir(), ".nebula-butler-relinked-"));
+  await writeFile(path.join(linkedFolder, "linked-marker.txt"), "synthetic linked workspace\n");
+  await writeFile(path.join(relinkFolder, "relinked-marker.txt"), "synthetic new workspace\n");
+  let targetId = "";
+  let targetRevision = 0;
+  const actions = new Map([
+    ["Create the Butler LAN project", "create"],
+    ["Create the uncertain Butler project", "create_uncertain"],
+    ["Create a linked Butler project", "create_linked"],
+    ["Relink the Butler linked project", "relink"],
+    ["Rename the Butler LAN project", "rename"],
+    ["Archive the Butler LAN project", "archive"],
+    ["Restore the Butler LAN project", "restore"],
+    ["Permanently delete the Butler LAN project", "delete"],
+  ]);
+  const stub = await startLocalModelStub({responseContent: "I requested the project change on this browser.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const action = actions.get(String(messages[lastUser]?.content ?? ""));
+    if (!action) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: `${action} project`}};
+    if (action === "create" || action === "create_uncertain" || action === "create_linked") {
+      const operation = action === "create_linked" ? "nebula.projects.create_linked" : "nebula.projects.create";
+      if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation, arguments: {
+        name: action === "create" ? "Butler LAN project" : action === "create_linked" ? "Butler linked project" : "Butler uncertain project", description: "Disposable lifecycle fixture",
+      }}};
+      return undefined;
+    }
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.projects.detail"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.projects.detail", arguments: {project_id: targetId}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: `nebula.projects.${action}`}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation: `nebula.projects.${action}`, arguments: {
+      project_id: targetId, expected_revision: targetRevision, ...(action === "rename" ? {name: "Butler LAN renamed"} : {}),
+    }}};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const initial = await api.post("engagements", {data: {name: "Butler lifecycle source", status: "active", metadata: {}}});
+    expect(initial.ok(), await initial.text()).toBe(true);
+    const sourceId = (await initial.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler lifecycle model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), sourceId);
+    await pairRealCoreBrowser(page, core, "Butler lifecycle browser", {requireReady: false});
+    const sourceUrl = `${core.origin}/projects/${sourceId}/workbench?view=chat`;
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (message: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(message);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    const target = async () => {
+      const response = await api.get(`engagements/${targetId}`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const saved = await response.json() as {id: string; name: string; status: string; revision: number};
+      targetRevision = saved.revision;
+      return saved;
+    };
+
+    await send("Create a linked Butler project");
+    const linkedHandoff = assistant.getByRole("region", {name: "Choose linked project folder"});
+    await expect(linkedHandoff).toBeVisible({timeout: 45_000});
+    await linkedHandoff.getByRole("button", {name: "Cancel"}).click();
+    await expect(linkedHandoff).toBeHidden();
+    const projectRows = async () => {
+      const response = await api.get("engagements");
+      expect(response.ok(), await response.text()).toBe(true);
+      return await response.json() as Array<{id: string; name: string}>;
+    };
+    expect((await projectRows()).filter(row => row.name === "Butler linked project")).toHaveLength(0);
+    await send("Create a linked Butler project");
+    await expect(linkedHandoff).toBeVisible({timeout: 45_000});
+    await linkedHandoff.getByRole("button", {name: "Browse folders"}).click();
+    const picker = page.getByRole("dialog", {name: "Choose project folder"});
+    await expect(picker).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".host-folder-dialog").analyze()).violations).toEqual([]);
+    await picker.getByRole("button", {name: path.basename(linkedFolder), exact: true}).click();
+    await expect(picker.getByText(linkedFolder, {exact: true})).toBeVisible();
+    await picker.getByRole("button", {name: "Select folder"}).click();
+    await expect.poll(async () => (await projectRows()).filter(row => row.name === "Butler linked project").length, {timeout: 45_000}).toBe(1);
+    const linkedProjectId = (await projectRows()).find(row => row.name === "Butler linked project")!.id;
+    const linkedResponse = await api.get(`engagements/${linkedProjectId}`);
+    expect(linkedResponse.ok(), await linkedResponse.text()).toBe(true);
+    expect((await linkedResponse.json() as {workspace_path: string}).workspace_path).toBe(linkedFolder);
+    const linkedPolicy = await api.get(`engagements/${linkedProjectId}/automation-policy`);
+    expect(linkedPolicy.ok(), await linkedPolicy.text()).toBe(true);
+    expect((await linkedPolicy.json() as {host_access_acknowledged: boolean}).host_access_acknowledged).toBe(false);
+    await expect(page).toHaveURL(new RegExp(`/projects/${linkedProjectId}/workbench`));
+    await page.reload();
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "More workbench views", exact: true}).click();
+      await page.getByRole("dialog", {name: "More"}).getByRole("group", {name: "Workspace tools"})
+        .getByRole("button", {name: "Files", exact: true}).click();
+    } else {
+      await clickWorkbenchTab(page, "Workspace files");
+    }
+    await expect(page.getByText("linked-marker.txt", {exact: true})).toBeVisible();
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
+
+    targetId = linkedProjectId;
+    targetRevision = (await (await api.get(`engagements/${linkedProjectId}`)).json() as {revision: number}).revision;
+    const genericRelink = await api.patch(`engagements/${linkedProjectId}`, {data: {
+      changes: {workspace_path: relinkFolder}, expected_revision: targetRevision,
+    }});
+    expect(genericRelink.status()).toBe(422);
+    await send("Relink the Butler linked project");
+    const relinkHandoff = assistant.getByRole("region", {name: "Relink project folder"});
+    await expect(relinkHandoff).toBeVisible({timeout: 45_000});
+    await relinkHandoff.getByRole("button", {name: "Cancel"}).click();
+    expect((await (await api.get(`engagements/${linkedProjectId}`)).json() as {workspace_path: string}).workspace_path).toBe(linkedFolder);
+    await send("Relink the Butler linked project");
+    await relinkHandoff.getByRole("button", {name: "Browse folders"}).click();
+    await picker.getByRole("button", {name: path.basename(relinkFolder), exact: true}).click();
+    await picker.getByRole("button", {name: "Select folder"}).click();
+    const relinkDialog = page.getByRole("dialog", {name: "Relink Butler linked project?"});
+    await expect(relinkDialog).toContainText(linkedFolder);
+    await expect(relinkDialog).toContainText(relinkFolder);
+    expect((await new AxeBuilder({page}).include(".confirmation-dialog").analyze()).violations).toEqual([]);
+    await relinkDialog.getByRole("button", {name: "Relink project"}).click();
+    await expect.poll(async () => (await (await api.get(`engagements/${linkedProjectId}`)).json() as {workspace_path: string}).workspace_path,
+      {timeout: 45_000}).toBe(relinkFolder);
+    await expect(page).toHaveURL(new RegExp(`/projects/${linkedProjectId}/workbench\\?view=workspace`));
+    await page.reload();
+    await expect(page.getByText("relinked-marker.txt", {exact: true})).toBeVisible();
+    expect(await readFile(path.join(linkedFolder, "linked-marker.txt"), "utf8")).toContain("synthetic linked workspace");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
+
+    await send("Create the Butler LAN project");
+    await expect.poll(async () => {
+      const response = await api.get("engagements");
+      expect(response.ok(), await response.text()).toBe(true);
+      const projects = await response.json() as Array<{id: string; name: string}>;
+      targetId = projects.find(item => item.name === "Butler LAN project")?.id ?? "";
+      return projects.filter(item => item.name === "Butler LAN project").length;
+    }, {timeout: 45_000}).toBe(1);
+    await expect(page).toHaveURL(new RegExp(`/projects/${targetId}/workbench`));
+    expect((await target()).status).toBe("draft");
+    const hostPolicy = await api.get(`engagements/${targetId}/automation-policy`);
+    expect(hostPolicy.ok(), await hostPolicy.text()).toBe(true);
+    expect((await hostPolicy.json() as {host_access_acknowledged: boolean}).host_access_acknowledged).toBe(false);
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
+    let browserCreatePosts = 0;
+    let uncertainCreateBody: Record<string, unknown> | undefined;
+    let uncertainProjectId = "";
+    await page.route("**/api/v1/engagements", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      browserCreatePosts += 1;
+      if (browserCreatePosts > 1) return route.continue();
+      uncertainCreateBody = route.request().postDataJSON() as Record<string, unknown>;
+      expect(uncertainCreateBody.request_id).toMatch(/^[a-f0-9-]{36}$/i);
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      uncertainProjectId = (await response.json() as {id: string}).id;
+      await route.abort("failed");
+    });
+    await send("Create the uncertain Butler project");
+    await expect(assistant.getByRole("alert")).toContainText("Core did not confirm whether Butler uncertain project was created", {timeout: 45_000});
+    const uncertainCount = async () => {
+      const response = await api.get("engagements");
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as Array<{name: string}>).filter((project) => project.name === "Butler uncertain project").length;
+    };
+    await expect.poll(uncertainCount, {timeout: 45_000}).toBe(1);
+    if (!uncertainCreateBody) throw new Error("Butler create body was not captured");
+    const replay = await api.post("engagements", {data: uncertainCreateBody});
+    expect(replay.status(), await replay.text()).toBe(201);
+    expect((await replay.json() as {id: string}).id).toBe(uncertainProjectId);
+    const changedRequest = await api.post("engagements", {data: {...uncertainCreateBody, description: "Changed retry"}});
+    expect(changedRequest.status()).toBe(409);
+    const otherRequest = await api.post("engagements", {data: {...uncertainCreateBody, request_id: "dc11cf90-f748-4906-9b34-27b245efae9a"}});
+    expect(otherRequest.status()).toBe(409);
+    expect(await uncertainCount()).toBe(1);
+    await send("Create the uncertain Butler project");
+    await expect(assistant.getByRole("alert")).toContainText("Core already has a project named Butler uncertain project", {timeout: 45_000});
+    expect(browserCreatePosts).toBe(1);
+    expect(await uncertainCount()).toBe(1);
+    await page.unroute("**/api/v1/engagements");
+    await send("Rename the Butler LAN project");
+    await expect.poll(async () => (await target()).name, {timeout: 45_000}).toBe("Butler LAN renamed");
+    await page.reload();
+    const openNav = page.getByRole("button", {name: "Open navigation", exact: true});
+    const closeSwitcherAndSidebar = async () => {
+      await page.getByRole("button", {name: "Switch project", exact: true}).click();
+      const scrim = page.getByRole("button", {name: "Close sidebar"});
+      if (await scrim.isVisible()) {
+        await scrim.click({position: {x: (page.viewportSize()?.width ?? 320) - 12, y: 100}});
+        await expect(scrim).toBeHidden();
+      }
+    };
+    if (await openNav.isVisible()) await openNav.click();
+    await page.getByRole("button", {name: "Switch project", exact: true}).click();
+    await expect(page.getByRole("dialog", {name: "Project switcher"}).getByRole("button", {name: "Butler LAN renamed draft", exact: true})).toBeVisible();
+    await closeSwitcherAndSidebar();
+    await openNebulaAssistantFromShell(page);
+
+    await send("Archive the Butler LAN project");
+    const archiveDialog = page.getByRole("dialog", {name: "Remove Butler LAN renamed?"});
+    await expect(archiveDialog).toContainText("Running work continues", {timeout: 45_000});
+    expect((await new AxeBuilder({page}).include(".confirmation-dialog").analyze()).violations).toEqual([]);
+    await archiveDialog.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("Butler LAN renamed remains active. No change was saved.")).toBeVisible();
+    expect((await target()).status).toBe("draft");
+    await send("Archive the Butler LAN project");
+    await archiveDialog.getByRole("button", {name: "Remove project"}).click();
+    await expect.poll(async () => (await target()).status, {timeout: 45_000}).toBe("archived");
+    await page.reload();
+    if (await openNav.isVisible()) await openNav.click();
+    await page.getByRole("button", {name: "Switch project", exact: true}).click();
+    await page.getByRole("button", {name: /^Archived projects/}).click();
+    await expect(page.getByRole("dialog", {name: "Project switcher"}).getByText("Butler LAN renamed")).toBeVisible();
+    await closeSwitcherAndSidebar();
+    await openNebulaAssistantFromShell(page);
+
+    await send("Restore the Butler LAN project");
+    await expect.poll(async () => (await target()).status, {timeout: 45_000}).toBe("active");
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await send("Archive the Butler LAN project");
+    await archiveDialog.getByRole("button", {name: "Remove project"}).click();
+    await expect.poll(async () => (await target()).status, {timeout: 45_000}).toBe("archived");
+    await send("Permanently delete the Butler LAN project");
+    const deleteDialog = page.getByRole("dialog", {name: "Permanently delete Butler LAN renamed?"});
+    await expect(deleteDialog).toContainText("cannot be undone", {timeout: 45_000});
+    await deleteDialog.getByRole("button", {name: "Delete permanently"}).click();
+    await expect.poll(async () => (await api.get(`engagements/${targetId}`)).status(), {timeout: 45_000}).toBe(404);
+    await page.reload();
+    await testInfo.attach("butler-project-lifecycle", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry,
+      assetSha256: build.assets[entry!], linkedFolder, relinkFolder, steps: ["linked create cancellation", "host picker and linked create", "Core workspace and Host consent readback", "linked Files after refresh", "generic relink refused", "relink cancellation", "host picker and confirmed relink", "new Files after refresh and old files retained", "create", "uncertain create response", "Core retry receipt readback", "changed-key conflict", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "linked host fixture", dispose: () => rm(linkedFolder, {recursive: true, force: true})},
+    {name: "relinked host fixture", dispose: () => rm(relinkFolder, {recursive: true, force: true})},
   ]);
 });
 
@@ -10748,7 +12574,135 @@ test("production side chat branches and resumes from its parent conversation", a
     await stopRealCore(core);
   }
 });
-test("notebook real Core uses a supplied file index on LAN", async ({page}) => {
+test("assistant upgrade Butler connects and removes a Notebook file index on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  let revision = 0;
+  const connectPrompt = "Connect a file index to this project's Notebook.";
+  const removePrompt = "Remove this project's Notebook file index setting.";
+  const stub = await startLocalModelStub({responseContent: "I checked the Notebook file-index request in Core.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = messages[lastUser]?.content;
+    const instruction = typeof prompt === "string" && (prompt === connectPrompt || prompt.startsWith(`${connectPrompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))
+      ? connectPrompt : typeof prompt === "string" && (prompt === removePrompt || prompt.startsWith(`${removePrompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))
+        ? removePrompt : undefined;
+    if (!instruction) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "notebook file index"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.notebook.file_index_status"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.notebook.file_index_status", arguments: {}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: instruction === connectPrompt ? "nebula.notebook.connect_file_index" : "nebula.notebook.remove_file_index"}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {
+      operation: instruction === connectPrompt ? "nebula.notebook.connect_file_index" : "nebula.notebook.remove_file_index",
+      arguments: {expected_project_revision: revision},
+    }};
+    return undefined;
+  }});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const workspace = path.join(core.dataDir, "indexed-project");
+    await mkdir(workspace);
+    const notebook = JSON.stringify({nbformat: 4, nbformat_minor: 5, metadata: {}, cells: []});
+    await writeFile(path.join(workspace, "indexed.ipynb"), notebook);
+    await writeFile(path.join(workspace, "scan-only.ipynb"), notebook);
+    const index = path.join(core.dataDir, "inventory.db");
+    const create = spawnSync("python3", ["-c", `import datetime, sqlite3, sys\ndb, root = sys.argv[1:]\nwith sqlite3.connect(db) as connection:\n connection.executescript('CREATE TABLE repositories (id INTEGER PRIMARY KEY, root TEXT UNIQUE, complete INTEGER, pending_files INTEGER, last_reconciled_at TEXT); CREATE TABLE files (repository_id INTEGER, path TEXT, size INTEGER, mtime_ns INTEGER);')\n connection.execute('INSERT INTO repositories VALUES (1, ?, 1, 0, ?)', (root, datetime.datetime.now(datetime.timezone.utc).isoformat()))\n connection.execute("INSERT INTO files VALUES (1, 'indexed.ipynb', 12, 1000000000)")`, index, workspace], {encoding: "utf8"});
+    expect(create.status, create.stderr).toBe(0);
+    const projectResponse = await api.post("engagements", {data: {name: "Butler indexed project", workspace_path: workspace}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string; revision: number};
+    revision = project.revision;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler file-index model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Butler index LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      const button = assistant.getByRole("button", {name: "Send to Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await expect(button).toBeEnabled({timeout: 30_000});
+      await button.click();
+    };
+    await send(connectPrompt);
+    const handoff = assistant.getByRole("region", {name: "Connect Notebook file index"});
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    await handoff.getByRole("button", {name: "Cancel"}).click();
+    expect((await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null}).path).toBeNull();
+    await send(connectPrompt);
+    await expect(handoff).toBeVisible({timeout: 45_000});
+    await handoff.getByRole("button", {name: "Browse index files"}).click();
+    const picker = page.getByRole("dialog", {name: "Choose file index"});
+    await expect(picker.locator(".host-folder-location code")).toHaveText(/^\//);
+    for (let i = 0; i < 6; i++) {
+      const current = await picker.locator(".host-folder-location code").textContent();
+      if (current === "/") break;
+      await picker.getByRole("button", {name: "Up one level"}).click();
+      await expect(picker.locator(".host-folder-location code")).toHaveText(path.dirname(current!));
+    }
+    await picker.getByRole("button", {name: "tmp", exact: true}).click();
+    await picker.getByRole("button", {name: path.basename(core.dataDir)}).click();
+    await picker.getByRole("button", {name: "inventory.db"}).click();
+    await expect(assistant.getByText("Connected the selected host file index in Core. Notebook discovery now uses it.")).toBeVisible({timeout: 30_000});
+    let status = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; state: string; project_revision: number};
+    expect(status).toMatchObject({path: index, state: "connected"});
+    expect(status.project_revision).toBeGreaterThan(revision);
+    revision = status.project_revision;
+    expect(stub.requests.some(request => JSON.stringify(request).includes(index))).toBe(false);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await expect(assistant.getByText("Connected the selected host file index in Core. Notebook discovery now uses it.")).toBeVisible();
+    await assistant.getByRole("button", {name: "Close Butler"}).click();
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notebook&notebook=indexed.ipynb`);
+    const panel = page.getByRole("region", {name: "Project notebook"});
+    await expect(panel.getByRole("combobox", {name: "Notebook"})).not.toContainText("scan-only.ipynb");
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    await send(removePrompt);
+    const confirm = page.getByRole("dialog", {name: "Remove Notebook file index?"});
+    await expect(confirm).toBeVisible({timeout: 45_000});
+    await confirm.getByRole("button", {name: "Cancel"}).click();
+    expect((await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null}).path).toBe(index);
+    await send(removePrompt);
+    await expect(confirm).toBeVisible({timeout: 45_000});
+    await confirm.getByRole("button", {name: "Remove index"}).click();
+    await expect(assistant.getByText("Removed the selected project's Notebook file-index setting in Core. The host index file remains on disk.")).toBeVisible({timeout: 30_000});
+    status = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; state: string; project_revision: number};
+    expect(status).toMatchObject({path: null, state: "none"});
+    expect(status.project_revision).toBeGreaterThan(revision);
+    expect(existsSync(index)).toBe(true);
+    await page.reload();
+    await openNebulaAssistantFromShell(page);
+    await assistant.getByRole("button", {name: "Close Butler"}).click();
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notebook&notebook=indexed.ipynb`);
+    await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
+    expect((await new AxeBuilder({page}).include(".notebook-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-file-index-lan", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId: project.id,
+      result: "Butler requested private browser index selection and confirmed Core state; cancellation retained selection; removal retained host file; Notebook discovery followed state after refresh"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("notebook real Core uses a supplied file index on LAN", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const api = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
@@ -10768,14 +12722,24 @@ with sqlite3.connect(db) as connection:
     expect(create.status, create.stderr).toBe(0);
     const response = await api.post("engagements", {data: {name: "Indexed project", workspace_path: workspace}});
     expect(response.ok(), await response.text()).toBe(true);
-    const project = await response.json() as {id: string};
+    const project = await response.json() as {id: string; revision: number};
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
     await pairRealCoreBrowser(page, core, "Indexed notebook LAN browser");
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notebook&notebook=indexed.ipynb`);
     const panel = page.getByRole("region", {name: "Project notebook"});
     await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
     await panel.locator("summary", {hasText: "File index"}).click();
+    await expect(panel.getByRole("button", {name: "Browse index files"})).toBeEnabled();
     await panel.getByRole("button", {name: "Browse index files"}).click();
     const dialog = page.getByRole("dialog", {name: "Choose file index"});
+    await expect(dialog).toBeVisible();
+    expect((await new AxeBuilder({page}).include(".host-folder-dialog").analyze()).violations).toEqual([]);
+    await dialog.getByRole("button", {name: "Close folder browser"}).click();
+    expect((await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null}).path).toBeNull();
+    await panel.getByRole("button", {name: "Browse index files"}).click();
     for (let i = 0; i < 6; i++) {
       const current = await dialog.locator(".host-folder-location code").textContent();
       if (current === "/") break;
@@ -10786,12 +12750,23 @@ with sqlite3.connect(db) as connection:
     await dialog.getByRole("button", {name: path.basename(core.dataDir)}).click();
     await dialog.getByRole("button", {name: "inventory.db"}).click();
     await expect(panel.getByText("File index connected")).toBeVisible();
+    const connected = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; project_revision: number};
+    expect(connected.path).toBe(index);
+    expect(connected.project_revision).toBeGreaterThan(project.revision);
     await expect(panel.getByRole("combobox", {name: "Notebook"})).not.toContainText("scan-only.ipynb");
     await page.reload();
     await panel.locator("summary", {hasText: "File index"}).click();
     await expect(panel.getByText("File index connected")).toBeVisible();
     await panel.getByRole("button", {name: "Remove index"}).click();
     await expect(panel.getByRole("combobox", {name: "Notebook"})).toContainText("scan-only.ipynb");
+    const removed = await (await api.get(`engagements/${project.id}/notebooks/file-index`)).json() as {path: string | null; project_revision: number};
+    expect(removed.path).toBeNull();
+    expect(removed.project_revision).toBeGreaterThan(connected.project_revision);
+    expect(existsSync(index)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("notebook-manual-file-index-lan", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId: project.id,
+      result: "Manual Notebook picker cancellation left Core unchanged; selection and removal used current project revisions, survived refresh, and retained the host index file"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core process", dispose: () => stopRealCore(core)},

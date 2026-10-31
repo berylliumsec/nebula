@@ -1,9 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ChatStreamEvent } from "../api/types";
+import { ApiError } from "../api/client";
 import { ThemeProvider } from "../state/ThemeContext";
 import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
@@ -254,6 +255,42 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("dialog", {name: "Butler"})).toHaveTextContent("project-b");
     expect(screen.queryByRole("list", {name: "Butler image attachments"})).not.toBeInTheDocument();
     expect(screen.getByRole("button", {name: "Attach image to Butler"})).toBeEnabled();
+  });
+
+  it("discards an Evidence file handoff when the selected project changes", async () => {
+    const user = userEvent.setup();
+    let projectId = "project-a";
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "evidence-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.evidence.upload", butler_project_id: "project-a",
+          state: "pending_browser_apply", client_action: {kind: "evidence_upload", project_id: "project-a"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: "evidence-reply", role: "assistant", content: "Choose an evidence file on this device."}};
+    });
+    const api = {getOrCreateControlAssistantSession: vi.fn().mockImplementation(async () => ({...savedButler, engagementId: projectId})),
+      getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat};
+    const harnesses = [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+      permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}];
+    vi.mocked(useWorkspace).mockImplementation(() => ({
+      api,
+      coreState: "online", engagement: {id: projectId, name: projectId}, providers: [], assets: [], findings: [],
+      harnesses,
+    }) as unknown as ReturnType<typeof useWorkspace>);
+    const renderAssistant = () => <DialogProvider><ThemeProvider>
+      <NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} />
+    </ThemeProvider></DialogProvider>;
+    const view = render(renderAssistant());
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Add evidence{enter}");
+    expect(await screen.findByRole("region", {name: "Add project evidence"})).toBeVisible();
+    projectId = "project-b";
+    view.rerender(renderAssistant());
+    expect(screen.queryByRole("region", {name: "Add project evidence"})).not.toBeInTheDocument();
+    projectId = "project-a";
+    view.rerender(renderAssistant());
+    expect(screen.queryByRole("region", {name: "Add project evidence"})).not.toBeInTheDocument();
+    expect(streamChat).toHaveBeenCalledTimes(1);
   });
 
   it("sends selected Butler text to Butler and keeps it available after a failed turn", async () => {
@@ -880,6 +917,118 @@ describe("NebulaControlAssistant", () => {
   });
 
   it.each([
+    {response: "confirmed", lostResponse: false},
+    {response: "lost after Core saved the draft", lostResponse: true},
+  ])("creates a Butler draft after a $response response and waits for exact Core readback before navigation", async ({lostResponse}) => {
+    const user = userEvent.setup();
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const saved = {id: reportId, engagementId: "project", title: "Synthetic report", status: "draft",
+      executiveSummary: "Current summary", findingIds: [], observationIds: [], revision: 1};
+    const getReport = vi.fn().mockRejectedValueOnce(new ApiError("Missing", 404)).mockResolvedValue(saved);
+    const createReport = lostResponse
+      ? vi.fn().mockRejectedValue(new Error("The create response was lost after Core saved the draft"))
+      : vi.fn().mockResolvedValue(saved);
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const onNavigate = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "report-create", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Create draft", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.reports.create", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "report_create", project_id: "project", report_id: reportId, title: "Synthetic report",
+            executive_summary: "Current summary", finding_ids: [], observation_ids: []}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I requested the draft."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getReport},
+      coreState: "online", engagement: {id: "project", name: "Project"}, createReport, retryResource,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Create a report{enter}");
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/project/reports/${reportId}`));
+    expect(createReport).toHaveBeenCalledWith({engagementId: "project", reportId, title: "Synthetic report",
+      executiveSummary: "Current summary", findingIds: [], observationIds: []});
+    expect(createReport).toHaveBeenCalledTimes(1);
+    expect(getReport).toHaveBeenCalledTimes(2);
+    expect(retryResource).toHaveBeenCalledWith("reports");
+  });
+
+  it("opens the saved review revision for human sign-off without signing for the operator", async () => {
+    const user = userEvent.setup();
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const getReport = vi.fn().mockResolvedValue({id: reportId, engagementId: "project", title: "Synthetic report",
+      status: "review", revision: 3});
+    const onNavigate = vi.fn();
+    const signOffReport = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "report-signoff", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Open signoff", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.reports.signoff", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "report_signoff", project_id: "project", report_id: reportId, expected_revision: 3}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "Please review before signing."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getReport},
+      coreState: "online", engagement: {id: "project", name: "Project"}, signOffReport,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Open sign-off for the synthetic Butler report{enter}");
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/project/reports/${reportId}?butler_signoff=3`));
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(signOffReport).not.toHaveBeenCalled();
+  });
+
+  it("asks the requesting browser before deleting an exact draft and confirms the Core result", async () => {
+    const user = userEvent.setup();
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const getReport = vi.fn().mockResolvedValue({id: reportId, engagementId: "project", title: "Synthetic draft",
+      status: "draft", revision: 3});
+    const deleteReport = vi.fn().mockResolvedValue(undefined);
+    const onNavigate = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "report-delete", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Delete draft", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.reports.delete", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "report_delete", project_id: "project", report_id: reportId,
+            expected_revision: 3, title: "Synthetic draft"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I requested deletion."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getReport},
+      coreState: "online", engagement: {id: "project", name: "Project"}, deleteReport,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const ask = async () => {
+      await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Delete the synthetic draft{enter}");
+    };
+    await ask();
+    const first = await screen.findByRole("dialog", {name: "Permanently delete Synthetic draft?"});
+    await user.click(within(first).getByRole("button", {name: "Cancel"}));
+    expect(deleteReport).not.toHaveBeenCalled();
+    expect(await screen.findByText(/was not deleted. No change was saved/)).toBeVisible();
+    await ask();
+    const second = await screen.findByRole("dialog", {name: "Permanently delete Synthetic draft?"});
+    await user.click(within(second).getByRole("button", {name: "Delete report"}));
+    await waitFor(() => expect(deleteReport).toHaveBeenCalledWith(reportId, "project", 3));
+    expect(getReport).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith("/projects/project/reports"));
+  });
+
+  it.each([
     { name: "desktop transcript", mobile: false },
     { name: "mobile body", mobile: true },
   ])("shows a jump to the latest Butler message when reading older messages in the $name", async ({ mobile }) => {
@@ -953,14 +1102,16 @@ describe("NebulaControlAssistant", () => {
     expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");
     await waitFor(() => expect(onCloseSetting).toHaveBeenCalled(), { timeout: 4000 });
     expect(screen.getByText("Changed this device to Zero Dark. The choice is saved in this browser.")).toBeInTheDocument();
-    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "change it to the light theme{enter}");
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask Butler a question" }), { target: { value: "change it to the light theme" } });
+    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "{enter}");
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
     expect(localStorage.getItem("nebula.theme")).toBe("light");
     await waitFor(() => expect(screen.getByText("Changed this device to Light. The choice is saved in this browser.")).toBeInTheDocument(), { timeout: 4000 });
-    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "change it to the rainbow theme{enter}");
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask Butler a question" }), { target: { value: "change it to the rainbow theme" } });
+    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "{enter}");
     expect(screen.getByText("I couldn't identify that theme. Choose one in Settings → Appearance.")).toBeInTheDocument();
     expect(document.documentElement.dataset.theme).toBe("light");
-  }, 10_000);
+  }, 15_000);
 
   it("applies a model-selected theme action on this browser and confirms it after readback", async () => {
     const user = userEvent.setup();
@@ -1036,6 +1187,587 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(getAutomationPolicy).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText(/Project is now in Host mode for new sessions/)).toBeInTheDocument(), { timeout: 4000 });
   });
+
+  it("confirms Butler project archive on the requesting browser and checks Core before moving", async () => {
+    const user = userEvent.setup();
+    const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const nextId = "b8e0e1a2-53d3-4adf-a7db-bb0e069da57e";
+    const current = {id: projectId, name: "Fixture project", status: "active", revision: 4};
+    const archived = {...current, status: "archived", revision: 5};
+    const getProjectLifecycle = vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(current).mockResolvedValueOnce(archived);
+    const setEngagementArchived = vi.fn().mockResolvedValue(nextId);
+    const onNavigate = vi.fn();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({ type: "tool_completed", turnId: "turn", toolCallId: "archive-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending browser confirmation", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.projects.archive", butler_project_id: projectId,
+          state: "pending_browser_apply", client_action: {kind: "project_archive", project_id: projectId, name: current.name, expected_revision: 4}} });
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked the browser to confirm the archive."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, engagementId: projectId}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getProjectLifecycle},
+      coreState: "online", engagement: {id: projectId, name: current.name}, setEngagementArchived,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Archive Fixture project{enter}");
+    expect(await screen.findByRole("heading", {name: "Remove Fixture project?"})).toBeVisible();
+    expect(setEngagementArchived).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Cancel"}));
+    await waitFor(() => expect(screen.getByText("Fixture project remains active. No change was saved.")).toBeVisible());
+    await user.type(composer, "Archive Fixture project{enter}");
+    await user.click(await screen.findByRole("button", {name: "Remove project"}));
+    await waitFor(() => expect(setEngagementArchived).toHaveBeenCalledWith(projectId, true, 4));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/${nextId}/workbench?view=chat`));
+    expect(getProjectLifecycle).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps Butler transcript export on the requesting device after confirmation and Core readback", async () => {
+    const user = userEvent.setup();
+    const chatId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const chat = {id: chatId, engagementId: "project", title: "Research", revision: 4,
+      backend: "provider", model: "model", createdAt: "2026-10-30T00:00:00Z", updatedAt: "2026-10-30T00:00:00Z"};
+    const getChatSession = vi.fn().mockResolvedValue(chat);
+    const listChatMessages = vi.fn().mockResolvedValue([]);
+    const createObjectURL = vi.fn().mockReturnValue("blob:butler-export");
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: createObjectURL});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "export-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.chats.export", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "chat_export", project_id: "project", session_id: chatId, expected_revision: 4}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked this browser to export the chat."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getChatSession, listChatMessages},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", {name: "Open Butler"}));
+      const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+      await user.type(composer, "Export the Research transcript{enter}");
+      expect(await screen.findByRole("heading", {name: "Export Research?"})).toBeVisible();
+      expect(listChatMessages).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", {name: "Cancel"}));
+      await waitFor(() => expect(screen.getByText("Research was not exported. No download started.")).toBeVisible());
+      expect(createObjectURL).not.toHaveBeenCalled();
+      await user.type(composer, "Export the Research transcript{enter}");
+      await user.click(await screen.findByRole("button", {name: "Export transcript"}));
+      await waitFor(() => expect(listChatMessages).toHaveBeenCalledWith(chatId));
+      await waitFor(() => expect(screen.getByText(/Started a Markdown transcript download for Research/)).toBeVisible());
+      expect(getChatSession).toHaveBeenCalledTimes(4);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(anchorClick).toHaveBeenCalledTimes(1);
+    } finally {
+      anchorClick.mockRestore();
+    }
+  });
+
+  it("confirms Butler file deletion and verifies the requesting-device download", async () => {
+    const user = userEvent.setup();
+    const content = "Saved workspace text\n";
+    const {sha256Hex} = await import("../sha256");
+    const hash = sha256Hex(content);
+    const deleteWorkspaceEntry = vi.fn().mockResolvedValue({path: "notes/research.txt"});
+    const previewWorkspaceFile = vi.fn().mockRejectedValue(new ApiError("Missing", 404));
+    const blob = new Blob([content], {type: "text/plain"});
+    Object.defineProperty(blob, "arrayBuffer", {value: vi.fn().mockResolvedValue(new TextEncoder().encode(content).buffer)});
+    const downloadWorkspaceFile = vi.fn().mockResolvedValue(blob);
+    const createObjectURL = vi.fn().mockReturnValue("blob:butler-workspace");
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: createObjectURL});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    let requestCount = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      const isDownload = requestCount++ === 2;
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `file-${requestCount}`,
+        capability: "nebula.capabilities.change", status: "complete", summary: "Pending on browser",
+        evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: isDownload ? "nebula.workspace.download_file" : "nebula.workspace.delete_file",
+          butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: isDownload ? "workspace_download" : "workspace_delete", project_id: "project",
+            path: "notes/research.txt", expected_sha256: hash, ...(isDownload ? {size: content.length} : {})}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I requested the file action."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, deleteWorkspaceEntry,
+        previewWorkspaceFile, downloadWorkspaceFile},
+      engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", {name: "Open Butler"}));
+      const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+      await user.type(composer, "Delete the research file{enter}");
+      await user.click(await screen.findByRole("button", {name: "Cancel"}));
+      await waitFor(() => expect(screen.getByText("notes/research.txt was not deleted.")).toBeVisible());
+      expect(deleteWorkspaceEntry).not.toHaveBeenCalled();
+      await user.type(composer, "Delete the research file{enter}");
+      await user.click(await screen.findByRole("button", {name: "Delete"}));
+      await waitFor(() => expect(deleteWorkspaceEntry).toHaveBeenCalledWith("project", "notes/research.txt", hash));
+      await waitFor(() => expect(screen.getByText(/Core no longer serves the file/)).toBeVisible());
+      expect(previewWorkspaceFile).toHaveBeenCalledWith("project", "notes/research.txt");
+      await user.type(composer, "Download the research file{enter}");
+      await waitFor(() => expect(downloadWorkspaceFile).toHaveBeenCalledWith("project", "notes/research.txt"));
+      await waitFor(() => expect(screen.getByText(/Started a download of notes\/research.txt/)).toBeVisible());
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect(anchorClick).toHaveBeenCalledOnce();
+    } finally {
+      anchorClick.mockRestore();
+    }
+  });
+
+  it("lets the requesting browser upload binary workspace bytes after a scoped Butler handoff", async () => {
+    const user = userEvent.setup();
+    const {sha256Hex} = await import("../sha256");
+    const bytes = new Uint8Array([0, 255, 42, 1]);
+    const digest = sha256Hex(bytes);
+    const identity = "a".repeat(64);
+    const directory = {engagementId: "project", path: "captures", kind: "directory", size: 0,
+      entryIdentity: identity};
+    let saved = false;
+    const getWorkspaceEntryState = vi.fn().mockImplementation(async (_project: string, path: string) => {
+      if (path === "captures") return directory;
+      if (path === "captures/sample.bin" && saved) return {engagementId: "project", path,
+        kind: "file", size: bytes.length, sha256: digest};
+      throw new ApiError("Missing", 404);
+    });
+    const uploadWorkspaceFile = vi.fn().mockImplementation(async () => {
+      saved = true;
+      return {engagementId: "project", path: "captures/sample.bin", size: bytes.length,
+        sha256: digest, overwritten: false};
+    });
+    let calls = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `upload-${++calls}`,
+        capability: "nebula.capabilities.change", status: "complete", summary: "Pending on browser",
+        evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.workspace.upload_from_device", butler_project_id: "project",
+          state: "pending_browser_apply", client_action: {kind: "workspace_upload", project_id: "project",
+            directory: "captures", expected_directory_identity: identity}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "Choose the file in this browser."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat,
+        getWorkspaceEntryState, uploadWorkspaceFile},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Upload a binary file{enter}");
+    expect(await screen.findByRole("region", {name: "Upload to project workspace"})).toBeVisible();
+    await user.click(screen.getByRole("button", {name: "Cancel"}));
+    expect(uploadWorkspaceFile).not.toHaveBeenCalled();
+    await user.type(composer, "Upload a binary file{enter}");
+    const input = await screen.findByLabelText("Choose project workspace file");
+    const file = new File([bytes], "sample.bin", {type: "application/octet-stream"});
+    Object.defineProperty(file, "stream", {value: () => new ReadableStream<Uint8Array>({
+      start(controller) {controller.enqueue(bytes); controller.close();},
+    })});
+    fireEvent.change(input, {target: {files: [file]}});
+    await waitFor(() => expect(uploadWorkspaceFile).toHaveBeenCalledWith("project", "captures/sample.bin",
+      file, false, expect.any(AbortSignal), undefined, digest, identity));
+    expect(await screen.findByText(/Uploaded \/workspace\/captures\/sample.bin in Core/)).toBeVisible();
+    expect(getWorkspaceEntryState).toHaveBeenCalledWith("project", "captures/sample.bin");
+  });
+
+  it("lets the requesting browser choose and remove a Notebook index with Core revision readback", async () => {
+    const user = userEvent.setup();
+    let status = {path: null as string | null, state: "none", detail: null, project_revision: 4};
+    const notebookFileIndex = vi.fn(async () => ({...status}));
+    const setNotebookFileIndex = vi.fn(async (_project: string, path: string, expected: number) => {
+      expect(expected).toBe(status.project_revision);
+      status = {path, state: "connected", detail: null, project_revision: status.project_revision + 1};
+      return {...status};
+    });
+    const removeNotebookFileIndex = vi.fn(async (_project: string, expected: number) => {
+      expect(expected).toBe(status.project_revision);
+      status = {path: null, state: "none", detail: null, project_revision: status.project_revision + 1};
+      return {...status};
+    });
+    const listHostWorkspaceFolders = vi.fn(async () => ({path: "/indexes", parent: "/", directories: [],
+      files: [{name: "inventory.db", path: "/indexes/inventory.db"}], truncated: false}));
+    let calls = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      const remove = ++calls === 3;
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `index-${calls}`,
+        capability: "nebula.capabilities.change", status: "complete", summary: "Pending on browser",
+        evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: remove ? "nebula.notebook.remove_file_index" : "nebula.notebook.connect_file_index",
+          butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: remove ? "notebook_index_remove" : "notebook_index_connect",
+            project_id: "project", expected_project_revision: status.project_revision}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: `index-reply-${calls}`, role: "assistant", content: "The requesting browser owns the host index choice."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, notebookFileIndex,
+        setNotebookFileIndex, removeNotebookFileIndex, listHostWorkspaceFolders},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    fireEvent.change(composer, {target: {value: "Connect an index"}});
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    const handoff = await screen.findByRole("region", {name: "Connect Notebook file index"});
+    await user.click(within(handoff).getByRole("button", {name: "Cancel"}));
+    expect(setNotebookFileIndex).not.toHaveBeenCalled();
+    fireEvent.change(composer, {target: {value: "Connect an index"}});
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    await user.click(within(await screen.findByRole("region", {name: "Connect Notebook file index"}))
+      .getByRole("button", {name: "Browse index files"}));
+    await user.click(await screen.findByRole("button", {name: "inventory.db"}));
+    await waitFor(() => expect(setNotebookFileIndex).toHaveBeenCalledWith("project", "/indexes/inventory.db", 4));
+    expect(await screen.findByText("Connected the selected host file index in Core. Notebook discovery now uses it.")).toBeVisible();
+    expect(JSON.parse(localStorage.getItem("nebula.control-assistant.session.project.action-outcomes") ?? "{}")["index-reply-2"])
+      .toContain("Connected the selected host file index in Core");
+    fireEvent.change(composer, {target: {value: "Remove the index"}});
+    await user.click(screen.getByRole("button", {name: "Send to Butler"}));
+    await user.click(await screen.findByRole("button", {name: "Remove index"}));
+    await waitFor(() => expect(removeNotebookFileIndex).toHaveBeenCalledWith("project", 5));
+    expect(await screen.findByText(/The host index file remains on disk/)).toBeVisible();
+    expect(notebookFileIndex).toHaveBeenCalled();
+  });
+
+  it("confirms an exact shared Library reindex, rereads Core, and refreshes the Library", async () => {
+    const user = userEvent.setup();
+    const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const current = {id: itemId, name: "Shared note", revision: 4, status: "ready", artifactId: "artifact"};
+    const getLibraryItem = vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current).mockResolvedValueOnce({...current, revision: 5});
+    const reindexLibraryItemAtRevision = vi.fn().mockResolvedValue({...current, revision: 5});
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "library-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.reindex", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_reindex", project_id: "project", item_id: itemId, expected_revision: 4, name: "Shared note"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked this browser to reindex the item."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, reindexLibraryItemAtRevision},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [], retryResource,
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Reindex the shared note{enter}");
+    expect(await screen.findByRole("heading", {name: "Reindex Shared note?"})).toBeVisible();
+    expect(reindexLibraryItemAtRevision).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Cancel"}));
+    await waitFor(() => expect(screen.getByText("Shared note was not reindexed. No change was saved.")).toBeVisible());
+    await user.type(composer, "Reindex the shared note{enter}");
+    await user.click(await screen.findByRole("button", {name: "Reindex shared item"}));
+    await waitFor(() => expect(reindexLibraryItemAtRevision).toHaveBeenCalledWith(itemId, 4));
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("library"));
+    expect(await screen.findByText("Reindexed Shared note in Core's shared Library at revision 5.")).toBeVisible();
+    expect(getLibraryItem).toHaveBeenCalledTimes(4);
+  });
+
+  it("removes a shared Library item only after confirmation and a Core 404 readback", async () => {
+    const user = userEvent.setup();
+    const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const current = {id: itemId, name: "Shared note", revision: 4, status: "ready"};
+    const getLibraryItem = vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(current)
+      .mockRejectedValueOnce(new ApiError("Not found", 404));
+    const deleteLibraryItemAtRevision = vi.fn().mockResolvedValue(undefined);
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "library-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.remove", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_remove", project_id: "project", item_id: itemId, expected_revision: 4, name: "Shared note"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked this browser to remove the item."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, deleteLibraryItemAtRevision},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [], retryResource,
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Remove the shared note{enter}");
+    expect(await screen.findByRole("heading", {name: "Remove Shared note?"})).toBeVisible();
+    expect(deleteLibraryItemAtRevision).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Remove shared item"}));
+    await waitFor(() => expect(deleteLibraryItemAtRevision).toHaveBeenCalledWith(itemId, 4));
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("library"));
+    expect(await screen.findByText("Removed Shared note from Core's shared Library. Its original artifact was retained.")).toBeVisible();
+  });
+
+  it("keeps shared Library file bytes in the requesting browser and confirms Core's saved item", async () => {
+    const user = userEvent.setup();
+    const item = {id: "9482d86e-2ddc-436b-90be-30b878f68537", name: "note.txt", revision: 1,
+      status: "ready", artifactId: "artifact", metadata: {size: 14}};
+    const ingestLibraryItem = vi.fn().mockResolvedValue(item);
+    const getLibraryItem = vi.fn().mockResolvedValue(item);
+    const listLibraryItems = vi.fn().mockResolvedValue({items: [item]});
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "add-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.add", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_add", project_id: "project"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "Choose a file on the requesting device."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, listLibraryItems},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [], ingestLibraryItem, retryResource,
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    const file = new File(["synthetic note"], "note.txt", {type: "text/plain"});
+    Object.defineProperty(file, "arrayBuffer", {value: async () => new TextEncoder().encode("synthetic note").buffer});
+    await user.type(composer, "Add a shared Library file{enter}");
+    expect(await screen.findByRole("region", {name: "Add to shared Library"})).toBeVisible();
+    expect(ingestLibraryItem).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Choose shared Library file"), {target: {files: [file]}});
+    const firstDialog = await screen.findByRole("dialog", {name: "Add note.txt to the shared Library?"});
+    await user.click(within(firstDialog).getByRole("button", {name: "Cancel"}));
+    expect(ingestLibraryItem).not.toHaveBeenCalled();
+    await user.type(composer, "Add a shared Library file{enter}");
+    await screen.findByRole("region", {name: "Add to shared Library"});
+    fireEvent.change(screen.getByLabelText("Choose shared Library file"), {target: {files: [file]}});
+    const dialog = await screen.findByRole("dialog", {name: "Add note.txt to the shared Library?"});
+    await user.click(within(dialog).getByRole("button", {name: "Add shared file"}));
+    await waitFor(() => expect(ingestLibraryItem).toHaveBeenCalledWith({
+      filename: "note.txt", mediaType: "text/plain", contentBase64: btoa("synthetic note"),
+    }));
+    expect(await screen.findByText("Added note.txt to Core's shared Library. It is available to every project.")).toBeVisible();
+    expect(getLibraryItem).toHaveBeenCalledWith(item.id);
+    expect(listLibraryItems).toHaveBeenCalled();
+    expect(retryResource).toHaveBeenCalledWith("library");
+    expect(screen.queryByRole("region", {name: "Add to shared Library"})).not.toBeInTheDocument();
+  });
+
+  it("downloads a shared Library artifact only after confirmation and stable Core readback", async () => {
+    const user = userEvent.setup();
+    const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const current = {id: itemId, name: "Shared note", revision: 4, status: "ready",
+      artifactId: "artifact", metadata: {filename: "note.txt", size: 4}};
+    const getLibraryItem = vi.fn().mockResolvedValue(current);
+    const getArtifactContent = vi.fn().mockResolvedValue(new Blob(["note"]));
+    const createObjectURL = vi.fn().mockReturnValue("blob:library-file");
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    Object.defineProperty(URL, "createObjectURL", {configurable: true, value: createObjectURL});
+    Object.defineProperty(URL, "revokeObjectURL", {configurable: true, value: vi.fn()});
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "download-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.library.download", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "library_download", project_id: "project", item_id: itemId, expected_revision: 4, name: "Shared note"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "The browser will confirm the download."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, getLibraryItem, getArtifactContent},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    try {
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", {name: "Open Butler"}));
+      const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+      await user.type(composer, "Download the shared note{enter}");
+      expect(await screen.findByRole("dialog", {name: "Download Shared note?"})).toBeVisible();
+      expect(getArtifactContent).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", {name: "Cancel"}));
+      await waitFor(() => expect(screen.getByText("Shared note was not downloaded. No file transfer started.")).toBeVisible());
+      await user.type(composer, "Download the shared note{enter}");
+      await user.click(await screen.findByRole("button", {name: "Download original"}));
+      await waitFor(() => expect(getArtifactContent).toHaveBeenCalledWith("artifact"));
+      expect(await screen.findByText("Started a download of Shared note's original file on this device.")).toBeVisible();
+      expect(getLibraryItem).toHaveBeenCalledTimes(4);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(anchorClick).toHaveBeenCalledTimes(1);
+    } finally {
+      anchorClick.mockRestore();
+    }
+  });
+
+  it.each([
+    {caseName: "an archived project already has the name", projects: [{id: "8c516abd-4d22-4a54-a43a-79923ed66af9", name: "  SAME   NAME ", status: "archived"}], listFails: false, message: "Core already has a project named Same name"},
+    {caseName: "Core cannot list projects", projects: [], listFails: true, message: "Core's project list is unavailable"},
+  ])("refuses Butler project creation when $caseName", async ({projects, listFails, message}) => {
+    const user = userEvent.setup();
+    const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const createEngagement = vi.fn();
+    const listEngagements = listFails ? vi.fn().mockRejectedValue(new Error("offline")) : vi.fn().mockResolvedValue({items: projects});
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({ type: "tool_completed", turnId: "turn", toolCallId: "create-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending browser creation", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.projects.create", butler_project_id: projectId,
+          state: "pending_browser_apply", client_action: {kind: "project_create", name: "Same name", description: "", client_name: "", request_id: "e02b1f22-7a31-4810-b912-16300357494c"}} });
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I requested project creation."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, engagementId: projectId}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, listEngagements},
+      coreState: "online", engagement: {id: projectId, name: "Current project"}, createEngagement,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    fireEvent.change(composer, {target: {value: "Create Same name"}});
+    await user.type(composer, "{enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(createEngagement).not.toHaveBeenCalled();
+  });
+
+  it("lets the requesting browser choose a linked project folder and leaves Host consent pending", async () => {
+    const user = userEvent.setup();
+    const sourceProjectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const createdProjectId = "8c516abd-4d22-4a54-a43a-79923ed66af9";
+    const hostFolder = "/srv/linked-project";
+    const createEngagement = vi.fn().mockResolvedValue({id: createdProjectId, name: "Linked project", workspacePath: hostFolder});
+    const listHostWorkspaceFolders = vi.fn().mockResolvedValue({path: hostFolder, parent: "/srv", directories: [], truncated: false});
+    const savedLifecycle = {id: createdProjectId, name: "Linked project", status: "draft" as const, revision: 1, workspacePath: hostFolder};
+    let resolveLifecycle!: (value: typeof savedLifecycle) => void;
+    const getProjectLifecycle = vi.fn().mockImplementation(() => new Promise<typeof savedLifecycle>(resolve => {resolveLifecycle = resolve;}));
+    const getAutomationPolicy = vi.fn().mockResolvedValue({hostAccessAcknowledged: false});
+    const onNavigate = vi.fn();
+    let reply = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "linked-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Choose a host folder", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.projects.create_linked", butler_project_id: sourceProjectId,
+          state: "pending_browser_apply", client_action: {kind: "project_create_linked", name: "Linked project",
+            description: "", client_name: "", request_id: "e02b1f22-7a31-4810-b912-16300357494c"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: `linked-reply-${++reply}`, role: "assistant", content: "Choose a folder on the Nebula host."}};
+    });
+    const sourceWorkspace = {
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, engagementId: sourceProjectId}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, listEngagements: vi.fn().mockResolvedValue({items: []}),
+        listHostWorkspaceFolders, getProjectLifecycle, getAutomationPolicy},
+      coreState: "online", engagement: {id: sourceProjectId, name: "Source project"}, createEngagement,
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>;
+    vi.mocked(useWorkspace).mockReturnValue(sourceWorkspace);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Create a linked project{enter}");
+    const handoff = await screen.findByRole("region", {name: "Choose linked project folder"});
+    expect(createEngagement).not.toHaveBeenCalled();
+    await user.click(within(handoff).getByRole("button", {name: "Cancel"}));
+    expect(createEngagement).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(`nebula.control-assistant.session.${sourceProjectId}.action-outcomes`) ?? "{}")["linked-reply-1"])
+      .toContain("No project was created");
+    await user.type(composer, "Create a linked project{enter}");
+    await user.click(within(await screen.findByRole("region", {name: "Choose linked project folder"})).getByRole("button", {name: "Browse folders"}));
+    const picker = await screen.findByRole("dialog", {name: "Choose project folder"});
+    await user.click(within(picker).getByRole("button", {name: "Select folder"}));
+    await waitFor(() => expect(createEngagement).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Linked project", workspacePath: hostFolder, hostAccessAcknowledged: false,
+      requestId: "e02b1f22-7a31-4810-b912-16300357494c",
+    }), {select: false}));
+    await waitFor(() => expect(getProjectLifecycle).toHaveBeenCalledWith(createdProjectId));
+    expect(onNavigate).not.toHaveBeenCalled();
+    await act(async () => {resolveLifecycle(savedLifecycle);});
+    expect(getAutomationPolicy).toHaveBeenCalledWith(createdProjectId);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/${createdProjectId}/workbench?view=chat`));
+    expect(JSON.parse(localStorage.getItem(`nebula.control-assistant.session.${sourceProjectId}.action-outcomes`) ?? "{}")["linked-reply-2"])
+      .toContain("Created Linked project with host folder");
+  }, 20_000);
+
+  it("confirms an existing project relink and waits for Core path read-back", async () => {
+    const user = userEvent.setup();
+    const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const current = {id: projectId, name: "Current project", status: "active" as const,
+      revision: 4, workspacePath: "/srv/old"};
+    const saved = {...current, revision: 5, workspacePath: "/srv/new"};
+    const relinkProjectWorkspace = vi.fn().mockRejectedValue(new Error("response lost after save"));
+    const getProjectLifecycle = vi.fn().mockImplementation(async () => relinkProjectWorkspace.mock.calls.length ? saved : current);
+    const refreshProjectLifecycle = vi.fn().mockResolvedValue(saved);
+    const listHostWorkspaceFolders = vi.fn().mockResolvedValue({path: "/srv/new", parent: "/srv", directories: [], truncated: false});
+    const onNavigate = vi.fn();
+    let reply = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `relink-${++reply}`, capability: "nebula.capabilities.change",
+        status: "complete", summary: "Choose a host folder", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.projects.relink", butler_project_id: projectId,
+          state: "pending_browser_apply", client_action: {kind: "project_relink", project_id: projectId,
+            expected_revision: 4, name: "Current project"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: `relink-reply-${reply}`, role: "assistant", content: "Choose a host folder."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, engagementId: projectId}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat,
+        getProjectLifecycle, relinkProjectWorkspace, listHostWorkspaceFolders},
+      refreshProjectLifecycle,
+      coreState: "online", engagement: {id: projectId, name: "Current project"},
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Relink this project{enter}");
+    const handoff = await screen.findByRole("region", {name: "Relink project folder"});
+    await user.click(within(handoff).getByRole("button", {name: "Cancel"}));
+    expect(relinkProjectWorkspace).not.toHaveBeenCalled();
+    await user.type(composer, "Relink this project{enter}");
+    await user.click(within(await screen.findByRole("region", {name: "Relink project folder"})).getByRole("button", {name: "Browse folders"}));
+    await user.click(within(await screen.findByRole("dialog", {name: "Choose project folder"})).getByRole("button", {name: "Select folder"}));
+    const confirmation = await screen.findByRole("dialog", {name: "Relink Current project?"});
+    expect(confirmation).toHaveTextContent("/srv/old");
+    expect(confirmation).toHaveTextContent("/srv/new");
+    expect(relinkProjectWorkspace).not.toHaveBeenCalled();
+    await user.click(within(confirmation).getByRole("button", {name: "Relink project"}));
+    await waitFor(() => expect(relinkProjectWorkspace).toHaveBeenCalledWith(projectId, "/srv/new", 4));
+    expect(relinkProjectWorkspace).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/${projectId}/workbench?view=workspace`));
+    expect(refreshProjectLifecycle).toHaveBeenCalledWith(projectId);
+    expect(JSON.parse(localStorage.getItem(`nebula.control-assistant.session.${projectId}.action-outcomes`) ?? "{}")["relink-reply-2"])
+      .toContain("Relinked Current project in Core");
+    expect(localStorage.getItem(`nebula.control-assistant.session.${projectId}.action-outcomes`))
+      .not.toContain("/srv/new");
+  }, 20_000);
 
   it("saves an all-destinations policy from a model receipt and refreshes Project Policy", async () => {
     const user = userEvent.setup();

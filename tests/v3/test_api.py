@@ -20,6 +20,7 @@ from nebula.v3.domain import (
     Asset,
     AutomationProjectPolicy,
     ChatGoal,
+    ChatQueue,
     ChatSession,
     ChatGoalStatus,
     ChatTurn,
@@ -1504,6 +1505,70 @@ def test_project_creation_records_explicit_host_consent_without_persisting_reque
     )
 
 
+def test_project_create_request_id_replays_exact_core_result(api, tmp_path):
+    client, store, _ = api
+    body = {
+        "name": "Idempotent project",
+        "description": "Original request",
+        "request_id": "request-one",
+    }
+    first = client.post("/api/v1/engagements", headers=_auth(), json=body)
+    replay = client.post("/api/v1/engagements", headers=_auth(), json=body)
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert "request_id" not in first.json()
+    assert (
+        len([p for p in store.list_entities(Engagement) if p.name == body["name"]]) == 1
+    )
+
+    conflict = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={**body, "description": "Different request"},
+    )
+    assert conflict.status_code == 409
+
+    linked_folder = tmp_path / "linked"
+    linked_folder.mkdir()
+    linked_body = {
+        "name": "Linked retry project",
+        "workspace_path": str(linked_folder),
+        "host_access_acknowledged": False,
+        "request_id": "linked-request-one",
+    }
+    linked = client.post("/api/v1/engagements", headers=_auth(), json=linked_body)
+    assert linked.status_code == 201, linked.text
+    assert linked.json()["workspace_path"] == str(linked_folder.resolve())
+    assert (
+        client.post("/api/v1/engagements", headers=_auth(), json=linked_body).json()
+        == linked.json()
+    )
+    [policy] = store.list_entities(
+        AutomationProjectPolicy, engagement_id=linked.json()["id"]
+    )
+    assert policy.host_access_acknowledged is False
+
+    other_folder = tmp_path / "other"
+    other_folder.mkdir()
+    changed_folder = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={**linked_body, "workspace_path": str(other_folder)},
+    )
+    assert changed_folder.status_code == 409
+    missing_folder = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={
+            **linked_body,
+            "request_id": "missing-folder",
+            "workspace_path": str(tmp_path / "missing"),
+        },
+    )
+    assert missing_folder.status_code == 422
+
+
 def test_typed_crud_revision_and_overview(api):
     client, store, _ = api
     created = client.post(
@@ -2496,7 +2561,7 @@ def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
     )
 
 
-def test_engagement_updates_validate_workspace_path_like_create(api, tmp_path):
+def test_generic_engagement_updates_cannot_relink_or_clear_workspace(api, tmp_path):
     client, store, _ = api
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2523,20 +2588,204 @@ def test_engagement_updates_validate_workspace_path_like_create(api, tmp_path):
 
     moved = tmp_path / "moved"
     moved.mkdir()
+    for path in (str(moved), None):
+        patched = client.patch(
+            url, headers=_auth(), json={"changes": {"workspace_path": path}}
+        )
+        assert patched.status_code == 422, patched.text
+        replaced = client.put(
+            url, headers=_auth(), json={**project, "workspace_path": path}
+        )
+        assert replaced.status_code == 422, replaced.text
+        assert store.get(Engagement, project["id"]).workspace_path == str(
+            workspace.resolve()
+        )
+    renamed = client.patch(url, headers=_auth(), json={"changes": {"name": "Renamed"}})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Renamed"
+    assert renamed.json()["workspace_path"] == str(workspace.resolve())
+
+
+def test_existing_project_relink_requires_dedicated_revision_checked_route(
+    api, tmp_path
+):
+    client, store, _ = api
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    created = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={
+            "name": "Linked",
+            "workspace_path": str(workspace),
+            "host_access_acknowledged": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    project = created.json()
+    url = f"/api/v1/engagements/{project['id']}"
+
+    patched = client.patch(
+        url, headers=_auth(), json={"changes": {"workspace_path": "relative/missing"}}
+    )
+    assert patched.status_code == 422, patched.text
+    replaced = client.put(
+        url, headers=_auth(), json={**project, "workspace_path": str(tmp_path / "gone")}
+    )
+    assert replaced.status_code == 422, replaced.text
+    assert store.get(Engagement, project["id"]).workspace_path == str(
+        workspace.resolve()
+    )
+
+    moved = tmp_path / "moved"
+    moved.mkdir()
     patched = client.patch(
         url,
         headers=_auth(),
         json={"changes": {"workspace_path": str(workspace / ".." / "moved")}},
     )
-    assert patched.status_code == 200, patched.text
-    assert patched.json()["workspace_path"] == str(moved.resolve())
+    assert patched.status_code == 422, patched.text
     replaced = client.put(
         url,
         headers=_auth(),
-        json={**patched.json(), "workspace_path": str(moved / ".." / "workspace")},
+        json={**project, "workspace_path": str(moved)},
     )
-    assert replaced.status_code == 200, replaced.text
-    assert replaced.json()["workspace_path"] == str(workspace.resolve())
+    assert replaced.status_code == 422, replaced.text
+
+    with_index = store.update(
+        Engagement,
+        project["id"],
+        {"metadata": {"notebook_file_index": str(workspace / "index.db")}},
+        expected_revision=project["revision"],
+    )
+    project["revision"] = with_index.revision
+    relink = client.post(
+        f"{url}/workspace/relink",
+        headers=_auth(),
+        json={
+            "path": str(workspace / ".." / "moved"),
+            "expected_revision": project["revision"],
+        },
+    )
+    assert relink.status_code == 200, relink.text
+    assert relink.json()["workspace_path"] == str(moved.resolve())
+    assert relink.json()["revision"] == project["revision"] + 1
+    assert "notebook_file_index" not in relink.json()["metadata"]
+    assert workspace.is_dir()
+    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=project["id"])
+    assert policy.host_access_acknowledged is True
+    assert policy.revision == 1
+
+    stale = client.post(
+        f"{url}/workspace/relink",
+        headers=_auth(),
+        json={"path": str(workspace), "expected_revision": project["revision"]},
+    )
+    assert stale.status_code == 409
+    assert store.get(Engagement, project["id"]).workspace_path == str(moved.resolve())
+
+
+def test_existing_project_relink_refuses_reusable_harness_session(api, tmp_path):
+    from nebula.v3.domain import HarnessSession, HarnessSessionStatus
+
+    client, store, _ = api
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    created = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={"name": "Linked", "workspace_path": str(first)},
+    )
+    assert created.status_code == 201, created.text
+    project = created.json()
+    store.create(
+        HarnessSession(
+            engagement_id=project["id"],
+            harness_profile_id="fixture",
+            model="fixture",
+            status=HarnessSessionStatus.IDLE,
+        )
+    )
+
+    blocked = client.post(
+        f"/api/v1/engagements/{project['id']}/workspace/relink",
+        headers=_auth(),
+        json={"path": str(second), "expected_revision": project["revision"]},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert "harness session" in blocked.json()["detail"]
+    assert store.get(Engagement, project["id"]).workspace_path == str(first.resolve())
+
+
+def test_existing_project_relink_waits_for_chat_queue_and_native_hook(api, tmp_path):
+    client, store, _ = api
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    project = store.create(Engagement(name="Queued project", workspace_path=str(first)))
+    queue = store.create(
+        ChatQueue(
+            engagement_id=project.id,
+            session_id="synthetic-chat",
+            items=[{"id": "follow-up", "status": "queued"}],
+        )
+    )
+    url = f"/api/v1/engagements/{project.id}/workspace/relink"
+    request = {"path": str(second), "expected_revision": project.revision}
+
+    queued = client.post(url, headers=_auth(), json=request)
+    assert queued.status_code == 409, queued.text
+    assert "chat follow-up" in queued.json()["detail"]
+    queue = store.update(
+        ChatQueue,
+        queue.id,
+        {"items": [{"id": "follow-up", "status": "cancelled"}]},
+        expected_revision=queue.revision,
+    )
+    hook = store.create(
+        NativeHookExecution(
+            engagement_id=project.id,
+            hook_id="synthetic-hook",
+            hook_snapshot={},
+            event_name="chat.turn.completed",
+            side_effects="workspace",
+            started_at=utc_now(),
+        )
+    )
+    running_hook = client.post(url, headers=_auth(), json=request)
+    assert running_hook.status_code == 409, running_hook.text
+    assert "native hook" in running_hook.json()["detail"]
+    store.update(
+        NativeHookExecution,
+        hook.id,
+        {"status": "complete", "completed_at": utc_now()},
+        expected_revision=hook.revision,
+    )
+    store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id="synthetic-chat",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+            status=ChatTurnStatus.INTERRUPTED,
+        )
+    )
+    store.create(
+        ChatGoal(
+            engagement_id=project.id,
+            session_id="synthetic-chat",
+            objective="Continue in the linked chat",
+            completion_criteria=["Linked chat takes ownership"],
+            status=ChatGoalStatus.PAUSED,
+            metadata={"handoff_target_session_id": "linked-chat"},
+        )
+    )
+    relinked = client.post(url, headers=_auth(), json=request)
+    assert relinked.status_code == 200, relinked.text
+    assert relinked.json()["workspace_path"] == str(second.resolve())
 
 
 def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(api):

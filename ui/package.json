@@ -8,6 +8,7 @@
     "dev": "vite",
     "dev:desktop": "npm run build && npm run build:core && tauri dev",
     "dev:electron": "npm run build && electron electron/main.mjs",
+    "prebuild": "node scripts/check-butler-workflow-registry.mjs",
     "build": "tsc -b && vite build",
     "build:core": "poetry -C .. run python -m scripts.build_nebula_core",
     "preview": "vite preview",

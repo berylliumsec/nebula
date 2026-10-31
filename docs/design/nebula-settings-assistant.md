@@ -40,8 +40,19 @@ Settings assistant and the complete destination catalog.
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets. In Workbench conversations, chats Butler creates appear below Butler; older recovery chats use their linked Core goal as ownership evidence. Search reveals matching children, and a selected child remains open after reload | Core sessions, goal metadata, turns, queues and runs; URL for selection | Tool unit, component, browser and real Core |
 | Organize conversations | In the Workbench conversation list, More actions can pin or flag one chat. Select conversations loads the full project chat list, then lets the operator select individual chats or all search matches and apply Archive, Restore, Pin, Unpin, a flag color, Clear flag, or Delete permanently. Deletion shows the exact selected count for confirmation. Core readback confirms each outcome, and failed chats remain selected for retry. These choices survive refresh because Core owns them. An archived Butler-created chat moves into Butler's own collapsed Archived section and remains searchable and restorable. The dedicated settings assistant can open this list and describe the selection workflow when asked for bulk chat actions, pinned chats, flagged chats, or archived Butler chats; it does not apply destructive actions for the operator | Core chat-session metadata and deletion; UI owns only temporary selection and expansion state | Core API, component, browser and real Core |
+| Edit a saved conversation message | Interactive Butler can page active message previews with `nebula.work.chat_messages`, then use `nebula.work.rewind_chat` with the selected user message ID and current chat revision after an explicit request. Core retracts that message and later replies in the same chat and reports the saved revision. A replacement is a separate `nebula.work.message_chat` action; Butler must verify that turn separately. Scheduled Butler cannot rewind. The Workbench edit control uses the same Core retraction path | Core transcript, chat revision and harness replay; URL selects the chat | Core API, Butler tool and real Core browser |
+| Export a saved conversation | Interactive Butler discovers `nebula.chats.export` for one listed main chat and passes its current revision. The requesting browser confirms sensitive transcript content, rereads the chat, fetches the complete active transcript through authenticated Core, verifies that the revision stayed stable, and starts a Markdown download using the chat menu's formatter. Butler receives only a short outcome, never the transcript bytes. Cancellation starts no download; scheduled Butler has no device export action | Core chat and messages; requesting browser owns confirmation and local download | Butler tool, component and production LAN browser |
+| Build, transform, delete and export a report | Interactive Butler pages selected-project reports and source findings or notes, reads an exact report revision, and requests a draft create or edit through the paired browser. For a linked note, it can read bounded source text and prepare an exact report/source-revision AI section transform. The requesting browser chooses a permitted runtime, obtains one-request cloud consent where needed, lets the operator edit the draft, and saves it only after current-revision checks and Core read-back; the source note remains unchanged. Core validates all report references and reads back the saved record. The requesting browser confirms deletion of an exact draft or review report with `If-Match`; Core 404 and refreshed list absence confirm the result. A saved PDF render may retain its report; signed final reports cannot be deleted. A sign-off request opens the exact review report's existing form; the operator chooses identity and attests before Core makes it immutable. PDF and sensitive engagement bundle exports require browser confirmation, reread the selected revision, and start a download on that device. Butler receives no file bytes. An uncertain draft create is reconciled by its fixed report ID before retry; scheduled Butler has no report mutation or device export | Core report, project and render records; URL selects the report; requesting browser owns deletion confirmation, sign-off and downloads | Butler tool, Core API, component and production LAN browser |
+| Manage project workspace files | Interactive Butler can page a selected project's workspace entries and read bounded UTF-8 text through `nebula.workspace.list` and `nebula.workspace.read`. It can create text without overwriting, replace or rename a regular file with its full current SHA-256, and request deletion with Files' confirmation. `nebula.workspace.upload_from_device` opens a browser-owned picker for any file; Core checks the selected directory identity, expected content SHA-256, and a current file SHA-256 before a confirmed overwrite. `nebula.workspace.create_directory`, `rename_directory`, and `delete_directory` use opaque directory identities; deletion requires an empty folder and browser confirmation. Core checks path containment and reads mutations back. `nebula.workspace.download_file` sends only a path and digest to the requesting browser, which verifies downloaded bytes. Scheduled Butler has no workspace file actions. Relinking an existing project requires a separate control | Core WorkspaceService and selected project; requesting browser owns confirmation, file picker and download | Butler tool, Core API, component and production LAN browser |
+| Relink an existing project folder | Interactive Butler reads the target project and prepares `nebula.projects.relink` at its current revision. The requesting browser chooses a Nebula-host folder, sees both paths, and confirms the change. Core rejects stale revisions and projects with sessions, queued follow-ups, native hooks, or other work that can still use the old folder; generic project updates cannot bypass this route. After a successful save, the browser refreshes the selected project context and opens the new Files view. Existing files stay in the old folder, a stale Notebook file index is disconnected, and Host access keeps its one-time project policy | Core project record and workload state; requesting browser owns host-folder selection and confirmation | Butler tool, Core API, component and production LAN browser |
+| Inspect and stop a project terminal | Interactive Butler can discover `nebula.terminal.list` for ticket-free live session identities in the selected project, and request `nebula.terminal.stop` for one exact session ID and creation time. The requesting browser rereads Core, confirms the destructive stop, sends a conditional project-scoped close, and reads back absence before reporting success. Cancellation leaves the terminal active; uncertain results require fresh inspection. Opening the Terminal destination on the requesting browser starts or reconnects the shell through its existing UI. Scheduled Butler cannot use the terminal actions | ContainerTerminalService, selected project, requesting browser and live process; WebSocket tickets and shell output stay out of Butler | Butler tool, Core API, component and production LAN browser |
+| Edit and run a project Notebook | Interactive Butler can open the Notebook destination and discover typed `nebula.notebook.*` actions. It pages project paths and cell previews, reads exact source, then creates or edits with a current document revision or cell source hash. Core checks the live Notebook grant and project path before each call. A saved edit is reported after Core read-back; a stale hash preserves the existing cell. After an operator request, Butler executes the exact current code cell hash, pages the run and its ordered events, and can interrupt one exact run ID. An uncertain execution is checked against recent runs before another attempt. For resources, Butler reads `kernel_status` and `installed_package`, installs only a pinned `name==version` after an explicit request, and reports Core's observed version. A Docker project without a current container reports the package state as unknown; an authorized install mounts the persisted environment and reads its version before changing it. Butler restarts only the selected idle kernel instance and generation after an explicit request; Core reports a new generation after worker acknowledgement. A missing kernel is reported as absent, and uncertain installs or restarts require fresh reads before retry | Core Notebook grant, project policy, selected environment, kernel instance and generation, workspace file and run store; URL selects the Workbench view | Butler tool, Core API and production LAN browser for edit, execution, interruption, package installation and restart |
+| Add or download a shared Library file | Interactive Butler discovers `nebula.library.add` or selects an exact item and revision before `nebula.library.download`. The requesting browser owns its file picker or sensitive-download confirmation. It sends file bytes directly to authenticated Core, reads the new item back from Core, or checks that the original item stayed at the selected revision before starting a local download. The control tool returns no original file bytes. A cancelled choice has no effect, and an uncertain upload requires Library inspection before retrying | Core global Library and artifact store; requesting browser owns local file selection and download | Butler tool, component and production LAN browser |
+| Connect or remove a Notebook file index | Interactive Butler reads `nebula.notebook.file_index_status`, which exposes configured state and project revision without the host path. `connect_file_index` asks the requesting browser to choose a SQLite index; Core validates that it indexes the selected project folder, checks the revision, and returns its saved state. `remove_file_index` asks the browser to confirm removal at that revision, then Core read-back shows no selection. The host index file remains. Scheduled Butler has no file-index mutation action | Core Notebook service, project revision and requesting-browser host picker | Butler tool, Core API, component and production LAN browser |
+| Store or download project Evidence | Interactive Butler pages selected-project evidence metadata, reads an exact record and revision, and prepares an upload or original-file download. The requesting browser chooses the file, title, type and project links, checks the file hash, and reports a stored result only after Core detail and list agree. Original download requires confirmation and byte-for-byte SHA-256 verification. Cancellation transfers nothing; an uncertain upload requires inspecting Evidence before another attempt. Butler receives no original bytes, and scheduled Butler has no device-file action | Core evidence and artifact store; requesting browser owns local file selection, confirmation and download | Butler tool, Core API, component and production LAN browser |
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
+| Start a scoped browser mission | Interactive Butler pages active security browser sessions with `nebula.work.browser_sessions`, then starts a selected-project mission with an exact session, target URLs, risk classes and lease limits. Core checks the same scope and session policy as the Browser form. Butler reads the saved mission ID and status; completion and findings require later mission inspection | Core browser session, scope policy, automation lease and mission; URL selects Browser or Missions | Butler tool, Core API and production LAN browser |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 | Ask for a task plan | The chat's Assistant settings asks any provider or harness agent to share a plan on future turns, or Butler records one exact one-task request with the target revision and reason. Normal tools remain available, and the activity view shows whether a plan was shared | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
 | Hand off a previously planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source; the new planning preference is advisory | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
@@ -62,6 +73,27 @@ still apply. Browser appearance remains device-owned. Uploads and local desktop
 operations remain subject to the capabilities of the active device. An explicit
 operator setting request authorizes the assistant action without a second
 confirmation dialog. A pending browser action is never reported as saved.
+
+The Notebook destination opens the selected project's Workbench Notebook view.
+Project Policy contains execution mode, Host consent acknowledgement, and package
+network access. The MCP server catalog owns the Notebook grant. Butler's
+capability search and Settings catalog expose the typed Notebook action family;
+the `read` and `change` gateway routes to Core's project-scoped Notebook service.
+Butler must read a file revision or cell hash before a write and read Core again
+before reporting the saved cell. After an operator asks it to execute a cell,
+Butler calls `nebula.notebook.execute` with the current source hash, reads the
+returned run ID from Core, then waits or pages ordered events before reporting
+the result. If the execution response is uncertain, it calls
+`nebula.notebook.recent_runs` for that path and hash before any retry.
+`nebula.notebook.interrupt` targets one exact run ID and is read back from Core.
+Package lookup requires the project's network permission; pinned installation
+and exact idle-kernel restart are in the interactive catalog with Core read-back.
+For file-index changes, Butler reads the project revision without a host path.
+The requesting browser chooses the host SQLite file or confirms removal, and
+Core checks that revision before saving. The host index must describe the
+selected project folder; removal does not delete the index file. Host consent
+stays on the operator's settings control. Scheduled Butler does not receive
+these Notebook actions.
 Storage source enrollment stays in the visible Storage settings form because its
 webhook token is shown only once. The settings assistant can discover and open
 that form or navigate to the global Storage dashboard; it does not create or
@@ -100,12 +132,100 @@ their Core message in browser storage so the requesting device shows the
 confirmation again after refresh. The transcript follows new results into view.
 The general assistant never receives these tools.
 The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
-`nebula.work.chat`, `nebula.work.mission`, `nebula.work.start_chat`,
+`nebula.work.chat`, `nebula.work.mission`, `nebula.work.browser_sessions`, `nebula.work.start_chat`,
 `nebula.work.message_chat`, `nebula.work.stop_chat`,
 `nebula.work.start_mission`, `nebula.work.steer_mission`, and
 `nebula.work.stop_mission`. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
+For the selected project's Work board, Butler discovers
+`nebula.work.work_items`, reads `nebula.work.work_item`, and uses
+`nebula.work.create_work_item`, `nebula.work.update_work_item`, or
+`nebula.work.check_in_work_item` after an operator request. Creation and
+check-ins use stable request IDs; edits and check-ins use the current item
+revision. Butler reports the saved Core result and board link. A Work check-in
+does not run or complete an assigned assistant chat.
+
+### Project workspace files
+
+Interactive Butler uses `nebula.workspace.list` to find a selected-project file or folder. It returns an opaque directory identity for the exact listed directory. File replacement or rename uses the current full SHA-256; folder creation, rename and deletion use directory identities and Core read-back. `nebula.workspace.upload_from_device` asks the requesting browser to choose a file for that directory. The browser hashes selected bytes on HTTP LAN origins, checks the current destination, confirms any overwrite, and sends bytes directly to authenticated Core with content and directory preconditions. It reports success only after exact entry-state read-back. Cancellation or an uncertain response requires inspecting Files before another attempt. `nebula.workspace.download_file` asks the requesting browser to verify bytes and start a local download. Butler never receives a device file path or binary payload.
+
+### Project terminal lifecycle
+
+Interactive Butler uses `nebula.terminal.list` to read live session IDs, creation
+times, states, and attachment status in the selected project. This read never
+issues a WebSocket ticket or returns shell output. `nebula.terminal.stop` returns
+an exact pending action to the requesting browser. The browser checks the same
+session against fresh Core state, asks the operator to confirm loss of running
+commands and container-only packages, and sends a conditional project-scoped
+close. It reads Core again before saying the terminal stopped. Cancellation has
+no effect; an uncertain response or failed read-back asks the operator to inspect
+Terminal before retrying. Opening Terminal through `nebula.navigate.open` uses
+the existing browser UI to start or reconnect a shell. Scheduled Butler cannot
+list or stop terminals.
+
+### Butler report control
+
+Interactive Butler uses `nebula.reports.list`, `nebula.reports.sources`, and
+`nebula.reports.detail` to find a report, source findings and notes, and its
+current revision. `nebula.reports.create` asks the requesting browser to save a
+draft with a stable report ID; Core validates the references and reads back the
+draft. `nebula.reports.update` edits a draft or review report against its current
+revision. `nebula.reports.source_note` pages a selected-project note with its
+current revision. `nebula.reports.transform_note` prepares an exact report and
+source-revision browser handoff. The browser uses the existing writing service
+and permitted runtime catalog, requires one-request cloud consent where needed,
+and shows an editable AI draft. The operator saves only after review; the
+browser rereads the report and note before writing and confirms the exact
+transform in Core. The original note remains unchanged.
+`nebula.reports.signoff` opens the existing operator sign-off form; the
+operator must personally attest before Core finalizes it.
+`nebula.reports.delete` asks this browser to confirm a named non-final report at
+its current revision, then checks exact Core absence and refreshes the list.
+Core refuses signed final reports and reports still referenced by saved renders.
+For a PDF download,
+`nebula.reports.export_pdf` asks the browser to render and confirm the exact
+report revision. `nebula.reports.export_bundle` asks for separate confirmation
+before downloading the sensitive project bundle. Butler receives no file bytes.
+
+### Project lifecycle
+
+Interactive Butler also discovers `nebula.projects.list` and
+`nebula.projects.detail` to page the operator's projects, including archived
+ones, and read an exact target revision. Archive and permanent delete require
+the same project-specific confirmations as the project switcher. Its typed
+create, rename, archive, restore, and delete actions issue a scoped pending
+browser action. The requesting browser uses Core's project routes, checks the
+target revision and
+reads the saved result before reporting success; a cancelled dialog saves
+nothing. `nebula.projects.create` uses a managed workspace.
+`nebula.projects.create_linked` opens the host folder picker in the requesting
+browser, then Core resolves and saves that folder with the new project. The
+browser reads back the exact project path and pending Host consent before
+navigating; the model never supplies a host path. This creates a new project
+and does not relink an existing workspace. Host execution consent remains in
+the visible project policy control. Scheduled Butler cannot discover
+or invoke these interactive project actions. An uncertain create response
+requires a fresh project search before retrying. The requesting browser checks
+all project names before creation and refuses a sequential retry if Core saved
+the first request, including when that project is archived. Each Butler create
+receipt carries a UUID retry ID to Core. Core saves the ID, operator identity,
+request fingerprint, and project ID in the same transaction as the project,
+default scope, and Host policy. Reapplying that receipt returns the same project;
+changing its details or reusing it after project deletion fails with a conflict.
+Core serializes Butler project names at the write boundary, so concurrent Butler
+receipts cannot create the same normalized name. Other project creation paths
+keep their existing semantics.
+
+### Project Work and goals
+
+For agent access, Butler reads `nebula.work.work_setting` before calling
+`nebula.work.set_work_setting` with the current project revision. The Core
+read-back confirms whether the selected project's built-in agent Work tools
+are enabled. Disabling them leaves existing items and check-ins visible.
+For older check-ins, Butler pages `nebula.work.work_updates` by item and reads
+`nebula.work.work_update` for exact summary, next step, or blocker text in
+bounded chunks. The item and update must belong to the selected project.
 The dedicated assistant reads and edits the saved goal resume instruction
 through `nebula.work.goal` and `nebula.work.update_goal`. It discovers those actions in its work
 catalog, reads the exact goal and revision, and updates only the named goal.
@@ -161,6 +281,46 @@ A requested chat follow-up is saved to Core's durable queue. Live steering is
 available only for an active harness chat or harness mission. A provider chat
 can receive a queued next message; a provider mission cannot be live-steered.
 Starting work reports its saved ID and current state, never a completed result.
+For an older saved message, Butler pages `nebula.work.chat_messages` using
+`next_before_message_id` and selects the exact active user message. A stale
+revision, active response, other project's chat, or replaced message prevents a
+rewind. On success, the same chat ID remains and Core records which messages
+were retracted. A subsequent replacement turn must be observed independently;
+rewind alone does not mean an agent answered the edited prompt.
+For a transcript export, Butler selects an exact chat from `nebula.work.chats`
+or `nebula.work.chat`, then invokes `nebula.chats.export` with its current
+revision. The requesting browser presents the same sensitive-data confirmation
+as the conversation menu. It reads all active saved messages from Core and
+checks the chat revision again before starting the local Markdown download.
+The model receives no complete transcript. A cancelled or stale handoff is not
+a saved file, and a browser download start does not establish the device's
+final save location.
+For shared Library items, interactive Butler can page bounded metadata and
+read one item's current revision. Add uses a picker and global-impact
+confirmation on the requesting browser, followed by Core detail and list
+read-back. An uncertain upload response is not a success receipt: inspect the
+shared Library before selecting the file again. Download uses exact item and
+revision checks before and after Core artifact retrieval, then starts a local
+browser download. The model receives no original file bytes through these
+control actions. Reindex and remove are exact browser
+handoffs: the requesting browser rereads the item, names the global impact in
+a confirmation, checks the revision again, sends a revision-guarded request,
+and reads Core's saved result before reporting success. Cancel leaves the item
+unchanged. The control action returns metadata only; the browser owns original
+file transfer. If Butler's Knowledge setting is enabled, Core may separately
+retrieve bounded Library excerpts into the model context as reference data.
+Scheduled Butler has no shared Library mutation action. The operating system
+owns the final download save location.
+For project Evidence, interactive Butler uses `nebula.evidence.list` and
+`nebula.evidence.detail` to page bounded records and select one exact revision.
+`nebula.evidence.upload` opens a requesting-browser file picker and editable
+metadata and link form. Core validates same-project finding and asset links and
+stores an immutable original; the browser compares its SHA-256, filename, size,
+links and saved list before reporting success. A failed or uncertain upload
+does not automatically resend the file. `nebula.evidence.download` rereads the exact
+record, requires device confirmation, and checks the returned bytes against
+Core's digest. Butler receives no file bytes through either action. The final
+download location is controlled by the operating system.
 The existing Settings controls remain available. Browser and notes mutation
 tools are separate future work; this slice does not grant them.
 The packaged app destination list covers the All projects page, the selected

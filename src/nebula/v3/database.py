@@ -93,6 +93,20 @@ class BootstrapStateRow(Base):
     )
 
 
+class ProjectCreateRequestRow(Base):
+    """An immutable project-create receipt retained after project deletion."""
+
+    __tablename__ = "project_create_requests"
+
+    actor_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    engagement_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class EntityRow(Base):
     """Versioned JSON documents validated by the Pydantic domain boundary."""
 

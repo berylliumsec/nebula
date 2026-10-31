@@ -217,7 +217,9 @@ if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents, AutomationToolPlatform
     from .browser_automation import BrowserAutonomyRequestModel
     from .browser_tools import BrowserAutomationToolPlatform
+    from .container_terminal import ContainerTerminalService
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
+    from .workspace import WorkspaceService
 
 MAX_NORMALIZED_TEXT = 200_000
 MAX_TOOL_ARGUMENT_TEXT = 64_000
@@ -8802,6 +8804,8 @@ class HarnessRuntimeService:
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
         self.butler_memory: Any = None
+        self.workspace_service: WorkspaceService | None = None
+        self.container_terminal_service: ContainerTerminalService | None = None
         self.butler_instructions_root: Path | None = None
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
@@ -8894,6 +8898,18 @@ class HarnessRuntimeService:
 
     def bind_butler_memory(self, memory: Any) -> None:
         self.butler_memory = memory
+
+    def bind_workspace_service(self, service: WorkspaceService) -> None:
+        if service.store is not self.store:
+            raise ValueError("workspace service must use the harness runtime store")
+        self.workspace_service = service
+
+    def bind_container_terminal_service(
+        self, service: ContainerTerminalService
+    ) -> None:
+        if service.store is not self.store:
+            raise ValueError("terminal service must use the harness runtime store")
+        self.container_terminal_service = service
 
     def bind_provider_subagents(self, service: SubagentService) -> None:
         """Bind the provider-chat subagent service harness chats delegate to."""
@@ -10060,10 +10076,18 @@ class HarnessRuntimeService:
             metadata=metadata,
         )
         if transaction is not None:
+            transaction.assert_project_workspace(
+                engagement_id, engagement.workspace_path
+            )
             transaction.add(session)
             created = session
         else:
-            created = self.store.create(session)
+            with self.store.transaction(immediate=True) as admission:
+                admission.assert_project_workspace(
+                    engagement_id, engagement.workspace_path
+                )
+                admission.add(session)
+            created = session
         if components is not None:
             self._gateway_oci_components[created.id] = components
         return created
@@ -10820,6 +10844,9 @@ class HarnessRuntimeService:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
+        project_workspace_path = self.store.get(
+            Engagement, engagement_id
+        ).workspace_path
         profile = self.store.get(HarnessProfile, profile_id)
         from .chat_agent_messages import resolve_agent_messaging_choice
 
@@ -11551,7 +11578,8 @@ class HarnessRuntimeService:
         prior_messages = self._chat_messages(
             engagement_id, chat.id, include_replaced=True
         )
-        with self.store.transaction() as transaction:
+        with self.store.transaction(immediate=True) as transaction:
+            transaction.assert_project_workspace(engagement_id, project_workspace_path)
             # Serialize competing sends on PostgreSQL and recheck in the same
             # transaction that saves the turn. SQLite writes are serialized by
             # its single-writer transaction boundary.
@@ -13156,6 +13184,9 @@ class HarnessRuntimeService:
         allow_remote_mcp: bool = False,
         browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
+        project_workspace_path = self.store.get(
+            Engagement, engagement_id
+        ).workspace_path
         profile = self.store.get(HarnessProfile, profile_id)
         # Standing profile consent stands in for the per-turn confirmation.
         allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
@@ -13356,7 +13387,8 @@ class HarnessRuntimeService:
             )
             for index, stage in enumerate(stage_prompts)
         ]
-        with self.store.transaction() as transaction:
+        with self.store.transaction(immediate=True) as transaction:
+            transaction.assert_project_workspace(engagement_id, project_workspace_path)
             transaction.add(run)
             for turn in turns:
                 transaction.add(turn)
@@ -14790,6 +14822,8 @@ class HarnessRuntimeService:
                 and self.mcp_service.notebook_tools is not None
                 else None
             ),
+            workspace=self.workspace_service,
+            container_terminals=self.container_terminal_service,
         )
 
     def _gateway_catalog(

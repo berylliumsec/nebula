@@ -13,9 +13,9 @@ let api: Record<string, ReturnType<typeof vi.fn>>;
 beforeEach(() => {
   api = {
     notebookStatus: vi.fn(async () => ({projectId: "p", executionMode: "host", hostAccessAcknowledged: true, consentRequired: false, runtimeReady: true, mcpProfileId: "nebula-notebook-p", mcpEnabled: true})),
-    notebookFileIndex: vi.fn(async () => ({path: null, state: "none", detail: null})),
-    setNotebookFileIndex: vi.fn(async (_projectId: string, path: string) => ({path, state: "connected", detail: null})),
-    removeNotebookFileIndex: vi.fn(async () => ({path: null, state: "none", detail: null})),
+    notebookFileIndex: vi.fn(async () => ({path: null, state: "none", detail: null, project_revision: 1})),
+    setNotebookFileIndex: vi.fn(async (_projectId: string, path: string) => ({path, state: "connected", detail: null, project_revision: 2})),
+    removeNotebookFileIndex: vi.fn(async () => ({path: null, state: "none", detail: null, project_revision: 3})),
     listNotebooks: vi.fn(async () => [{path: "quick.ipynb", size: 100, modifiedAt: "2026-10-13T00:00:00Z"}]),
     readNotebook: vi.fn(async () => initial()),
     listNotebookRuns: vi.fn(async () => []),
@@ -36,6 +36,18 @@ it("looks up a package name in the project's runtime before installation", async
   await user.click(screen.getByRole("button", {name: "Find"}));
   await waitFor(() => expect(api.searchNotebookPackage).toHaveBeenCalledWith("p", "quick.ipynb", "numpy"));
   expect(await screen.findByText(/Array computing/)).toBeVisible();
+});
+
+it("reports when restart found no active kernel instead of claiming variables were cleared", async () => {
+  const user = userEvent.setup();
+  api.restartNotebookKernel.mockResolvedValueOnce({restarted: false, state: "absent"});
+  render(<NotebookPanel api={api as unknown as ApiClient} projectId="p" active path="quick.ipynb" onPathChange={vi.fn()} onProjectSettings={vi.fn()} />);
+  await screen.findByRole("textbox", {name: "code cell editor"});
+  await user.click(screen.getByRole("button", {name: "Restart"}));
+  expect(await screen.findByRole("status")).toHaveTextContent("No active kernel; one will start when you run a cell.");
+  expect(screen.getByRole("status")).not.toHaveTextContent("variables were cleared");
+  await user.click(screen.getByRole("button", {name: "Restart"}));
+  expect(await screen.findByRole("status")).toHaveTextContent("Kernel restarted; variables were cleared.");
 });
 
 it("saves a changed cell before queueing execution", async () => {
@@ -99,4 +111,22 @@ it("keeps the selected file usable and retries a failed inventory", async () => 
   await user.click(screen.getByRole("button", {name: "Retry"}));
   await waitFor(() => expect(api.listNotebooks).toHaveBeenCalledWith("p", true));
   await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+});
+
+it("clears the prior project's file index controls while the next project loads", async () => {
+  api.notebookFileIndex.mockImplementation(async (projectId: string) => projectId === "a"
+    ? {path: "/indexes/first.db", state: "connected", detail: null, project_revision: 1}
+    : new Promise(() => undefined));
+  const onPathChange = vi.fn();
+  const props = {api: api as unknown as ApiClient, active: true, path: "quick.ipynb", onPathChange, onProjectSettings: vi.fn()};
+  const {rerender} = render(<NotebookPanel {...props} projectId="a" />);
+  fireEvent.click(screen.getByText("File index"));
+  expect(await screen.findByText("/indexes/first.db")).toBeVisible();
+  expect(screen.getByRole("button", {name: "Remove index"})).toBeEnabled();
+
+  rerender(<NotebookPanel {...props} projectId="b" />);
+  expect(screen.queryByText("/indexes/first.db")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", {name: "Remove index"})).not.toBeInTheDocument();
+  expect(screen.getByRole("button", {name: "Browse index files"})).toBeDisabled();
+  expect(api.removeNotebookFileIndex).not.toHaveBeenCalled();
 });

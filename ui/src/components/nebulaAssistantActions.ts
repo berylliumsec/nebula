@@ -12,9 +12,49 @@ export type SettingClientAction =
   | { kind: "device_theme"; theme: ThemePreference }
   | { kind: "project_execution_mode"; mode: ProjectMode; from?: ProjectMode }
   | { kind: "project_scope"; changes: Record<string, unknown> }
-  | { kind: "headless_session"; action: "start" | "stop" };
+  | { kind: "headless_session"; action: "start" | "stop" }
+  | { kind: "project_create"; name: string; description: string; clientName: string; requestId: string }
+  | { kind: "project_create_linked"; sourceProjectId: string; name: string; description: string; clientName: string; requestId: string }
+  | { kind: "project_relink"; sourceProjectId: string; projectId: string; expectedRevision: number; name: string }
+  | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
+  | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string }
+  | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
+  | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
+  | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
+  | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
+  | { kind: "workspace_delete_directory"; projectId: string; path: string; expectedEntryIdentity: string }
+  | { kind: "notebook_index_connect" | "notebook_index_remove"; projectId: string; expectedProjectRevision: number }
+  | { kind: "library_add"; projectId: string }
+  | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string }
+  | { kind: "evidence_upload"; projectId: string }
+  | { kind: "evidence_download"; projectId: string; evidenceId: string; expectedRevision: number; title: string; expectedSha256: string }
+  | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
+  | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
+  | { kind: "report_transform_note"; projectId: string; reportId: string; expectedRevision: number; observationId: string; expectedSourceRevision: number; instruction: string }
+  | { kind: "report_signoff" | "report_export_pdf"; projectId: string; reportId: string; expectedRevision: number }
+  | { kind: "report_delete"; projectId: string; reportId: string; expectedRevision: number; title: string }
+  | { kind: "report_export_bundle"; projectId: string; expectedProjectRevision: number }
+  | { kind: "terminal_stop"; projectId: string; sessionId: string; expectedCreatedAt: string };
 
 export interface AssistantWorkReceipt { url: string; content: string }
+
+function validWorkspacePath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 4096
+    && !value.startsWith("/") && !value.includes("\\") && !value.includes("\0")
+    && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+function validWorkspaceDirectory(value: unknown): value is string {
+  return value === "" || validWorkspacePath(value);
+}
+
+const uuidPattern = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
+
+function validReportReferences(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= 500
+    && value.every((item) => typeof item === "string" && uuidPattern.test(item))
+    && new Set(value).size === value.length;
+}
 
 function butlerGatewayOperation(event: Extract<ChatStreamEvent, {type: "tool_completed"}>, projectId?: string): string | undefined {
   const gateway = event.capability === "nebula.capabilities.change"
@@ -72,6 +112,174 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const action = receipt.client_action;
   if (!action || typeof action !== "object" || Array.isArray(action)) return undefined;
   const value = action as Record<string, unknown>;
+  const projectAction = event.capability === "nebula.capabilities.change"
+    || event.capability === "nebula_capabilities_change"
+    || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (projectAction && operation === "nebula.terminal.stop" && value.kind === "terminal_stop"
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.session_id === "string" && uuidPattern.test(value.session_id)
+      && typeof value.expected_created_at === "string"
+      && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)$/.test(value.expected_created_at)
+      && Number.isFinite(Date.parse(value.expected_created_at))) {
+    return {kind: "terminal_stop", projectId, sessionId: value.session_id,
+      expectedCreatedAt: value.expected_created_at};
+  }
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId
+      && operation.startsWith("nebula.reports.")) {
+    const reportId = typeof value.report_id === "string" && uuidPattern.test(value.report_id) ? value.report_id : undefined;
+    const revision = Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+      ? Number(value.expected_revision) : undefined;
+    if (operation === "nebula.reports.export_bundle" && value.kind === "report_export_bundle"
+        && Number.isInteger(value.expected_project_revision) && Number(value.expected_project_revision) >= 1) {
+      return {kind: "report_export_bundle", projectId, expectedProjectRevision: Number(value.expected_project_revision)};
+    }
+    if (!reportId) return undefined;
+    if (operation === "nebula.reports.create" && value.kind === "report_create"
+        && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500
+        && typeof value.executive_summary === "string" && value.executive_summary.length <= 100_000
+        && validReportReferences(value.finding_ids) && validReportReferences(value.observation_ids)) {
+      return {kind: "report_create", projectId, reportId, title: value.title,
+        executiveSummary: value.executive_summary, findingIds: value.finding_ids, observationIds: value.observation_ids};
+    }
+    if (operation === "nebula.reports.update" && value.kind === "report_update" && revision) {
+      const changes = ["title", "status", "executive_summary", "finding_ids", "observation_ids"]
+        .filter((field) => Object.hasOwn(value, field));
+      if (!changes.length || (value.title !== undefined && (typeof value.title !== "string" || !value.title.trim() || value.title.length > 500))
+          || (value.status !== undefined && value.status !== "draft" && value.status !== "review")
+          || (value.executive_summary !== undefined && (typeof value.executive_summary !== "string" || value.executive_summary.length > 100_000))
+          || (value.finding_ids !== undefined && !validReportReferences(value.finding_ids))
+          || (value.observation_ids !== undefined && !validReportReferences(value.observation_ids))) return undefined;
+      return {kind: "report_update", projectId, reportId, expectedRevision: revision,
+        ...(value.title !== undefined ? {title: value.title as string} : {}),
+        ...(value.status !== undefined ? {status: value.status as "draft" | "review"} : {}),
+        ...(value.executive_summary !== undefined ? {executiveSummary: value.executive_summary as string} : {}),
+        ...(value.finding_ids !== undefined ? {findingIds: value.finding_ids as string[]} : {}),
+        ...(value.observation_ids !== undefined ? {observationIds: value.observation_ids as string[]} : {})};
+    }
+    if (operation === "nebula.reports.transform_note" && value.kind === "report_transform_note" && revision
+        && typeof value.observation_id === "string" && uuidPattern.test(value.observation_id)
+        && Number.isInteger(value.expected_source_revision) && Number(value.expected_source_revision) >= 1
+        && typeof value.instruction === "string" && value.instruction.trim().length > 0 && value.instruction.length <= 4000) {
+      return {kind: "report_transform_note", projectId, reportId, expectedRevision: revision,
+        observationId: value.observation_id, expectedSourceRevision: Number(value.expected_source_revision),
+        instruction: value.instruction.trim()};
+    }
+    if (revision && operation === "nebula.reports.signoff" && value.kind === "report_signoff") {
+      return {kind: "report_signoff", projectId, reportId, expectedRevision: revision};
+    }
+    if (revision && operation === "nebula.reports.delete" && value.kind === "report_delete"
+        && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500) {
+      return {kind: "report_delete", projectId, reportId, expectedRevision: revision, title: value.title};
+    }
+    if (revision && operation === "nebula.reports.export_pdf" && value.kind === "report_export_pdf") {
+      return {kind: "report_export_pdf", projectId, reportId, expectedRevision: revision};
+    }
+    return undefined;
+  }
+  if (projectAction && operation === "nebula.chats.export" && value.kind === "chat_export"
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.session_id === "string"
+      && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.session_id)
+      && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1) {
+    return {kind: "chat_export", projectId, sessionId: value.session_id, expectedRevision: Number(value.expected_revision)};
+  }
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId
+      && validWorkspacePath(value.path) && typeof value.expected_sha256 === "string"
+      && /^[0-9a-f]{64}$/.test(value.expected_sha256)) {
+    if (operation === "nebula.workspace.delete_file" && value.kind === "workspace_delete") {
+      return {kind: "workspace_delete", projectId, path: value.path, expectedSha256: value.expected_sha256};
+    }
+    if (operation === "nebula.workspace.download_file" && value.kind === "workspace_download"
+        && Number.isSafeInteger(value.size) && Number(value.size) >= 0) {
+      return {kind: "workspace_download", projectId, path: value.path,
+        expectedSha256: value.expected_sha256, size: Number(value.size)};
+    }
+  }
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    const indexKind = operation === "nebula.notebook.connect_file_index" ? "notebook_index_connect"
+      : operation === "nebula.notebook.remove_file_index" ? "notebook_index_remove" : undefined;
+    if (indexKind && value.kind === indexKind && Number.isInteger(value.expected_project_revision)
+        && Number(value.expected_project_revision) >= 1) {
+      return {kind: indexKind, projectId, expectedProjectRevision: Number(value.expected_project_revision)};
+    }
+    if (operation === "nebula.workspace.upload_from_device" && value.kind === "workspace_upload"
+        && validWorkspaceDirectory(value.directory)
+        && typeof value.expected_directory_identity === "string"
+        && /^[0-9a-f]{64}$/.test(value.expected_directory_identity)) {
+      return {kind: "workspace_upload", projectId, directory: value.directory,
+        expectedDirectoryIdentity: value.expected_directory_identity};
+    }
+    if (operation === "nebula.workspace.delete_directory" && value.kind === "workspace_delete_directory"
+        && validWorkspacePath(value.path) && typeof value.expected_entry_identity === "string"
+        && /^[0-9a-f]{64}$/.test(value.expected_entry_identity)) {
+      return {kind: "workspace_delete_directory", projectId, path: value.path,
+        expectedEntryIdentity: value.expected_entry_identity};
+    }
+  }
+  if (projectAction && operation === "nebula.library.add" && value.kind === "library_add"
+      && typeof projectId === "string" && value.project_id === projectId) {
+    return {kind: "library_add", projectId};
+  }
+  if (projectAction && operation === "nebula.evidence.upload" && value.kind === "evidence_upload"
+      && typeof projectId === "string" && value.project_id === projectId) {
+    return {kind: "evidence_upload", projectId};
+  }
+  if (projectAction && operation === "nebula.evidence.download" && value.kind === "evidence_download"
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.evidence_id === "string" && uuidPattern.test(value.evidence_id)
+      && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+      && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500
+      && typeof value.expected_sha256 === "string" && /^[0-9a-f]{64}$/.test(value.expected_sha256)) {
+    return {kind: "evidence_download", projectId, evidenceId: value.evidence_id,
+      expectedRevision: Number(value.expected_revision), title: value.title,
+      expectedSha256: value.expected_sha256};
+  }
+  const libraryKind = operation === "nebula.library.download" ? "library_download"
+    : operation === "nebula.library.reindex" ? "library_reindex"
+    : operation === "nebula.library.remove" ? "library_remove" : undefined;
+  if (projectAction && libraryKind && value.kind === libraryKind
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.item_id === "string"
+      && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.item_id)
+      && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+      && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 300) {
+    return {kind: libraryKind, projectId, itemId: value.item_id, expectedRevision: Number(value.expected_revision), name: value.name};
+  }
+  if (projectAction && operation.startsWith("nebula.projects.")) {
+    const name = value.name;
+    const validName = typeof name === "string" && name.trim().length > 0 && name.length <= 300;
+    if (operation === "nebula.projects.create" && value.kind === "project_create" && validName
+        && typeof value.description === "string" && value.description.length <= 20_000
+        && typeof value.client_name === "string" && value.client_name.length <= 300
+        && typeof value.request_id === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.request_id)) {
+      return { kind: "project_create", name, description: value.description, clientName: value.client_name, requestId: value.request_id };
+    }
+    if (operation === "nebula.projects.create_linked" && value.kind === "project_create_linked" && validName
+        && typeof projectId === "string"
+        && typeof value.description === "string" && value.description.length <= 20_000
+        && typeof value.client_name === "string" && value.client_name.length <= 300
+        && typeof value.request_id === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.request_id)) {
+      return { kind: "project_create_linked", sourceProjectId: projectId,
+        name, description: value.description, clientName: value.client_name, requestId: value.request_id };
+    }
+    const target = typeof value.project_id === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.project_id) ? value.project_id : undefined;
+    const revision = Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1 ? Number(value.expected_revision) : undefined;
+    if (target && revision && validName) {
+      if (operation === "nebula.projects.relink" && value.kind === "project_relink" && typeof projectId === "string") {
+        return {kind: "project_relink", sourceProjectId: projectId,
+          projectId: target, expectedRevision: revision, name};
+      }
+      if (operation === "nebula.projects.rename" && value.kind === "project_rename"
+          && typeof value.old_name === "string" && value.old_name.length <= 300) {
+        return { kind: "project_rename", projectId: target, expectedRevision: revision, oldName: value.old_name, name };
+      }
+      const kind = `project_${operation.slice("nebula.projects.".length)}`;
+      if (kind === value.kind && (kind === "project_archive" || kind === "project_restore" || kind === "project_delete")) {
+        return { kind, projectId: target, expectedRevision: revision, name };
+      }
+    }
+    return undefined;
+  }
   const themeTool = operation === "nebula.settings.set_device_theme"
     || /^nebula_settings_set_device_theme_[0-9a-f]{10,}$/.test(operation);
   const openTool = operation === "nebula.settings.open"
@@ -129,6 +337,10 @@ export function isSettingNavigationRequest(prompt: string): boolean {
   // A question about a failure needs an explanation grounded in Core state,
   // even when it also contains a word such as "where" or "find".
   if (/\b(?:why|how|cannot|cant|doesnt|failed|failure|error|troubleshoot|unable|permission|not working)\b/.test(text)) return false;
+  // An action on another resource may mention Butler incidentally. Let the
+  // model handle it unless the operator explicitly asked for settings.
+  if (!/\b(?:setting|settings|controls)\b/.test(text)
+      && /\b(?:reports?|sign off|exports?|downloads?|archive|delete|create|edit|save|run)\b/.test(text)) return false;
   return /^(?:(?:please|can you|could you|would you)\s+)?(?:open|show|bring up|take me to|go to|find|locate|where|which setting)\b/.test(text)
     || /\b(?:where|which setting|setting for|controls for|page for)\b/.test(text);
 }

@@ -119,7 +119,7 @@ import { ChatPreviewCache } from "./chatPreviewCache";
 import { chatImageKey, chatImagePalette, chatImageWidth, ChatImagePreviewCache, renderChatImagePreview, type ChatImagePreview } from "./chatImagePreview";
 import { groupByAssistantId } from "./chatRenderGroups";
 import { startHarnessActivityPolling } from "./harnessActivityPolling";
-import { Link, useNavigate, useSearchParams, type NavigateOptions } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams, type NavigateOptions } from "react-router-dom";
 import { projectSurface } from "../resourceRoutes";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
@@ -1228,7 +1228,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     requestChatContext,
     registerAssistantSnapshot,
   } = useWorkbenchDrafts();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get(embeddedSideChat ? "sideChat" : "session") ?? "";
   const requestedSideChatId = embeddedSideChat || shellOnly ? "" : searchParams.get("sideChat") ?? "";
   // The URL is the only authority for the Workbench view, so every control on
@@ -1245,12 +1245,17 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const activeToolId = searchParams.get("panelTab") ?? "";
   const activeToolTab = toolTabs.find(tab => tab.id === activeToolId);
   const companionExpanded = (sideView !== undefined || chatTerminalOpen) && searchParams.get("companion") === "full";
+  const {projectId: routeProjectId} = useParams();
 
   const updateSearchParams = useCallback((update: (params: URLSearchParams) => void, options?: NavigateOptions) => {
+    // Async chat reads can settle after Butler switches projects. A stale
+    // Workbench must not restore its project route with a relative query write.
+    const pathname = window.location.pathname;
+    if (!routeProjectId || pathname !== projectSurface(routeProjectId, "workbench")) return;
     const params = latestSearchParams();
     update(params);
-    setSearchParams(params, options);
-  }, [setSearchParams]);
+    navigate({pathname, search: `?${params.toString()}`}, options);
+  }, [routeProjectId, navigate]);
   const setView = useCallback((next: SessionView) => {
     if (shellOnly && next !== "chat") return;
     updateSearchParams(params => params.set("view", next), { replace: true });
@@ -4149,7 +4154,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessActivity(undefined);
     if (!preserveTranscript) { setMessages(preview?.messages ?? []); setReplacedMessages([]); }
     setToolCards(preview?.toolCards ?? []);
-    setMobileListOpen(false);
+    // Restoring a URL session can finish after the operator opens the drawer.
+    // Only a deliberate selection should dismiss it.
+    if (updateUrl) setMobileListOpen(false);
     setActivityItems([]);
     setHarnessInteractions([]);
     setPendingResponse(undefined);

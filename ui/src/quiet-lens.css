@@ -113,7 +113,7 @@
 :root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > :is(.top-bar-leading, .top-bar-page-actions) { display: none; }
 :root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > .top-bar-actions > :not(.approval-trigger):not(.connection-chip) { display: none; }
 :root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > .top-bar-actions > .connection-chip.ready { display: none; }
-:root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > .top-bar-actions { margin-left: auto; }
+:root[data-theme="quiet-lens"] .top-bar[data-lens-open="false"] > .top-bar-actions { position: relative; z-index: 4; margin-left: auto; }
 :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-leading { min-width: 145px; }
 :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > :not(.quiet-lens-handle) { position: relative; z-index: 2; }
 :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .top-bar-page-actions { overflow-x: auto; }

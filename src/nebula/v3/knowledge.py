@@ -36,7 +36,7 @@ from pypdf import PdfReader
 from .artifacts import ArtifactIntegrityError, ArtifactStore
 from .domain import Artifact, Engagement, KnowledgeSource, LibraryItem, utc_now
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
-from .storage import NebulaStore
+from .storage import ConflictError, NebulaStore
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 MAX_EXTRACTED_CHARACTERS = 4 * 1024 * 1024
@@ -905,10 +905,15 @@ def reindex_library_item(
     artifact_store: ArtifactStore,
     item_id: str,
     knowledge_index: KnowledgeIndex | None = None,
+    expected_revision: int | None = None,
 ) -> LibraryItem:
     """Rebuild one global Library item from its immutable artifact."""
 
     item = store.get(LibraryItem, item_id)
+    if expected_revision is not None and item.revision != expected_revision:
+        raise ConflictError(
+            f"revision conflict: expected {expected_revision}, found {item.revision}"
+        )
     if not item.artifact_id:
         raise InvalidDocumentError("Library item has no authoritative artifact")
     artifact = store.get(Artifact, item.artifact_id)

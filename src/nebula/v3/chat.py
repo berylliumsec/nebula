@@ -967,6 +967,7 @@ class PreparedChat:
     pending_session: ChatSession | None
     stored_messages: list[ChatMessage]
     new_messages: list[ChatRequestMessage]
+    project_workspace_path: str | None = None
     operator_decisions: list[dict[str, Any]] = field(default_factory=list)
     source_request: ChatCompletionRequest | None = None
     base_instructions: str = ""
@@ -6564,6 +6565,9 @@ class ChatService:
                     "hook_snapshots": [
                         item.model_dump(mode="json") for item in hook_snapshots
                     ],
+                    "project_workspace_path": (
+                        engagement.workspace_path if engagement else None
+                    ),
                     "model_request": model_request.model_dump(mode="json"),
                     "operator_max_output_tokens": request.max_output_tokens,
                     "citations": [item.model_dump(mode="json") for item in citations],
@@ -6650,6 +6654,9 @@ class ChatService:
                     "hook_snapshots": [
                         item.model_dump(mode="json") for item in hook_snapshots
                     ],
+                    "project_workspace_path": (
+                        engagement.workspace_path if engagement else None
+                    ),
                     "model_request": model_request.model_dump(mode="json"),
                     "operator_max_output_tokens": request.max_output_tokens,
                     "citations": [item.model_dump(mode="json") for item in citations],
@@ -6679,6 +6686,7 @@ class ChatService:
             resolved_model=resolved_model,
             citations=citations,
             engagement_id=engagement_id,
+            project_workspace_path=engagement.workspace_path if engagement else None,
             session=session,
             pending_session=pending_session,
             stored_messages=stored_messages,
@@ -12664,6 +12672,9 @@ class ChatService:
                 resolved_model=resolved_model,
                 citations=citations,
                 engagement_id=turn.engagement_id,
+                project_workspace_path=turn.request_snapshot.get(
+                    "project_workspace_path"
+                ),
                 session=session,
                 pending_session=None,
                 stored_messages=self._session_messages(session),
@@ -12960,6 +12971,7 @@ class ChatService:
             resolved_model=resolved_model,
             citations=citations,
             engagement_id=turn.engagement_id,
+            project_workspace_path=turn.request_snapshot.get("project_workspace_path"),
             session=session,
             pending_session=None,
             stored_messages=self._session_messages(session),
@@ -13071,6 +13083,10 @@ class ChatService:
                     chat_session_id=session.id,
                     chat_turn_id=turn.id,
                     event_name=event_name,
+                    project_workspace_binding=(
+                        prepared.engagement_id,
+                        prepared.project_workspace_path,
+                    ),
                     workspace_provenance=workspace_provenance,
                     payload={
                         "provider_id": prepared.provider_profile.id,
@@ -14337,11 +14353,19 @@ class ChatService:
         return fork
 
     def rewind_session(
-        self, session_id: str, *, before_message_id: str
+        self,
+        session_id: str,
+        *,
+        before_message_id: str,
+        expected_revision: int | None = None,
     ) -> tuple[ChatSession, list[ChatMessage], list[ChatMessage]]:
         """Retract an operator message and its replies so it can be resent here."""
 
         session = self.store.get(ChatSession, session_id)
+        if expected_revision is not None and session.revision != expected_revision:
+            raise ChatHistoryConflict(
+                "conversation changed; read its current revision before editing"
+            )
         if self.pending_turn(session_id) is not None:
             raise ChatHistoryConflict(
                 "conversation cannot be edited while a response is active"
@@ -16455,7 +16479,10 @@ class ChatService:
         turn = turn.model_copy(update={"request_snapshot": compact_snapshot})
         if prepared.pending_session is not None:
             session = prepared.pending_session.model_copy(update={"metadata": metadata})
-            with self.store.transaction() as transaction:
+            with self.store.transaction(immediate=True) as transaction:
+                transaction.assert_project_workspace(
+                    prepared.engagement_id, prepared.project_workspace_path
+                )
                 transaction.add_all([session, *messages])
                 stage_snapshot_parts(transaction, snapshot_parts)
                 transaction.add(turn)
@@ -16463,7 +16490,10 @@ class ChatService:
             prepared.pending_session = None
         else:
             goal = self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
-            with self.store.transaction() as transaction:
+            with self.store.transaction(immediate=True) as transaction:
+                transaction.assert_project_workspace(
+                    prepared.engagement_id, prepared.project_workspace_path
+                )
                 prepared.session = transaction.update(
                     ChatSession,
                     session.id,

@@ -43,6 +43,7 @@ function bytesBlob(value: string, type: string): Blob {
 function evidence(id: string, artifactId: string): EvidenceSummary {
   return {
     id,
+    revision: 1,
     engagementId: "project-1",
     evidenceType: "terminal-screenshot",
     title: id,

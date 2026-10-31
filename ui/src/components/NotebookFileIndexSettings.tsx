@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ApiClient } from "../api/client";
+import { ApiError, type ApiClient } from "../api/client";
 import type { NotebookFileIndexStatus } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { HostFolderPicker } from "./HostFolderPicker";
@@ -21,29 +21,35 @@ export function NotebookFileIndexSettings({api, projectId, listing, onChanged}: 
   const connect = async (path: string) => {
     setBusy(true); setError("");
     try {
-      setStatus(await api.setNotebookFileIndex(projectId, path));
+      if (!status) throw new Error("File index status is unavailable. Reopen File index and try again.");
+      setStatus(await api.setNotebookFileIndex(projectId, path, status.project_revision));
       onChanged();
     } catch (caught) {
       logCaughtDiagnostic("interface.notebook.index_connect_failed", "File index could not be connected.", caught);
-      setError("File index could not be connected.");
+      setError(caught instanceof ApiError && caught.status === 409
+        ? "Project changed. Reopen File index to refresh before selecting another file."
+        : "File index could not be connected. Inspect its current status before retrying.");
     }
     finally { setBusy(false); }
   };
   const remove = async () => {
     setBusy(true); setError("");
     try {
-      setStatus(await api.removeNotebookFileIndex(projectId));
+      if (!status) throw new Error("File index status is unavailable. Reopen File index and try again.");
+      setStatus(await api.removeNotebookFileIndex(projectId, status.project_revision));
       onChanged();
     } catch (caught) {
       logCaughtDiagnostic("interface.notebook.index_remove_failed", "File index could not be removed.", caught);
-      setError("File index could not be removed.");
+      setError(caught instanceof ApiError && caught.status === 409
+        ? "Project changed. Reopen File index to refresh before removing it."
+        : "File index could not be removed. Inspect its current status before retrying.");
     }
     finally { setBusy(false); }
   };
   return <section className="notebook-index-settings" aria-label="Notebook file index">
     <p>Use a host SQLite repository file index to find notebooks faster. The project folder still owns the files.</p>
     {status?.path && <p role="status"><strong>{status.state === "fallback" ? "Scanning project folder" : status.state === "partial" ? "File index updating" : "File index connected"}</strong> <code>{status.path}</code>{status.detail && <span> {status.detail}</span>}</p>}
-    <HostFolderPicker api={api} purpose="index" value={status?.path ?? undefined} onSelect={path => {void connect(path);}} />
+    <HostFolderPicker api={status && !busy ? api : undefined} purpose="index" value={status?.path ?? undefined} onSelect={path => {void connect(path);}} />
     {status?.path && <button className="button quiet" type="button" disabled={busy} onClick={() => void remove()}>Remove index</button>}
     {busy && <span role="status">Checking file index…</span>}
     {error && <p role="alert">{error}</p>}

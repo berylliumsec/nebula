@@ -7,13 +7,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
-from nebula.v3.chat import ChatCompletionRequest, ChatRequestMessage
+from nebula.v3.chat import (
+    ChatCompletionRequest,
+    ChatHistoryConflict,
+    ChatRequestMessage,
+)
 from nebula.v3.butler_capabilities import BUTLER_TOOL_NAMES
-from nebula.v3.control_assistant_work import WORK_TOOLS, dispatch_work_tool
+from nebula.v3.control_assistant_work import (
+    START_MISSION_SCHEMA,
+    WORK_TOOLS,
+    dispatch_work_tool,
+)
 from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    BrowserIdentity,
+    BrowserSession,
     ChatBackend,
     ChatGoal,
     ChatMessage,
@@ -38,6 +48,8 @@ from nebula.v3.domain import (
     ProviderProfile,
     RiskClass,
     ScopePolicy,
+    WorkItem,
+    WorkUpdate,
 )
 from nebula.v3.runtime_platform import RuntimePlatform, _ControlAssistantScopeBroker
 from nebula.v3.artifacts import ArtifactStore
@@ -51,6 +63,8 @@ from nebula.v3.providers import (
     ProviderKind,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
+from nebula.v3.tool_results import MAX_EXCERPT_BYTES, model_result_bytes
+from nebula.v3.work import WorkCreate, WorkService
 from tests.v3.test_harnesses import FakeAdapter
 
 
@@ -312,6 +326,140 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
         "main",
         "goal_child",
     }
+
+
+def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Research",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    messages = [
+        store.create(
+            ChatMessage(
+                engagement_id=selected.id,
+                session_id=session.id,
+                sequence=index,
+                role=ChatRole.USER if index % 2 else ChatRole.ASSISTANT,
+                content=f"Message {index} " + ("x" * 520 if index == 5 else "body"),
+                metadata={"retracted_at": "2026-01-01T00:00:00Z"} if index == 4 else {},
+            )
+        )
+        for index in range(1, 36)
+    ]
+    foreign = store.create(
+        ChatSession(
+            engagement_id=other.id,
+            title="Foreign",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    foreign_message = store.create(
+        ChatMessage(
+            engagement_id=other.id,
+            session_id=foreign.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Foreign text",
+        )
+    )
+    child = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Delegated child",
+            provider_profile_id=profile.id,
+            model="model-a",
+            parent_session_id=session.id,
+            metadata={"delegated_from_goal_id": "parent-goal"},
+        )
+    )
+    work = app.state.control_assistant_work
+    assert work.catalog(selected.id, "nebula.work.chat_messages")["read_only"] is True
+    assert work.catalog(selected.id, "nebula.work.rewind_chat")["read_only"] is False
+    first = work.chat_messages(selected.id, {"session_id": session.id})
+    assert len(first["messages"]) == 30
+    assert all(item["id"] != messages[3].id for item in first["messages"])
+    second = work.chat_messages(
+        selected.id,
+        {
+            "session_id": session.id,
+            "before_message_id": first["next_before_message_id"],
+        },
+    )
+    assert [item["id"] for item in second["messages"]] == [
+        item.id for item in messages[:5] if item.id != messages[3].id
+    ]
+    assert second["next_before_message_id"] is None
+    assert (
+        next(item for item in second["messages"] if item["id"] == messages[4].id)[
+            "content_truncated"
+        ]
+        is True
+    )
+    with pytest.raises(ValueError, match="work roster"):
+        work.chat_messages(selected.id, {"session_id": foreign.id})
+    with pytest.raises(ValueError, match="child goal chat"):
+        work.chat_messages(selected.id, {"session_id": child.id})
+    with pytest.raises(ChatHistoryConflict, match="cursor does not belong"):
+        work.chat_messages(
+            selected.id,
+            {"session_id": session.id, "before_message_id": foreign_message.id},
+        )
+
+    async def rewind(arguments):
+        return await dispatch_work_tool(
+            work, selected.id, "nebula.work.rewind_chat", arguments
+        )
+
+    base = {
+        "session_id": session.id,
+        "expected_revision": first["revision"],
+        "before_message_id": messages[4].id,
+    }
+    with pytest.raises(ValueError, match="active user message"):
+        asyncio.run(rewind({**base, "before_message_id": messages[5].id}))
+    with pytest.raises(ValueError, match="active user message"):
+        asyncio.run(rewind({**base, "before_message_id": foreign_message.id}))
+    with pytest.raises(ValueError, match="chat changed"):
+        asyncio.run(rewind({**base, "expected_revision": session.revision + 1}))
+    with pytest.raises(ValueError, match="child goal chat"):
+        asyncio.run(rewind({**base, "session_id": child.id}))
+    assert (
+        len(work.chat_messages(selected.id, {"session_id": session.id})["messages"])
+        == 30
+    )
+
+    changed = asyncio.run(rewind(base))
+    assert changed["session_id"] == session.id
+    assert changed["revision"] > session.revision
+    assert changed["active_message_count"] == 3
+    assert changed["retracted_message_count"] == 31
+    assert changed["retracted_from_message_id"] == messages[4].id
+    assert [item.id for item in work.chat.session_messages(session.id)] == [
+        item.id for item in messages[:3]
+    ]
+    assert work.chat_detail(selected.id, session.id)["revision"] == changed["revision"]
+    assert (
+        store.get(ChatMessage, messages[4].id).metadata["retracted_reason"]
+        == "operator_edit"
+    )
+    with pytest.raises(ValueError, match="chat changed"):
+        asyncio.run(rewind(base))
 
 
 def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
@@ -1257,6 +1405,438 @@ def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
     assert second["result"] == "an existing retry is already saved in Core"
 
 
+def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    chats = [
+        store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=f"Chat {index}",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        for index in range(34)
+    ]
+    store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            provider_profile_id=profile.id,
+            model="model-a",
+            metadata={"control_assistant": True},
+        )
+    )
+    for excluded_metadata in (
+        {"side_chat": True},
+        {"temporary_assistant": True},
+        {"delegated_from_goal_id": "goal-1"},
+    ):
+        store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Excluded",
+                provider_profile_id=profile.id,
+                model="model-a",
+                metadata=excluded_metadata,
+            )
+        )
+    other_project = store.create(Engagement(name="Other"))
+    other_chat = store.create(
+        ChatSession(
+            engagement_id=other_project.id,
+            title="Other project's private chat",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    work = app.state.control_assistant_work
+    descriptor = work.catalog(project.id, "nebula.work.update_chat")
+    assert {"pinned", "flag_color"}.issubset(descriptor["parameters"]["properties"])
+    assert "pin" in descriptor["description"]
+
+    async def page(offset):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {"operation": "nebula.work.chats", "arguments": {"offset": offset}},
+        )
+
+    first = asyncio.run(page(0))
+    second = asyncio.run(page(first["next_offset"]))
+    assert first["next_offset"] == 30
+    assert second["next_offset"] is None
+    assert {item["id"] for item in first["chats"] + second["chats"]} == {
+        item.id for item in chats
+    }
+    with pytest.raises(ValueError, match="work roster"):
+        work.chat_detail(project.id, other_chat.id)
+
+    target = chats[0]
+
+    async def change(revision, **updates):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {
+                "operation": "nebula.work.update_chat",
+                "arguments": {
+                    "session_id": target.id,
+                    "expected_revision": revision,
+                    **updates,
+                },
+            },
+        )
+
+    pinned = asyncio.run(change(target.revision, pinned=True, flag_color="purple"))
+    assert (pinned["pinned"], pinned["flag_color"]) == (True, "purple")
+    assert (
+        work.chat_detail(project.id, target.id)["pinned"],
+        work.chat_detail(project.id, target.id)["flag_color"],
+    ) == (True, "purple")
+    assert any(
+        item["id"] == target.id and item["pinned"] and item["flag_color"] == "purple"
+        for item in work.chats(project.id, 30)["chats"]
+    )
+    with pytest.raises(ValueError, match="chat changed"):
+        asyncio.run(change(target.revision, pinned=False))
+    cleared = asyncio.run(change(pinned["revision"], pinned=False, flag_color=None))
+    assert (cleared["pinned"], cleared["flag_color"]) == (False, None)
+    assert "pinned" not in store.get(ChatSession, target.id).metadata
+    assert "flag_color" not in store.get(ChatSession, target.id).metadata
+    with pytest.raises(ValueError, match="pinned must be true or false"):
+        asyncio.run(change(cleared["revision"], pinned="yes"))
+    with pytest.raises(ValueError, match="listed flag color"):
+        asyncio.run(change(cleared["revision"], flag_color="magenta"))
+
+
+def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    assigned = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Assigned agent",
+            provider_profile_id="local",
+            model="model-a",
+        )
+    )
+    other_agent = store.create(
+        ChatSession(
+            engagement_id=other.id,
+            title="Other agent",
+            provider_profile_id="local",
+            model="model-a",
+        )
+    )
+    service = WorkService(store)
+    seeded = [
+        service.create(
+            project.id,
+            WorkCreate(title=f"Task {index}"),
+            actor_id="operator",
+        )
+        for index in range(32)
+    ]
+    private = service.create(
+        other.id, WorkCreate(title="Other project's task"), actor_id="operator"
+    )
+    work = app.state.control_assistant_work
+    assert (
+        "request_id"
+        in work.catalog(project.id, "nebula.work.create_work_item")["parameters"][
+            "required"
+        ]
+    )
+
+    async def invoke(operation, arguments):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {"operation": f"nebula.work.{operation}", "arguments": arguments},
+        )
+
+    async def scenario():
+        first = await invoke("work_items", {"offset": 0})
+        second = await invoke("work_items", {"offset": first["next_offset"]})
+        assert model_result_bytes(first) <= MAX_EXCERPT_BYTES
+        assert model_result_bytes(second) <= MAX_EXCERPT_BYTES
+        assert {item["id"] for item in first["items"] + second["items"]} == {
+            item.id for item in seeded
+        }
+        assert second["next_offset"] is None
+        with pytest.raises(NotFoundError):
+            await invoke("work_item", {"item_id": private.id})
+        with pytest.raises(ValueError, match="invalid Work item arguments"):
+            await invoke(
+                "create_work_item",
+                {
+                    "title": "Forged import",
+                    "request_id": "forged-import-1",
+                    "source_kind": "import",
+                },
+            )
+        created = await invoke(
+            "create_work_item",
+            {"title": "Butler task", "request_id": "butler-work-create-1"},
+        )
+        item_id = created["item"]["id"]
+        assert created["item"]["status"] == "ready"
+        assert created["url"].endswith(f"/work/{item_id}")
+        repeated = await invoke(
+            "create_work_item",
+            {"title": "Butler task", "request_id": "butler-work-create-1"},
+        )
+        assert repeated["item"]["id"] == item_id
+        with pytest.raises(NotFoundError):
+            await invoke(
+                "update_work_item",
+                {
+                    "item_id": private.id,
+                    "expected_revision": private.revision,
+                    "priority": "high",
+                },
+            )
+        with pytest.raises(ValueError, match="Core rejected the work action"):
+            await invoke(
+                "update_work_item",
+                {
+                    "item_id": item_id,
+                    "expected_revision": created["item"]["revision"],
+                    "assignee_session_id": other_agent.id,
+                },
+            )
+        changed = await invoke(
+            "update_work_item",
+            {
+                "item_id": item_id,
+                "expected_revision": created["item"]["revision"],
+                "priority": "high",
+                "assignee_session_id": assigned.id,
+            },
+        )
+        assert changed["item"]["priority"] == "high"
+        assert changed["item"]["assignee_session_id"] == assigned.id
+        with pytest.raises(ValueError, match="work item changed"):
+            await invoke(
+                "update_work_item",
+                {
+                    "item_id": item_id,
+                    "expected_revision": created["item"]["revision"],
+                    "title": "Stale overwrite",
+                },
+            )
+        checked = await invoke(
+            "check_in_work_item",
+            {
+                "item_id": item_id,
+                "expected_revision": changed["item"]["revision"],
+                "summary": "Ready for review",
+                "status": "review",
+                "request_id": "butler-work-check-1",
+            },
+        )
+        assert checked["status"] == "review"
+        repeated_check = await invoke(
+            "check_in_work_item",
+            {
+                "item_id": item_id,
+                "expected_revision": changed["item"]["revision"],
+                "summary": "Ready for review",
+                "status": "review",
+                "request_id": "butler-work-check-1",
+            },
+        )
+        assert repeated_check["update_id"] == checked["update_id"]
+        assert repeated_check["revision"] == checked["revision"]
+        with pytest.raises(ValueError, match="Core rejected the work action"):
+            await invoke(
+                "check_in_work_item",
+                {
+                    "item_id": item_id,
+                    "expected_revision": changed["item"]["revision"],
+                    "summary": "Stale status",
+                    "status": "done",
+                    "request_id": "butler-work-check-2",
+                },
+            )
+        assert store.get(WorkItem, item_id).status == "review"
+
+    asyncio.run(scenario())
+
+    long_description = "🔎" * 20_000
+    long_item = service.create(
+        project.id,
+        WorkCreate(title="Large Unicode description", description=long_description),
+        actor_id="operator",
+    )
+    chunks = []
+    offset = 0
+    while True:
+        detail = work.work_item(
+            project.id, {"item_id": long_item.id, "description_offset": offset}
+        )
+        assert model_result_bytes(detail) <= MAX_EXCERPT_BYTES
+        chunks.append(detail["item"]["description"])
+        offset = detail["next_description_offset"]
+        if offset is None:
+            break
+    assert "".join(chunks) == long_description
+
+
+def test_butler_controls_work_agent_access_and_reads_complete_check_in_history(
+    tmp_path,
+):
+    store, app, _ = _app(tmp_path)
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    service = WorkService(store)
+    item = service.create(project.id, WorkCreate(title="History"), actor_id="operator")
+    other_item = service.create(
+        other.id, WorkCreate(title="Private"), actor_id="operator"
+    )
+    long_summary = "🔎" * 4_000
+    long_next_step = "🧭" * 2_000
+    long_blocker = "⛔" * 2_000
+    saved = [
+        store.create(
+            WorkUpdate(
+                engagement_id=project.id,
+                item_id=item.id,
+                summary=long_summary if index == 0 else f"Check-in {index}",
+                next_step=long_next_step if index == 0 else None,
+                blocker=long_blocker if index == 0 else None,
+                status="in_progress",
+                actor_kind="operator",
+                actor_id="seed",
+            )
+        )
+        for index in range(205)
+    ]
+    private = store.create(
+        WorkUpdate(
+            engagement_id=other.id,
+            item_id=other_item.id,
+            summary="Private check-in",
+            status="ready",
+            actor_kind="operator",
+            actor_id="seed",
+        )
+    )
+    work = app.state.control_assistant_work
+    for operation in (
+        "work_setting",
+        "set_work_setting",
+        "work_updates",
+        "work_update",
+    ):
+        assert (
+            work.catalog(project.id, f"nebula.work.{operation}")["name"]
+            == f"nebula.work.{operation}"
+        )
+
+    async def invoke(operation, arguments):
+        return await dispatch_work_tool(
+            work,
+            project.id,
+            "nebula.work.manage",
+            {"operation": f"nebula.work.{operation}", "arguments": arguments},
+        )
+
+    async def scenario():
+        setting = await invoke("work_setting", {})
+        assert setting["enabled"] is True
+        with pytest.raises(ValueError, match="project Work setting changed"):
+            await invoke(
+                "set_work_setting",
+                {"enabled": False, "expected_revision": setting["revision"] + 1},
+            )
+        assert store.get(Engagement, project.id).work_enabled is True
+        disabled = await invoke(
+            "set_work_setting",
+            {"enabled": False, "expected_revision": setting["revision"]},
+        )
+        assert disabled["saved"] is True
+        assert disabled["enabled"] is False
+        assert store.get(Engagement, project.id).revision == disabled["revision"]
+        with pytest.raises(ValueError, match="project Work setting changed"):
+            await invoke(
+                "set_work_setting",
+                {"enabled": False, "expected_revision": setting["revision"]},
+            )
+        with pytest.raises(ValueError, match="invalid Work item arguments"):
+            await invoke(
+                "set_work_setting",
+                {"enabled": "false", "expected_revision": disabled["revision"]},
+            )
+        assert service.get(project.id, item.id).id == item.id
+
+        ids = []
+        offset = 0
+        while True:
+            page = await invoke("work_updates", {"item_id": item.id, "offset": offset})
+            assert model_result_bytes(page) <= MAX_EXCERPT_BYTES
+            ids.extend(update["id"] for update in page["updates"])
+            next_offset = page["next_offset"]
+            if next_offset is None:
+                break
+            assert next_offset > offset
+            offset = next_offset
+        assert len(ids) == 205
+        assert set(ids) == {update.id for update in saved}
+        with pytest.raises(NotFoundError):
+            await invoke("work_updates", {"item_id": other_item.id})
+        with pytest.raises(NotFoundError):
+            await invoke("work_update", {"item_id": item.id, "update_id": private.id})
+        with pytest.raises(NotFoundError):
+            await invoke(
+                "work_update", {"item_id": other_item.id, "update_id": saved[0].id}
+            )
+        for field, expected in (
+            ("summary", long_summary),
+            ("next_step", long_next_step),
+            ("blocker", long_blocker),
+        ):
+            chunks = []
+            offset = 0
+            while True:
+                detail = await invoke(
+                    "work_update",
+                    {
+                        "item_id": item.id,
+                        "update_id": saved[0].id,
+                        "field": field,
+                        "content_offset": offset,
+                    },
+                )
+                assert model_result_bytes(detail) <= MAX_EXCERPT_BYTES
+                chunks.append(detail["update"][field])
+                offset = detail["next_content_offset"]
+                if offset is None:
+                    break
+            assert "".join(chunks) == expected
+        with pytest.raises(ValueError, match="outside this check-in field"):
+            await invoke(
+                "work_update",
+                {"item_id": item.id, "update_id": saved[0].id, "content_offset": 4_001},
+            )
+
+    asyncio.run(scenario())
+
+
 def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
     store, app, _ = _app(tmp_path)
     selected = store.create(Engagement(name="Selected"))
@@ -1860,6 +2440,181 @@ def test_mission_start_uses_existing_core_route_and_reads_back(tmp_path, monkeyp
         assert calls[0]["engagement_id"] == selected.id
         assert calls[0]["tool_names"] == []
         assert work.mission_detail(selected.id, result["run_id"])["name"] == "Survey"
+
+    asyncio.run(scenario())
+
+
+def test_butler_discovers_project_browser_and_starts_scoped_mission(
+    tmp_path, monkeypatch
+):
+    store, app, _ = _app(tmp_path)
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    scope = store.create(
+        ScopePolicy(engagement_id=selected.id, allowed_domains=["example.test"])
+    )
+    store.update(
+        Engagement,
+        selected.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=selected.revision,
+    )
+    store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    identity = store.create(BrowserIdentity(engagement_id=selected.id, name="Research"))
+    session = store.create(
+        BrowserSession(
+            engagement_id=selected.id,
+            identity_id=identity.id,
+            name="Security browser",
+            runtime_kind="agent_security",
+        )
+    )
+    foreign_identity = store.create(
+        BrowserIdentity(engagement_id=other.id, name="Other identity")
+    )
+    foreign = store.create(
+        BrowserSession(
+            engagement_id=other.id,
+            identity_id=foreign_identity.id,
+            name="Other browser",
+            runtime_kind="agent_security",
+        )
+    )
+    started = []
+
+    async def start_mission(**kwargs):
+        started.append(kwargs)
+        saved_autonomy = kwargs["browser_autonomy"].model_dump(mode="json")
+        if kwargs["name"] == "Mismatched lease":
+            saved_autonomy["allowed_risk_classes"] = ["passive", "active_scan"]
+        return store.create(
+            AgentRun(
+                engagement_id=kwargs["engagement_id"],
+                objective=kwargs["objective"],
+                metadata={
+                    "name": kwargs["name"],
+                    "browser_autonomy": saved_autonomy,
+                },
+            )
+        )
+
+    monkeypatch.setattr(app.state.mission_service, "start_mission", start_mission)
+    work = app.state.control_assistant_work
+    mission_requests = []
+    original_request = work._request
+
+    async def tracked_request(*args, **kwargs):
+        mission_requests.append(args)
+        return await original_request(*args, **kwargs)
+
+    monkeypatch.setattr(work, "_request", tracked_request)
+    request = {
+        "name": "Bounded survey",
+        "objective": "Inspect this test host",
+        "browser_autonomy": {
+            "session_id": session.id,
+            "targets": ["https://example.test/"],
+            "allowed_risk_classes": ["passive"],
+            "duration_seconds": 60,
+            "max_commands": 4,
+            "max_requests": 10,
+            "max_body_bytes": 4096,
+        },
+    }
+
+    async def scenario():
+        schema = START_MISSION_SCHEMA["properties"]["browser_autonomy"]
+        assert set(schema["required"]) == set(request["browser_autonomy"])
+        assert schema["properties"]["allowed_risk_classes"]["minItems"] == 1
+        assert (
+            "local_read"
+            not in schema["properties"]["allowed_risk_classes"]["items"]["enum"]
+        )
+        for missing in schema["required"]:
+            invalid = {
+                **request,
+                "browser_autonomy": {
+                    key: value
+                    for key, value in request["browser_autonomy"].items()
+                    if key != missing
+                },
+            }
+            with pytest.raises(ValueError, match="requires explicit"):
+                await work.start_mission(selected.id, invalid)
+        for risks in ([], ["local_read"]):
+            invalid = {
+                **request,
+                "browser_autonomy": {
+                    **request["browser_autonomy"],
+                    "allowed_risk_classes": risks,
+                },
+            }
+            with pytest.raises(ValueError, match="risk class"):
+                await work.start_mission(selected.id, invalid)
+        assert mission_requests == []
+        assert started == []
+        descriptor = await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.catalog",
+            {"operation": "nebula.work.browser_sessions"},
+        )
+        assert descriptor["read_only"] is True
+        assert await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.manage",
+            {"operation": "nebula.work.browser_sessions", "arguments": {}},
+        ) == work.browser_sessions(selected.id)
+        listed = work.browser_sessions(selected.id)
+        assert [item["id"] for item in listed["sessions"]] == [session.id]
+        assert listed["sessions"][0]["eligible_for_autonomy"] is True
+        result = await work.start_mission(selected.id, request)
+        assert result["browser_session_id"] == session.id
+        assert result["status"] == "queued"
+        assert (
+            work.mission_detail(selected.id, result["run_id"])["browser_session_id"]
+            == session.id
+        )
+        assert started[0]["browser_autonomy"].targets == ["https://example.test/"]
+        assert started[0]["browser_autonomy"].model_dump(mode="json") == {
+            **request["browser_autonomy"],
+            "credential_refs": [],
+        }
+        with pytest.raises(ValueError, match="outside the selected project"):
+            await work.start_mission(
+                selected.id,
+                {
+                    **request,
+                    "browser_autonomy": {
+                        **request["browser_autonomy"],
+                        "session_id": foreign.id,
+                    },
+                },
+            )
+        with pytest.raises(ValueError, match="Core rejected.*409"):
+            await work.start_mission(
+                selected.id,
+                {
+                    **request,
+                    "browser_autonomy": {
+                        **request["browser_autonomy"],
+                        "targets": ["https://outside.test/"],
+                    },
+                },
+            )
+        assert len(started) == 1
+        with pytest.raises(ValueError, match="without the requested browser lease"):
+            await work.start_mission(
+                selected.id, {**request, "name": "Mismatched lease"}
+            )
 
     asyncio.run(scenario())
 
