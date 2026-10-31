@@ -7122,13 +7122,14 @@ test("assistant upgrade Butler adds, downloads, reindexes and removes one shared
   ]);
 });
 
-test("assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core", async ({page}, testInfo) => {
-  test.setTimeout(360_000);
+test("assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(480_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
   const prompts = {
     create: "Create the synthetic Butler report draft.",
     createDisposable: "Create a temporary report draft to delete.",
     update: "Move the synthetic Butler report into review with a summary.",
+    transform: "Transform the linked TLS note into a reviewed report section.",
     delete: "Delete the temporary report draft.",
     signoff: "Open sign-off for the synthetic Butler report.",
     pdf: "Export the synthetic Butler report PDF.",
@@ -7140,6 +7141,9 @@ test("assistant upgrade Butler drafts, deletes, signs and exports a report on pr
   let disposableRevision = 0;
   let projectId = "";
   let projectRevision = 0;
+  let noteId = "";
+  let noteRevision = 0;
+  const noteBody = "Port 443 was observed; certificate review remains pending.";
   const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm the report action.", toolCall: body => {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
     const lastUser = messages.map(message => message.role).lastIndexOf("user");
@@ -7149,6 +7153,7 @@ test("assistant upgrade Butler drafts, deletes, signs and exports a report on pr
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
     const operation = action === "create" || action === "createDisposable" ? "nebula.reports.create"
       : action === "update" ? "nebula.reports.update"
+      : action === "transform" ? "nebula.reports.transform_note"
       : action === "delete" ? "nebula.reports.delete"
       : action === "signoff" ? "nebula.reports.signoff"
       : action === "pdf" ? "nebula.reports.export_pdf" : "nebula.reports.export_bundle";
@@ -7157,7 +7162,7 @@ test("assistant upgrade Butler drafts, deletes, signs and exports a report on pr
       if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation}};
       if (replies === 2) return {name: "nebula_capabilities_change", arguments: {operation,
         arguments: {title: action === "createDisposable" ? "Temporary Butler draft" : "Synthetic Butler assessment",
-          executive_summary: "Draft summary"}}};
+          executive_summary: "Draft summary", ...(action === "create" ? {observation_ids: [noteId]} : {})}}};
       return undefined;
     }
     if (action === "bundle") {
@@ -7173,6 +7178,17 @@ test("assistant upgrade Butler drafts, deletes, signs and exports a report on pr
     if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.detail"}};
     if (replies === 4) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.detail",
       arguments: {report_id: action === "delete" ? disposableId : reportId}}};
+    if (action === "transform") {
+      if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.reports.source_note"}};
+      if (replies === 6) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.reports.source_note",
+        arguments: {observation_id: noteId}}};
+      if (replies === 7) return {name: "nebula_capabilities_describe", arguments: {operation}};
+      if (replies === 8) return {name: "nebula_capabilities_change", arguments: {operation,
+        arguments: {report_id: reportId, expected_revision: reportRevision,
+          observation_id: noteId, expected_source_revision: noteRevision,
+          instruction: "Preserve the observed fact and label certificate uncertainty."}}};
+      return undefined;
+    }
     if (replies === 5) return {name: "nebula_capabilities_describe", arguments: {operation}};
     if (replies === 6) return {name: "nebula_capabilities_change", arguments: {operation,
       arguments: {report_id: action === "delete" ? disposableId : reportId,
@@ -7197,6 +7213,12 @@ test("assistant upgrade Butler drafts, deletes, signs and exports a report on pr
     const provider = await providerResponse.json() as {id: string; revision: number};
     const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
     expect(verified.ok(), await verified.text()).toBe(true);
+    const noteResponse = await api.post("observations", {data: {engagement_id: projectId,
+      observation_type: "manual", title: "TLS note", body: noteBody}});
+    expect(noteResponse.ok(), await noteResponse.text()).toBe(true);
+    const note = await noteResponse.json() as {id: string; revision: number};
+    noteId = note.id;
+    noteRevision = note.revision;
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -7216,17 +7238,44 @@ test("assistant upgrade Butler drafts, deletes, signs and exports a report on pr
       reportId = rows[0]?.id ?? "";
       return rows.length;
     }, {timeout: 45_000}).toBe(1);
-    const created = await (await api.get(`reports/${reportId}`)).json() as {id: string; revision: number; executive_summary: string; status: string};
+    const created = await (await api.get(`reports/${reportId}`)).json() as {id: string; revision: number; executive_summary: string; status: string; observation_ids: string[]};
     reportRevision = created.revision;
     expect(created).toMatchObject({id: reportId, status: "draft", executive_summary: "Draft summary"});
+    expect(created.observation_ids).toEqual([noteId]);
     await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/reports/${reportId}$`));
     await expect(page.getByRole("textbox", {name: "Report title"})).toHaveValue("Synthetic Butler assessment");
     await send(prompts.update);
     await expect(assistant.getByText(/Saved Synthetic Butler assessment in Core as review/)).toBeVisible({timeout: 45_000});
-    const reviewed = await (await api.get(`reports/${reportId}`)).json() as {revision: number; status: string; executive_summary: string};
+    const reviewed = await (await api.get(`reports/${reportId}`)).json() as {revision: number; status: string; executive_summary: string; observation_ids: string[]};
     reportRevision = reviewed.revision;
     expect(reviewed.status).toBe("review");
     expect(reviewed.executive_summary).toBe("Reviewed synthetic evidence.");
+    expect(reviewed.observation_ids).toEqual([noteId]);
+    await send(prompts.transform);
+    const writingDialog = page.getByRole("dialog", {name: "Transform TLS note for the report"});
+    await expect(writingDialog).toBeVisible({timeout: 45_000});
+    await writingDialog.getByRole("button", {name: "Close", exact: true}).click();
+    await expect(assistant.getByText(/No reviewed report section was saved/)).toBeVisible();
+    expect((await (await api.get(`reports/${reportId}`)).json() as {revision: number}).revision).toBe(reportRevision);
+    await send(prompts.transform);
+    await expect(writingDialog).toBeVisible({timeout: 45_000});
+    await writingDialog.getByRole("button", {name: "Generate draft"}).click();
+    const reviewedDraft = writingDialog.getByRole("textbox", {name: "AI writing draft"});
+    await expect(reviewedDraft).toBeVisible({timeout: 45_000});
+    await reviewedDraft.fill("Port 443 was observed; certificate posture remains under review.");
+    await expect(page.getByRole("toolbar", {name: "Selected text actions"})).toHaveCount(0);
+    await writingDialog.getByRole("button", {name: "Save report section"}).click();
+    await expect(writingDialog).toBeHidden({timeout: 45_000});
+    const transformed = await (await api.get(`reports/${reportId}`)).json() as {revision: number;
+      note_transforms: Array<{observation_id: string; source_revision: number; body: string; provenance: {provider_profile_id: string}}>};
+    reportRevision = transformed.revision;
+    expect(transformed.note_transforms).toEqual([expect.objectContaining({observation_id: noteId,
+      source_revision: noteRevision, body: "Port 443 was observed; certificate posture remains under review.",
+      provenance: expect.objectContaining({provider_profile_id: provider.id})})]);
+    expect((await (await api.get(`observations/${noteId}`)).json() as {body: string}).body).toBe(noteBody);
+    await page.reload();
+    await expect(page.getByRole("textbox", {name: "Report section for TLS note"}))
+      .toHaveValue("Port 443 was observed; certificate posture remains under review.");
     await send(prompts.signoff);
     const signoff = page.getByRole("dialog", {name: "Sign off final report"});
     await expect(signoff).toBeVisible({timeout: 45_000});
@@ -7303,7 +7352,7 @@ test("assistant upgrade Butler drafts, deletes, signs and exports a report on pr
     await testInfo.attach("butler-report-lan", {body: JSON.stringify({origin: core.origin, build: "production",
       project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
       reportId, revision: reportRevision,
-      result: "Butler draft and edit read back from Core; operator attested final report; cancelled PDF started no download; PDF and sensitive bundle downloaded on requesting browser; Butler and Reports screen confirmed draft deletion and Core absence"}), contentType: "application/json"});
+      result: "Butler draft and edit read back from Core; reviewed AI note transform saved and source retained; operator attested final report; cancelled PDF started no download; PDF and sensitive bundle downloaded on requesting browser; Butler and Reports screen confirmed draft deletion and Core absence"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
