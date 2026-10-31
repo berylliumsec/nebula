@@ -25,6 +25,7 @@ Settings assistant and the complete destination catalog.
 | Compose | Enter submits one message; Shift+Enter inserts a newline; composition does not submit | React draft and Core turn | Component, browser and real Core |
 | Open a named setting | An unambiguous open/show request opens the existing Settings lens immediately | Shared settings catalog and shell lens | Component and browser |
 | Open storage integration | A request to connect a storage source opens Settings → Integrations → Storage; a request to view storage devices opens the global Storage dashboard | Shared settings and app destination catalogs, URL, Core storage state | Tool unit, component and real Core browser |
+| Pair or revoke a companion device | The settings assistant opens Paired devices for a phone, QR, or companion request. Interactive Butler can list bounded device metadata and prepare `nebula.devices.pair` or `nebula.devices.revoke`; the requesting browser authorizes the host-only offer or exact revocation. The pairing link requires an explicit phone-reachable HTTPS Core origin, or an explicitly acknowledged insecure LAN test mode. A QR is an offer, not proof of redemption; Core device read-back confirms pairing or revocation | Core pairing and device records; requesting browser owns the one-time secret, confirmation, and companion address | Butler tool, settings catalog, component and production LAN browser |
 | Open an app destination | A request such as “show me my projects” navigates to the All projects page immediately; every static app route is available through the assistant catalog and exact model tool | Shared packaged destination list, URL and selected Core project | Tool unit, component, desktop/mobile browser, real Core |
 | Change this device's theme | An explicit theme command opens Appearance, applies and confirms the browser preference, then closes the lens; “Zero theme” means Zero Dark | Browser theme context and storage; shell lens owns presentation | Component and desktop/mobile browser |
 | Model-selected browser action | The model calls an exact open-setting or device-theme tool; Core returns a typed pending action, and only the requesting browser applies and confirms it | Scoped tool receipt and browser theme/lens state | Tool unit, component, real-Core browser and live model |
@@ -100,6 +101,15 @@ that form or navigate to the global Storage dashboard; it does not create or
 rotate source tokens through generic Settings API calls. Remote storage actions
 still require a source preview and an authenticated operator approval in the
 Storage interface.
+Paired devices are available from Identity & Security. The settings assistant
+can navigate there for a phone, QR, or companion request. Interactive Butler's
+`nebula.devices.list` reports bounded device metadata; its pair and revoke tools
+prepare typed browser handoffs. Only a bearer-authenticated browser on the Core
+host can create a pairing offer. The operator enters the HTTPS Core address the
+companion can reach; a localhost QR would point back to the companion itself.
+The transient link and code stay in that browser, and a newly paired browser
+must redeem the offer through Core before it appears in the authoritative device
+list. A revoke checks the exact current device record and requires confirmation.
 The headless security session is independent of the visible-browser desktop
 cutover. It needs the verified Chromium runtime and the mitmdump security proxy.
 The Mac desktop shell supplies the bundled addon and discovers mitmdump in its

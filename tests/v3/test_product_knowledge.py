@@ -403,6 +403,18 @@ def test_product_search_finds_butler_evidence_file_boundary(monkeypatch):
     assert "sha-256" in text
 
 
+def test_product_search_finds_butler_device_pairing_handoff(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler pair a companion phone and revoke its browser access?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "nebula.devices.pair" in text
+    assert "nebula.devices.revoke" in text
+    assert "phone-reachable https" in text
+    assert "host-only" in text
+
+
 def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

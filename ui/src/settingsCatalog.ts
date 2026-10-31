@@ -194,11 +194,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.devices",
     label: "Paired devices",
-    description: "Pair, inspect, and revoke browsers and mobile devices",
+    description: "Pair a companion browser with a reachable Core address, inspect devices, or revoke access",
     category: "Identity & Security",
     scope: "Security",
     target: "device-pairing-settings",
-    keywords: ["device", "pair", "phone", "mobile", "browser", "qr", "revoke"],
+    keywords: ["device", "pair", "phone", "mobile", "browser", "qr", "revoke", "companion", "lan", "pairing link"],
   },
   {
     id: "settings.release",
