@@ -12,9 +12,10 @@ import shutil
 import sys
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .automation_runtime import AutomationRuntimeManager, ContainerRuntimeSession
@@ -346,11 +347,13 @@ class NotebookWorkerConnection:
         *,
         mode: str,
         policy_revision: int,
+        workspace_path: Path | None = None,
     ) -> None:
         self.process = process
         self.on_event = on_event
         self.mode = mode
         self.policy_revision = policy_revision
+        self.workspace_path = workspace_path
         self.instance_id = uuid4().hex
         self.generation = 1
         self.restart_uncertain = False
@@ -504,7 +507,9 @@ class NotebookService:
         self._sessions: dict[str, tuple[str, int]] = {}
         self._mode_changes: set[str] = set()
         self._list_locks: dict[str, asyncio.Lock] = {}
-        self._list_cache: dict[str, tuple[float, builtins.list[dict[str, Any]]]] = {}
+        self._list_cache: dict[
+            str, tuple[int, float, builtins.list[dict[str, Any]]]
+        ] = {}
         self._index_errors: dict[str, str] = {}
         self._index_warnings: dict[str, str] = {}
         self._created_notebooks: dict[str, set[str]] = {}
@@ -537,6 +542,19 @@ class NotebookService:
             {"engagement_id": engagement_id, "status": ["queued", "running"]},
             limit=None,
         )
+
+    @asynccontextmanager
+    async def guard_workspace_relink(self, engagement_id: str) -> AsyncIterator[None]:
+        """Serialize notebook run admission and worker startup with a relink."""
+
+        async with self._worker_lock:
+            try:
+                yield
+            finally:
+                self._list_cache.pop(engagement_id, None)
+                self._created_notebooks.pop(engagement_id, None)
+                self._index_errors.pop(engagement_id, None)
+                self._index_warnings.pop(engagement_id, None)
 
     async def prepare_policy_change(self, engagement_id: str, next_mode: str) -> bool:
         async with self._worker_lock:
@@ -657,12 +675,16 @@ class NotebookService:
     async def list_async(
         self, engagement_id: str, *, refresh: bool = False
     ) -> builtins.list[dict[str, Any]]:
-        self.store.get(Engagement, engagement_id)
         async with self._list_locks.setdefault(engagement_id, asyncio.Lock()):
-            cached = self._list_cache.get(engagement_id)
-            if not refresh and cached and cached[0] > time.monotonic():
-                return cached[1]
             engagement = self.store.get(Engagement, engagement_id)
+            cached = self._list_cache.get(engagement_id)
+            if (
+                not refresh
+                and cached
+                and cached[0] == engagement.revision
+                and cached[1] > time.monotonic()
+            ):
+                return cached[2]
             index_path = engagement.metadata.get("notebook_file_index")
             if isinstance(index_path, str):
                 try:
@@ -702,6 +724,7 @@ class NotebookService:
                             entries, key=lambda item: str(item["path"]).lower()
                         )[:1000]
                         self._list_cache[engagement_id] = (
+                            engagement.revision,
                             time.monotonic() + NOTEBOOK_LIST_CACHE_SECONDS,
                             entries,
                         )
@@ -718,6 +741,7 @@ class NotebookService:
             # on the FastAPI event loop, and share the result between callers.
             entries = await asyncio.to_thread(self.documents.list, engagement_id)
             self._list_cache[engagement_id] = (
+                engagement.revision,
                 time.monotonic() + NOTEBOOK_LIST_CACHE_SECONDS,
                 entries,
             )
@@ -780,6 +804,22 @@ class NotebookService:
         ][:20]
 
     async def start_run(
+        self,
+        engagement_id: str,
+        path: str,
+        cell_id: str,
+        *,
+        expected_source_hash: str | None = None,
+    ) -> NotebookRun:
+        async with self._worker_lock:
+            return await self._admit_run(
+                engagement_id,
+                path,
+                cell_id,
+                expected_source_hash=expected_source_hash,
+            )
+
+    async def _admit_run(
         self,
         engagement_id: str,
         path: str,
@@ -951,6 +991,10 @@ class NotebookService:
         self.read(engagement_id, path)
         key = (engagement_id, path)
         worker = self.workers.get(key)
+        if worker is not None and worker.workspace_path != self._workspace_path(
+            engagement_id
+        ):
+            worker = None
         runs = [
             run.id
             for run in self.active_runs(engagement_id)
@@ -997,6 +1041,10 @@ class NotebookService:
                 if expected_instance_id is not None or expected_generation is not None:
                     raise NotebookConflict("kernel is absent; read its current status")
                 return {**self.kernel_status(engagement_id, path), "restarted": False}
+            if worker.workspace_path != self._workspace_path(engagement_id):
+                raise NotebookConflict(
+                    "project workspace changed; read the current kernel status"
+                )
             if (
                 expected_instance_id is not None
                 and worker.instance_id != expected_instance_id
@@ -1039,10 +1087,12 @@ class NotebookService:
         key = (engagement_id, path)
         async with self._worker_lock:
             policy = self.policy(engagement_id)
+            workspace_path = self._workspace_path(engagement_id)
             existing = self.workers.get(key)
             if (
                 existing is not None
                 and existing.policy_revision == policy.revision
+                and existing.workspace_path == workspace_path
                 and existing.process.returncode is None
                 and not existing.restart_uncertain
             ):
@@ -1068,9 +1118,13 @@ class NotebookService:
                 await evict.close()
                 self.workers.pop(evict_key, None)
             command = await self._worker_command(engagement_id, policy)
+            if workspace_path != self._workspace_path(engagement_id):
+                raise NotebookConflict(
+                    "project workspace changed while starting a kernel; retry the cell"
+                )
             process = await asyncio.create_subprocess_exec(
                 *command,
-                cwd=str(self.documents.workspace_resolver(engagement_id)),
+                cwd=str(workspace_path),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -1081,6 +1135,7 @@ class NotebookService:
                 self._on_event,
                 mode=policy.execution_mode,
                 policy_revision=policy.revision,
+                workspace_path=workspace_path,
             )
             try:
                 await asyncio.wait_for(worker.ready, timeout=45)
@@ -1091,6 +1146,13 @@ class NotebookService:
                 ) from exc
             self.workers[key] = worker
             return worker
+
+    def _workspace_path(self, engagement_id: str) -> Path:
+        return (
+            self.documents.workspace_resolver(engagement_id)
+            .expanduser()
+            .resolve(strict=True)
+        )
 
     async def _worker_command(
         self, engagement_id: str, policy: AutomationProjectPolicy
