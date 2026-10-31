@@ -1522,10 +1522,19 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       const linkedAssets = action.assetIds.map((id) => assets?.items.find((item) => item.id === id));
       if (linkedAssets.some((item) => !item)) throw new Error("A selected asset is no longer in this project. Ask Butler to list assets again.");
       if (activeImageProject.current !== action.projectId) throw new Error("The selected project changed. Ask Butler to prepare the upload again.");
-      const links = [finding ? `finding ${finding.title}` : "", linkedAssets.length ? `${linkedAssets.length} asset${linkedAssets.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
       const approved = await confirm({
         title: `Store ${file.name} as evidence?`,
-        message: `This device will send ${file.name} to Core as immutable evidence${links ? ` linked to ${links}` : ""}. Butler will receive the saved hash and record, not the file bytes.`,
+        message: <div className="butler-evidence-confirmation" role="region" aria-label="Proposed evidence details" tabIndex={0}>
+          <p>This device will send the file to Core as immutable evidence. Review the record Butler proposed:</p>
+          <dl>
+            <div><dt>Title</dt><dd>{action.title ?? file.name}</dd></div>
+            <div><dt>Type</dt><dd>{action.evidenceType}</dd></div>
+            <div><dt>Description</dt><dd>{action.description || "None"}</dd></div>
+            <div><dt>Finding</dt><dd>{finding?.title ?? "None"}</dd></div>
+            <div><dt>Assets</dt><dd>{linkedAssets.length ? linkedAssets.map((item) => item?.displayName).join(", ") : "None"}</dd></div>
+          </dl>
+          <p>Butler will receive the saved hash and record, not the file bytes.</p>
+        </div>,
         confirmLabel: "Store evidence",
       });
       if (!approved) {

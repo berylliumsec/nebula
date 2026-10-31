@@ -1555,7 +1555,7 @@ describe("NebulaControlAssistant", () => {
     const getEvidence = vi.fn().mockResolvedValue(record);
     const listEvidence = vi.fn().mockResolvedValue({items: [record]});
     const listFindings = vi.fn().mockResolvedValue({items: [{id: findingId, title: "Selected finding", evidenceIds: [record.id]}]});
-    const listAssets = vi.fn().mockResolvedValue({items: [{id: assetId, name: "Selected asset"}]});
+    const listAssets = vi.fn().mockResolvedValue({items: [{id: assetId, displayName: "Selected asset"}]});
     const retryResource = vi.fn().mockResolvedValue(undefined);
     let calls = 0;
     const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
@@ -1596,16 +1596,28 @@ describe("NebulaControlAssistant", () => {
     Object.defineProperty(file, "arrayBuffer", {value: async () => bytes.slice().buffer});
     fireEvent.change(screen.getByLabelText("Choose project evidence file"), {target: {files: [file]}});
     const confirmation = await screen.findByRole("dialog", {name: "Store proof.txt as evidence?"});
+    expect(confirmation).toHaveTextContent("Synthetic proof");
+    expect(confirmation).toHaveTextContent("operator_upload");
+    expect(confirmation).toHaveTextContent("Fixture");
     expect(confirmation).toHaveTextContent("Selected finding");
+    expect(confirmation).toHaveTextContent("Selected asset");
     expect(uploadEvidence).not.toHaveBeenCalled();
-    await user.click(within(confirmation).getByRole("button", {name: "Store evidence"}));
+    await user.click(within(confirmation).getByRole("button", {name: "Cancel"}));
+    expect(uploadEvidence).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem("nebula.control-assistant.session.project.action-outcomes") ?? "{}")["evidence-reply-2"])
+      .toContain("No evidence file was uploaded.");
+    await user.type(composer, "Add synthetic evidence{enter}");
+    await screen.findByRole("region", {name: "Add project evidence"});
+    fireEvent.change(screen.getByLabelText("Choose project evidence file"), {target: {files: [file]}});
+    const confirmed = await screen.findByRole("dialog", {name: "Store proof.txt as evidence?"});
+    await user.click(within(confirmed).getByRole("button", {name: "Store evidence"}));
     await waitFor(() => expect(uploadEvidence).toHaveBeenCalledWith(expect.objectContaining({
       engagementId: "project", filename: "proof.txt", contentBase64: btoa("Synthetic evidence\n"),
       findingId, assetIds: [assetId],
     }), expect.any(AbortSignal)));
     await waitFor(() => expect(retryResource).toHaveBeenCalledWith("evidence"));
     expect(await screen.findByText(new RegExp(`Stored Synthetic proof as evidence in Core.*${hash}`))).toBeVisible();
-    expect(JSON.parse(localStorage.getItem("nebula.control-assistant.session.project.action-outcomes") ?? "{}")["evidence-reply-2"])
+    expect(JSON.parse(localStorage.getItem("nebula.control-assistant.session.project.action-outcomes") ?? "{}")["evidence-reply-3"])
       .toContain(hash);
   }, 20_000);
 

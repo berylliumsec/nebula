@@ -2231,6 +2231,11 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .confirmation-dialog > header { display: grid; grid-template-columns: 38px 1fr 32px; gap: 12px; align-items: start; padding: 22px; }
 .confirmation-dialog h2 { margin: 1px 0 8px; font-size: var(--type-title-sm); }
 .confirmation-message { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.butler-evidence-confirmation { max-height: min(45dvh, 360px); overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+.butler-evidence-confirmation p { margin: 0 0 8px; }
+.butler-evidence-confirmation dl { display: grid; gap: 5px; margin: 8px 0; }
+.butler-evidence-confirmation dl > div { display: grid; grid-template-columns: 75px minmax(0, 1fr); gap: 8px; }
+.butler-evidence-confirmation dd { min-width: 0; margin: 0; color: var(--text); white-space: pre-wrap; }
 .confirmation-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; color: var(--blue); background: var(--blue-muted); }
 .confirmation-icon.danger { color: var(--red); background: var(--red-muted); }
 .confirmation-remember { display: flex; align-items: flex-start; gap: 9px; margin: 0 22px 4px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); cursor: pointer; }
