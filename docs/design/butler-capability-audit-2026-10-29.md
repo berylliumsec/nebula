@@ -409,13 +409,13 @@ Each supported row must name a test of its own observed result; a gap row must
 state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
-The first registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 28
-reviewed actions, including explicit export, workspace, Notebook, Library,
-linked-project creation, and storage dispositions. Its source inventory contains
-510 distinct `api` call signatures in production UI TypeScript, of which 64
-are linked to those reviewed actions; 446 still require action-level review. The new Workbench bulk
-chat calls map to the existing per-chat archive, priority and deletion actions;
+The current registry lives in `docs/design/butler-workflow-registry.json` and is
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 36
+reviewed actions: 34 supported, one gap, and one device handoff. Its source
+inventory contains 521 distinct `api` call signatures in production UI
+TypeScript, of which 78 are linked to reviewed actions; 443 still require
+action-level review. Workbench bulk chat calls map to the existing per-chat
+archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
 calls are keyed by route expression and HTTP verb. The guard fails when a call
 is added, removed, or repeated without refreshing the inventory. It does not
