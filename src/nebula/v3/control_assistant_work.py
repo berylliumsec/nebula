@@ -2350,6 +2350,7 @@ class ControlAssistantWork:
                 identity = self.store.get(BrowserIdentity, session.identity_id)
                 available = identity.engagement_id == project_id
             except NotFoundError:
+                # diagnostic-expected: a stale session without its browser identity remains visible but cannot be used for autonomy.
                 available = False
             sessions.append(
                 {

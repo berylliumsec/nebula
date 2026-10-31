@@ -2617,6 +2617,10 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
             )
 
     asyncio.run(scenario())
+    store.delete(BrowserIdentity, identity.id)
+    stale = work.browser_sessions(selected.id)
+    assert [item["id"] for item in stale["sessions"]] == [session.id]
+    assert stale["sessions"][0]["eligible_for_autonomy"] is False
 
 
 def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch):
