@@ -74,10 +74,17 @@
 .transcriptImage { display: block; max-width: min(100%, 360px); max-height: 300px; object-fit: contain; border-radius: 8px; }
 .imageStatus { margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
 .libraryHandoff { display: grid; gap: 6px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); font-size: .82rem; }
+.evidenceHandoff { flex: 0 1 auto; min-height: 0; max-height: min(420px, 52dvh); overflow-y: auto; overscroll-behavior: contain; }
 .libraryHandoff strong, .libraryHandoff small { display: block; overflow-wrap: anywhere; }
 .libraryHandoff small { margin-top: 2px; color: var(--muted); }
 .libraryHandoffActions { display: flex; flex-wrap: wrap; gap: 6px; }
 .libraryHandoffActions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.evidenceHandoffForm { display: grid; gap: 8px; min-width: 0; }
+.evidenceHandoffForm > label { display: grid; gap: 3px; min-width: 0; }
+.evidenceHandoffForm input:not([type="checkbox"]), .evidenceHandoffForm select, .evidenceHandoffForm textarea { width: 100%; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; color: var(--text); background: var(--surface); font: inherit; }
+.evidenceHandoffForm fieldset { display: grid; gap: 5px; min-width: 0; max-height: 130px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-control); }
+.evidenceHandoffForm fieldset label { display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.evidenceHandoffForm .libraryHandoffActions button { min-height: 44px; }
 .turnStatus { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); }
 .turnStatusDot { flex: 0 0 7px; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; background: var(--blue); }
 .turnStatus[data-state="attention"] .turnStatusDot, .turnStatus[data-state="error"] .turnStatusDot { background: var(--danger, var(--text)); }

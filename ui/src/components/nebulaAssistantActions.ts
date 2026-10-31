@@ -25,6 +25,8 @@ export type SettingClientAction =
   | { kind: "notebook_index_connect" | "notebook_index_remove"; projectId: string; expectedProjectRevision: number }
   | { kind: "library_add"; projectId: string }
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string }
+  | { kind: "evidence_upload"; projectId: string }
+  | { kind: "evidence_download"; projectId: string; evidenceId: string; expectedRevision: number; title: string; expectedSha256: string }
   | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
   | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
   | { kind: "report_transform_note"; projectId: string; reportId: string; expectedRevision: number; observationId: string; expectedSourceRevision: number; instruction: string }
@@ -216,6 +218,20 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   if (projectAction && operation === "nebula.library.add" && value.kind === "library_add"
       && typeof projectId === "string" && value.project_id === projectId) {
     return {kind: "library_add", projectId};
+  }
+  if (projectAction && operation === "nebula.evidence.upload" && value.kind === "evidence_upload"
+      && typeof projectId === "string" && value.project_id === projectId) {
+    return {kind: "evidence_upload", projectId};
+  }
+  if (projectAction && operation === "nebula.evidence.download" && value.kind === "evidence_download"
+      && typeof projectId === "string" && value.project_id === projectId
+      && typeof value.evidence_id === "string" && uuidPattern.test(value.evidence_id)
+      && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+      && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500
+      && typeof value.expected_sha256 === "string" && /^[0-9a-f]{64}$/.test(value.expected_sha256)) {
+    return {kind: "evidence_download", projectId, evidenceId: value.evidence_id,
+      expectedRevision: Number(value.expected_revision), title: value.title,
+      expectedSha256: value.expected_sha256};
   }
   const libraryKind = operation === "nebula.library.download" ? "library_download"
     : operation === "nebula.library.reindex" ? "library_reindex"

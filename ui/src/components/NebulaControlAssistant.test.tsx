@@ -257,6 +257,42 @@ describe("NebulaControlAssistant", () => {
     expect(screen.getByRole("button", {name: "Attach image to Butler"})).toBeEnabled();
   });
 
+  it("discards an Evidence file handoff when the selected project changes", async () => {
+    const user = userEvent.setup();
+    let projectId = "project-a";
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "evidence-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.evidence.upload", butler_project_id: "project-a",
+          state: "pending_browser_apply", client_action: {kind: "evidence_upload", project_id: "project-a"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: "evidence-reply", role: "assistant", content: "Choose an evidence file on this device."}};
+    });
+    const api = {getOrCreateControlAssistantSession: vi.fn().mockImplementation(async () => ({...savedButler, engagementId: projectId})),
+      getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat};
+    const harnesses = [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+      permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}];
+    vi.mocked(useWorkspace).mockImplementation(() => ({
+      api,
+      coreState: "online", engagement: {id: projectId, name: projectId}, providers: [], assets: [], findings: [],
+      harnesses,
+    }) as unknown as ReturnType<typeof useWorkspace>);
+    const renderAssistant = () => <DialogProvider><ThemeProvider>
+      <NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} />
+    </ThemeProvider></DialogProvider>;
+    const view = render(renderAssistant());
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Add evidence{enter}");
+    expect(await screen.findByRole("region", {name: "Add project evidence"})).toBeVisible();
+    projectId = "project-b";
+    view.rerender(renderAssistant());
+    expect(screen.queryByRole("region", {name: "Add project evidence"})).not.toBeInTheDocument();
+    projectId = "project-a";
+    view.rerender(renderAssistant());
+    expect(screen.queryByRole("region", {name: "Add project evidence"})).not.toBeInTheDocument();
+    expect(streamChat).toHaveBeenCalledTimes(1);
+  });
+
   it("sends selected Butler text to Butler and keeps it available after a failed turn", async () => {
     const user = userEvent.setup();
     const response = (content: string) => ({

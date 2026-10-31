@@ -226,6 +226,29 @@ describe("settings assistant actions", () => {
       path: "notes/research.txt", expectedSha256: hash});
   });
 
+  it("accepts only selected-project evidence file handoffs with exact download identity", () => {
+    const evidenceId = "12345678-1234-1234-1234-123456789abc";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "evidence-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.evidence.upload", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "evidence_upload", project_id: "selected"}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "evidence_upload", projectId: "selected"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    const downloadAction = {kind: "evidence_download", project_id: "selected", evidence_id: evidenceId,
+      expected_revision: 2, title: "Proof", expected_sha256: "a".repeat(64)};
+    const download: Extract<ChatStreamEvent, {type: "tool_completed"}> = {...event, receipt: {
+      ...event.receipt, butler_operation: "nebula.evidence.download", client_action: downloadAction,
+    }};
+    expect(settingClientAction(download, "selected")).toEqual({kind: "evidence_download", projectId: "selected",
+      evidenceId, expectedRevision: 2, title: "Proof", expectedSha256: "a".repeat(64)});
+    expect(settingClientAction({...download, receipt: {...download.receipt, client_action: {
+      ...downloadAction, project_id: "foreign"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...download, receipt: {...download.receipt, client_action: {
+      ...downloadAction, expected_sha256: "bad"}}}, "selected")).toBeUndefined();
+  });
+
   it("accepts only scoped device uploads and empty-folder deletion receipts", () => {
     const identity = "a".repeat(64);
     const event: ChatStreamEvent = {
