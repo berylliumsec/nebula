@@ -3571,6 +3571,85 @@ test("a paired browser can revoke itself without a stale authentication error", 
   ]);
 });
 
+test.describe("assistant upgrade phone-reachable device pairing", () => {
+  // The disposable LAN Core uses a short-lived self-signed certificate with SANs
+  // for loopback host authorization and the separate companion LAN origin.
+  test.use({ignoreHTTPSErrors: true});
+
+  test("assistant upgrade host pairing QR redeems on a separate LAN browser and revocation survives refresh", async ({page, browser}, testInfo) => {
+    test.setTimeout(120_000);
+    const lanAddress = localNetworkIpv4();
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: lanAddress, tls: true});
+    const hostOrigin = `https://127.0.0.1:${new URL(core.origin).port}`;
+    const hostContext = await browser.newContext({ignoreHTTPSErrors: true, viewport: {width: 1440, height: 900}});
+    const host = await hostContext.newPage();
+    const api = await playwrightRequest.newContext({baseURL: `${hostOrigin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}, ignoreHTTPSErrors: true});
+    await withOwnedCleanup(async () => {
+      const build = await (await api.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
+      await testInfo.attach("device-pairing-lan-build", {body: JSON.stringify({origin: core.origin, hostOrigin, buildCommit: build.commit, builtAt: build.builtAt, browserProject: testInfo.project.name}), contentType: "application/json"});
+      const settings = host.locator("#device-pairing-settings");
+      let hostVisit = 0;
+      const openHostSettings = async () => {
+        // The bearer is intentionally memory-only; each full page load needs the
+        // host's token fragment. A unique query forces a fresh document so the
+        // paired-device list is read again after companion redemption.
+        await host.goto(`${hostOrigin}/settings?pairing_visit=${++hostVisit}#token=${encodeURIComponent(core.token)}`);
+        await expect(coreConnected(host)).toBeVisible({timeout: 20_000});
+        if (!await settings.isVisible()) await host.getByText("Identity & Security", {exact: true}).click();
+      };
+      await openHostSettings();
+      await expect(settings.getByRole("heading", {name: "Paired devices"})).toBeVisible();
+      await settings.getByRole("button", {name: "Pair device"}).click();
+      const dialog = host.getByRole("dialog", {name: "Pair a device"});
+      await dialog.getByLabel("Device name").fill("Field phone from QR");
+      await dialog.getByLabel("Companion address").fill(core.origin);
+      expect((await new AxeBuilder({page: host}).include(".device-pairing-dialog").analyze()).violations).toEqual([]);
+      await dialog.getByRole("button", {name: "Create pairing link"}).click();
+      const pairingUrl = await dialog.locator(".device-pairing-secret code").innerText();
+      expect(new URL(pairingUrl).origin).toBe(core.origin);
+      expect(new URL(pairingUrl).hostname).toBe(lanAddress);
+      expect(pairingUrl).not.toContain("127.0.0.1");
+
+      await page.goto(pairingUrl);
+      await expect(page.getByRole("heading", {name: "Pair this device"})).toBeVisible();
+      expect(new URL(page.url()).hash).toBe("");
+      expect((await new AxeBuilder({page}).include(".pairing-gate").analyze()).violations).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.getByLabel("Device name").fill("Field phone from QR");
+      const redeemed = page.waitForResponse(response => response.url().endsWith("/auth/pairings/redeem") && response.request().method() === "POST");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      expect((await redeemed).ok()).toBe(true);
+      await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+      await page.reload();
+      await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+      await page.goto(`${core.origin}/settings#identity-security-settings`);
+      await expect(page.locator("#device-pairing-settings").getByRole("button", {name: "Pair device"})).toHaveCount(0);
+
+      const pairedDevicesResponse = await api.get("auth/devices");
+      expect(pairedDevicesResponse.ok(), await pairedDevicesResponse.text()).toBe(true);
+      const pairedDevices = await pairedDevicesResponse.json() as Array<{name: string}>;
+      expect(pairedDevices.some(device => device.name === "Field phone from QR")).toBe(true);
+
+      await openHostSettings();
+      await settings.getByRole("button", {name: "Revoke Field phone from QR"}).click();
+      await host.getByRole("dialog", {name: "Revoke Field phone from QR?"}).getByRole("button", {name: "Revoke device"}).click();
+      await expect(settings.getByRole("button", {name: "Revoke Field phone from QR"})).toHaveCount(0);
+      const devicesResponse = await api.get("auth/devices");
+      expect(devicesResponse.ok(), await devicesResponse.text()).toBe(true);
+      const devices = await devicesResponse.json() as Array<{name: string}>;
+      expect(devices.some(device => device.name === "Field phone from QR")).toBe(false);
+      await page.reload();
+      const recovery = page.getByRole("alert").filter({hasText: "Pair this browser to continue"});
+      await expect(recovery).toBeVisible({timeout: 20_000});
+      await expect(recovery).toContainText("access expired or was revoked");
+    }, [
+      {name: "Host API context", dispose: () => api.dispose()},
+      {name: "Host browser context", dispose: () => hostContext.close()},
+      {name: "Disposable LAN Core", dispose: () => stopRealCore(core)},
+    ]);
+  });
+});
+
 test("assistant upgrade focused work surfaces retain real Core project context", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore();
