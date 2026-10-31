@@ -57,7 +57,7 @@ from nebula.v3.domain import (
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.setup import create_engagement_with_default_scope
-from nebula.v3.storage import NebulaStore, NotFoundError
+from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
 from nebula.v3.tool_results import (
     ToolOutputAccessError,
     ToolOutputQueryError,
@@ -244,6 +244,47 @@ def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
         session_factory=launch,
     )
     return manager, store, artifacts, engagement, sessions
+
+
+def test_host_session_refuses_project_relink_after_workspace_resolution(tmp_path):
+    manager, store, _, project, _ = runtime(tmp_path)
+    old = tmp_path / "workspaces" / project.id
+    new = tmp_path / "new-workspace"
+    new.mkdir()
+    project = store.update(
+        Engagement,
+        project.id,
+        {"workspace_path": str(old)},
+        expected_revision=project.revision,
+    )
+    policy = manager.project_policy(project.id)
+    store.update(
+        AutomationProjectPolicy,
+        policy.id,
+        {"execution_mode": "host", "host_access_acknowledged": True},
+        expected_revision=policy.revision,
+    )
+    read_policy = manager.project_policy
+
+    def relink_after_project_read(engagement_id):
+        manager.project_policy = read_policy
+        policy = read_policy(engagement_id)
+        store.relink_project_workspace(
+            project.id, str(new), expected_revision=project.revision
+        )
+        return policy
+
+    manager.project_policy = relink_after_project_read
+
+    async def attempt():
+        with pytest.raises(ConflictError, match="Project workspace changed"):
+            await manager._get_or_create_session(
+                engagement_id=project.id, owner_kind="api", owner_id="late-start"
+            )
+
+    asyncio.run(attempt())
+    assert store.count(AutomationSession, engagement_id=project.id) == 0
+    assert store.get(Engagement, project.id).workspace_path == str(new)
 
 
 def command_hook(

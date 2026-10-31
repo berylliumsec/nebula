@@ -620,6 +620,48 @@ def test_api_rejects_cloud_mission_for_local_only_engagement(tmp_path):
     assert store.count(AgentRun, engagement_id=engagement.id) == 0
 
 
+def test_mission_refuses_relink_between_preparation_and_queue_insert(
+    tmp_path, monkeypatch
+):
+    old_folder = tmp_path / "old"
+    new_folder = tmp_path / "new"
+    old_folder.mkdir()
+    new_folder.mkdir()
+    store = NebulaStore(tmp_path / "relink-mission.db")
+    project = store.create(
+        Engagement(name="Relink mission", workspace_path=str(old_folder))
+    )
+    profile = _profile(store)
+    provider = RecordingProvider(profile)
+    service = MissionService(
+        store,
+        checkpoint_path=tmp_path / "mission-checkpoints.db",
+        provider_factory=lambda selected: provider,
+    )
+    original_create = store.create_with_event
+
+    def relink_before_queue(*args, **kwargs):
+        store.relink_project_workspace(
+            project.id, str(new_folder), expected_revision=project.revision
+        )
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(store, "create_with_event", relink_before_queue)
+    app = create_app(store, auth_token="test-token", mission_service=service)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/missions",
+            headers=_auth(),
+            json=_start_payload(project, profile),
+        )
+
+    assert response.status_code == 409, response.text
+    assert "workspace changed" in response.json()["detail"].lower()
+    assert store.count(AgentRun, engagement_id=project.id) == 0
+    assert store.get(Engagement, project.id).workspace_path == str(new_folder)
+    assert provider.requests == []
+
+
 def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
     bootstrap_store = NebulaStore(tmp_path / "nebula.db")
     engagement = bootstrap_store.create(Engagement(name="API mission"))
