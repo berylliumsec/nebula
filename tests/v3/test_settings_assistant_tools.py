@@ -95,6 +95,11 @@ def test_catalog_covers_settings_destinations_without_secrets():
     assert "bulk chat actions" in chat_destination["aliases"]
     assert "Select conversations" in chat_destination["guide"]
     assert "Delete permanently" in chat_destination["guide"]
+    evidence_destination = next(
+        item for item in result["destinations"] if item["id"] == "evidence"
+    )
+    assert "upload evidence" in evidence_destination["aliases"]
+    assert "Butler receives no device file bytes" in evidence_destination["guide"]
     assert (
         next(item for item in result["settings"] if item["id"] == "storage")["url"]
         == "/settings#storage-integration-settings"

@@ -3,7 +3,7 @@
   {"id":"project","label":"Project overview","path":"/projects/{project_id}","aliases":["current project","project overview","project home","project"]},
   {"id":"project-work","label":"Project work","path":"/projects/{project_id}/work","aliases":["work board","project work","tasks","work items","create work item","assign work item","change work priority","post work update","work check-in","enable agent tools","disable agent tools","work updates","check-in history"]},
   {"id":"assets","label":"Assets","path":"/projects/{project_id}/assets","aliases":["assets","project assets","asset inventory"]},
-  {"id":"evidence","label":"Evidence","path":"/projects/{project_id}/evidence","aliases":["evidence","project evidence"]},
+  {"id":"evidence","label":"Evidence","path":"/projects/{project_id}/evidence","aliases":["evidence","project evidence","upload evidence","add evidence file","evidence upload"],"guide":"Open the selected project's Evidence page to inspect saved records and links. Interactive Butler can page evidence, findings, and assets and ask this paired browser to choose a local file for an immutable Core upload. The browser confirms links and reads back Core's exact hash, size, artifact ID, and selected-project relations. Butler receives no device file bytes; inspect Evidence before retrying an uncertain upload."},
   {"id":"sources","label":"Sources","path":"/projects/{project_id}/sources","aliases":["sources","knowledge","knowledge sources","project sources"]},
   {"id":"results","label":"Results","path":"/projects/{project_id}/results","aliases":["results","project results"]},
   {"id":"findings","label":"Findings","path":"/projects/{project_id}/findings","aliases":["findings","vulnerabilities","issues"]},
