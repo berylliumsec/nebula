@@ -8092,16 +8092,19 @@ with zipfile.ZipFile(root / "nebula_notebook_fixture-1.0.0-py3-none-any.whl", "w
 });
 
 test("Butler project lifecycle confirms and reads back changes on production LAN Core", async ({page}, testInfo) => {
-  test.setTimeout(360_000);
+  test.setTimeout(420_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
   const linkedFolder = await mkdtemp(path.join(homedir(), ".nebula-butler-linked-"));
+  const relinkFolder = await mkdtemp(path.join(homedir(), ".nebula-butler-relinked-"));
   await writeFile(path.join(linkedFolder, "linked-marker.txt"), "synthetic linked workspace\n");
+  await writeFile(path.join(relinkFolder, "relinked-marker.txt"), "synthetic new workspace\n");
   let targetId = "";
   let targetRevision = 0;
   const actions = new Map([
     ["Create the Butler LAN project", "create"],
     ["Create the uncertain Butler project", "create_uncertain"],
     ["Create a linked Butler project", "create_linked"],
+    ["Relink the Butler linked project", "relink"],
     ["Rename the Butler LAN project", "rename"],
     ["Archive the Butler LAN project", "archive"],
     ["Restore the Butler LAN project", "restore"],
@@ -8208,6 +8211,36 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
     await page.goto(sourceUrl);
     await openNebulaAssistantFromShell(page);
 
+    targetId = linkedProjectId;
+    targetRevision = (await (await api.get(`engagements/${linkedProjectId}`)).json() as {revision: number}).revision;
+    const genericRelink = await api.patch(`engagements/${linkedProjectId}`, {data: {
+      changes: {workspace_path: relinkFolder}, expected_revision: targetRevision,
+    }});
+    expect(genericRelink.status()).toBe(422);
+    await send("Relink the Butler linked project");
+    const relinkHandoff = assistant.getByRole("region", {name: "Relink project folder"});
+    await expect(relinkHandoff).toBeVisible({timeout: 45_000});
+    await relinkHandoff.getByRole("button", {name: "Cancel"}).click();
+    expect((await (await api.get(`engagements/${linkedProjectId}`)).json() as {workspace_path: string}).workspace_path).toBe(linkedFolder);
+    await send("Relink the Butler linked project");
+    await relinkHandoff.getByRole("button", {name: "Browse folders"}).click();
+    await picker.getByRole("button", {name: path.basename(relinkFolder), exact: true}).click();
+    await picker.getByRole("button", {name: "Select folder"}).click();
+    const relinkDialog = page.getByRole("dialog", {name: "Relink Butler linked project?"});
+    await expect(relinkDialog).toContainText(linkedFolder);
+    await expect(relinkDialog).toContainText(relinkFolder);
+    expect((await new AxeBuilder({page}).include(".confirmation-dialog").analyze()).violations).toEqual([]);
+    await relinkDialog.getByRole("button", {name: "Relink project"}).click();
+    await expect.poll(async () => (await (await api.get(`engagements/${linkedProjectId}`)).json() as {workspace_path: string}).workspace_path,
+      {timeout: 45_000}).toBe(relinkFolder);
+    await expect(page).toHaveURL(new RegExp(`/projects/${linkedProjectId}/workbench\\?view=workspace`));
+    await page.reload();
+    await expect(page.getByText("relinked-marker.txt", {exact: true})).toBeVisible();
+    expect(await readFile(path.join(linkedFolder, "linked-marker.txt"), "utf8")).toContain("synthetic linked workspace");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.goto(sourceUrl);
+    await openNebulaAssistantFromShell(page);
+
     await send("Create the Butler LAN project");
     await expect.poll(async () => {
       const response = await api.get("engagements");
@@ -8309,12 +8342,13 @@ test("Butler project lifecycle confirms and reads back changes on production LAN
     await expect.poll(async () => (await api.get(`engagements/${targetId}`)).status(), {timeout: 45_000}).toBe(404);
     await page.reload();
     await testInfo.attach("butler-project-lifecycle", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, asset: entry,
-      assetSha256: build.assets[entry!], linkedFolder, steps: ["linked create cancellation", "host picker and linked create", "Core workspace and Host consent readback", "linked Files after refresh", "create", "uncertain create response", "Core retry receipt readback", "changed-key conflict", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
+      assetSha256: build.assets[entry!], linkedFolder, relinkFolder, steps: ["linked create cancellation", "host picker and linked create", "Core workspace and Host consent readback", "linked Files after refresh", "generic relink refused", "relink cancellation", "host picker and confirmed relink", "new Files after refresh and old files retained", "create", "uncertain create response", "Core retry receipt readback", "changed-key conflict", "duplicate retry blocked", "rename", "archive cancel", "archive", "restore", "delete"]}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
     {name: "linked host fixture", dispose: () => rm(linkedFolder, {recursive: true, force: true})},
+    {name: "relinked host fixture", dispose: () => rm(relinkFolder, {recursive: true, force: true})},
   ]);
 });
 
