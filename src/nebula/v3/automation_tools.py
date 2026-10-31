@@ -963,7 +963,10 @@ class AutomationToolPlatform:
         browser_only = bool(
             self.browser_automation is not None
             and run.metadata.get("browser_autonomy")
-            and not run.metadata.get("command_tool_names")
+            and not any(
+                name in {RUN_COMMAND_NAME, PROCESS_IO_NAME}
+                for name in run.metadata.get("command_tool_names", [])
+            )
             and not run.runtime_snapshot.get("mcp_snapshot")
         )
         if browser_only:

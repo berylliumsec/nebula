@@ -17,8 +17,13 @@ from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    BrowserAutomationLease,
+    BrowserIdentity,
+    BrowserSession,
     Engagement,
+    ProviderCapabilityVerification,
     ProviderProfile,
+    ProviderVerificationStatus,
     RiskClass,
     RunBudget,
     RunBackend,
@@ -660,6 +665,96 @@ def test_mission_refuses_relink_between_preparation_and_queue_insert(
     assert store.count(AgentRun, engagement_id=project.id) == 0
     assert store.get(Engagement, project.id).workspace_path == str(new_folder)
     assert provider.requests == []
+
+
+def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
+    store = NebulaStore(tmp_path / "browser-mission.db")
+    project = store.create(Engagement(name="Scoped browser mission"))
+    scope = store.create(
+        ScopePolicy(engagement_id=project.id, allowed_domains=["example.test"])
+    )
+    store.update(
+        Engagement,
+        project.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=project.revision,
+    )
+    identity = store.create(BrowserIdentity(engagement_id=project.id, name="Research"))
+    session = store.create(
+        BrowserSession(
+            engagement_id=project.id,
+            identity_id=identity.id,
+            name="Browser session",
+            runtime_kind="agent_security",
+        )
+    )
+    profile = store.create(
+        ProviderProfile(
+            name="Local browser model",
+            provider_type="vllm",
+            endpoint="http://127.0.0.1:8000/v1",
+            is_local=True,
+            model_allowlist=["security-model"],
+            capability_verifications={
+                "security-model": ProviderCapabilityVerification(
+                    model="security-model",
+                    status=ProviderVerificationStatus.VERIFIED,
+                )
+            },
+        )
+    )
+    scheduled_for = utc_now() + timedelta(days=1)
+    with TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            mission_checkpoint_path=tmp_path / "browser-mission-checkpoints.db",
+        )
+    ) as client:
+        response = client.post(
+            "/api/v1/missions",
+            headers=_auth(),
+            json=_start_payload(
+                project,
+                profile,
+                scheduled_for=scheduled_for.isoformat(),
+                max_tool_calls=4,
+                browser_autonomy={
+                    "session_id": session.id,
+                    "targets": ["https://example.test/"],
+                    "allowed_risk_classes": ["passive"],
+                    "max_commands": 4,
+                },
+            ),
+        )
+        assert response.status_code == 202, response.text
+        queued = response.json()
+        assert queued["budget"]["max_delegation_depth"] == 1
+        assert queued["budget"]["max_tool_calls"] == 4
+        assert queued["metadata"]["browser_autonomy"]["session_id"] == session.id
+        assert (
+            len(
+                store.find_entities(
+                    BrowserAutomationLease,
+                    {"run_id": queued["id"]},
+                    engagement_id=project.id,
+                    limit=2,
+                )
+            )
+            == 1
+        )
+        service = client.app.state.mission_service
+        run = store.get(AgentRun, queued["id"])
+        components = service._components(run, service.provider_factory(profile))
+        plan = asyncio.run(
+            components.supervisor.plan(
+                run.objective,
+                components.context,
+                run.budget,
+            )
+        )
+        assert len(plan.tasks) == 1
+        assert plan.tasks[0].role.value == "network_service"
 
 
 def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
