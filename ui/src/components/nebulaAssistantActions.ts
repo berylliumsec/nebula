@@ -15,6 +15,7 @@ export type SettingClientAction =
   | { kind: "headless_session"; action: "start" | "stop" }
   | { kind: "project_create"; name: string; description: string; clientName: string; requestId: string }
   | { kind: "project_create_linked"; sourceProjectId: string; name: string; description: string; clientName: string; requestId: string }
+  | { kind: "project_relink"; sourceProjectId: string; projectId: string; expectedRevision: number; name: string }
   | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
   | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string }
   | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
@@ -254,6 +255,10 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     const target = typeof value.project_id === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value.project_id) ? value.project_id : undefined;
     const revision = Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1 ? Number(value.expected_revision) : undefined;
     if (target && revision && validName) {
+      if (operation === "nebula.projects.relink" && value.kind === "project_relink" && typeof projectId === "string") {
+        return {kind: "project_relink", sourceProjectId: projectId,
+          projectId: target, expectedRevision: revision, name};
+      }
       if (operation === "nebula.projects.rename" && value.kind === "project_rename"
           && typeof value.old_name === "string" && value.old_name.length <= 300) {
         return { kind: "project_rename", projectId: target, expectedRevision: revision, oldName: value.old_name, name };

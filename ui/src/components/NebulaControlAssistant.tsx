@@ -82,7 +82,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { activeOperator, api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
+  const { activeOperator, api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, refreshProjectLifecycle, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -106,6 +106,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [connectingNotebookIndex, setConnectingNotebookIndex] = useState(false);
   const [pendingLinkedProject, setPendingLinkedProject] = useState<(Extract<SettingClientAction, {kind: "project_create_linked"}> & {sourceMessageId?: string})>();
   const [creatingLinkedProject, setCreatingLinkedProject] = useState(false);
+  const [pendingProjectRelink, setPendingProjectRelink] = useState<(Extract<SettingClientAction, {kind: "project_relink"}> & {sourceMessageId?: string})>();
+  const [relinkingProject, setRelinkingProject] = useState(false);
   const [imageHelp, setImageHelp] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -812,7 +814,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return observed;
   };
 
-  const applyProjectLifecycle = async (action: Extract<SettingClientAction, { kind: "project_create" | "project_create_linked" | "project_rename" | "project_archive" | "project_restore" | "project_delete" }>): Promise<string> => {
+  const applyProjectLifecycle = async (action: Extract<SettingClientAction, { kind: "project_create" | "project_create_linked" | "project_relink" | "project_rename" | "project_archive" | "project_restore" | "project_delete" }>): Promise<string> => {
     if (!api || coreState !== "online") throw new Error("Reconnect to Core before changing a project.");
     if (action.kind === "project_create_linked") {
       if (activeImageProject.current !== action.sourceProjectId) throw new Error("Select the original project before choosing a host folder.");
@@ -829,6 +831,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const current = await api.getProjectLifecycle(action.projectId);
     if (current.revision !== action.expectedRevision || current.name !== (action.kind === "project_rename" ? action.oldName : action.name)) {
       throw new Error("Project changed. Ask Butler to read it again before retrying.");
+    }
+    if (action.kind === "project_relink") {
+      if (activeImageProject.current !== action.sourceProjectId) throw new Error("Select the original project before choosing a host folder.");
+      setPendingProjectRelink(action);
+      setView("chat");
+      return `Choose a Nebula-host folder for ${action.name}. Core will refuse a relink while existing work can still use the old folder.`;
     }
     if (action.kind === "project_rename") {
       await renameEngagementAtRevision(action.projectId, action.name, action.expectedRevision);
@@ -876,6 +884,65 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return archiving
       ? `Archived ${observed.name} in Core. Running work continues; restore it from Archived projects.`
       : `Restored ${observed.name} in Core. Select it from active projects.`;
+  };
+
+  const relinkProject = async (path: string): Promise<void> => {
+    const action = pendingProjectRelink;
+    if (!action || relinkingProject) return;
+    if (!api || coreState !== "online" || activeImageProject.current !== action.sourceProjectId) {
+      setPendingProjectRelink(undefined);
+      const message = "Reconnect and select the original project before choosing another folder.";
+      setError(message);
+      if (action.sourceMessageId) appendBrowserActionOutcome(action, message);
+      return;
+    }
+    setRelinkingProject(true);
+    setError("");
+    try {
+      const current = await api.getProjectLifecycle(action.projectId);
+      if (current.revision !== action.expectedRevision || current.name !== action.name) {
+        throw new Error("Project changed. Ask Butler to read it again before relinking.");
+      }
+      if (current.workspacePath === path) {
+        throw new Error("This project already uses that folder. Choose a different folder or cancel.");
+      }
+      const approved = await confirm({
+        title: `Relink ${action.name}?`,
+        message: `Current folder: ${current.workspacePath ?? "Nebula-managed workspace"}. New folder: ${path}. Future Files, Code, Notebook, terminals and agents will use the new folder. Existing files will not be moved or deleted. A connected Notebook file index will be disconnected.`,
+        confirmLabel: "Relink project",
+      });
+      if (!approved) {
+        setPendingProjectRelink(undefined);
+        appendBrowserActionOutcome(action, `${action.name} was not relinked. No project folder changed.`);
+        return;
+      }
+      let saved: Awaited<ReturnType<typeof api.relinkProjectWorkspace>>;
+      try {
+        saved = await api.relinkProjectWorkspace(action.projectId, path, action.expectedRevision);
+      } catch (saveError) {
+        const recovered = await api.getProjectLifecycle(action.projectId);
+        if (recovered.revision !== action.expectedRevision + 1 || recovered.workspacePath !== path) throw saveError;
+        saved = recovered;
+      }
+      const observed = await refreshProjectLifecycle(action.projectId);
+      if (!saved.workspacePath || observed.workspacePath !== saved.workspacePath || observed.revision !== saved.revision) {
+        throw new Error("Core did not confirm the new project folder. Inspect the project before retrying.");
+      }
+      if (activeImageProject.current !== action.sourceProjectId) throw new Error("The selected project changed. Inspect the target project before retrying.");
+      setPendingProjectRelink(undefined);
+      appendBrowserActionOutcome(action, `Relinked ${action.name} in Core. The old folder was kept; the new folder is visible in Files.`);
+      setHidden(true);
+      onNavigate(`${projectSurface(action.projectId, "workbench")}?view=workspace`);
+    } catch (caught) {
+      void logDiagnostic({level: "error", eventCode: "interface.nebula_assistant.project_relink_failed",
+        message: "Butler could not confirm the project folder change.", outcome: "failure", stage: "project-relink", retryable: true, exception: caught});
+      setPendingProjectRelink(undefined);
+      const message = caught instanceof Error ? caught.message : "Core did not confirm the project folder. Inspect the project before retrying.";
+      setError(message);
+      if (action.sourceMessageId) appendBrowserActionOutcome(action, "Project folder change was not confirmed. Inspect the project before choosing another folder; Core may already have saved this change.");
+    } finally {
+      setRelinkingProject(false);
+    }
   };
 
   const createLinkedProject = async (path: string): Promise<void> => {
@@ -1590,7 +1657,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "workspace_upload") return applyWorkspaceUpload(action);
     if (action.kind === "workspace_delete_directory") return applyWorkspaceDeleteDirectory(action);
     if (action.kind === "notebook_index_connect" || action.kind === "notebook_index_remove") return applyNotebookIndexAction(action);
-    if (action.kind === "project_create" || action.kind === "project_create_linked" || action.kind === "project_rename" || action.kind === "project_archive"
+    if (action.kind === "project_create" || action.kind === "project_create_linked" || action.kind === "project_relink" || action.kind === "project_rename" || action.kind === "project_archive"
       || action.kind === "project_restore" || action.kind === "project_delete") return applyProjectLifecycle(action);
     if (action.kind === "device_theme") return applyDeviceTheme(action.theme);
     if (action.kind === "project_execution_mode") return applyProjectMode(action);
@@ -1866,6 +1933,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const workReceipts: { url: string; content: string }[] = [];
     let notebookIndexConnectRequested = false;
     let linkedProjectRequested = false;
+    let projectRelinkRequested = false;
     let evidenceUploadRequested = false;
     let actionQueue = Promise.resolve();
     try {
@@ -1907,6 +1975,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           appliedCallIds.add(event.toolCallId);
           if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
           if (action.kind === "project_create_linked") linkedProjectRequested = true;
+          if (action.kind === "project_relink") projectRelinkRequested = true;
           if (action.kind === "evidence_upload") evidenceUploadRequested = true;
           actionQueue = actionQueue.then(async () => {
             if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
@@ -1944,6 +2013,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           setPendingLinkedProject((current) => current?.sourceProjectId === engagement.id && result.message!.id
             ? {...current, sourceMessageId: result.message!.id} : undefined);
           if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
+        }
+        if (projectRelinkRequested) {
+          setPendingProjectRelink((current) => current?.sourceProjectId === engagement.id && result.message!.id
+            ? {...current, sourceMessageId: result.message!.id} : undefined);
+          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect the project before choosing a folder.");
         }
         if (evidenceUploadRequested) {
           setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
@@ -2039,6 +2113,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const applied = new Set<string>();
     let notebookIndexConnectRequested = false;
     let linkedProjectRequested = false;
+    let projectRelinkRequested = false;
     let evidenceUploadRequested = false;
     let actionQueue = Promise.resolve();
     setMessages((current) => [...current, { role: "user", content: prompt }]);
@@ -2075,6 +2150,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         applied.add(event.toolCallId);
         if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
         if (action.kind === "project_create_linked") linkedProjectRequested = true;
+        if (action.kind === "project_relink") projectRelinkRequested = true;
         if (action.kind === "evidence_upload") evidenceUploadRequested = true;
         actionQueue = actionQueue.then(async () => { confirmations.push(await applyClientAction(action)); });
       }
@@ -2100,6 +2176,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setPendingLinkedProject((current) => current?.sourceProjectId === engagement.id && result.message!.id
         ? {...current, sourceMessageId: result.message!.id} : undefined);
       if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
+    }
+    if (projectRelinkRequested) {
+      setPendingProjectRelink((current) => current?.sourceProjectId === engagement.id && result.message!.id
+        ? {...current, sourceMessageId: result.message!.id} : undefined);
+      if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect the project before choosing a folder.");
     }
     if (evidenceUploadRequested) {
       setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
@@ -2285,6 +2366,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <button className="button quiet" type="button" disabled={creatingLinkedProject} onClick={() => {appendBrowserActionOutcome(pendingLinkedProject, "No project was created. The host folder was not linked."); setPendingLinkedProject(undefined);}}>Cancel</button>
       </div>
       {creatingLinkedProject && <span role="status">Creating linked project in Core…</span>}
+    </section>}
+    {pendingProjectRelink && pendingProjectRelink.sourceProjectId === engagement?.id && pendingProjectRelink.sourceMessageId && <section className={styles.libraryHandoff} aria-label="Relink project folder">
+      <div><strong>Relink {pendingProjectRelink.name}</strong><small>Choose a folder on the Nebula host. Core will check that no existing work still uses the old folder.</small></div>
+      <div className={styles.libraryHandoffActions}>
+        <HostFolderPicker api={coreState === "online" && !relinkingProject ? api : undefined} onSelect={path => {void relinkProject(path);}} />
+        <button className="button quiet" type="button" disabled={relinkingProject} onClick={() => {appendBrowserActionOutcome(pendingProjectRelink, `${pendingProjectRelink.name} was not relinked. No folder changed.`); setPendingProjectRelink(undefined);}}>Cancel</button>
+      </div>
+      {relinkingProject && <span role="status">Checking project folder in Core…</span>}
     </section>}
     {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>

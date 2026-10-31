@@ -1758,6 +1758,61 @@ describe("NebulaControlAssistant", () => {
       .toContain("Created Linked project with host folder");
   }, 20_000);
 
+  it("confirms an existing project relink and waits for Core path read-back", async () => {
+    const user = userEvent.setup();
+    const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const current = {id: projectId, name: "Current project", status: "active" as const,
+      revision: 4, workspacePath: "/srv/old"};
+    const saved = {...current, revision: 5, workspacePath: "/srv/new"};
+    const relinkProjectWorkspace = vi.fn().mockRejectedValue(new Error("response lost after save"));
+    const getProjectLifecycle = vi.fn().mockImplementation(async () => relinkProjectWorkspace.mock.calls.length ? saved : current);
+    const refreshProjectLifecycle = vi.fn().mockResolvedValue(saved);
+    const listHostWorkspaceFolders = vi.fn().mockResolvedValue({path: "/srv/new", parent: "/srv", directories: [], truncated: false});
+    const onNavigate = vi.fn();
+    let reply = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `relink-${++reply}`, capability: "nebula.capabilities.change",
+        status: "complete", summary: "Choose a host folder", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.projects.relink", butler_project_id: projectId,
+          state: "pending_browser_apply", client_action: {kind: "project_relink", project_id: projectId,
+            expected_revision: 4, name: "Current project"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: `relink-reply-${reply}`, role: "assistant", content: "Choose a host folder."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue({...savedButler, engagementId: projectId}),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat,
+        getProjectLifecycle, relinkProjectWorkspace, listHostWorkspaceFolders},
+      refreshProjectLifecycle,
+      coreState: "online", engagement: {id: projectId, name: "Current project"},
+      providers: [], harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await user.type(composer, "Relink this project{enter}");
+    const handoff = await screen.findByRole("region", {name: "Relink project folder"});
+    await user.click(within(handoff).getByRole("button", {name: "Cancel"}));
+    expect(relinkProjectWorkspace).not.toHaveBeenCalled();
+    await user.type(composer, "Relink this project{enter}");
+    await user.click(within(await screen.findByRole("region", {name: "Relink project folder"})).getByRole("button", {name: "Browse folders"}));
+    await user.click(within(await screen.findByRole("dialog", {name: "Choose project folder"})).getByRole("button", {name: "Select folder"}));
+    const confirmation = await screen.findByRole("dialog", {name: "Relink Current project?"});
+    expect(confirmation).toHaveTextContent("/srv/old");
+    expect(confirmation).toHaveTextContent("/srv/new");
+    expect(relinkProjectWorkspace).not.toHaveBeenCalled();
+    await user.click(within(confirmation).getByRole("button", {name: "Relink project"}));
+    await waitFor(() => expect(relinkProjectWorkspace).toHaveBeenCalledWith(projectId, "/srv/new", 4));
+    expect(relinkProjectWorkspace).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(`/projects/${projectId}/workbench?view=workspace`));
+    expect(refreshProjectLifecycle).toHaveBeenCalledWith(projectId);
+    expect(JSON.parse(localStorage.getItem(`nebula.control-assistant.session.${projectId}.action-outcomes`) ?? "{}")["relink-reply-2"])
+      .toContain("Relinked Current project in Core");
+    expect(localStorage.getItem(`nebula.control-assistant.session.${projectId}.action-outcomes`))
+      .not.toContain("/srv/new");
+  }, 20_000);
+
   it("saves an all-destinations policy from a model receipt and refreshes Project Policy", async () => {
     const user = userEvent.setup();
     const current = { revision: 2, allow_all_targets: false, bypass_permissions: false, local_only: true,
