@@ -248,6 +248,14 @@ class ApiEntityValidator:
         if type(current) is not type(candidate):
             raise ApiEntityValidationError("entity type cannot be changed")
         if (
+            isinstance(current, Engagement)
+            and isinstance(candidate, Engagement)
+            and current.workspace_path != candidate.workspace_path
+        ):
+            raise ApiEntityValidationError(
+                "Use the project workspace relink action to change a linked folder"
+            )
+        if (
             isinstance(current, HarnessProfile)
             and isinstance(candidate, HarnessProfile)
             and current.kind != candidate.kind

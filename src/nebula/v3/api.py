@@ -1308,6 +1308,11 @@ class EngagementCreateRequest(Engagement):
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class ProjectWorkspaceRelinkRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    expected_revision: int = Field(ge=1)
+
+
 class NotebookFileIndexRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
     expected_project_revision: int | None = Field(default=None, ge=1)
@@ -7257,6 +7262,31 @@ def create_app(
             async with executions.engagement_lock(engagement_id):
                 return await asyncio.to_thread(workspace.reset, engagement_id, request)
         return await asyncio.to_thread(workspace.reset, engagement_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/relink",
+        response_model=Engagement,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def relink_project_workspace(
+        engagement_id: str, request: ProjectWorkspaceRelinkRequest
+    ) -> Engagement:
+        path = _resolve_engagement_workspace_path(request.path)
+
+        def save() -> Engagement:
+            return store.relink_project_workspace(
+                engagement_id, path, expected_revision=request.expected_revision
+            )
+
+        async with notebook_service.guard_workspace_relink(engagement_id):
+            if container_terminals is not None:
+                async with container_terminals.guard_workspace_operation(engagement_id):
+                    return await asyncio.to_thread(save)
+            if executions is not None:
+                async with executions.engagement_lock(engagement_id):
+                    return await asyncio.to_thread(save)
+            return await asyncio.to_thread(save)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset-status",
