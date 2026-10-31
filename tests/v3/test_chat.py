@@ -64,7 +64,7 @@ from nebula.v3.providers import (
 )
 from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
 from nebula.v3.skill_catalog import SkillSnapshot
-from nebula.v3.storage import NebulaStore, StoreTransaction
+from nebula.v3.storage import ConflictError, NebulaStore, StoreTransaction
 from nebula.v3.tools import StoreToolLedger, ToolInvocation, ToolSpec, ToolBrokerError
 from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
 
@@ -4663,6 +4663,40 @@ def test_persist_turn_inputs_refuses_a_waiting_callback_turn(tmp_path):
         item.status for item in store.list_session_entities(ChatTurn, session.id)
     ] == [ChatTurnStatus.WAITING_CALLBACK]
     assert store.list_session_entities(ChatMessage, session.id) == []
+
+
+def test_prepare_refuses_project_relink_after_binding_workspace(tmp_path):
+    old = tmp_path / "old"
+    new = tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    store = NebulaStore(tmp_path / "chat-relink-admission.db")
+    project = store.create(Engagement(name="Relink admission", workspace_path=str(old)))
+    profile = store.create(_profile(local=True))
+    service = ChatService(
+        store, provider_factory=lambda _: FakeProvider(profile.id, local=True)
+    )
+    persist = service._persist_turn_inputs
+
+    def relink_before_admission(prepared):
+        store.relink_project_workspace(
+            project.id, str(new), expected_revision=project.revision
+        )
+        persist(prepared)
+
+    service._persist_turn_inputs = relink_before_admission
+    with pytest.raises(ConflictError, match="Project workspace changed"):
+        service.prepare(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=project.id,
+                messages=[{"role": "user", "content": "Run in my project"}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+    assert store.count(ChatTurn) == 0
+    assert store.get(Engagement, project.id).workspace_path == str(new)
 
 
 def test_persist_turn_inputs_retries_against_a_session_written_during_prepare(
