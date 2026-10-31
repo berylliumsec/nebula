@@ -534,7 +534,7 @@
         "change": "nebula.reports.create"
       },
       "authority": "Interactive selected project; fixed create ID and Core read-back; browser retains report URL",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core",
       "result": "Exact draft ID, title, sources and summary appear in Core and Reports after refresh",
       "status": "supported"
     },
@@ -552,8 +552,27 @@
         "change": "nebula.reports.update"
       },
       "authority": "Interactive selected project and exact report revision; final reports immutable",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core",
       "result": "Saved fields and incremented revision agree in Core and Reports",
+      "status": "supported"
+    },
+    {
+      "id": "report.transform_note",
+      "entry_point": "Butler request: transform one linked project note into an operator-reviewed report section",
+      "ui_calls": [
+        "ui/src/components/butlerReportTransform.ts::getObservation",
+        "ui/src/components/butlerReportTransform.ts::getReport",
+        "ui/src/components/butlerReportTransform.ts::updateReport"
+      ],
+      "core_owner": "Core report and source note revisions, writing service, privacy policy and saved report-local transform; requesting browser owns runtime choice and review",
+      "butler": {
+        "discover": "nebula.reports.list and nebula.reports.sources",
+        "read": "nebula.reports.detail and nebula.reports.source_note",
+        "change": "nebula.reports.transform_note"
+      },
+      "authority": "Interactive selected project; exact report and linked note revisions; Core writing runtime privacy and one-request cloud consent; operator edits before save; Core read-back",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core",
+      "result": "The reviewed section appears in Core and Reports at a new revision; source note remains unchanged",
       "status": "supported"
     },
     {
@@ -571,7 +590,7 @@
         "change": "nebula.reports.delete"
       },
       "authority": "Interactive selected project, exact report revision and requesting-browser destructive confirmation; Core refuses signed finals or reports referenced by saved renders",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core",
       "result": "Core returns 404 for the exact deleted report, refreshed Reports omits it, and source findings remain",
       "status": "supported"
     },
@@ -589,7 +608,7 @@
         "change": "nebula.reports.signoff"
       },
       "authority": "Browser opens exact revision; operator personally supplies identity and attestation; Butler cannot finalize it",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core",
       "result": "Core final record is signed and immutable after operator submits the form",
       "status": "supported"
     },
@@ -608,7 +627,7 @@
         "change": "nebula.reports.export_pdf"
       },
       "authority": "Interactive selected project, exact revision, browser confirmation and requesting-device download",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core",
       "result": "Browser receives a PDF for the saved revision; Butler receives no PDF bytes",
       "status": "supported"
     },
@@ -626,7 +645,7 @@
         "change": "nebula.reports.export_bundle"
       },
       "authority": "Interactive selected project and requesting-browser sensitive-export confirmation",
-      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, deletes, signs and exports a report on production LAN Core",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core",
       "result": "Browser receives a sensitive ZIP; Butler receives no bundle bytes",
       "status": "supported"
     },
@@ -1930,6 +1949,18 @@
     {
       "key": "ui/src/components/assistantSettingsMutations.ts::request::GET path",
       "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerReportTransform.ts::getObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerReportTransform.ts::getReport",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerReportTransform.ts::updateReport",
+      "count": 1
     },
     {
       "key": "ui/src/components/butlerTerminalStop.ts::closeProjectContainerTerminal",

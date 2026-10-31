@@ -30,7 +30,7 @@ and reads; these counts are not a coverage percentage.
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host consent remains in its visible control; relinking an existing project remains a gap. |
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Existing-project host-folder relinking remains a gap. Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, evidence capture, and other research-data control still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
-| Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. Note-transform authoring and the operating system's final download save location remain outside this slice. |
+| Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; prepare an exact linked-note AI section transform for browser runtime choice and operator review; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. The operating system's final download save location remains device-owned. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
 The present gateway is deliberately small: Butler receives
@@ -146,7 +146,7 @@ conflicts; an uncertain response requires a fresh Core project search before
 another attempt. This action does not relink an existing project's workspace or
 acknowledge Host command access.
 
-## Branch slice: report drafts, sign-off handoff, deletion and exports
+## Branch slice: report drafts, reviewed note transforms, sign-off, deletion and exports
 
 Entry point: an operator asks interactive Butler to find, draft, edit, delete, sign off or
 export a selected-project report, or deletes a draft from Reports. Butler pages reports and source findings or
@@ -157,16 +157,22 @@ operator attestation and device downloads. Butler does not receive PDF or bundle
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |
 | Discover and select | Report and source pages reach older records; exact detail reads the current revision and bounded summary; other-project IDs are refused | Core report and source store | Butler tool, real Core |
-| Create and edit | A prepared draft carries a fixed report ID; an uncertain create is reconciled by exact Core ID. Edits require the current report revision and Core validates all same-project references | Core report API and database | Butler tool, component, real Core browser |
+| Create and edit | A prepared draft carries a fixed report ID; an uncertain create is reconciled by exact Core ID. The fixed-ID route writes the same authoritative finding and note relations as regular report creation. Edits require the current report revision and Core validates all same-project references | Core report API and database | Butler tool, component, real Core browser |
+| Transform linked note | Butler selects an exact report and linked source-note revision. The requesting browser chooses a permitted writing runtime, asks one-request cloud consent if needed, and shows an editable AI draft. Before saving, it rereads both revisions and confirms the exact report-local section in Core. The original note stays unchanged | Core report and source records, writing service privacy, operator review | Butler tool, component, real Core browser |
 | Sign off | Butler opens the exact review report form at its current revision; only the operator chooses identity and attests; Core's dedicated route finalizes and makes it immutable | Browser form and Core sign-off route | Component, real Core browser |
 | Delete | Butler or Reports identifies an exact non-final report and revision; the browser names it in a destructive confirmation, sends `If-Match`, then verifies Core 404 and its absence from the refreshed project list. Cancellation leaves the report intact; a final signed report and a draft referenced by a saved render are refused | Core report validator and revision; browser confirmation | Core API, component, real Core browser |
 | Export | The browser confirms sensitive content, renders the exact report revision or exports the selected project, and starts a local download. Cancellation starts none | Core renderer and export service; browser device | Component, production LAN browser |
 | Refresh and retry | URL and saved report agree after reload; stale revisions fail, and an uncertain write prompts a fresh read before retry | URL, Core revision and browser | Real Core browser |
 
 Stream, interrupt and fork do not apply to a report record or local file
-download. Note-transform authoring remains in the visible Reports screen and
-requires a separate Butler action. A download start does not prove the
+download. A requested note transform uses the same reviewed AI writing path as
+Reports; the operator may cancel, edit, or save the generated section. Butler
+reports a saved section only after Core read-back. A download start does not prove the
 operating system's final save location.
+Report detail and list project note and finding links from Core's relation rows,
+including links added or removed through the relations API. A relation change
+does not advance the report revision, so the browser rechecks the current link
+when applying a prepared transform.
 
 ## Branch slice: chat transcript export
 
