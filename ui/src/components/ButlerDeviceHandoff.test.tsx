@@ -45,10 +45,13 @@ describe("ButlerDeviceHandoff", () => {
       {kind: "device_pair", projectId, name: "Field phone"},
       {baseUrl: "http://127.0.0.1:8000/api/v1", getToken: vi.fn().mockReturnValue("host-token"), createDevicePairing},
     );
+    expect(screen.getByRole("button", {name: "Create pairing offer"})).toBeDisabled();
+    await user.type(screen.getByLabelText("Companion address"), "https://nebula.example:8443");
     await user.click(screen.getByRole("button", {name: "Create pairing offer"}));
     await waitFor(() => expect(createDevicePairing).toHaveBeenCalledWith("Field phone"));
     expect(screen.getByRole("status")).toHaveTextContent("Confirm code 123456");
     expect(screen.getByRole("status")).toHaveTextContent("single-use-secret");
+    expect(screen.getByRole("status")).toHaveTextContent("https://nebula.example:8443/#pair=single-use-secret&code=123456");
     expect(onOutcome).toHaveBeenCalledOnce();
     expect(onOutcome.mock.calls[0][0]).toContain("Redemption on the companion device has not been verified");
     expect(onOutcome.mock.calls[0][0]).not.toContain("single-use-secret");

@@ -6,6 +6,7 @@ import type { PairedDevice } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface, useConfirmation } from "./DialogSystem";
 import { ShowMeHow } from "../guides/ShowMeHow";
+import { companionOrigin, companionPairingUrl } from "../devicePairingLink";
 
 interface DevicePairingSettingsProps {
   api?: ApiClient;
@@ -17,8 +18,10 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
   const confirm = useConfirmation();
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [name, setName] = useState("My phone");
+  const [companionAddress, setCompanionAddress] = useState("");
+  const [allowInsecureLan, setAllowInsecureLan] = useState(false);
   const [pairingOpen, setPairingOpen] = useState(false);
-  const [pairing, setPairing] = useState<{ secret: string; confirmationCode: string; expiresAt: string }>();
+  const [pairing, setPairing] = useState<{ secret: string; confirmationCode: string; expiresAt: string; origin: string }>();
   const [busy, setBusy] = useState(false);
   const [revokingId, setRevokingId] = useState<string>();
   const [error, setError] = useState<string>();
@@ -37,6 +40,7 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
     && api?.getToken?.()
     && ["127.0.0.1", "localhost", "::1"].includes(apiHostname),
   );
+  const reachableOrigin = companionOrigin(companionAddress, allowInsecureLan);
 
   const refresh = useCallback(async () => {
     if (!api) return;
@@ -50,11 +54,11 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
   useEffect(() => { void refresh(); }, [refresh]);
 
   const createPairing = async () => {
-    if (!api || !name.trim()) return;
+    if (!api || !canCreatePairing || !name.trim() || !reachableOrigin) return;
     setBusy(true);
     setPairingError(undefined);
     try {
-      setPairing(await api.createDevicePairing(name.trim()));
+      setPairing({ ...await api.createDevicePairing(name.trim()), origin: reachableOrigin });
     } catch (caught) {
       logCaughtDiagnostic("interface.device_pairing.create_failed", "A device pairing link could not be created.", caught, "device-pairing");
       setPairingError(caught instanceof Error ? caught.message : "Could not create a pairing.");
@@ -71,7 +75,7 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
   };
 
   const pairingUrl = pairing
-    ? `${window.location.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmationCode)}`
+    ? companionPairingUrl(pairing.origin, pairing.secret, pairing.confirmationCode)
     : "";
 
   const revokeDevice = async (device: PairedDevice) => {
@@ -117,9 +121,9 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
       <header><div><small>Host-authorized access</small><h2 id="device-pairing-dialog-title">Pair a device</h2></div><button className="icon-button subtle" type="button" aria-label="Close pairing dialog" disabled={busy} onClick={closePairing}><X size={17} /></button></header>
       {pairing
         ? <div className="device-pairing-secret" role="status"><strong>Scan on the companion device</strong><QRCodeSVG value={pairingUrl} size={168} bgColor="#ffffff" fgColor="#05070b" level="M" marginSize={2} title="Nebula device pairing QR code" /><code>{pairingUrl}</code><p>Confirm code <b>{pairing.confirmationCode}</b> · expires {new Date(pairing.expiresAt).toLocaleTimeString()}. This link is single-use.</p></div>
-        : <><label>Device name<input autoFocus required value={name} maxLength={200} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createPairing(); } }} /></label><p className="provider-dialog-note">The link expires in five minutes and can authorize one browser.</p></>}
+        : <><label>Device name<input autoFocus required value={name} maxLength={200} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createPairing(); } }} /></label><label>Companion address<input type="url" inputMode="url" autoComplete="url" placeholder="https://nebula.example:8000" value={companionAddress} onChange={(event) => setCompanionAddress(event.target.value)} /></label><p className="provider-dialog-note">Enter this Core's HTTPS address as reached from the companion device. Check the host and port before creating the one-time link. Localhost will not work on a phone.</p><label><input type="checkbox" checked={allowInsecureLan} onChange={(event) => setAllowInsecureLan(event.target.checked)} /> I started Core with <code>--allow-insecure-lan</code> on a trusted test network</label>{companionAddress && !reachableOrigin && <p role="alert">Enter a reachable HTTPS origin without a path, query, or fragment. HTTP requires the explicit insecure LAN option.</p>}<p className="provider-dialog-note">The link expires in five minutes and can authorize one browser.</p></>}
       {pairingError && <DiagnosticErrorNotice error={pairingError} fallback="Could not create the pairing link." compact />}
-      <footer><button className="button secondary" type="button" disabled={busy} onClick={closePairing}>{pairing ? "Done" : "Cancel"}</button>{!pairing && <button className="button primary" type="button" disabled={busy || !name.trim()} onClick={() => void createPairing()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Link2 size={14} />} {busy ? "Creating…" : "Create pairing link"}</button>}</footer>
+      <footer><button className="button secondary" type="button" disabled={busy} onClick={closePairing}>{pairing ? "Done" : "Cancel"}</button>{!pairing && <button className="button primary" type="button" disabled={busy || !name.trim() || !reachableOrigin} onClick={() => void createPairing()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Link2 size={14} />} {busy ? "Creating…" : "Create pairing link"}</button>}</footer>
     </ModalSurface>}
   </section>;
 }

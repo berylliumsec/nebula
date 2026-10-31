@@ -70,11 +70,35 @@ describe("DevicePairingSettings", () => {
     expect(dialog).toBeVisible();
     await user.clear(screen.getByLabelText("Device name"));
     await user.type(screen.getByLabelText("Device name"), "Field phone");
+    expect(screen.getByRole("button", { name: "Create pairing link" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Companion address"), "https://nebula.example:8443");
     await user.click(screen.getByRole("button", { name: "Create pairing link" }));
 
     await waitFor(() => expect(createDevicePairing).toHaveBeenCalledWith("Field phone"));
     expect(screen.getByRole("status")).toHaveTextContent("Confirm code 123456");
+    expect(screen.getByRole("status")).toHaveTextContent("https://nebula.example:8443/#pair=single-use-secret&code=123456");
+    expect(screen.getByRole("status")).not.toHaveTextContent("localhost");
     expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
+  });
+
+  it("requires explicit insecure LAN mode before creating an HTTP pairing link", async () => {
+    const user = userEvent.setup();
+    const createDevicePairing = vi.fn().mockResolvedValue({
+      secret: "single-use-secret", confirmationCode: "123456", expiresAt: "2026-08-23T16:00:00Z",
+    });
+    renderSettings({
+      baseUrl: "http://127.0.0.1:8000/api/v1",
+      getToken: vi.fn().mockReturnValue("host-token"),
+      listPairedDevices: vi.fn().mockResolvedValue([]),
+      createDevicePairing,
+    });
+    await user.click(await screen.findByRole("button", { name: "Pair device" }));
+    await user.type(screen.getByLabelText("Companion address"), "http://192.168.1.44:8000");
+    expect(screen.getByRole("button", { name: "Create pairing link" })).toBeDisabled();
+    expect(createDevicePairing).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /I started Core with/ }));
+    await user.click(screen.getByRole("button", { name: "Create pairing link" }));
+    await waitFor(() => expect(createDevicePairing).toHaveBeenCalledOnce());
   });
 
   it("confirms current-browser revocation and does not refresh with the revoked cookie", async () => {

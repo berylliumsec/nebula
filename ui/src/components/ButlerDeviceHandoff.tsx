@@ -4,6 +4,7 @@ import type { ApiClient } from "../api/client";
 import type { PairedDevice } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useConfirmation } from "./DialogSystem";
+import { companionOrigin, companionPairingUrl } from "../devicePairingLink";
 import type { SettingClientAction } from "./nebulaAssistantActions";
 import styles from "./NebulaControlAssistant.module.css";
 
@@ -36,8 +37,10 @@ export function ButlerDeviceHandoff({api, online, action, currentProjectId, onOu
 }) {
   const confirm = useConfirmation();
   const [name, setName] = useState(action.kind === "device_pair" ? action.name : "");
+  const [companionAddress, setCompanionAddress] = useState("");
+  const [allowInsecureLan, setAllowInsecureLan] = useState(false);
   const [target, setTarget] = useState<PairedDevice>();
-  const [offer, setOffer] = useState<{secret: string; confirmationCode: string; expiresAt: string}>();
+  const [offer, setOffer] = useState<{secret: string; confirmationCode: string; expiresAt: string; origin: string}>();
   const [loading, setLoading] = useState(action.kind === "device_revoke");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -47,6 +50,7 @@ export function ButlerDeviceHandoff({api, online, action, currentProjectId, onOu
   currentProjectIdRef.current = currentProjectId;
   const hostBrowser = isHostBearerBrowser(api);
   const projectCurrent = online && currentProjectId() === action.projectId;
+  const reachableOrigin = companionOrigin(companionAddress, allowInsecureLan);
 
   useEffect(() => {
     if (action.kind !== "device_revoke" || !api || !online || currentProjectIdRef.current() !== action.projectId) return;
@@ -77,8 +81,8 @@ export function ButlerDeviceHandoff({api, online, action, currentProjectId, onOu
 
   const createOffer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!api || !projectCurrent || !hostBrowser || !name.trim() || offer) {
-      setError("Open Butler on the Nebula host with local bearer access before creating a device pairing offer.");
+    if (!api || !projectCurrent || !hostBrowser || !name.trim() || !reachableOrigin || offer) {
+      setError("Use local bearer access and enter this Core's reachable companion address before creating an offer.");
       return;
     }
     setBusy(true);
@@ -93,7 +97,7 @@ export function ButlerDeviceHandoff({api, online, action, currentProjectId, onOu
       if (currentProjectId() !== action.projectId) {
         throw new Error("The selected project changed after Core created the offer. Close this handoff; the offer expires in five minutes.");
       }
-      setOffer(created);
+      setOffer({...created, origin: reachableOrigin});
       onOutcome(`Core created a five-minute pairing offer for ${name.trim()} on this host browser. Redemption on the companion device has not been verified. The one-time code stays on this browser.`);
       setRecorded(true);
     } catch (caught) {
@@ -158,7 +162,7 @@ export function ButlerDeviceHandoff({api, online, action, currentProjectId, onOu
   };
 
   const pairingUrl = offer
-    ? `${window.location.origin}/#pair=${encodeURIComponent(offer.secret)}&code=${encodeURIComponent(offer.confirmationCode)}`
+    ? companionPairingUrl(offer.origin, offer.secret, offer.confirmationCode)
     : "";
 
   return <section className={`${styles.libraryHandoff} ${styles.evidenceHandoff}`} aria-label={action.kind === "device_pair" ? "Pair device with Butler" : "Revoke paired device with Butler"}>
@@ -170,7 +174,11 @@ export function ButlerDeviceHandoff({api, online, action, currentProjectId, onOu
         <code>{pairingUrl}</code><small>Confirm code {offer.confirmationCode} · expires {new Date(offer.expiresAt).toLocaleTimeString()}. Companion redemption is not yet verified.</small>
       </div> : <form className={styles.evidenceHandoffForm} onSubmit={(event) => void createOffer(event)}>
         <label>Device name<input value={name} maxLength={200} required disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
-        <div className={styles.libraryHandoffActions}><button className="button primary" type="submit" disabled={busy || !projectCurrent || !hostBrowser || !name.trim()}>Create pairing offer</button><button className="button quiet" type="button" disabled={busy} onClick={dismiss}>Cancel</button></div>
+        <label>Companion address<input type="url" inputMode="url" autoComplete="url" placeholder="https://nebula.example:8000" value={companionAddress} disabled={busy} onChange={(event) => setCompanionAddress(event.target.value)} /></label>
+        <small>Enter this Core's HTTPS address as reached from the companion device. Check the host and port; localhost will not work on a phone.</small>
+        <label><input type="checkbox" checked={allowInsecureLan} disabled={busy} onChange={(event) => setAllowInsecureLan(event.target.checked)} /> I started Core with <code>--allow-insecure-lan</code> on a trusted test network</label>
+        {companionAddress && !reachableOrigin && <p role="alert">Enter a reachable HTTPS origin without a path, query, or fragment. HTTP requires the explicit insecure LAN option.</p>}
+        <div className={styles.libraryHandoffActions}><button className="button primary" type="submit" disabled={busy || !projectCurrent || !hostBrowser || !name.trim() || !reachableOrigin}>Create pairing offer</button><button className="button quiet" type="button" disabled={busy} onClick={dismiss}>Cancel</button></div>
       </form>}
       {offer && <div className={styles.libraryHandoffActions}><button className="button quiet" type="button" onClick={dismiss}>Done</button></div>}
     </> : <>
