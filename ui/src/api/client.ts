@@ -2740,6 +2740,7 @@ function mapEvidence(value: WireEvidence): EvidenceSummary {
   const metadata = value.metadata ?? {};
   return {
     id: value.id,
+    revision: value.revision,
     engagementId: value.engagement_id,
     evidenceType: value.evidence_type,
     title: value.title,
@@ -7659,6 +7660,10 @@ export class ApiClient {
     return this.listAll<WireEvidence>("evidence", signal, engagementId).then(
       (items) => page(items.map(mapEvidence)),
     );
+  }
+
+  getEvidence(id: string, signal?: AbortSignal): Promise<EvidenceSummary> {
+    return this.request<WireEvidence>(`evidence/${encodeURIComponent(id)}`, { signal }).then(mapEvidence);
   }
 
   uploadEvidence(

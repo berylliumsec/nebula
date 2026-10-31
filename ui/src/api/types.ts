@@ -1436,6 +1436,7 @@ export interface ExecutionChatAttachment {
 
 export interface EvidenceSummary {
   id: Identifier;
+  revision: number;
   engagementId: Identifier;
   evidenceType: string;
   title: string;
