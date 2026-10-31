@@ -29,7 +29,7 @@ and reads; these counts are not a coverage percentage.
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host consent remains in its visible control; relinking an existing project remains a gap. |
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Existing-project host-folder relinking remains a gap. Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
-| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal | Direct browser page control, evidence capture, and other research-data control still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
+| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page project Evidence metadata and request browser-owned upload or verified original-file download | Direct browser page control, evidence capture, and other research-data control still lack accepted Butler journeys. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; prepare an exact linked-note AI section transform for browser runtime choice and operator review; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. The operating system's final download save location remains device-owned. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
 
@@ -173,6 +173,26 @@ Report detail and list project note and finding links from Core's relation rows,
 including links added or removed through the relations API. A relation change
 does not advance the report revision, so the browser rechecks the current link
 when applying a prepared transform.
+
+## Branch slice: project evidence files
+
+Entry point: the operator asks interactive Butler to inspect project Evidence,
+store a file from the requesting device, or download an exact original. Butler
+pages bounded metadata and reads the selected record. The browser owns file
+choice, evidence title, type, description, finding and asset links, and download
+confirmation. Core owns the immutable artifact, hash, project links and saved
+record. Butler never receives original bytes through these actions.
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Discover and select | Butler pages selected-project Evidence and reads one exact revision, hash and links; other-project IDs are refused | Core evidence records and capability catalog | Butler tool, real Core |
+| Upload or cancel | Cancelling sends no file. The browser selects up to 25 MB and edits metadata and links; Core validates project references and saves the original. The browser hashes the file and confirms exact Core detail and list before reporting a saved result | Requesting device, Core artifact and evidence store | Component, real Core browser |
+| Download or cancel | The browser confirms a sensitive original-file download, rereads the exact evidence revision and artifact, verifies bytes against Core's SHA-256, and starts a local download. Cancellation transfers nothing | Core evidence and artifact store, requesting device | Component, real Core browser |
+| Refresh and retry | The saved evidence and Butler outcome survive refresh. An uncertain upload does not automatically retry or claim success; the operator inspects Evidence before selecting the file again | Core records, browser outcome cache and URL | Component, real Core browser |
+
+Streaming, interrupt, fork and deletion do not apply to this immutable-file
+handoff. Evidence links can be reviewed through the existing Evidence inspector;
+the browser's final operating-system save location remains device-owned.
 
 ## Branch slice: chat transcript export
 
@@ -410,10 +430,10 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 36
-reviewed actions: 34 supported, one gap, and one device handoff. Its source
-inventory contains 521 distinct `api` call signatures in production UI
-TypeScript, of which 78 are linked to reviewed actions; 443 still require
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 38
+reviewed actions: 36 supported, one gap, and one device handoff. Its source
+inventory contains 525 distinct `api` call signatures in production UI
+TypeScript, of which 84 are linked to reviewed actions; 441 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
@@ -435,6 +455,12 @@ tool catalog.
 2. Complete existing-project host-folder relinking and the
    remaining resource actions in their owning services. Each needs target
    discovery, optimistic revisions where applicable, and observed Core read-back.
+   Generic Engagement PATCH/PUT currently permits a path change or clear while
+   live consumers can retain the old workspace. A typed relink must fence new
+   work, account for terminals, reviewed executions, automation and harness
+   sessions, warm Notebook kernels, debugger sessions, stale previews and the
+   saved file index, then switch and refresh the same-project UI. The generic
+   path edit must close when this transition is implemented.
 3. Add specialized device and administration handoffs for local file selection, pairing, storage
    enrollment, credentials, release updates and service state.
    Keep one-time values on the requesting device and preserve existing

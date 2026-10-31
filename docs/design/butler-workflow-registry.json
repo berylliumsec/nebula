@@ -521,6 +521,45 @@
       "status": "supported"
     },
     {
+      "id": "evidence.upload",
+      "entry_point": "Evidence: store a browser-selected original with reviewed project links",
+      "ui_calls": [
+        "ui/src/components/ButlerEvidenceUpload.tsx::uploadEvidence",
+        "ui/src/components/ButlerEvidenceUpload.tsx::getEvidence",
+        "ui/src/components/ButlerEvidenceUpload.tsx::listEvidence",
+        "ui/src/state/WorkspaceContext.tsx::uploadEvidence"
+      ],
+      "core_owner": "Project Evidence and immutable Artifact store",
+      "butler": {
+        "discover": "nebula.evidence.list",
+        "read": "nebula.evidence.detail",
+        "change": "nebula.evidence.upload"
+      },
+      "authority": "Selected project; requesting browser owns file, metadata, links and attribution; Core validates links and reads back exact SHA-256, detail and list",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stores and downloads project evidence on production LAN Core",
+      "result": "Original file and linked evidence record appear in Core and refreshed Evidence; cancellation stores nothing",
+      "status": "supported"
+    },
+    {
+      "id": "evidence.download",
+      "entry_point": "Evidence: download one exact original to the requesting device",
+      "ui_calls": [
+        "ui/src/pages/EvidencePage.tsx::getArtifactContent",
+        "ui/src/components/NebulaControlAssistant.tsx::getEvidence",
+        "ui/src/components/NebulaControlAssistant.tsx::getArtifactContent"
+      ],
+      "core_owner": "Project Evidence and immutable Artifact store",
+      "butler": {
+        "discover": "nebula.evidence.list",
+        "read": "nebula.evidence.detail",
+        "change": "nebula.evidence.download"
+      },
+      "authority": "Selected project, exact evidence revision and SHA-256, requesting-browser confirmation and byte verification",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stores and downloads project evidence on production LAN Core",
+      "result": "Cancelled handoff starts no download; confirmed original bytes match Core's digest on this device",
+      "status": "supported"
+    },
+    {
       "id": "report.create",
       "entry_point": "Butler request or Reports: create a selected-project draft",
       "ui_calls": [
@@ -824,6 +863,18 @@
     },
     {
       "key": "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerEvidenceUpload.tsx::getEvidence",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerEvidenceUpload.tsx::listEvidence",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerEvidenceUpload.tsx::uploadEvidence",
       "count": 1
     },
     {
@@ -1300,7 +1351,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getArtifactContent",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy",
@@ -1320,6 +1371,10 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getControlAssistantSession",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::getEvidence",
       "count": 3
     },
     {

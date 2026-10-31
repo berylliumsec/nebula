@@ -371,6 +371,18 @@ def test_product_search_finds_butler_report_note_transform_review(monkeypatch):
     assert "review" in text
 
 
+def test_product_search_finds_butler_evidence_file_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler upload project evidence from my device and download the original?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "nebula.evidence.upload" in text
+    assert "nebula.evidence.download" in text
+    assert "requesting-browser" in text
+    assert "sha-256" in text
+
+
 def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

@@ -76,6 +76,8 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.library.download",
         "nebula.library.reindex",
         "nebula.library.remove",
+        "nebula.evidence.upload",
+        "nebula.evidence.download",
         "nebula.reports.create",
         "nebula.reports.update",
         "nebula.reports.signoff",
@@ -245,6 +247,7 @@ class ButlerCapabilities:
         }
         if background_case_id is None:
             from .butler_chat_export import ButlerChatExport
+            from .butler_evidence import ButlerEvidence
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
             from .butler_reports import ButlerReports
@@ -271,6 +274,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerLibrary(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerEvidence(store, project_id).actions()
                 }
             )
             self._actions.update(
