@@ -288,6 +288,23 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
         )
         assert rename["client_action"]["old_name"] == renamed.name
         assert store.get(Engagement, selected.id).name == renamed.name
+        relink = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.relink",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": renamed.revision,
+                },
+            },
+            change=True,
+        )
+        assert relink["client_action"] == {
+            "kind": "project_relink",
+            "project_id": selected.id,
+            "expected_revision": renamed.revision,
+            "name": renamed.name,
+        }
+        assert "workspace_path" not in relink["client_action"]
         create = await capabilities.invoke(
             {
                 "operation": "nebula.projects.create",

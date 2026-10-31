@@ -132,6 +132,17 @@ class ButlerProjects:
             }
         )
 
+    def relink(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = self._current(arguments)
+        return self._pending(
+            {
+                "kind": "project_relink",
+                "project_id": project.id,
+                "expected_revision": project.revision,
+                "name": project.name,
+            }
+        )
+
     def archive(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project = self._current(arguments)
         if project.status == EngagementStatus.ARCHIVED:
@@ -207,6 +218,13 @@ class ButlerProjects:
                 _RENAME,
                 RiskClass.WORKSPACE_WRITE,
                 self.rename,
+            ),
+            (
+                "nebula.projects.relink",
+                "Ask the requesting browser to choose a Nebula-host folder for an existing project at its current revision. Core refuses the change while old-workspace sessions or work can be reused, and the browser confirms the exact path and reads it back. The model never supplies a host path.",
+                _CHANGE,
+                RiskClass.WORKSPACE_WRITE,
+                self.relink,
             ),
             (
                 "nebula.projects.archive",

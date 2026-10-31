@@ -27,11 +27,25 @@ and reads; these counts are not a coverage percentage.
 | Butler memory | List and search visible preferences and lessons; save a quoted memory; edit or forget one on operator request with its current revision | Memory is context with provenance, not authority to change another project or certify a result. |
 | Assistant runtimes | List available runtimes; change chat defaults and next-turn Assistant settings; inspect model and quota information | A next-turn setting does not rebind a running turn. Some runtime lifecycle controls remain in the visible settings screens. |
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
-| Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms removal, and reads back results. The branch records each Butler create request and serializes normalized names in Core. Host consent remains in its visible control; relinking an existing project remains a gap. |
-| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Existing-project host-folder relinking remains a gap. Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
+| Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, relink an existing project through a browser-selected host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms folder choice and removal, and reads back results. Core refuses a relink while old-workspace work can be reused and disconnects a stale Notebook file index. Host consent remains in its visible control. |
+| Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page selected-project evidence and link targets and request a browser-owned immutable evidence upload with exact Core read-back | Direct browser page control, browser evidence capture, and other research-data control still lack accepted Butler journeys. Device file bytes stay in the requesting browser. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. Note-transform authoring and the operating system's final download save location remain outside this slice. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
+
+## Branch slice: existing-project folder relink
+
+Interactive Butler reads the exact project and current revision, then asks the
+requesting browser to select a Nebula-host folder. The browser shows both
+folders and confirms the change. A dedicated Core route checks the revision and
+refuses active or resumable old-workspace work; generic project updates cannot
+change the folder. Core disconnects a stale Notebook file index, preserves the
+old folder and its files, and returns the new project revision. Warm Notebook
+kernels are bound to their resolved folder and replaced after a relink. The
+browser refreshes the selected project context from the exact Core record
+before opening Files. The paired browser journey checks Files after refresh.
+The selected API, Notebook, component and paired production LAN project journey
+are the acceptance evidence for this slice.
 
 ## Branch slice: project evidence upload
 
@@ -421,11 +435,11 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The first registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 28
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 36
 reviewed actions, including explicit export, workspace, Notebook, Library,
 linked-project creation, and storage dispositions. Its source inventory contains
-510 distinct `api` call signatures in production UI TypeScript, of which 64
-are linked to those reviewed actions; 446 still require action-level review. The new Workbench bulk
+526 distinct `api` call signatures in production UI TypeScript, of which 84
+are linked to those reviewed actions; 442 still require action-level review. The new Workbench bulk
 chat calls map to the existing per-chat archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
 calls are keyed by route expression and HTTP verb. The guard fails when a call
@@ -443,8 +457,7 @@ tool catalog.
    Keep Core owner, Butler discover/read/change actions, authority, and an
    observed-result test current. The initial source guard detects changes to
    tracked `api` calls without making them model-callable.
-2. Complete existing-project host-folder relinking and the
-   remaining resource actions in their owning services. Each needs target
+2. Complete the remaining resource actions in their owning services. Each needs target
    discovery, optimistic revisions where applicable, and observed Core read-back.
 3. Add specialized device and administration handoffs for local file selection, pairing, storage
    enrollment, credentials, release updates and service state.
