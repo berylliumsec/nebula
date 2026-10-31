@@ -150,6 +150,29 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, expected_created_at: "2026-10-30T20:30:00"}}}, "selected")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff"}}, "selected")).toBeUndefined();
   });
+  it("accepts only scoped device pairing and exact revocation handoffs", () => {
+    const deviceId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const pairAction = {kind: "device_pair", project_id: "selected", name: "Field phone"};
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "device-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending browser action", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.devices.pair", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: pairAction},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "device_pair", projectId: "selected", name: "Field phone"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...pairAction, name: "   "}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.devices.revoke"}}, "selected")).toBeUndefined();
+
+    const revokeAction = {kind: "device_revoke", project_id: "selected", device_id: deviceId,
+      expected_name: "Field phone", expected_created_at: "2026-10-30T20:30:00.123456Z"};
+    const revoke = {...event, receipt: {...event.receipt, butler_operation: "nebula.devices.revoke", client_action: revokeAction}};
+    expect(settingClientAction(revoke, "selected")).toEqual({kind: "device_revoke", projectId: "selected",
+      deviceId, expectedName: "Field phone", expectedCreatedAt: revokeAction.expected_created_at});
+    expect(settingClientAction({...revoke, receipt: {...revoke.receipt, client_action: {...revokeAction, device_id: "../other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...revoke, receipt: {...revoke.receipt, client_action: {...revokeAction, expected_created_at: "today"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...revoke, receipt: {...revoke.receipt, client_action: {...revokeAction, project_id: "other"}}}, "selected")).toBeUndefined();
+  });
   it("accepts only scoped report drafts, current revisions and device handoffs", () => {
     const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
     const findingId = "70d5a305-6f30-4270-b27d-2322d7385fbf";

@@ -28,6 +28,8 @@ export type SettingClientAction =
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string }
   | { kind: "evidence_upload"; projectId: string }
   | { kind: "evidence_download"; projectId: string; evidenceId: string; expectedRevision: number; title: string; expectedSha256: string }
+  | { kind: "device_pair"; projectId: string; name: string }
+  | { kind: "device_revoke"; projectId: string; deviceId: string; expectedName: string; expectedCreatedAt: string }
   | { kind: "report_create"; projectId: string; reportId: string; title: string; executiveSummary: string; findingIds: string[]; observationIds: string[] }
   | { kind: "report_update"; projectId: string; reportId: string; expectedRevision: number; title?: string; status?: "draft" | "review"; executiveSummary?: string; findingIds?: string[]; observationIds?: string[] }
   | { kind: "report_transform_note"; projectId: string; reportId: string; expectedRevision: number; observationId: string; expectedSourceRevision: number; instruction: string }
@@ -123,6 +125,21 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
       && Number.isFinite(Date.parse(value.expected_created_at))) {
     return {kind: "terminal_stop", projectId, sessionId: value.session_id,
       expectedCreatedAt: value.expected_created_at};
+  }
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    if (operation === "nebula.devices.pair" && value.kind === "device_pair"
+        && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 200) {
+      return {kind: "device_pair", projectId, name: value.name.trim()};
+    }
+    if (operation === "nebula.devices.revoke" && value.kind === "device_revoke"
+        && typeof value.device_id === "string" && uuidPattern.test(value.device_id)
+        && typeof value.expected_name === "string" && value.expected_name.trim().length > 0 && value.expected_name.length <= 200
+        && typeof value.expected_created_at === "string"
+        && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)$/.test(value.expected_created_at)
+        && Number.isFinite(Date.parse(value.expected_created_at))) {
+      return {kind: "device_revoke", projectId, deviceId: value.device_id,
+        expectedName: value.expected_name, expectedCreatedAt: value.expected_created_at};
+    }
   }
   if (projectAction && typeof projectId === "string" && value.project_id === projectId
       && operation.startsWith("nebula.reports.")) {

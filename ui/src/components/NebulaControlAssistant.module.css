@@ -85,6 +85,9 @@
 .evidenceHandoffForm fieldset { display: grid; gap: 5px; min-width: 0; max-height: 130px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-control); }
 .evidenceHandoffForm fieldset label { display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .evidenceHandoffForm .libraryHandoffActions button { min-height: 44px; }
+.devicePairingOffer { display: grid; gap: 8px; min-width: 0; }
+.devicePairingOffer code { display: block; max-width: 100%; overflow-wrap: anywhere; }
+.devicePairingOffer svg { max-width: 100%; }
 .turnStatus { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); }
 .turnStatusDot { flex: 0 0 7px; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; background: var(--blue); }
 .turnStatus[data-state="attention"] .turnStatusDot, .turnStatus[data-state="error"] .turnStatusDot { background: var(--danger, var(--text)); }

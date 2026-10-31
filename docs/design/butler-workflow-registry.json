@@ -709,6 +709,46 @@
       "status": "supported"
     },
     {
+      "id": "devices.pairing",
+      "entry_point": "Paired devices: create a host-only single-use pairing offer",
+      "ui_calls": [
+        "ui/src/components/DevicePairingSettings.tsx::createDevicePairing",
+        "ui/src/components/DevicePairingSettings.tsx::getToken",
+        "ui/src/components/ButlerDeviceHandoff.tsx::createDevicePairing",
+        "ui/src/components/ButlerDeviceHandoff.tsx::getToken"
+      ],
+      "core_owner": "Core transient pairing offers, local-machine restriction, and paired-device sessions",
+      "butler": {
+        "discover": "nebula.devices.list",
+        "read": "nebula.devices.list",
+        "change": "missing: paired production-LAN redemption evidence for nebula.devices.pair browser handoff"
+      },
+      "authority": "Host bearer browser creates and displays the one-time offer; companion redeems it through Core; Butler receives no secret or confirmation code",
+      "observed_result_test": "missing: Butler host-to-companion LAN pairing journey",
+      "result": "Core creates an offer; a paired device is reported only after separate redemption readback",
+      "status": "device_handoff"
+    },
+    {
+      "id": "devices.revocation",
+      "entry_point": "Paired devices: revoke one exact browser or mobile device",
+      "ui_calls": [
+        "ui/src/components/DevicePairingSettings.tsx::listPairedDevices",
+        "ui/src/components/DevicePairingSettings.tsx::revokePairedDevice",
+        "ui/src/components/ButlerDeviceHandoff.tsx::listPairedDevices",
+        "ui/src/components/ButlerDeviceHandoff.tsx::revokePairedDevice"
+      ],
+      "core_owner": "Core paired-device session and revocation record",
+      "butler": {
+        "discover": "nebula.devices.list",
+        "read": "nebula.devices.list",
+        "change": "missing: paired production-LAN readback evidence for nebula.devices.revoke browser handoff"
+      },
+      "authority": "Exact device ID, creation time and name, requesting-browser confirmation, Core revocation and refreshed device list",
+      "observed_result_test": "missing: Butler paired-device revocation LAN journey",
+      "result": "The exact device is absent from Core or this browser loses authentication",
+      "status": "device_handoff"
+    },
+    {
       "id": "storage.enrollment",
       "entry_point": "Storage settings: enroll, rotate or revoke a source",
       "ui_calls": [
@@ -883,6 +923,22 @@
     },
     {
       "key": "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerDeviceHandoff.tsx::createDevicePairing",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerDeviceHandoff.tsx::getToken",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerDeviceHandoff.tsx::listPairedDevices",
+      "count": 4
+    },
+    {
+      "key": "ui/src/components/ButlerDeviceHandoff.tsx::revokePairedDevice",
       "count": 1
     },
     {

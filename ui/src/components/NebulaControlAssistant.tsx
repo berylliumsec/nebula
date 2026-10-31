@@ -33,6 +33,7 @@ import { HostFolderPicker } from "./HostFolderPicker";
 import { applyButlerTerminalStop } from "./butlerTerminalStop";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
+import { ButlerDeviceHandoff } from "./ButlerDeviceHandoff";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
@@ -101,6 +102,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [pendingLibraryAdd, setPendingLibraryAdd] = useState<Extract<SettingClientAction, {kind: "library_add"}>>();
   const [uploadingLibrary, setUploadingLibrary] = useState(false);
   const [pendingEvidenceUpload, setPendingEvidenceUpload] = useState<(Extract<SettingClientAction, {kind: "evidence_upload"}> & {sourceMessageId?: string})>();
+  const [pendingDeviceAction, setPendingDeviceAction] = useState<(Extract<SettingClientAction, {kind: "device_pair" | "device_revoke"}> & {sourceMessageId?: string})>();
   const [pendingWorkspaceUpload, setPendingWorkspaceUpload] = useState<Extract<SettingClientAction, {kind: "workspace_upload"}>>();
   const [uploadingWorkspace, setUploadingWorkspace] = useState(false);
   const [pendingNotebookIndex, setPendingNotebookIndex] = useState<(Extract<SettingClientAction, {kind: "notebook_index_connect" | "notebook_index_remove"}> & {sourceMessageId?: string})>();
@@ -253,6 +255,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setUploadingImage(false);
     setPendingLibraryAdd(undefined);
     setPendingEvidenceUpload(undefined);
+    setPendingDeviceAction(undefined);
     setUploadingLibrary(false);
     workspaceUploadAbort.current?.abort();
     setPendingWorkspaceUpload(undefined);
@@ -1442,6 +1445,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return "Choose a file on this device in Butler's evidence control, review its project links, then store it in Core.";
   };
 
+  const applyDeviceAction = async (action: Extract<SettingClientAction, {kind: "device_pair" | "device_revoke"}>): Promise<string> => {
+    if (!api || coreState !== "online" || engagement?.id !== action.projectId || activeImageProject.current !== action.projectId) {
+      throw new Error("Reconnect to Core and select the original project before managing a paired device.");
+    }
+    setPendingDeviceAction(action);
+    setView("chat");
+    return action.kind === "device_pair"
+      ? `Review the host-only pairing offer for ${action.name} in Butler's device control. No device has been paired yet.`
+      : `Review and confirm revocation of ${action.expectedName} in Butler's device control. No device has been revoked yet.`;
+  };
+
   const applyEvidenceDownload = async (action: Extract<SettingClientAction, {kind: "evidence_download"}>): Promise<string> => {
     if (!api || coreState !== "online" || engagement?.id !== action.projectId || activeImageProject.current !== action.projectId) {
       throw new Error("Reconnect to Core and select the original project before downloading evidence.");
@@ -1647,6 +1661,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "evidence_upload") return applyEvidenceUpload(action);
     if (action.kind === "evidence_download") return applyEvidenceDownload(action);
+    if (action.kind === "device_pair" || action.kind === "device_revoke") return applyDeviceAction(action);
     if (action.kind === "chat_export") return applyChatExport(action);
     if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
     if (action.kind === "workspace_download") return applyWorkspaceDownload(action);
@@ -1932,6 +1947,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     let reportTransformRequested = false;
     let projectRelinkRequested = false;
     let evidenceUploadRequested = false;
+    let deviceHandoffRequested = false;
     let actionQueue = Promise.resolve();
     try {
       const result = await api.streamChat({
@@ -1975,6 +1991,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           if (action.kind === "report_transform_note") reportTransformRequested = true;
           if (action.kind === "project_relink") projectRelinkRequested = true;
           if (action.kind === "evidence_upload") evidenceUploadRequested = true;
+          if (action.kind === "device_pair" || action.kind === "device_revoke") deviceHandoffRequested = true;
           actionQueue = actionQueue.then(async () => {
             if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
           });
@@ -2026,6 +2043,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
             ? {...current, sourceMessageId: result.message!.id} : undefined);
           if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
+        }
+        if (deviceHandoffRequested) {
+          setPendingDeviceAction((current) => current?.projectId === engagement.id && result.message!.id
+            ? {...current, sourceMessageId: result.message!.id} : undefined);
+          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect paired devices before acting.");
         }
         setPendingImages([]);
         if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
@@ -2119,6 +2141,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     let reportTransformRequested = false;
     let projectRelinkRequested = false;
     let evidenceUploadRequested = false;
+    let deviceHandoffRequested = false;
     let actionQueue = Promise.resolve();
     setMessages((current) => [...current, { role: "user", content: prompt }]);
     const result = await api.streamChat({
@@ -2157,6 +2180,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         if (action.kind === "report_transform_note") reportTransformRequested = true;
         if (action.kind === "project_relink") projectRelinkRequested = true;
         if (action.kind === "evidence_upload") evidenceUploadRequested = true;
+        if (action.kind === "device_pair" || action.kind === "device_revoke") deviceHandoffRequested = true;
         actionQueue = actionQueue.then(async () => { confirmations.push(await applyClientAction(action)); });
       }
       const receipt = assistantWorkReceipt(event, engagement.id);
@@ -2196,6 +2220,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
         ? {...current, sourceMessageId: result.message!.id} : undefined);
       if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
+    }
+    if (deviceHandoffRequested) {
+      setPendingDeviceAction((current) => current?.projectId === engagement.id && result.message!.id
+        ? {...current, sourceMessageId: result.message!.id} : undefined);
+      if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect paired devices before acting.");
     }
     confirmations.push(...workReceipts.filter(({ url }) => !result.message!.content.includes(url)).map(({ content }) => content));
     if (result.message.id && confirmations.length && actionOutcomesKey) {
@@ -2360,6 +2389,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         appendBrowserActionOutcome(pendingEvidenceUpload, message);
         setPendingEvidenceUpload(undefined);
       }}
+    />}
+    {pendingDeviceAction && pendingDeviceAction.projectId === engagement?.id && pendingDeviceAction.sourceMessageId && <ButlerDeviceHandoff
+      key={pendingDeviceAction.sourceMessageId}
+      api={api}
+      online={coreState === "online"}
+      action={pendingDeviceAction}
+      currentProjectId={() => activeImageProject.current}
+      onOutcome={(message) => appendBrowserActionOutcome(pendingDeviceAction, message)}
+      onDismiss={() => setPendingDeviceAction(undefined)}
+      onSelfRevoked={() => window.location.replace("/")}
     />}
     {pendingWorkspaceUpload && pendingWorkspaceUpload.projectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Upload to project workspace">
       <div><strong>Upload to project workspace</strong><small>Choose a file on this device for /workspace/{pendingWorkspaceUpload.directory}. Core will confirm the saved bytes.</small></div>
