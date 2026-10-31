@@ -112,6 +112,11 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create_linked", client_action: {...linked, workspace_path: "/private"}}}, "selected"))
       .toEqual({kind: "project_create_linked", sourceProjectId: "selected", name: "Linked", description: "", clientName: "", requestId});
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: linked}}, "selected")).toBeUndefined();
+    const relink = {kind: "project_relink", project_id: projectId, expected_revision: 3, name: "Fixture"};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.relink", client_action: relink}}, "selected"))
+      .toEqual({kind: "project_relink", sourceProjectId: "selected", projectId, expectedRevision: 3, name: "Fixture"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.relink", client_action: {...relink, expected_revision: 0}}}, "selected"))
+      .toBeUndefined();
   });
   it("accepts only a scoped transcript export handoff from Core", () => {
     const sessionId = "9482d86e-2ddc-436b-90be-30b878f68537";

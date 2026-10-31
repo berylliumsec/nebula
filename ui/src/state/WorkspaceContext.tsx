@@ -97,6 +97,7 @@ interface WorkspaceContextValue {
   deleteArchivedEngagement: (id: string, expectedRevision?: number) => Promise<void>;
   setEngagementArchived: (id: string, archived: boolean, expectedRevision?: number) => Promise<string | undefined>;
   renameEngagementAtRevision: (id: string, name: string, expectedRevision: number) => Promise<EngagementSummary>;
+  refreshProjectLifecycle: (id: string) => ReturnType<ApiClient["getProjectLifecycle"]>;
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
   engagement?: EngagementSummary;
@@ -677,6 +678,17 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return saved;
   }, [api, coreState, selectedEngagementId]);
 
+  const refreshProjectLifecycle = useCallback(async (id: string) => {
+    if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to refresh a project.");
+    const observed = await api.getProjectLifecycle(id);
+    const refreshed = (current: EngagementSummary): EngagementSummary => current.id === id
+      ? {...current, name: observed.name, status: observed.status, workspacePath: observed.workspacePath}
+      : current;
+    setEngagements((current) => current.map(refreshed));
+    if (id === selectedEngagementId) setEngagement((current) => current ? refreshed(current) : current);
+    return observed;
+  }, [api, coreState, selectedEngagementId]);
+
   const deleteArchivedEngagement = useCallback(async (id: string, expectedRevision?: number) => {
     if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to delete a project.");
     await api.deleteArchivedEngagement(id, expectedRevision);
@@ -1157,6 +1169,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       selectEngagement,
       createEngagement,
       renameEngagementAtRevision,
+      refreshProjectLifecycle,
       setEngagementArchived,
       deleteArchivedEngagement,
       addAsset,
@@ -1220,6 +1233,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       selectEngagement,
       createEngagement,
       renameEngagementAtRevision,
+      refreshProjectLifecycle,
       setEngagementArchived,
       deleteArchivedEngagement,
       addAsset,

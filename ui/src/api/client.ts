@@ -6152,6 +6152,15 @@ export class ApiClient {
     }));
   }
 
+  relinkProjectWorkspace(id: string, path: string, expectedRevision: number): Promise<{ id: string; revision: number; workspacePath?: string }> {
+    return this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}/workspace/relink`, {
+      method: "POST",
+      body: JSON.stringify({ path, expected_revision: expectedRevision }),
+    }).then(({ id: projectId, revision, workspace_path }) => ({
+      id: projectId, revision, workspacePath: workspace_path ?? undefined,
+    }));
+  }
+
   async renameEngagementAtRevision(id: string, name: string, expectedRevision: number): Promise<EngagementSummary> {
     const saved = await this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}`, {
       method: "PATCH",

@@ -28,6 +28,7 @@ function Probe() {
     library: value.libraryItems, harnesses: value.harnesses, assets: value.assets,
     run: missions.run, runs: missions.runs, events,
     approvals: value.approvals, evidence: value.evidence, engagement: value.engagement?.id,
+    workspacePath: value.engagement?.workspacePath,
     projects: value.engagements.map((project) => project.id),
     observations: value.observations,
   })}</output>{(["library", "harnesses", "activity", "evidence"] as const).map((resource) =>
@@ -35,6 +36,7 @@ function Probe() {
   <button onClick={() => value.selectEngagement("project-b")}>Select project B</button>
   <button onClick={() => value.selectEngagement("project")}>Select project A</button>
   <button onClick={() => void value.createEngagement({name: "Created"}, {select: false})}>Create without selection</button>
+  <button onClick={() => void value.refreshProjectLifecycle("project")}>Refresh project lifecycle</button>
   <button onClick={() => missions.selectMission("run-2")}>Select mission 2</button>
   <button onClick={value.reconnect}>Retry Core</button>
   <button onClick={() => void value.resolveApproval(value.approvals[0]?.id ?? "", { decision: "approve" }).catch((error: Error) => fixture.errors.push(error.message))}>Approve first</button></>;
@@ -73,6 +75,21 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it("refreshes the selected project folder from the exact Core record", async () => {
+    fixture.methods.listEngagements.mockResolvedValue({items: [
+      {id: "project", name: "Project", status: "active", workspacePath: "/srv/old"},
+    ]});
+    fixture.methods.getProjectLifecycle = vi.fn().mockResolvedValue({
+      id: "project", name: "Project", status: "active", revision: 2, workspacePath: "/srv/new",
+    });
+    await mount();
+    expect(state().workspacePath).toBe("/srv/old");
+    fireEvent.click(screen.getByText("Refresh project lifecycle"));
+    await waitFor(() => expect(state().workspacePath).toBe("/srv/new"));
+    expect(fixture.methods.getProjectLifecycle).toHaveBeenCalledWith("project");
+    expect(fixture.methods.listEngagements).toHaveBeenCalledTimes(1);
+  });
+
   it("adds a created project without changing the selected project before navigation", async () => {
     fixture.methods.createEngagement = vi.fn().mockResolvedValue({id: "created", name: "Created", status: "draft"});
     await mount();
