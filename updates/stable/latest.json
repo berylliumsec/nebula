@@ -2,10 +2,10 @@
   "notes": "Nebula desktop update",
   "platforms": {
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRWTVLd1o4bWFYVEdvSUpMOTYzdlFzR3kwTWFFeFZoVHBQbkFvcFdJWjFoVU4rZHVxM2EwN2llaVJuNFA1ZlFsNnYzcTloNzREL0dGSGdaemRSTVAyeG1NbDVtd3cxd2dBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgwMzM2CWZpbGU6TmVidWxhXzMuMC4zN19hbWQ2NC5BcHBJbWFnZQptdDVWMDBjM1BBWVJPaXA1d0hlRUNnYVdySDlFMnVjL3pHL2lXTXRRU1R4NDFXL05aNDNtaC9ES25XckVGOFRGSWxNV1h6YVFERWozWTJSZVlOOGVEZz09Cg==",
-      "url": "https://github.com/berylliumsec/nebula/releases/download/nebula-v3.0.37/Nebula-3.0.37-linux-x86_64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRWTVLd1o4bWFYVElxVU4xRFBzVnRSdWJWZTU0Zkg3b1Rid2lUeVloN2lnZ0puWUhJeEEreEs3alVYR1MvV2hqRmtzQS9POUR5NlRKdktuTzFnUjkrMEJ3dFFDTEJkUGdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNDUyODgyCWZpbGU6TmVidWxhXzMuMC4zOF9hbWQ2NC5BcHBJbWFnZQp6aE8xSWd1MW9jWDhOYXM4Vk5jMmxFbSttdjNNL0dqZ293NDZiVjFYUC9Nbi9TVTUyYVBSOVBuczZiOU5tSDNaZnRuaEIzMjJwOGpOZjZmRkREL2xBUT09Cg==",
+      "url": "https://github.com/berylliumsec/nebula/releases/download/nebula-v3.0.38/Nebula-3.0.38-linux-x86_64.AppImage"
     }
   },
-  "pub_date": "2026-10-29T13:43:30Z",
-  "version": "3.0.37"
+  "pub_date": "2026-10-31T13:38:33Z",
+  "version": "3.0.38"
 }
