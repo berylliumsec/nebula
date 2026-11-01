@@ -2,6 +2,26 @@
   "version": 1,
   "actions": [
     {
+      "id": "butler.memory_manage",
+      "entry_point": "Butler Memory panel: read, search, edit or delete a visible saved memory; Butler can remember, search, update or forget one through typed tools",
+      "ui_calls": [
+        "ui/src/api/butlerMemory.ts::request::GET `butler/memory?engagement_id=${encodeURIComponent(projectId)}&limit=50`",
+        "ui/src/api/butlerMemory.ts::request::\"POST\" \"butler/memory/search\"",
+        "ui/src/api/butlerMemory.ts::request::\"PATCH\" `butler/memory/${encodeURIComponent(item.id)}`",
+        "ui/src/api/butlerMemory.ts::request::\"DELETE\" `butler/memory/${encodeURIComponent(item.id)}?engagement_id=${encodeURIComponent(projectId)}&expected_revision=${item.revision}`"
+      ],
+      "core_owner": "ButlerMemoryService scoped list, search and revision-checked update/delete",
+      "butler": {
+        "discover": "nebula.memory.list and nebula.memory.search",
+        "read": "nebula.memory.list and nebula.memory.search",
+        "change": "nebula.memory.remember, nebula.memory.update and nebula.memory.forget"
+      },
+      "authority": "Selected project; global memory visibility rules; exact memory ID and current revision for edit or deletion; explicit operator request for mutation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade control assistant starts project work on production LAN Core",
+      "result": "Memory appears after a Butler turn, survives Core readback, and disappears after confirmed panel deletion; selected project filters foreign lessons",
+      "status": "supported"
+    },
+    {
       "id": "chat.archive",
       "entry_point": "Conversation menu: Archive or Restore a saved main chat",
       "ui_calls": [

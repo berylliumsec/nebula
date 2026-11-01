@@ -7383,9 +7383,20 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await preferenceRow.locator("summary").click();
     expect(await memory.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     expect((await new AxeBuilder({page}).include('[aria-label="Butler memory"]').analyze()).violations).toEqual([]);
-    await preferenceRow.getByRole("button", {name: "Delete", exact: true}).click();
-    await preferenceRow.getByRole("button", {name: "Delete memory"}).click();
-    await expect(preferenceRow).toHaveCount(0);
+    await preferenceRow.getByRole("button", {name: "Edit", exact: true}).click();
+    const editedPreference = "The operator prefers Eastern Time for timestamps.";
+    await memory.getByRole("textbox", {name: "Memory content"}).fill(editedPreference);
+    await memory.getByRole("button", {name: "Save changes"}).click();
+    const editedRow = memory.getByRole("listitem").filter({hasText: editedPreference});
+    await expect(editedRow).toBeVisible();
+    await expect.poll(async () => {
+      const saved = await (await api.get(`butler/memory?engagement_id=${projectId}&limit=50`)).json() as {
+        items: Array<{content: string}>};
+      return saved.items.some(item => item.content === editedPreference);
+    }).toBe(true);
+    await editedRow.getByRole("button", {name: "Delete", exact: true}).click();
+    await editedRow.getByRole("button", {name: "Delete memory"}).click();
+    await expect(editedRow).toHaveCount(0);
     await memory.getByRole("button", {name: "Memory", exact: true}).click();
     await assistant.getByRole("button", {name: "Chat"}).click();
     const missionLink = assistant.getByRole("link", {name: "Open mission"});
