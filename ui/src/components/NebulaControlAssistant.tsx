@@ -38,6 +38,7 @@ import { deleteButlerCredential } from "./butlerCredentialAction";
 import { attachButlerProviderCredential } from "./butlerProviderCredentialAction";
 import { attachButlerHarnessCredential } from "./butlerHarnessCredentialAction";
 import { attachButlerMcpCredential } from "./butlerMcpCredentialAction";
+import { applyButlerNoteAction } from "./butlerNoteAction";
 import { applyButlerDiagnosticsExport } from "./butlerDiagnosticsAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
@@ -1700,6 +1701,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setPendingCredentialCreate(action);
       setView("chat");
       return "Opened write-only credential entry on this browser. No secret has been sent to Butler or saved yet.";
+    }
+    if (action.kind === "note_create" || action.kind === "note_update" || action.kind === "note_delete") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before changing its note.");
+      }
+      const result = await applyButlerNoteAction(api, action, () => activeImageProject.current, request => confirm(request));
+      if (result.refresh && activeImageProject.current === action.projectId) {
+        try {
+          await retryResource("notes");
+        } catch {
+          // diagnostic-expected: WorkspaceContext records the failed Notes read and exposes Retry Notes.
+          return `${result.message} The Notes list could not refresh; use Retry Notes.`;
+        }
+      }
+      return result.message;
     }
     if (action.kind === "settings_profile_refresh") {
       if (!api || coreState !== "online") return "Core confirmed the profile change. Reconnect to refresh Settings.";

@@ -1605,6 +1605,17 @@ class ReportRenderRequest(NebulaModel):
     report_revision: int = Field(ge=1)
 
 
+class ButlerNoteDraftRequest(NebulaModel):
+    """A requesting-browser note ID for exact create reconciliation."""
+
+    note_id: UUID
+    engagement_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(default="", max_length=100000)
+    asset_ids: list[str] = Field(default_factory=list, max_length=500)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
 class ButlerReportDraftRequest(NebulaModel):
     """A browser-owned draft ID for readback after an uncertain create response."""
 
@@ -7316,6 +7327,31 @@ def create_app(
         observation_id: str,
     ) -> ObservationDependencies:
         return _observation_dependencies(store, observation_id)
+
+    @app.post(
+        f"{API_PREFIX}/observations/butler-drafts",
+        response_model=Observation,
+        status_code=201,
+        tags=["observations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_butler_note_draft(request: ButlerNoteDraftRequest) -> Observation:
+        note = Observation(
+            id=str(request.note_id),
+            engagement_id=request.engagement_id,
+            observation_type="note",
+            title=request.title.strip(),
+            body=request.body,
+            asset_ids=request.asset_ids,
+            evidence_ids=request.evidence_ids,
+            source="operator-note",
+        )
+        if not note.title:
+            raise ValueError("note title cannot be blank")
+        entity_validator.validate_create(note)
+        created = relation_service.create_legacy_entity(note)
+        assert isinstance(created, Observation)
+        return created
 
     @app.post(
         f"{API_PREFIX}/writing/transform",

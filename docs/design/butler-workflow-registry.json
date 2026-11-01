@@ -1249,6 +1249,37 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
       "result": "Exact created identity is returned after Core readback; stale edits/deletes fail; live Settings catalogs and reload show saved profile state; confirmed deletion returns exact absence",
       "status": "supported"
+    },
+    {
+      "id": "notes.lifecycle",
+      "entry_point": "Butler or Project Notes: discover editable notes, create or edit exact fields and links, or confirm revision-checked deletion",
+      "ui_calls": [
+        "ui/src/components/NotesPanel.tsx::createObservation",
+        "ui/src/components/NotesPanel.tsx::updateObservation",
+        "ui/src/components/NotesPanel.tsx::deleteObservation",
+        "ui/src/components/NotesPanel.tsx::listObservations",
+        "ui/src/components/NotesPanel.tsx::observationDependencies",
+        "ui/src/state/WorkspaceContext.tsx::createObservation",
+        "ui/src/state/WorkspaceContext.tsx::updateObservation",
+        "ui/src/state/WorkspaceContext.tsx::deleteObservation",
+        "ui/src/state/WorkspaceContext.tsx::listAssets",
+        "ui/src/state/WorkspaceContext.tsx::listEvidence",
+        "ui/src/components/butlerNoteAction.ts::getObservation",
+        "ui/src/components/butlerNoteAction.ts::createButlerNote",
+        "ui/src/components/butlerNoteAction.ts::updateObservation",
+        "ui/src/components/butlerNoteAction.ts::deleteObservation",
+        "ui/src/components/butlerNoteAction.ts::observationDependencies"
+      ],
+      "core_owner": "Core note record and relation projection, same-project references, revision and report-dependency deletion guards",
+      "butler": {
+        "discover": "nebula.notes.list and nebula.notes.link_targets",
+        "read": "nebula.notes.detail",
+        "change": "nebula.notes.create, nebula.notes.update and nebula.notes.delete"
+      },
+      "authority": "Interactive selected-project browser receipt; browser-owned create UUID; exact current revision and title for edits or deletion; destructive browser confirmation; Core dependencies remain authoritative",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates edits and deletes project Notes on production LAN Core",
+      "result": "Saved linked note fields appear in Project Notes and survive reload; report dependency and cancellation retain the note; confirmed deletion reads exact absence without removing its evidence or assets",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -2602,6 +2633,26 @@
     },
     {
       "key": "ui/src/components/butlerMcpCredentialAction.ts::updateMcpServer",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerNoteAction.ts::createButlerNote",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerNoteAction.ts::deleteObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerNoteAction.ts::getObservation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerNoteAction.ts::observationDependencies",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerNoteAction.ts::updateObservation",
       "count": 1
     },
     {

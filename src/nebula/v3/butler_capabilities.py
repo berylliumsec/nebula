@@ -83,6 +83,9 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.providers.attach_credential",
         "nebula.harnesses.attach_credential",
         "nebula.mcp.attach_credential",
+        "nebula.notes.create",
+        "nebula.notes.update",
+        "nebula.notes.delete",
         "nebula.diagnostics.export",
         "nebula.workspace.download_file",
         "nebula.library.add",
@@ -169,6 +172,10 @@ _CATEGORIES = (
     {
         "id": "reports",
         "description": "Selected-project report and source discovery, draft changes, operator signoff handoff, and requesting-device exports",
+    },
+    {
+        "id": "notes",
+        "description": "Selected-project Notes and same-project link discovery with exact browser-owned create, edit and confirmed deletion",
     },
     {
         "id": "terminal",
@@ -285,6 +292,7 @@ class ButlerCapabilities:
             from .butler_providers import ButlerProviders
             from .butler_harnesses import ButlerHarnesses
             from .butler_mcp import ButlerMcp
+            from .butler_notes import ButlerNotes
             from .butler_reports import ButlerReports
             from .butler_storage import ButlerStorage
             from .butler_terminal import ButlerTerminal
@@ -358,6 +366,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerMcp(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerNotes(store, project_id).actions()
                 }
             )
             self._actions.update(

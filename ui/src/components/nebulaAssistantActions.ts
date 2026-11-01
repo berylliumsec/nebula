@@ -6,7 +6,11 @@ import { assistantDestination, type AssistantDestination } from "../assistantDes
 type Runtime = { kind: "provider" | "harness"; id: string; model: string };
 export type ProjectMode = "docker" | "host";
 export type ProjectScopeMode = "bounded" | "all_destinations" | "allow_all";
+type NoteChanges = {title?: string; body?: string; assetIds?: string[]; evidenceIds?: string[]};
 export type SettingClientAction =
+  | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
+  | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
+  | { kind: "note_delete"; projectId: string; noteId: string; name: string; expectedRevision: number }
   | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" }
   | { kind: "open_setting"; setting: SettingCatalogEntry }
   | { kind: "navigate"; destination: AssistantDestination }
@@ -67,6 +71,11 @@ function validReportReferences(value: unknown): value is string[] {
   return Array.isArray(value) && value.length <= 500
     && value.every((item) => typeof item === "string" && uuidPattern.test(item))
     && new Set(value).size === value.length;
+}
+
+function validNoteReferences(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= 500 && new Set(value).size === value.length
+    && value.every(item => typeof item === "string" && item.length > 0 && item.length <= 200 && !/[\x00-\x1f]/.test(item));
 }
 
 function butlerGatewayOperation(event: Extract<ChatStreamEvent, {type: "tool_completed"}>, projectId?: string): string | undefined {
@@ -138,6 +147,32 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     return undefined;
   }
   if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    const noteId = typeof value.note_id === "string" && value.note_id.length > 0 && value.note_id.length <= 200
+      && !/[\x00-\x1f]/.test(value.note_id) ? value.note_id : undefined;
+    const validNoteFields = (value.title === undefined || (typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500))
+      && (value.body === undefined || (typeof value.body === "string" && value.body.length <= 100000))
+      && (value.asset_ids === undefined || validNoteReferences(value.asset_ids))
+      && (value.evidence_ids === undefined || validNoteReferences(value.evidence_ids));
+    if (operation === "nebula.notes.create" && value.kind === "note_create" && noteId && uuidPattern.test(noteId)
+        && validNoteFields && typeof value.title === "string" && typeof value.body === "string"
+        && validNoteReferences(value.asset_ids) && validNoteReferences(value.evidence_ids)) {
+      return {kind: "note_create", projectId, noteId, title: value.title, body: value.body,
+        assetIds: value.asset_ids, evidenceIds: value.evidence_ids};
+    }
+    if (noteId && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+        && typeof value.name === "string" && value.name.length <= 500) {
+      if (operation === "nebula.notes.delete" && value.kind === "note_delete") {
+        return {kind: "note_delete", projectId, noteId, name: value.name, expectedRevision: Number(value.expected_revision)};
+      }
+      if (operation === "nebula.notes.update" && value.kind === "note_update" && validNoteFields
+          && [value.title, value.body, value.asset_ids, value.evidence_ids].some(field => field !== undefined)) {
+        return {kind: "note_update", projectId, noteId, name: value.name, expectedRevision: Number(value.expected_revision),
+          ...(typeof value.title === "string" ? {title: value.title} : {}),
+          ...(typeof value.body === "string" ? {body: value.body} : {}),
+          ...(validNoteReferences(value.asset_ids) ? {assetIds: value.asset_ids} : {}),
+          ...(validNoteReferences(value.evidence_ids) ? {evidenceIds: value.evidence_ids} : {})};
+      }
+    }
     if (operation === "nebula.diagnostics.export" && value.kind === "diagnostics_export") {
       return {kind: "diagnostics_export", projectId};
     }

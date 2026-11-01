@@ -9,6 +9,15 @@ vi.mock("../diagnostics", async (importOriginal) => ({
 }));
 
 describe("ApiClient", () => {
+  it("creates Butler notes with the browser-owned ID and exact Core link fields", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({id: "note", engagement_id: "project",
+      observation_type: "note", title: "Note", body: "Body", revision: 1}), {status: 201}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    await client.createButlerNote("note", {engagementId: "project", title: "Note", body: "Body", assetIds: ["asset"], evidenceIds: []});
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/observations/butler-drafts");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({note_id: "note", engagement_id: "project",
+      title: "Note", body: "Body", asset_ids: ["asset"], evidence_ids: []});
+  });
   it("maps opaque MCP credential references on exact profile readback", async () => {
     const reference = `session:${"a".repeat(32)}`;
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({

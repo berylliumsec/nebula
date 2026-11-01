@@ -1152,6 +1152,106 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
   ]);
 });
 
+test("assistant upgrade Butler creates edits and deletes project Notes on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  const prompts = ["Create the synthetic Butler project note.", "Revise the synthetic Butler project note.", "Delete the synthetic Butler project note."];
+  let noteId = "";
+  let noteRevision = 0;
+  let assetId = "";
+  const stub = await startLocalModelStub({responseContent: "The requesting browser checks the note result.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = prompts.find(item => String(messages[lastUser]?.content ?? "").startsWith(item));
+    if (!prompt) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const create = prompt === prompts[0];
+    const operation = create ? "nebula.notes.create" : prompt === prompts[1] ? "nebula.notes.update" : "nebula.notes.delete";
+    const read = create ? "nebula.notes.link_targets" : "nebula.notes.detail";
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "create edit delete project notes"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: read}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: read, arguments: create ? {kind: "asset"} : {note_id: noteId}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation}};
+    if (replies === 4) return {name: "nebula_capabilities_change", arguments: {operation, arguments: create
+      ? {title: "Butler note fixture", body: "Observed fixture fact.", asset_ids: [assetId]}
+      : {note_id: noteId, expected_revision: noteRevision,
+        ...(prompt === prompts[1] ? {title: "Butler revised note", body: "Revised fixture fact."} : {})}}};
+    return undefined;
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler Notes fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const assetResponse = await api.post("assets", {data: {engagement_id: projectId, name: "Synthetic host"}});
+    expect(assetResponse.ok(), await assetResponse.text()).toBe(true);
+    assetId = (await assetResponse.json() as {id: string}).id;
+    const modelResponse = await api.post("providers", {data: {name: "Butler Notes model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}}}});
+    expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+    const model = await modelResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${model.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: model.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler Notes LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=notes`);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts[0]);
+    await expect(assistant.getByText(/Created note “Butler note fixture”/)).toBeVisible({timeout: 60_000});
+    const rows = await (await api.get(`observations?engagement_id=${projectId}`)).json() as Array<{id: string; title: string; revision: number; asset_ids: string[]}>;
+    const note = rows.find(item => item.title === "Butler note fixture")!;
+    expect(note).toBeTruthy();
+    expect(note.asset_ids).toEqual([assetId]);
+    noteId = note.id; noteRevision = note.revision;
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await page.getByRole("complementary", {name: "Project notes"}).getByRole("button", {name: /Butler note fixture/}).click();
+    await expect(page.getByRole("textbox", {name: "Note body"})).toHaveValue("Observed fixture fact.");
+    await send(prompts[1]);
+    await expect(assistant.getByText(/Updated note “Butler revised note”/)).toBeVisible({timeout: 60_000});
+    const saved = await (await api.get(`observations/${noteId}`)).json() as {revision: number; asset_ids: string[]};
+    expect(saved.revision).toBeGreaterThan(noteRevision);
+    expect(saved.asset_ids).toEqual([assetId]);
+    noteRevision = saved.revision;
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await expect(page.getByRole("complementary", {name: "Project notes"}).getByRole("button", {name: /Butler revised note/})).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("textbox", {name: "Note body"})).toHaveValue("Revised fixture fact.");
+    const reportResponse = await api.post("reports", {data: {engagement_id: projectId, title: "Retaining report", observation_ids: [noteId]}});
+    expect(reportResponse.ok(), await reportResponse.text()).toBe(true);
+    const report = await reportResponse.json() as {id: string; revision: number};
+    await send(prompts[2]);
+    await expect(assistant.getByText(/Reports still use this note/)).toBeVisible({timeout: 60_000});
+    expect((await api.get(`observations/${noteId}`)).status()).toBe(200);
+    const unlinked = await api.patch(`reports/${report.id}`, {data: {expected_revision: report.revision, changes: {observation_ids: []}}});
+    expect(unlinked.ok(), await unlinked.text()).toBe(true);
+    await send(prompts[2]);
+    const confirmation = page.getByRole("dialog", {name: "Delete project note?"});
+    await expect(confirmation).toBeVisible({timeout: 60_000});
+    await confirmation.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(/Note “Butler revised note” was not deleted/)).toBeVisible();
+    await send(prompts[2]);
+    await expect(confirmation).toBeVisible({timeout: 60_000});
+    await confirmation.getByRole("button", {name: "Delete note"}).click();
+    await expect(assistant.getByText(/Core confirms its absence; linked assets and evidence remain/)).toBeVisible();
+    expect((await api.get(`observations/${noteId}`)).status()).toBe(404);
+    expect((await api.get(`assets/${assetId}`)).status()).toBe(200);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-notes-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Created and edited one linked note; live Notes and reload showed saved fields; report dependency blocked deletion; cancellation retained it; confirmed deletion removed only the note."}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
 test("assistant upgrade Butler manages nonsecret integration profiles on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(480_000);
   const profiles = [

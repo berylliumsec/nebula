@@ -447,6 +447,19 @@ def test_product_search_finds_butler_integration_profile_lifecycle(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_project_notes_lifecycle(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create edit or delete a project note linked to a report?"
+    )
+    assert any(
+        "notes" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        and "report" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_diagnostics_export(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

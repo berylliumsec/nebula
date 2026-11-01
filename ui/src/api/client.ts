@@ -7868,6 +7868,14 @@ export class ApiClient {
     return this.request<WireObservation>(`observations/${encodeURIComponent(id)}`, { signal }).then(mapObservation);
   }
 
+  createButlerNote(id: string, body: ObservationCreateRequest): Promise<ObservationSummary> {
+    return this.request<WireObservation>("observations/butler-drafts", {
+      method: "POST",
+      body: JSON.stringify({note_id: id, engagement_id: body.engagementId,
+        title: body.title, body: body.body ?? "", asset_ids: body.assetIds ?? [], evidence_ids: body.evidenceIds ?? []}),
+    }).then(mapObservation);
+  }
+
   createObservation(
     body: ObservationCreateRequest,
   ): Promise<ObservationSummary> {

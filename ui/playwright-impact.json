@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts"],"areas":["butler-notes"]},
     {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
     {"name": "harness-catalog-refresh", "patterns": ["ui/src/components/HarnessSettings.tsx", "ui/src/state/WorkspaceContext.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["harness-catalog-refresh"]},
     {"name": "assistant-browser-viewer", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "src/nebula/v3/browser_companion.py", "tests/v3/application_model_fixture.py", "ui/playwright.application-model.config.ts"], "areas": ["assistant-browser-viewer"]},
@@ -105,6 +106,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "butler-notes": [
+      {"area":"butler-notes","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "butler-integration-profiles": [
       {"area":"butler-integration-profiles","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-integration-profiles","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},

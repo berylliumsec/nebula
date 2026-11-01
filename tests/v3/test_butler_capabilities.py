@@ -969,6 +969,12 @@ def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path
     _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
 
     async def scenario():
+        assert not any(
+            row["operation"].startswith("nebula.notes.")
+            for row in (await capabilities.search({"query": "project notes"}))[
+                "matches"
+            ]
+        )
         assert "projects" not in [
             row["id"] for row in (await capabilities.search({}))["categories"]
         ]
