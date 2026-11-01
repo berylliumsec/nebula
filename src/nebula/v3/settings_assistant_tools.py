@@ -40,6 +40,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("providers", "Model providers", "provider-settings"),
     ("skills", "Shared skills", "native-skill-settings"),
     ("web-search", "Web search runtime", "web-search-runtime-settings"),
+    ("typesafe", "TypeSafe API key", "typesafe-integration-settings"),
     ("storage", "Storage sources", "storage-integration-settings"),
     ("follow-up", "Post-tool assistant", "post-tool-assistant-settings"),
     ("harnesses", "Assistant harnesses", "harness-settings"),
@@ -811,7 +812,7 @@ def provider_plugins(
         AnalysisTool(
             ToolSpec(
                 name="nebula.settings.api_request",
-                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Profile DELETE requires expected_revision from the exact profile GET and forwards Core's If-Match guard. A create reads back the exact new identity. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
+                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Profile DELETE requires expected_revision from the exact profile GET and forwards Core's If-Match guard. A create reads back the exact new identity. TypeSafe key entry/removal, VPN profile import/removal and MCP configuration import belong in the requesting browser: use nebula.settings.open with typesafe, vpn-egress or mcp. Never put their private input in tool arguments. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
                 input_schema=SETTINGS_API_REQUEST_SCHEMA,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.WORKSPACE_WRITE,

@@ -16,7 +16,7 @@ import { useOptionalWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { createHashedSelectionAttachment } from "./selection/selectionActions";
 import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeContext";
 import { readStorage, writeStorage } from "../state/browserStorage";
-import { settingCatalog, type SettingCatalogEntry } from "../settingsCatalog";
+import { settingCatalog, settingOpensInButler, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
 import { projectSurface, resourcePath } from "../resourceRoutes";
 import { sha256BlobHex, sha256Hex } from "../sha256";
@@ -80,7 +80,7 @@ const ButlerTranscript = memo(function ButlerTranscript({ messages, api, project
     const workLink = projectId && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
       && href.startsWith(`/projects/${encodeURIComponent(projectId)}/workbench?`) ? href : undefined;
     return setting
-      ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); onHide(setting.target !== "butler-oversight"); }}>{children}</a>
+      ? <a href={href} onClick={(event) => { event.preventDefault(); onOpenSetting(setting); onHide(!settingOpensInButler(setting)); }}>{children}</a>
       : destination ? <a href={href} onClick={(event) => { event.preventDefault(); onHide(true); onNavigate(assistantDestinationPath(destination, projectId) ?? "/projects"); }}>{children}</a>
       : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); onHide(true); }}>{children}</a>
       : <a href={href} {...props}>{children}</a>;
@@ -530,6 +530,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const openVoiceSettings = () => {
       setOpen(true);
       setHidden(false);
+      setView("more");
       if (!settingsOpen) openSettings();
       else void loadVoiceSettings();
     };
@@ -992,7 +993,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const openSelectedSetting = (entry: SettingCatalogEntry) => {
     onOpenSetting(entry);
     if (entry.target === "butler-oversight") setView("work");
-    setHidden(entry.target !== "butler-oversight");
+    setHidden(!settingOpensInButler(entry));
   };
 
   const applyChatExport = async (action: Extract<SettingClientAction, {kind: "chat_export"}>): Promise<string> => {

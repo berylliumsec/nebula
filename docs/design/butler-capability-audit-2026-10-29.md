@@ -29,7 +29,7 @@ and reads; these counts are not a coverage percentage.
 | Settings and navigation | Discover listed Settings routes, read schemas, use authenticated Core Settings API calls, open destinations, and request device theme or project mode/scope changes | The Settings gateway covers an allowlisted route family, not all Core APIs. Device actions are pending until that browser confirms them. One-time secrets and local file pickers stay on their protected UI paths. |
 | Projects and global oversight | Navigate to projects; interactive Butler can page and read projects and request create with a managed workspace or a browser-selected linked host folder, relink an existing project through a browser-selected host folder, rename, archive, restore, and permanent delete; scheduled Butler can inspect and act on eligible projects with current Act authority and privacy scope | The browser checks Core revisions, confirms folder choice and removal, and reads back results. Core refuses a relink while old-workspace work can be reused and disconnects a stale Notebook file index. Host consent remains in its visible control. |
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
-| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; discover active security browser sessions and start a scoped browser automation mission with explicit targets and lease limits; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page selected-project evidence and link targets and request a browser-owned immutable evidence upload with exact Core read-back | Direct control of the visible browser page, browser evidence capture, and other research-data control still lack accepted Butler journeys. A saved browser mission is not an assessment result. Device file bytes stay in the requesting browser. Security testing remains under the project's scope and approval policy. |
+| Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; discover active security browser sessions and start a scoped passive browser-inspection mission with explicit targets and lease limits; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page selected-project evidence and link targets and request a browser-owned immutable evidence upload with exact Core read-back | Direct control of the visible browser page, browser evidence capture, and other research-data control still lack accepted Butler journeys. A saved browser mission is not an assessment result. Device file bytes stay in the requesting browser. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; prepare an exact linked-note AI section transform for browser runtime choice and operator review; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. The operating system's final download save location remains device-owned. |
 | Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes; prepare selected-project storage enrollment, token, reporting and callback handoffs; list nonsecret paired-device identities and open host pairing or exact-device revocation controls; enter write-only credentials on the requesting browser, confirm deletion of exact managed references, and attach an available reference to an exact provider, Assistant harness or MCP server slot; confirm a sensitive diagnostics ZIP download on the requesting browser | Pairing redemption belongs to the new device. Attaching credentials to other integration profiles, release deployment, service control and other specialized workflows remain gaps. One-time source tokens, pairing links, credential secrets and diagnostics ZIP bytes stay on the requesting device. |
 
@@ -117,15 +117,16 @@ control because Core access ends immediately and cannot be read back there.
 The paired LAN journey covers cancellation, revocation, lost companion access,
 browser refresh and the absence of pairing secrets from model messages.
 
-## Branch slice: scoped browser automation mission
+## Branch slice: scoped passive browser inspection
 
-Entry point: an operator asks interactive Butler to assess an in-scope target
-through the project's headless security browser. Butler pages active eligible
+Entry point: an operator asks interactive Butler to inspect an in-scope page
+through the project's browser. Butler pages active eligible
 sessions, selects one exact session, and starts a mission with explicit targets,
-risk classes and a bounded browser lease. Core owns the session identity, scope,
+the passive risk class and a bounded browser lease. Other risk classes and new
+credential grants stay in the operator-controlled Browser. Core owns identity, scope,
 mission and lease; Butler receives no browser cookies, page body or credential
-secret. A cross-project session, out-of-scope target or ungranted high-risk class
-is refused by Core. The mission's saved status and ID are a start receipt;
+secret. A cross-project session, out-of-scope target, other risk class or new
+credential grant is refused before mission creation. The mission's saved status and ID are a start receipt;
 completion, findings and any browser effects require later read-back. The Browser
 and Missions views own the operator's ongoing observation. Refresh and retry use
 the saved mission roster so an uncertain start is inspected before another start.
@@ -554,19 +555,22 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 49
-reviewed actions. Its source inventory contains 543 distinct `api` call
-signatures in production UI TypeScript, of which 114 are linked to reviewed
-actions; 429 still require
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 78
+reviewed actions: 67 supported workflows and eleven operator-owned handoffs. Its
+source inventory contains 578 distinct API call signatures in production UI
+TypeScript, of which 303 are linked to reviewed actions; 275 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
-archive, priority and deletion actions;
-Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
-calls are keyed by route expression and HTTP verb. The guard fails when a call
-is added, removed, or repeated without refreshing the inventory. It does not
-see calls through other receiver names or UI actions with no API call, so the
-registry is an incomplete coverage map. `supported` means the named Butler
-operation and observed-result test exist; `gap` and `device_handoff` explicitly
-name the missing operation or browser handoff. To review a new call, trace its
+archive, priority and deletion actions; Butler can page and apply those actions
+to exact chats one at a time. Direct `ApiClient.request` calls are keyed by route
+expression and HTTP verb. The guard fails when a call is added, removed, or
+repeated without refreshing the inventory. It follows ApiClient declarations
+through aliases, nested properties, non-null assertions and literal indexed
+calls, plus the explicitly reviewed TerminalStopApi facade. Unrelated clients
+with matching method names are excluded. Controls without an API call still
+need manual workflow review. `supported` means the named Butler operation and
+observed-result test exist; `gap` identifies missing implementation, while
+`device_handoff` names an exact catalog destination and proves only opening its
+operator-owned control. To review a new call, trace its
 visible control to Core, add or update an action row, then run the script with
 `--write-inventory`. Neither that command nor a registry row changes Butler's
 tool catalog.

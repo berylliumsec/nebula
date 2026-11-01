@@ -723,7 +723,7 @@
     },
     {
       "id": "browser.scoped_automation_mission",
-      "entry_point": "Browser: start a scoped autonomous assessment in an active security session",
+      "entry_point": "Browser: start scoped passive inspection in an active session",
       "ui_calls": [
         "ui/src/components/WorkbenchBrowser.tsx::createMission",
         "ui/src/components/WorkbenchBrowser.tsx::getSecurityBrowserAutomation"
@@ -734,9 +734,9 @@
         "read": "nebula.work.mission",
         "change": "nebula.work.start_mission"
       },
-      "authority": "Interactive selected project, exact active security session, in-scope targets, risk grants and bounded lease",
+      "authority": "Interactive selected project, exact active session, in-scope targets, passive-only risk and bounded lease; no new credential grants; active testing remains operator-controlled",
       "observed_result_test": "tests/v3/test_control_assistant_work.py::test_butler_discovers_project_browser_and_starts_scoped_mission",
-      "result": "Core saves the mission with the selected browser session; completion must be read separately",
+      "result": "Core saves a passive-only mission with the selected session and empty credential grants; completion is read separately",
       "status": "supported"
     },
     {
@@ -1572,6 +1572,89 @@
         "reason": "Inspect Butler incidents and personally grant authority or acknowledge incidents belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
         "observed_result": "opened"
       }
+    },
+    {
+      "id": "settings.private_typesafe",
+      "entry_point": "TypeSafe key entry, replacement, removal and fixed-sample test",
+      "ui_calls": [
+        "ui/src/components/EngagementPolicySettings.tsx::getTypeSafeIntegration",
+        "ui/src/components/TypeSafeIntegrationSettings.tsx::getTypeSafeIntegration",
+        "ui/src/components/TypeSafeIntegrationSettings.tsx::removeTypeSafeKey",
+        "ui/src/components/TypeSafeIntegrationSettings.tsx::saveTypeSafeKey",
+        "ui/src/components/TypeSafeIntegrationSettings.tsx::testTypeSafeKey"
+      ],
+      "core_owner": "Core integration/credential service; requesting browser owns private entry and direct removal controls",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.api_request GET public integration/profile metadata",
+        "change": "nebula.settings.open setting_id=typesafe"
+      },
+      "authority": "Only public metadata enters Butler. Private input and integration credential removal require the requesting operator control; generic Settings operations omit and reject these methods.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core",
+      "result": "The exact private form opens; closing it clears unsaved input. No key, password or file enters a saved Butler result, and an opening receipt claims no mutation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "typesafe",
+        "owner": "requesting_browser",
+        "boundary": "device_secret",
+        "reason": "Private integration input and backing-credential removal belong to the requesting device controls.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "settings.private_vpn",
+      "entry_point": "VPN private configuration upload and backing-credential removal",
+      "ui_calls": [
+        "ui/src/components/EngagementPolicySettings.tsx::listVpnProfiles",
+        "ui/src/components/ToolingSettings.tsx::createVpnProfile",
+        "ui/src/components/ToolingSettings.tsx::deleteVpnProfile",
+        "ui/src/components/ToolingSettings.tsx::listVpnProfiles"
+      ],
+      "core_owner": "Core integration/credential service; requesting browser owns private entry and direct removal controls",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.api_request GET public integration/profile metadata",
+        "change": "nebula.settings.open setting_id=vpn-egress"
+      },
+      "authority": "Only public metadata enters Butler. Private input and integration credential removal require the requesting operator control; generic Settings operations omit and reject these methods.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core",
+      "result": "The exact private form opens; closing it clears unsaved input. No key, password or file enters a saved Butler result, and an opening receipt claims no mutation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "vpn-egress",
+        "owner": "requesting_browser",
+        "boundary": "device_secret",
+        "reason": "Private integration input and backing-credential removal belong to the requesting device controls.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "settings.private_mcp_import",
+      "entry_point": "MCP Settings: import a private file or pasted configuration and personally trust local programs",
+      "ui_calls": [
+        "ui/src/components/McpImportDialog.tsx::importMcpServers",
+        "ui/src/components/McpImportDialog.tsx::mcpServerSchema"
+      ],
+      "core_owner": "Core MCP import and CredentialStore; requesting browser owns raw input and trust choices",
+      "butler": {
+        "discover": "nebula.settings.open",
+        "read": "MCP public schema and reference-only export; no private configuration input",
+        "change": "nebula.settings.open setting_id=mcp"
+      },
+      "authority": "Raw files, literal header/environment credentials and local-program trust remain in the requesting browser. The generic Settings gateway omits and rejects import POST.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core",
+      "result": "MCP Settings and its import form open; cancelled synthetic private input clears, with no import request or created profile. Opening makes no mutation claim.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "mcp",
+        "owner": "requesting_browser",
+        "boundary": "device_secret",
+        "reason": "Imported configuration may contain literal secrets and program-trust choices that belong to private operator input.",
+        "observed_result": "opened"
+      }
     }
   ],
   "ui_api_calls": [
@@ -1665,6 +1748,66 @@
     },
     {
       "key": "ui/src/components/AuthenticatedChatImage.tsx::fetchChatImagePreview",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::claimSecurityBrowserCommand",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::createSecurityBrowserIntercept",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::finishSecurityBrowserCommand",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::getEngagementScope",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserAutomation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserResearch",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserWorkspace",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserAttackResult",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserRepeaterResult",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserSiteNode",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserAttack",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserCrawl",
+      "count": 5
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserRepeaterTab",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::uploadEvidence",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/BrowserAutomationWorker.tsx::uploadSecurityBrowserBodyArtifact",
       "count": 1
     },
     {
@@ -2744,11 +2887,27 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/WebSearchRuntimeSettings.tsx::installWebSearchRuntime",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/WebSearchRuntimeSettings.tsx::removeWebSearchRuntime",
       "count": 1
     },
     {
       "key": "ui/src/components/WebSearchRuntimeSettings.tsx::setWebSearchEngines",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WebSearchRuntimeSettings.tsx::startWebSearchRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WebSearchRuntimeSettings.tsx::stopWebSearchRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/WebSearchRuntimeSettings.tsx::testWebSearchRuntime",
       "count": 1
     },
     {
@@ -2785,7 +2944,7 @@
     },
     {
       "key": "ui/src/components/WorkbenchBrowser.tsx::finishSecurityBrowserAction",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/components/WorkbenchBrowser.tsx::finishSecurityBrowserHandoff",
@@ -2820,6 +2979,14 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::recordSecurityBrowserTraffic",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::recordSecurityBrowserWebSocketFrame",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/WorkbenchBrowser.tsx::startSecurityBrowserAction",
       "count": 1
     },
@@ -2838,6 +3005,10 @@
     {
       "key": "ui/src/components/WorkbenchBrowser.tsx::updateSecurityBrowserCapture",
       "count": 4
+    },
+    {
+      "key": "ui/src/components/WorkbenchBrowser.tsx::uploadSecurityBrowserBodyArtifact",
+      "count": 1
     },
     {
       "key": "ui/src/components/WorkspacePanel.tsx::deleteWorkspaceEntry",
@@ -3092,6 +3263,18 @@
       "count": 1
     },
     {
+      "key": "ui/src/guides/catalog.ts::getProjectInstructionsStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/guides/catalog.ts::listNativeHooks",
+      "count": 1
+    },
+    {
+      "key": "ui/src/guides/catalog.ts::listSkills",
+      "count": 1
+    },
+    {
       "key": "ui/src/hooks/useCredentialVault.ts::credentialVaultStatus",
       "count": 1
     },
@@ -3202,6 +3385,10 @@
     {
       "key": "ui/src/pages/SessionsPage.tsx::getChatGoal",
       "count": 2
+    },
+    {
+      "key": "ui/src/pages/SessionsPage.tsx::getChatMessageReasoning",
+      "count": 1
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::getChatSession",
@@ -3636,6 +3823,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/state/WorkspaceContext.tsx::health",
+      "count": 1
+    },
+    {
       "key": "ui/src/state/WorkspaceContext.tsx::ingestKnowledgeSource",
       "count": 1
     },
@@ -3649,59 +3840,59 @@
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listApprovals",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listAssets",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listEngagements",
-      "count": 4
+      "count": 5
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listEvidence",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listFindings",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listHarnesses",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listKnowledgeSources",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listLibraryItems",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listObservations",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listOperatorProfiles",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listProviderCatalog",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listProviders",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listReports",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::listRuns",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::refreshProviderHealth",
@@ -3737,7 +3928,7 @@
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::setupStatus",
-      "count": 2
+      "count": 3
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::signOffReport",

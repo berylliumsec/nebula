@@ -10,6 +10,10 @@ export interface SettingCatalogEntry {
   keywords: string[];
 }
 
+export function settingOpensInButler(entry: SettingCatalogEntry): boolean {
+  return entry.target === "butler-settings" || entry.target === "butler-oversight";
+}
+
 export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-instructions",
@@ -81,7 +85,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Models",
     scope: "Workspace",
     target: "provider-settings",
-    keywords: ["provider", "model", "openai", "anthropic", "gemini", "ollama", "vllm", "credential", "api key"],
+    keywords: ["provider", "model", "models", "openai", "anthropic", "gemini", "ollama", "vllm", "credential", "api key", "api keys"],
   },
   {
     id: "settings.skills",
@@ -109,6 +113,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     scope: "Workspace",
     target: "storage-integration-settings",
     keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "reporting interval", "callback settings", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
+  },
+  {
+    id: "settings.typesafe",
+    label: "TypeSafe API key",
+    description: "Enter, replace or remove the tool-suggestions key on this device",
+    category: "Integrations",
+    scope: "Security",
+    target: "typesafe-integration-settings",
+    keywords: ["typesafe", "jev", "tool suggestions", "typesafe api key", "integration key"],
   },
   {
     id: "settings.follow-up",

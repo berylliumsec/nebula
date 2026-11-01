@@ -106,6 +106,26 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "butler-settings-catalog": [
+      {"area":"butler-settings-catalog","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-private-settings": [
+      {"area":"butler-private-settings","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "butler-device-handoffs": [
       {"area":"butler-device-handoffs","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-device-handoffs","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},

@@ -2533,6 +2533,10 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
         schema = START_MISSION_SCHEMA["properties"]["browser_autonomy"]
         assert set(schema["required"]) == set(request["browser_autonomy"])
         assert schema["properties"]["allowed_risk_classes"]["minItems"] == 1
+        assert schema["properties"]["allowed_risk_classes"]["items"]["enum"] == [
+            "passive"
+        ]
+        assert schema["properties"]["credential_refs"]["maxItems"] == 0
         assert (
             "local_read"
             not in schema["properties"]["allowed_risk_classes"]["items"]["enum"]
@@ -2548,7 +2552,17 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
             }
             with pytest.raises(ValueError, match="requires explicit"):
                 await work.start_mission(selected.id, invalid)
-        for risks in ([], ["local_read"]):
+        for risks in (
+            [],
+            ["local_read"],
+            ["active_scan"],
+            ["credential_use"],
+            ["exploitation"],
+            ["persistence"],
+            ["destructive"],
+            ["scope_change"],
+            ["passive", "active_scan"],
+        ):
             invalid = {
                 **request,
                 "browser_autonomy": {
@@ -2558,6 +2572,19 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
             }
             with pytest.raises(ValueError, match="risk class"):
                 await work.start_mission(selected.id, invalid)
+        assert mission_requests == []
+        assert started == []
+        with pytest.raises(ValueError, match="credential grants"):
+            await work.start_mission(
+                selected.id,
+                {
+                    **request,
+                    "browser_autonomy": {
+                        **request["browser_autonomy"],
+                        "credential_refs": ["session:unavailable-fixture"],
+                    },
+                },
+            )
         assert mission_requests == []
         assert started == []
         descriptor = await dispatch_work_tool(

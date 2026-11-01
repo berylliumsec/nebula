@@ -345,14 +345,17 @@ async function openProjectSwitcherFromShell(page: Page) {
 
 async function openNebulaAssistantFromShell(page: Page) {
   await expect(page.locator(".app-shell")).toBeVisible();
+  const assistant = page.getByRole("dialog", {name: "Butler", exact: true});
+  if (await assistant.isVisible()) return;
   const butlerLauncherName = /^(Open|Show) Butler(?:;|$)/;
   const mobileLauncher = page.getByRole("navigation", { name: "Mobile operator navigation" })
     .getByRole("button", { name: butlerLauncherName });
   const launcher = page.getByRole("button", { name: butlerLauncherName }).first();
   const topMenu = page.getByRole("button", { name: "Open top menu" });
-  await expect.poll(async () => await mobileLauncher.isVisible()
+  await expect.poll(async () => await assistant.isVisible() || await mobileLauncher.isVisible()
     || await launcher.isVisible()
     || await topMenu.isVisible()).toBe(true);
+  if (await assistant.isVisible()) return;
   if (await mobileLauncher.isVisible()) {
     await mobileLauncher.click();
     return;
@@ -1250,6 +1253,82 @@ test("assistant upgrade Butler creates edits and deletes project Notes on produc
     await testInfo.attach("butler-notes-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Created and edited one linked note; live Notes and reload showed saved fields; report dependency blocked deletion; cancellation retained it; confirmed deletion removed only the note."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
+test("assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), env: {TYPESAFE_API_KEY: ""}});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const privateWrites: string[] = [];
+  page.on("request", request => {
+    const pathname = new URL(request.url()).pathname;
+    if (["POST", "PUT", "DELETE"].includes(request.method()) && /^\/api\/v1\/(?:integrations\/typesafe|vpn-profiles|mcp-servers\/import)(?:\/|$)/.test(pathname)) privateWrites.push(`${request.method()} ${pathname}`);
+  });
+  await withOwnedCleanup(async () => {
+    const created = await api.post("engagements", {data: {name: "Private Settings handoff", status: "active", metadata: {}}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = (await created.json() as {id: string}).id;
+    const notebookStatus = await api.get(`engagements/${projectId}/notebooks/status`);
+    expect(notebookStatus.ok(), await notebookStatus.text()).toBe(true);
+    const originalMcpProfiles = await (await api.get("mcp-servers")).json();
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Private Settings LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    const open = async (prompt: string, label: string) => {
+      if (!await page.getByRole("dialog", {name: "Butler", exact: true}).isVisible()) await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler", exact: true});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      const lens = page.getByRole("dialog", {name: label, exact: true});
+      await expect(lens).toBeVisible();
+      return lens;
+    };
+    const typesafeSecret = "synthetic-typesafe-entry-cancelled";
+    const typesafe = await open("open TypeSafe API key", "TypeSafe API key");
+    await typesafe.getByLabel("TypeSafe API key", {exact: true}).fill(typesafeSecret);
+    await typesafe.getByRole("button", {name: "Close setting"}).click();
+    await expect(typesafe).toHaveCount(0);
+    const reopenedTypesafe = await open("open TypeSafe API key", "TypeSafe API key");
+    await expect(reopenedTypesafe.getByLabel("TypeSafe API key", {exact: true})).toHaveValue("");
+    await expect(page.locator('.settings-lens[role="dialog"][aria-labelledby="settings-lens-title"]')).toHaveCount(1);
+    expect((await new AxeBuilder({page}).include('.settings-lens[role="dialog"][aria-labelledby="settings-lens-title"]').analyze()).violations).toEqual([]);
+    await reopenedTypesafe.getByRole("button", {name: "Close setting"}).click();
+    const vpnSecret = "synthetic-vpn-entry-cancelled";
+    const vpn = await open("open VPN egress", "VPN egress profiles");
+    await vpn.locator('.vpn-profile-form input[type="file"]').setInputFiles({name: "private-fixture.ovpn", mimeType: "application/x-openvpn-profile", buffer: Buffer.from("client\ndev tun\nremote 127.0.0.1 1194\n# private fixture material\n")});
+    await vpn.getByText("Credentials and storage", {exact: true}).click();
+    await vpn.getByLabel("Password", {exact: true}).fill(vpnSecret);
+    await vpn.getByRole("button", {name: "Close setting"}).click();
+    await expect(vpn).toHaveCount(0);
+    const reopenedVpn = await open("open VPN egress", "VPN egress profiles");
+    await expect(reopenedVpn.locator('.vpn-profile-form input[type="file"]')).toHaveValue("");
+    await reopenedVpn.getByText("Credentials and storage", {exact: true}).click();
+    await expect(reopenedVpn.getByLabel("Password", {exact: true})).toHaveValue("");
+    await reopenedVpn.getByRole("button", {name: "Close setting"}).click();
+    const mcp = await open("open MCP servers", "MCP servers");
+    await mcp.getByRole("button", {name: "Import", exact: true}).click();
+    const importDialog = page.getByRole("dialog", {name: "Import MCP servers", exact: true});
+    const mcpSecret = "synthetic-mcp-entry-cancelled";
+    await importDialog.getByRole("textbox", {name: "Configuration", exact: true}).fill(JSON.stringify({mcpServers: {private: {url: "https://example.test/mcp", headers: {Authorization: `Bearer ${mcpSecret}`}}}}));
+    await importDialog.getByRole("button", {name: "Close import dialog"}).click();
+    await mcp.getByRole("button", {name: "Import", exact: true}).click();
+    await expect(importDialog.getByRole("textbox", {name: "Configuration", exact: true})).toHaveValue("");
+    await importDialog.getByRole("button", {name: "Close import dialog"}).click();
+    expect(await page.evaluate(secrets => Object.values(localStorage).some(value => secrets.some(secret => value.includes(secret))), [typesafeSecret, vpnSecret, mcpSecret])).toBe(false);
+    expect(privateWrites).toEqual([]);
+    expect((await (await api.get("integrations/typesafe")).json() as {source: unknown}).source).toBeNull();
+    expect(await (await api.get("vpn-profiles")).json()).toEqual([]);
+    expect(await (await api.get("mcp-servers")).json()).toEqual(originalMcpProfiles);
+    await expect(page.locator('.settings-lens[role="dialog"][aria-labelledby="settings-lens-title"]')).toHaveCount(1);
+    expect((await new AxeBuilder({page}).include('.settings-lens[role="dialog"][aria-labelledby="settings-lens-title"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-private-settings-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Opened exact TypeSafe, VPN and MCP import forms; private entries stayed on the device, cancellation cleared them, and Core received no private writes. Opening did not claim a saved mutation."}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
 test("assistant upgrade Butler manages nonsecret integration profiles on production LAN Core", async ({page}, testInfo) => {
@@ -10757,12 +10836,14 @@ test("project execution mode assistant saves and shows Host then Docker on produ
 });
 
 test("project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core", async ({ page }, info) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   page.setDefaultTimeout(10_000);
-  expect(settingCatalog).toHaveLength(19);
+  expect(settingCatalog).toHaveLength(25);
+  let modelStub: LocalModelStub | undefined;
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   await withOwnedCleanup(async () => {
+    modelStub = await startLocalModelStub();
     const created = await api.post("engagements", { data: {
       name: "Assistant Catalog Acceptance", description: "", client_name: null, status: "active",
       tags: [], workspace_path: null, metadata: {},
@@ -10770,10 +10851,42 @@ test("project execution mode settings assistant opens every catalog setting from
     expect(created.ok(), await created.text()).toBe(true);
     const projectId = ((await created.json()) as { id: string }).id;
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
-    await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
+    await pairRealCoreBrowser(page, core, "Settings catalog LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/findings`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();
+    const unknownPrompt = "open a setting named pineapple moon";
+    await openNebulaAssistantFromShell(page);
+    const noModelPanel = page.getByRole("dialog", {name: "Butler", exact: true});
+    const noModelComposer = noModelPanel.getByRole("textbox", {name: "Ask Butler a question"});
+    await noModelComposer.fill(unknownPrompt);
+    const noModelStarted = Date.now();
+    await noModelComposer.press("Enter");
+    await expect(noModelPanel).toContainText("I couldn't identify a Nebula destination");
+    expect(Date.now() - noModelStarted).toBeLessThan(2000);
+    await expect(noModelPanel.getByText("Settings I can help with", {exact: true})).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe(`/projects/${projectId}/findings`);
+    await noModelPanel.getByRole("button", {name: "Close Butler"}).click();
+    const modelResponse = await api.post("providers", {data: {
+      name: "Catalog navigation model", provider_type: "vllm", endpoint: `${modelStub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+    const model = await modelResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${model.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: model.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const session = await api.post("chat/control-assistant/session", {data: {engagement_id: projectId, backend: "provider", provider_id: model.id, model: "security-model"}});
+    expect(session.ok(), await session.text()).toBe(true);
+    await page.reload();
+    await expect(page.getByRole("heading", {name: "Findings", exact: true})).toBeVisible();
     const timings: { setting: string; prompt: string; panelMs: number; controlsMs: number }[] = [];
     const naturalPrompts: Record<string, string> = {
+      "settings.butler-instructions": "open butler.md",
+      "settings.butler-check-interval": "open check interval",
+      "settings.butler-effort": "open reasoning",
+      "settings.butler-activity": "show Butler scheduled history",
+      "settings.butler-voice": "open voice timeout",
+      "settings.typesafe": "open typesafe",
       "settings.usage": "open usage limits",
       "settings.appearance": "open theme",
       "settings.providers": "show provider",
@@ -10795,6 +10908,12 @@ test("project execution mode settings assistant opens every catalog setting from
       "settings.setup": "open readiness",
     };
     const conversationalPrompts: Record<string, string> = {
+      "settings.butler-instructions": "where are Nebula-wide Butler instructions?",
+      "settings.butler-check-interval": "where can I change the Butler check interval?",
+      "settings.butler-effort": "where can I change Butler reasoning effort?",
+      "settings.butler-activity": "where can I read Butler scheduled activity?",
+      "settings.butler-voice": "where can I change the Butler Voice timeout?",
+      "settings.typesafe": "where can I enter the TypeSafe API key?",
       "settings.usage": "where can I see usage limits?",
       "settings.appearance": "where can I change the theme colors?",
       "settings.providers": "which setting holds API keys for models?",
@@ -10815,45 +10934,80 @@ test("project execution mode settings assistant opens every catalog setting from
       "settings.diagnostics": "where do I inspect logs?",
       "settings.setup": "where can I check Core readiness?",
     };
-    expect(Object.keys(naturalPrompts)).toHaveLength(settingCatalog.length);
-    expect(Object.keys(conversationalPrompts)).toHaveLength(settingCatalog.length);
+    expect(Object.keys(naturalPrompts).sort()).toEqual(settingCatalog.map(entry => entry.id).sort());
+    expect(Object.keys(conversationalPrompts).sort()).toEqual(settingCatalog.map(entry => entry.id).sort());
     const openAssistant = async () => openNebulaAssistantFromShell(page);
     for (const entry of settingCatalog) {
       for (const prompt of [`open ${entry.label}`, naturalPrompts[entry.id], conversationalPrompts[entry.id]]) {
+        if (new URL(page.url()).pathname !== `/projects/${projectId}/findings`) {
+          await page.goto(`${core.origin}/projects/${projectId}/findings`);
+          await expect(page.getByRole("heading", {name: "Findings", exact: true})).toBeVisible();
+        }
         await openAssistant();
-        const assistant = page.getByRole("dialog", { name: "Butler" });
+        const assistant = page.getByRole("dialog", { name: "Butler", exact: true });
         const composer = assistant.getByRole("textbox", { name: "Ask Butler a question" });
         await composer.fill(prompt);
         const started = Date.now();
         await composer.press("Enter");
-        const lens = page.getByRole("dialog", { name: entry.label, exact: true });
-        await expect(lens).toBeVisible();
-        const panelMs = Date.now() - started;
-        await expect(lens.locator(`#${entry.target}`)).toBeVisible();
-        const controlsMs = Date.now() - started;
-        timings.push({ setting: entry.id, prompt, panelMs, controlsMs });
-        await lens.getByRole("button", { name: "Close setting" }).click();
-        await expect(lens).toHaveCount(0);
+        let panelMs: number;
+        if (entry.target === "butler-settings") {
+          await expect(assistant).toBeVisible();
+          const settings = assistant.getByRole("region", {name: "Butler settings", exact: true});
+          await expect(settings).toBeVisible();
+          panelMs = Date.now() - started;
+          await expect(settings.getByRole("combobox", {name: entry.id === "settings.butler-effort" ? "Butler effort" : "Pause Voice after", exact: true})).toBeVisible();
+          timings.push({setting: entry.id, prompt, panelMs, controlsMs: Date.now() - started});
+          await assistant.getByRole("button", {name: "Hide Butler"}).click();
+        } else if (entry.target === "butler-oversight") {
+          await expect(assistant).toBeVisible();
+          await expect(assistant.getByRole("button", {name: "Work", exact: true})).toHaveAttribute("aria-current", "page");
+          await expect(assistant.getByRole("region", {name: "Butler oversight", exact: true})).toBeVisible();
+          panelMs = Date.now() - started;
+          await expect(assistant.getByRole("region", {name: "Butler scheduled activity", exact: true})).toBeVisible();
+          timings.push({setting: entry.id, prompt, panelMs, controlsMs: Date.now() - started});
+          await assistant.getByRole("button", {name: "Hide Butler"}).click();
+        } else {
+          const lens = page.getByRole("dialog", {name: entry.label, exact: true});
+          await expect(lens).toBeVisible();
+          panelMs = Date.now() - started;
+          if (entry.id === "settings.butler-instructions") {
+            const editor = page.getByRole("dialog", {name: "BUTLER.md", exact: true});
+            await expect(editor.getByRole("textbox", {name: "BUTLER.md", exact: true})).toBeVisible();
+            await editor.getByRole("button", {name: "Close Butler editor"}).click();
+            await expect(editor).toHaveCount(0);
+          }
+          await expect(lens.locator(`#${entry.target}`)).toBeVisible();
+          timings.push({setting: entry.id, prompt, panelMs, controlsMs: Date.now() - started});
+          await lens.getByRole("button", {name: "Close setting"}).click();
+          await expect(lens).toHaveCount(0);
+        }
       }
     }
+    if (new URL(page.url()).pathname !== `/projects/${projectId}/findings`) await page.goto(`${core.origin}/projects/${projectId}/findings`);
     await openAssistant();
     const assistant = page.getByRole("dialog", { name: "Butler" });
     const composer = assistant.getByRole("textbox", { name: "Ask Butler a question" });
-    await composer.fill("open a setting named pineapple moon");
-    const unknownStarted = Date.now();
+    const configuredReply = "CONFIGURED_RUNTIME_HANDLED_UNKNOWN_SETTING";
+    modelStub.responseContent = configuredReply;
+    await composer.fill(unknownPrompt);
     await composer.press("Enter");
-    await expect(assistant).toContainText("I couldn't identify a Nebula destination");
-    expect(Date.now() - unknownStarted).toBeLessThan(2000);
-    await expect(assistant.getByText("Settings I can help with")).toBeVisible();
+    await expect(assistant.getByText(configuredReply, {exact: true})).toBeVisible({timeout: 30_000});
+    expect(modelStub.requests.some(request => JSON.stringify(request.messages ?? []).includes(unknownPrompt))).toBe(true);
+    await assistant.getByRole("button", {name: "More", exact: true}).click();
+    const catalog = assistant.getByText("Settings I can help with", {exact: true});
+    await expect(catalog).toBeVisible();
+    await catalog.click();
+    await expect(assistant.getByRole("button", {name: /^TypeSafe API key/})).toBeVisible();
     expect(new URL(page.url()).pathname).toBe(`/projects/${projectId}/findings`);
     await info.attach("settings-assistant-catalog-timings", {
-      body: Buffer.from(JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), timings }, null, 2)),
+      body: Buffer.from(JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), unknownWithoutModel: "local catalog fallback", unknownWithModel: configuredReply, timings }, null, 2)),
       contentType: "application/json",
     });
     await info.attach("settings-assistant-catalog-final-screen", { body: await page.screenshot(), contentType: "image/png" });
     console.log(`settings assistant catalog timings ${JSON.stringify(timings)}`);
   }, [
     { name: "API context", dispose: () => api.dispose() },
+    { name: "model stub", dispose: () => modelStub ? stopLocalModelStub(modelStub) : undefined },
     { name: "Core fixture", dispose: () => stopRealCore(core) },
   ]);
 });
@@ -10870,7 +11024,8 @@ test("project execution mode assistant navigates every app destination on produc
     expect(created.ok(), await created.text()).toBe(true);
     const projectId = ((await created.json()) as { id: string }).id;
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
-    await page.goto(`${core.origin}/projects/${projectId}/workbench#token=${encodeURIComponent(core.token)}`);
+    await pairRealCoreBrowser(page, core, "App destinations LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench`);
     const timings: {destination: string; elapsedMs: number}[] = [];
     for (const destination of assistantDestinations) {
       await openNebulaAssistantFromShell(page);
@@ -10879,14 +11034,20 @@ test("project execution mode assistant navigates every app destination on produc
       const started = Date.now();
       await composer.press("Enter");
       const expected = assistantDestinationPath(destination, projectId)!;
-      await expect.poll(() => `${new URL(page.url()).pathname}${new URL(page.url()).search}`).toBe(expected);
+      await expect.poll(() => {
+        const current = new URL(page.url());
+        return `${current.pathname}${current.search}${current.hash}`;
+      }).toBe(expected);
       await expect(page.locator("#main-content")).toBeVisible();
       await expect(page.locator(".route-loading")).toHaveCount(0);
       if (destination.id === "projects") await expect(page.getByRole("heading", { name: "All projects" })).toBeVisible();
       timings.push({destination: destination.id, elapsedMs: Date.now() - started});
     }
     await page.reload();
-    await expect(page.locator("#main-content")).toBeVisible();
+    await expect(page.getByRole("heading", {name: "Settings", exact: true})).toBeVisible();
+    await expect(page.getByText("Browser session expired", {exact: true})).toHaveCount(0);
+    const health = await page.request.get(`${core.origin}/api/v1/health`);
+    expect(health.ok(), await health.text()).toBe(true);
     await info.attach("assistant-navigation-catalog", {
       body: Buffer.from(JSON.stringify({origin: core.origin, build: "ui/dist production", browser: info.project.name, viewport: page.viewportSize(), timings}, null, 2)),
       contentType: "application/json",

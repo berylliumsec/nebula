@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { API } from "typescript/unstable/sync";
-import { isCallExpression, isIdentifier, isObjectLiteralExpression, isPropertyAccessExpression, isPropertyAssignment } from "typescript/unstable/ast";
+import { isCallExpression, isClassDeclaration, isElementAccessExpression, isInterfaceDeclaration, isObjectLiteralExpression, isPropertyAccessExpression, isPropertyAssignment, isStringLiteral } from "typescript/unstable/ast";
 
 const uiRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(uiRoot, "..");
@@ -12,41 +12,72 @@ const registryPath = registryOption < 0
   : resolve(process.argv[registryOption + 1] ?? "");
 if (registryOption >= 0 && !process.argv[registryOption + 1]) throw new Error("--registry requires a path");
 
-function collectCalls() {
+export function collectCalls(sourceUiRoot = uiRoot) {
   const api = new API();
   try {
-    const snapshot = api.updateSnapshot({ openProjects: [resolve(uiRoot, "tsconfig.app.json")] });
+    const snapshot = api.updateSnapshot({ openProjects: [resolve(sourceUiRoot, "tsconfig.app.json")] });
     try {
       const project = snapshot.getProjects()[0];
       if (!project) throw new Error("Nebula UI TypeScript project was not loaded");
-      const calls = new Map();
+      // Declaration handles survive aliases and instantiated method symbols.
+      // TerminalStopApi is the audited facade passed the real workspace client.
+      const owners = [
+        {file: "src/api/client.ts", name: "ApiClient", matches: isClassDeclaration},
+        {file: "src/components/butlerTerminalStop.ts", name: "TerminalStopApi", matches: isInterfaceDeclaration},
+      ];
+      const members = [];
+      for (const owner of owners) {
+        const file = project.program.getSourceFile(resolve(sourceUiRoot, owner.file));
+        if (!file) {
+          if (owner.name === "ApiClient") throw new Error("ApiClient source was not loaded");
+          continue;
+        }
+        file.forEachChild((node) => {
+          if (owner.matches(node) && node.name?.text === owner.name) {
+            members.push(...node.members.flatMap((member) => typeof member.name?.text === "string" ? [member.name] : []));
+          }
+        });
+      }
+      if (!members.length) throw new Error("ApiClient declarations were not loaded");
+      const memberNames = new Set(members.map((member) => member.text));
+      const declarationKey = (handle) => JSON.stringify([handle.path, handle.index]);
+      const approved = new Set(project.checker.getSymbolAtLocation(members)
+        .flatMap((symbol) => symbol?.declarations.map(declarationKey) ?? []));
+      const candidates = [];
       for (const name of project.program.getSourceFileNames()) {
-        const path = relative(repoRoot, name).replaceAll("\\", "/");
+        const path = `ui/${relative(sourceUiRoot, name).replaceAll("\\", "/")}`;
         if (!path.startsWith("ui/src/") || path.includes(".test.") || path.includes(".spec.") || path === "ui/src/api/client.ts") continue;
         const file = project.program.getSourceFile(name);
         if (!file) throw new Error(`Could not parse ${path}`);
         function visit(node) {
-          if (isCallExpression(node) && isPropertyAccessExpression(node.expression)
-              && isIdentifier(node.expression.expression) && node.expression.expression.text === "api") {
-            const method = node.expression.name.text;
-            let key = `${path}::${method}`;
-            // A few screens use the generic API client request directly. Keep
-            // their route and verb distinct so one existing request cannot
-            // hide a new operator action in the same file.
-            if (method === "request") {
-              const route = node.arguments[0]?.getText(file).replace(/\s+/g, " ") ?? "<missing route>";
-              const init = node.arguments[1];
-              const methodProperty = init && isObjectLiteralExpression(init)
-                ? init.properties.find((property) => isPropertyAssignment(property) && property.name.getText(file) === "method")
-                : undefined;
-              const verb = methodProperty?.initializer.getText(file) ?? "GET";
-              key = `${key}::${verb} ${route}`;
-            }
-            calls.set(key, (calls.get(key) ?? 0) + 1);
+          if (isCallExpression(node)) {
+            const access = node.expression;
+            const member = isPropertyAccessExpression(access) ? access.name
+              : isElementAccessExpression(access) && isStringLiteral(access.argumentExpression) ? access.argumentExpression
+              : undefined;
+            if (member && memberNames.has(member.text)) candidates.push({node, member, path, file});
           }
           node.forEachChild(visit);
         }
         visit(file);
+      }
+      const calls = new Map();
+      const symbols = candidates.length ? project.checker.getSymbolAtLocation(candidates.map(({member}) => member)) : [];
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (!symbols[index]?.declarations.some((handle) => approved.has(declarationKey(handle)))) continue;
+        const {node, member, path, file} = candidates[index];
+        const method = member.text;
+        let key = `${path}::${method}`;
+        if (method === "request") {
+          const route = node.arguments[0]?.getText(file).replace(/\s+/g, " ") ?? "<missing route>";
+          const init = node.arguments[1];
+          const methodProperty = init && isObjectLiteralExpression(init)
+            ? init.properties.find((property) => isPropertyAssignment(property) && property.name.getText(file) === "method")
+            : undefined;
+          const verb = methodProperty?.initializer.getText(file) ?? "GET";
+          key = `${key}::${verb} ${route}`;
+        }
+        calls.set(key, (calls.get(key) ?? 0) + 1);
       }
       return [...calls].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, count]) => ({ key, count }));
     } finally {
@@ -141,4 +172,4 @@ function main() {
   console.log(`Butler workflow registry: ${registry.actions.length} reviewed actions, ${reviewed.size}/${current.length} UI API call signatures linked, ${unreviewed} unreviewed signatures, ${gaps} gaps, ${handoffs} operator-owned device handoffs`);
 }
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

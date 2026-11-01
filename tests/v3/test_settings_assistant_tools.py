@@ -54,8 +54,9 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 24
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 25
     assert any(item["id"] == "butler-check-interval" for item in result["settings"])
+    assert any(item["id"] == "typesafe" for item in result["settings"])
     assert (
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"
@@ -172,6 +173,11 @@ def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies
         "state": "pending_browser_apply",
         "client_action": {"kind": "open_setting", "setting_id": "appearance"},
     }
+    for setting_id in ("typesafe", "vpn-egress"):
+        assert open_setting({"setting_id": setting_id}) == {
+            "state": "pending_browser_apply",
+            "client_action": {"kind": "open_setting", "setting_id": setting_id},
+        }
     assert request_device_theme({"theme": "zero-dark"}) == {
         "state": "pending_browser_apply",
         "client_action": {"kind": "device_theme", "theme": "zero-dark"},

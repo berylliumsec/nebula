@@ -317,25 +317,19 @@ START_MISSION_SCHEMA: dict[str, Any] = {
                 "allowed_risk_classes": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 16,
+                    "maxItems": 1,
                     "uniqueItems": True,
+                    "description": "Delegated browser work is limited to passive inspection. Active testing stays in the operator-controlled Browser.",
                     "items": {
                         "type": "string",
-                        "enum": [
-                            "passive",
-                            "active_scan",
-                            "credential_use",
-                            "exploitation",
-                            "persistence",
-                            "destructive",
-                            "scope_change",
-                        ],
+                        "enum": ["passive"],
                     },
                 },
                 "credential_refs": {
                     "type": "array",
-                    "maxItems": 64,
+                    "maxItems": 0,
                     "uniqueItems": True,
+                    "description": "Credential grants remain in the operator-controlled Browser; leave this empty.",
                     "items": {"type": "string", "minLength": 1, "maxLength": 200},
                 },
                 "duration_seconds": {
@@ -3379,7 +3373,12 @@ class ControlAssistantWork:
                 raise ValueError("browser_autonomy requires explicit risk classes")
             if any(risk not in offered_risks for risk in risk_classes):
                 raise ValueError(
-                    "browser_autonomy contains an unsupported browser risk class"
+                    "browser_autonomy contains an unsupported browser risk class; "
+                    "open Browser for operator-controlled testing"
+                )
+            if raw_autonomy.get("credential_refs"):
+                raise ValueError(
+                    "browser credential grants belong in the operator-controlled Browser"
                 )
             autonomy = BrowserAutonomyRequestModel.model_validate(raw_autonomy)
             session = self.store.get(BrowserSession, autonomy.session_id)
@@ -3694,7 +3693,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.browser_sessions",
-        "Page this project's active browser sessions before starting a scoped browser automation mission. The listing excludes page content and secrets; only sessions marked eligible can be used.",
+        "Page this project's active browser sessions before starting a scoped passive-inspection mission. The listing excludes page content and secrets; only sessions marked eligible can be used.",
         PAGE_SCHEMA,
         True,
     ),
@@ -3724,7 +3723,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.start_mission",
-        "Start a Core-owned mission for this project using a listed runtime. For browser automation, first list active browser sessions and provide the exact session, in-scope targets, risk classes, and lease limits; Core checks scope and creates the lease. The result means saved and queued or running, not finished.",
+        "Start a Core-owned mission for this project using a listed runtime. For passive browser inspection, first list active sessions and provide the exact session, in-scope targets, passive risk class and lease limits. Credential grants and active testing remain operator-controlled. Core checks scope and creates the lease. The result means saved and queued or running, not finished.",
         START_MISSION_SCHEMA,
         False,
     ),

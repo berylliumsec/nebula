@@ -393,6 +393,20 @@ def test_product_search_finds_butler_write_only_credentials(monkeypatch):
     )
 
 
+def test_product_search_finds_private_typesafe_and_vpn_handoffs(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler open private TypeSafe, VPN and MCP configuration import?"
+    )
+    assert any(
+        all(
+            word in " ".join(str(item["text"]).lower().split())
+            for word in ("typesafe", "vpn", "mcp", "requesting browser", "private")
+        )
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_provider_credential_attachment(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

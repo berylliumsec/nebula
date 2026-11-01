@@ -56,6 +56,46 @@ def test_settings_api_discovers_existing_routes_and_rejects_other_core_workflows
             gateway.schema(path=path, method="GET")
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "read_path", "destination"),
+    [
+        ("PUT", "integrations/typesafe", "integrations/typesafe", "typesafe"),
+        ("DELETE", "integrations/typesafe", "integrations/typesafe", "typesafe"),
+        ("POST", "vpn-profiles", "vpn-profiles", "vpn-egress"),
+        ("POST", "mcp-servers/import", "mcp-servers", "mcp"),
+        ("DELETE", "vpn-profiles/example", "vpn-profiles", "vpn-egress"),
+    ],
+)
+def test_settings_api_keeps_private_integration_operations_in_browser(
+    tmp_path, method, path, read_path, destination
+):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    gateway = SettingsAssistantApi(
+        create_app(store, auth_token="test-token"), "test-token"
+    )
+    operations = gateway.schema()["operations"]
+    template = path.replace("/example", "/{profile_id}")
+    assert not any(
+        item["method"] == method and item["path"] == f"/api/v1/{template}"
+        for item in operations
+    )
+    for candidate in {path, template}:
+        with pytest.raises(ValueError, match=f"setting_id={destination}"):
+            gateway.schema(path=candidate, method=method)
+    assert gateway.schema(path=read_path, method="GET")["method"] == "GET"
+
+    async def journey():
+        before = await gateway.request(project.id, method="GET", path=read_path)
+        with pytest.raises(ValueError, match="requesting browser"):
+            await gateway.request(project.id, method=method, path=path)
+        current = await gateway.request(project.id, method="GET", path=read_path)
+        assert current["read_back"] is True
+        assert current["result"] == before["result"]
+
+    asyncio.run(journey())
+
+
 def test_settings_api_saves_only_selected_project_and_reads_back(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     selected = store.create(Engagement(name="Selected"))

@@ -112,3 +112,96 @@ def test_registry_rejects_browser_opening_marked_as_saved_mutation(
     result = _check(candidate)
     assert result.returncode != 0
     assert "browser opening cannot be marked as a supported mutation" in result.stderr
+
+
+def test_registry_collector_tracks_client_declarations_through_aliases(
+    tmp_path: Path,
+) -> None:
+    ui = tmp_path / "ui"
+    (ui / "src/api").mkdir(parents=True)
+    (ui / "src/components").mkdir()
+    (ui / "tsconfig.app.json").write_text(
+        json.dumps(
+            {
+                "compilerOptions": {
+                    "target": "ES2022",
+                    "module": "ESNext",
+                    "moduleResolution": "Bundler",
+                    "strict": True,
+                    "noEmit": True,
+                },
+                "include": ["src", "external.ts"],
+            }
+        )
+    )
+    (ui / "src/api/client.ts").write_text("""export class ApiClient {
+  listProjects() { return []; }
+  request(path: string, init?: {method?: string}) { return path; }
+  self() { this.listProjects(); }
+}
+export class OtherClient {
+  listProjects() { return []; }
+  request(path: string) { return path; }
+}
+""")
+    (ui / "src/components/butlerTerminalStop.ts").write_text(
+        "export interface TerminalStopApi { closeContainerTerminal(id: string): void; }"
+    )
+    (
+        ui / "src/view.ts"
+    ).write_text("""import {ApiClient, OtherClient} from "./api/client";
+import type {TerminalStopApi} from "./components/butlerTerminalStop";
+const api = new ApiClient();
+api.listProjects();
+const nextApi = api;
+nextApi.listProjects();
+const maybe: ApiClient | undefined = api;
+maybe!.listProjects();
+const context = {api};
+context.api.listProjects();
+const ref = {current: context};
+ref.current.api.listProjects();
+(api as ApiClient).listProjects();
+(api).listProjects();
+api["listProjects"]();
+api.request("one");
+nextApi.request("one");
+context.api.request("two", {method: "PATCH"});
+declare const facade: TerminalStopApi;
+const wrapped = facade;
+wrapped.closeContainerTerminal("one");
+function unrelated() {
+  const api = new OtherClient();
+  api.listProjects();
+  api.request("not-a-core-route");
+}
+const local = {listProjects() {}};
+local.listProjects();
+""")
+    for file in ("src/ignored.test.ts", "src/ignored.spec.ts", "external.ts"):
+        relative_import = (
+            "./api/client" if file.startswith("src/") else "./src/api/client"
+        )
+        (ui / file).write_text(
+            f'import {{ApiClient}} from "{relative_import}"; '
+            'new ApiClient().request("excluded");'
+        )
+    script = (
+        f"import {{collectCalls}} from {json.dumps(CHECK.as_uri())};"
+        "console.log(JSON.stringify(collectCalls(process.argv[1])));"
+    )
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script, str(ui)],
+        cwd=UI,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert {row["key"]: row["count"] for row in json.loads(result.stdout)} == {
+        "ui/src/view.ts::listProjects": 8,
+        'ui/src/view.ts::request::GET "one"': 2,
+        'ui/src/view.ts::request::"PATCH" "two"': 1,
+        "ui/src/view.ts::closeContainerTerminal": 1,
+    }

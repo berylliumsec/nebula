@@ -3,6 +3,10 @@ import type { ChatStreamEvent, HarnessProfile } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("keeps model API-key questions distinct from private TypeSafe entry", () => {
+    expect(settingToOpen("which setting holds API keys for models?")?.id).toBe("settings.providers");
+    expect(settingToOpen("where can I enter the TypeSafe API key?")?.id).toBe("settings.typesafe");
+  });
   it("maps explicit device-theme commands to bounded values without taking over questions", () => {
     expect(themeChange("change to zero theme")).toBe("zero-dark");
     expect(themeChange("set the theme to Zero Light")).toBe("zero-light");

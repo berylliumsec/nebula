@@ -27,6 +27,13 @@ _GLOBAL_SETTINGS = re.compile(
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_BROWSER_OWNED_OPERATIONS = (
+    ("POST", re.compile(r"^/api/v1/mcp-servers/import$"), "mcp"),
+    ("PUT", re.compile(r"^/api/v1/integrations/typesafe$"), "typesafe"),
+    ("DELETE", re.compile(r"^/api/v1/integrations/typesafe$"), "typesafe"),
+    ("POST", re.compile(r"^/api/v1/vpn-profiles$"), "vpn-egress"),
+    ("DELETE", re.compile(r"^/api/v1/vpn-profiles/[^/]+$"), "vpn-egress"),
+)
 _REDACT_KEYS = {
     "secret",
     "password",
@@ -63,7 +70,7 @@ def _route_exists(app: FastAPI, method: str, path: str) -> bool:
     scope = {"type": "http", "method": method, "path": path, "root_path": ""}
     return any(
         method in getattr(route, "methods", ())
-        and _template_is_allowed(getattr(route, "path", ""))
+        and _operation_is_allowed(method, getattr(route, "path", ""))
         and route.matches(scope)[0] == Match.FULL
         for route in app.routes
     )
@@ -106,6 +113,33 @@ def _safe_result(value: Any) -> Any:
     return value
 
 
+def _operation_is_allowed(method: str, template: str) -> bool:
+    return (
+        _template_is_allowed(template)
+        and _browser_owned_destination(method, template) is None
+    )
+
+
+def _browser_owned_destination(method: str, path: str) -> str | None:
+    return next(
+        (
+            destination
+            for verb, pattern, destination in _BROWSER_OWNED_OPERATIONS
+            if verb == method.upper() and pattern.fullmatch(path)
+        ),
+        None,
+    )
+
+
+def _require_public_input(method: str, path: str) -> None:
+    destination = _browser_owned_destination(method, path)
+    if destination:
+        raise ValueError(
+            "private input and credential removal belong in the requesting browser; "
+            f"use nebula.settings.open setting_id={destination}"
+        )
+
+
 def _schema_with_refs(schema: Any, components: dict[str, Any], depth: int = 0) -> Any:
     if depth > 5:
         return schema
@@ -137,7 +171,7 @@ def settings_api_schema(
                 continue
             candidate = template.replace("{engagement_id}", "{project}")
             for verb, operation in entries.items():
-                if verb.upper() in _METHODS:
+                if verb.upper() in _METHODS and _operation_is_allowed(verb, template):
                     operations.append(
                         {
                             "method": verb.upper(),
@@ -157,13 +191,14 @@ def settings_api_schema(
     if selected not in _METHODS:
         raise ValueError("choose a listed HTTP method")
     template = _openapi_path(candidate)
+    _require_public_input(selected, template)
     if not _template_is_allowed(template):
         raise ValueError("this path is outside the assistant's Settings API")
     operation = paths.get(template, {}).get(selected.lower())
     if operation is None:
         # A concrete resource id matches one OpenAPI path template.
         for option, entries in paths.items():
-            if not _template_is_allowed(option):
+            if not _operation_is_allowed(selected, option):
                 continue
             pattern = "/".join(
                 "[^/]+"
@@ -206,6 +241,7 @@ async def execute_settings_api(
     if selected not in _METHODS:
         raise ValueError("choose GET, POST, PUT, PATCH, or DELETE")
     candidate = _clean_path(path)
+    _require_public_input(selected, candidate)
     if "/engagements/" in candidate:
         if not re.fullmatch(r"[A-Za-z0-9_.~:-]+", project_id):
             raise ValueError("selected project has an invalid identifier")
