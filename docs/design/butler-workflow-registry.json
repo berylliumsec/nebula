@@ -679,7 +679,10 @@
       "ui_calls": [
         "ui/src/components/NebulaControlAssistant.tsx::getReport",
         "ui/src/components/NebulaControlAssistant.tsx::renderReport",
-        "ui/src/components/NebulaControlAssistant.tsx::downloadReportPdf"
+        "ui/src/components/NebulaControlAssistant.tsx::downloadReportPdf",
+        "ui/src/pages/ReportsPage.tsx::renderReport",
+        "ui/src/pages/ReportsPage.tsx::getReportRender",
+        "ui/src/pages/ReportsPage.tsx::downloadReportPdf"
       ],
       "core_owner": "Core report render job and exact report revision",
       "butler": {
@@ -697,7 +700,8 @@
       "entry_point": "Butler request or Reports: export the sensitive full-project bundle",
       "ui_calls": [
         "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
-        "ui/src/components/NebulaControlAssistant.tsx::exportEngagementBundle"
+        "ui/src/components/NebulaControlAssistant.tsx::exportEngagementBundle",
+        "ui/src/pages/ReportsPage.tsx::exportEngagementBundle"
       ],
       "core_owner": "Core engagement export service and project revision",
       "butler": {
