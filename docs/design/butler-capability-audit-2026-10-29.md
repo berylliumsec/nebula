@@ -570,8 +570,8 @@ checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 94
 reviewed entries: 70 supported workflows, fifteen operator-owned handoffs and
 nine supporting UI protocols that grant no model operation. Its
 source inventory contains 578 distinct API call signatures in production UI
-TypeScript, of which 359 are linked to reviewed entries; 219 still require
-action-level review. Workbench bulk chat calls map to the existing per-chat
+TypeScript, of which 396 are linked to reviewed entries; 182 still require
+action-level review. An additional 37 call sites reuse the already reviewed workspace, Notebook, private credential, integration-profile, report export, chat-setting and Work services. Global Work pages retain their existing UI aggregate; Butler reads and changes only the selected project through its typed roster and Work board operations. These mappings add no operation or wider authority. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions; Butler can page and apply those actions
 to exact chats one at a time. Direct `ApiClient.request` calls are keyed by route
 expression and HTTP verb. The guard fails when a call is added, removed, or

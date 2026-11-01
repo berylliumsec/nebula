@@ -316,7 +316,15 @@
         "ui/src/components/CodeEditorPanel.tsx::uploadWorkspaceFile",
         "ui/src/components/NebulaControlAssistant.tsx::deleteWorkspaceEntry",
         "ui/src/components/NebulaControlAssistant.tsx::downloadWorkspaceFile",
-        "ui/src/components/NebulaControlAssistant.tsx::previewWorkspaceFile"
+        "ui/src/components/NebulaControlAssistant.tsx::previewWorkspaceFile",
+        "ui/src/components/CodeEditorPanel.tsx::deleteWorkspaceEntry",
+        "ui/src/components/CodeEditorPanel.tsx::downloadWorkspaceFile",
+        "ui/src/components/CodeEditorPanel.tsx::listWorkspace",
+        "ui/src/components/CodeEditorPanel.tsx::renameWorkspaceEntry",
+        "ui/src/components/ChatAttachments.tsx::listWorkspace",
+        "ui/src/components/ChatAttachments.tsx::previewWorkspaceFile",
+        "ui/src/components/WorkspacePanel.tsx::listWorkspace",
+        "ui/src/components/WorkspacePanel.tsx::previewWorkspaceFile"
       ],
       "core_owner": "WorkspaceService and linked-folder policy",
       "butler": {
@@ -397,7 +405,9 @@
         "ui/src/components/NotebookPanel.tsx::createNotebook",
         "ui/src/components/NotebookPanel.tsx::listNotebooks",
         "ui/src/components/NotebookPanel.tsx::readNotebook",
-        "ui/src/components/NotebookPanel.tsx::saveNotebookCell"
+        "ui/src/components/NotebookPanel.tsx::saveNotebookCell",
+        "ui/src/components/NotebookPanel.tsx::notebookStatus",
+        "ui/src/pages/SessionsPage.tsx::notebookStatus"
       ],
       "core_owner": "NotebookService, project workspace file and cell revisions",
       "butler": {
@@ -418,7 +428,10 @@
         "ui/src/components/NotebookPanel.tsx::interruptNotebookRun",
         "ui/src/components/NotebookPanel.tsx::listNotebookRuns",
         "ui/src/components/NotebookPanel.tsx::readNotebookRun",
-        "ui/src/components/NotebookPanel.tsx::watchNotebookRun"
+        "ui/src/components/NotebookPanel.tsx::watchNotebookRun",
+        "ui/src/components/EngagementPolicySettings.tsx::interruptNotebookRun",
+        "ui/src/components/EngagementPolicySettings.tsx::listActiveNotebookRuns",
+        "ui/src/components/EngagementPolicySettings.tsx::waitNotebookRun"
       ],
       "core_owner": "NotebookService, project execution policy, run store and ordered events",
       "butler": {
@@ -689,7 +702,8 @@
         "ui/src/components/NebulaControlAssistant.tsx::downloadReportPdf",
         "ui/src/pages/ReportsPage.tsx::renderReport",
         "ui/src/pages/ReportsPage.tsx::getReportRender",
-        "ui/src/pages/ReportsPage.tsx::downloadReportPdf"
+        "ui/src/pages/ReportsPage.tsx::downloadReportPdf",
+        "ui/src/components/NebulaControlAssistant.tsx::getReportRender"
       ],
       "core_owner": "Core report render job and exact report revision",
       "butler": {
@@ -859,7 +873,12 @@
       "ui_calls": [
         "ui/src/components/ButlerCredentialCreate.tsx::credentialVaultStatus",
         "ui/src/components/ButlerCredentialCreate.tsx::createCredential",
-        "ui/src/components/ButlerCredentialCreate.tsx::credentialStatus"
+        "ui/src/components/ButlerCredentialCreate.tsx::credentialStatus",
+        "ui/src/components/ButlerIssues.tsx::createCredential",
+        "ui/src/components/ButlerIssues.tsx::credentialVaultStatus",
+        "ui/src/components/HarnessSettings.tsx::createCredential",
+        "ui/src/pages/SettingsPage.tsx::createCredential",
+        "ui/src/hooks/useCredentialVault.ts::credentialVaultStatus"
       ],
       "core_owner": "Core credential store, host vault or current Core session",
       "butler": {
@@ -877,7 +896,8 @@
       "entry_point": "Butler: delete an exact Nebula-managed credential reference",
       "ui_calls": [
         "ui/src/components/butlerCredentialAction.ts::credentialStatus",
-        "ui/src/components/butlerCredentialAction.ts::deleteCredential"
+        "ui/src/components/butlerCredentialAction.ts::deleteCredential",
+        "ui/src/pages/SettingsPage.tsx::deleteCredential"
       ],
       "core_owner": "Core credential store and reference status",
       "butler": {
@@ -896,7 +916,8 @@
       "ui_calls": [
         "ui/src/components/butlerProviderCredentialAction.ts::getProvider",
         "ui/src/components/butlerProviderCredentialAction.ts::credentialStatus",
-        "ui/src/components/butlerProviderCredentialAction.ts::attachProviderCredential"
+        "ui/src/components/butlerProviderCredentialAction.ts::attachProviderCredential",
+        "ui/src/pages/providerCredentialRecovery.ts::credentialStatus"
       ],
       "core_owner": "Core global provider profile revision and credential store",
       "butler": {
@@ -974,7 +995,10 @@
         "ui/src/pages/SessionsPage.tsx::listChatSessions",
         "ui/src/pages/SessionsPage.tsx::listChatSessionsPage",
         "ui/src/pages/SessionsPage.tsx::listChatSessionActivityIfChanged",
-        "ui/src/pages/useSessionState.ts::requestIfChanged"
+        "ui/src/pages/useSessionState.ts::requestIfChanged",
+        "ui/src/pages/WorkPage.tsx::listChatSessions",
+        "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
+        "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\""
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1088,7 +1112,9 @@
         "ui/src/pages/SessionsPage.tsx::listHarnessSkills",
         "ui/src/pages/SessionsPage.tsx::listMcpServers",
         "ui/src/pages/SessionsPage.tsx::listSkills",
-        "ui/src/components/McpServerChoices.tsx::getEngagementScope"
+        "ui/src/components/McpServerChoices.tsx::getEngagementScope",
+        "ui/src/components/NebulaControlAssistant.tsx::getChatAssistantConfig",
+        "ui/src/components/NebulaControlAssistant.tsx::updateChatAssistantConfig"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1176,7 +1202,13 @@
         "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(item.id)}/updates`",
         "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(linked[0].item_id)}`",
         "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `work/updates?source_session_id=${encodeURIComponent(sessionId)}&limit=1`",
-        "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::watchWorkChanges"
+        "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::watchWorkChanges",
+        "ui/src/pages/WorkPage.tsx::request::GET `${target}/${encodeURIComponent(trackItemId)}`",
+        "ui/src/pages/WorkPage.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`",
+        "ui/src/pages/WorkPage.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work`",
+        "ui/src/pages/WorkPage.tsx::request::GET `work/items?offset=${offset}&limit=${workPageSize}`",
+        "ui/src/pages/WorkPage.tsx::request::GET \"work/updates\"",
+        "ui/src/pages/WorkPage.tsx::watchWorkChanges"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1197,7 +1229,8 @@
         "ui/src/state/WorkspaceContext.tsx::updateProvider",
         "ui/src/state/WorkspaceContext.tsx::deleteProvider",
         "ui/src/state/WorkspaceContext.tsx::setProviderEnabled",
-        "ui/src/state/WorkspaceContext.tsx::listProviders"
+        "ui/src/state/WorkspaceContext.tsx::listProviders",
+        "ui/src/components/WorkbenchBrowser.tsx::listProviders"
       ],
       "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET",
       "butler": {
@@ -1217,7 +1250,10 @@
         "ui/src/components/HarnessSettings.tsx::createHarness",
         "ui/src/components/HarnessSettings.tsx::updateHarness",
         "ui/src/components/HarnessSettings.tsx::deleteHarness",
-        "ui/src/state/WorkspaceContext.tsx::listHarnesses"
+        "ui/src/state/WorkspaceContext.tsx::listHarnesses",
+        "ui/src/components/ButlerIssues.tsx::listHarnesses",
+        "ui/src/components/PostToolAssistantSettings.tsx::listHarnesses",
+        "ui/src/components/WorkbenchBrowser.tsx::listHarnesses"
       ],
       "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET",
       "butler": {
@@ -1237,7 +1273,8 @@
         "ui/src/components/HarnessSettings.tsx::createMcpServer",
         "ui/src/components/HarnessSettings.tsx::updateMcpServer",
         "ui/src/components/HarnessSettings.tsx::deleteMcpServer",
-        "ui/src/components/HarnessSettings.tsx::listMcpServers"
+        "ui/src/components/HarnessSettings.tsx::listMcpServers",
+        "ui/src/components/ButlerIssues.tsx::listMcpServers"
       ],
       "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET; shared and selected-project metadata ownership, authenticated pre-serialization export filtering and probe-time scope checks",
       "butler": {
