@@ -1152,6 +1152,99 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
   ]);
 });
 
+test("assistant upgrade Butler manages nonsecret integration profiles on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(480_000);
+  const profiles = [
+    {family: "providers", target: "provider-settings", payload: {provider_type: "ollama", is_local: true}},
+    {family: "harnesses", target: "harness-settings", payload: {kind: "codex_app_server", executable: "/bin/true"}},
+    {family: "mcp-servers", target: "mcp-settings", payload: {transport: "streamable_http", url: "https://example.test/mcp"}},
+  ];
+  let request: {prompt: string; path: string; method: string; body?: Record<string, unknown>; expected_revision?: number} | undefined;
+  const stub = await startLocalModelStub({responseContent: "Core returned the profile result.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (!request || !String(messages[lastUser]?.content ?? "").startsWith(request.prompt)) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const arguments_ = {path: request.path, method: request.method,
+      ...(request.body ? {body: request.body} : {}),
+      ...(request.expected_revision ? {expected_revision: request.expected_revision} : {})};
+    if (replies === 0) return {name: "nebula_capabilities_search", arguments: {query: "Core Settings API integration profile"}};
+    if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_schema"}};
+    if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.settings.api_schema", arguments: {path: request.path, method: request.method}}};
+    if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_request"}};
+    if (replies === 4 && request.method !== "POST") return {name: "nebula_capabilities_change", arguments: {
+      operation: "nebula.settings.api_request", arguments: {method: "GET", path: request.path}}};
+    if (replies === (request.method === "POST" ? 4 : 5)) return {name: "nebula_capabilities_change", arguments: {
+      operation: "nebula.settings.api_request", arguments: arguments_}};
+    return undefined;
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "Butler integration profile fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const modelResponse = await api.post("providers", {data: {
+      name: "Butler profile model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+    const model = await modelResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${model.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: model.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler integration LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    for (const profile of profiles) {
+      let saved: {id: string; revision: number} | undefined;
+      const name = `butler-profile-${profile.family}`;
+      for (const action of ["create", "rename", "delete"] as const) {
+        request = {prompt: `${action} the ${name} fixture.`, path: action === "create" ? profile.family : `${profile.family}/${saved!.id}`,
+          method: action === "create" ? "POST" : action === "rename" ? "PATCH" : "DELETE",
+          ...(action === "create" ? {body: {name, enabled: false, ...profile.payload}}
+            : action === "rename" ? {body: {expected_revision: saved!.revision, changes: {name: `${name}-renamed`}}}
+              : {expected_revision: saved!.revision})};
+        const response = `Core completed ${action} for ${name}.`;
+        stub.responseContent = response;
+        if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+        const assistant = page.getByRole("dialog", {name: "Butler"});
+        await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(request.prompt);
+        await assistant.getByRole("button", {name: "Send to Butler"}).click();
+        await expect(assistant.getByText(response, {exact: true})).toBeVisible({timeout: 60_000});
+        if (action === "create") {
+          const rows = await (await api.get(profile.family)).json() as Array<{id: string; name: string; revision: number; enabled: boolean}>;
+          const matches = rows.filter(item => item.name === name);
+          expect(matches).toHaveLength(1);
+          expect(matches[0].enabled).toBe(false);
+          saved = matches[0];
+        } else if (action === "rename") {
+          const observed = await (await api.get(`${profile.family}/${saved!.id}`)).json() as {id: string; name: string; revision: number};
+          expect(observed.name).toBe(`${name}-renamed`);
+          expect(observed.revision).toBeGreaterThan(saved!.revision);
+          saved = observed;
+        } else expect((await api.get(`${profile.family}/${saved!.id}`)).status()).toBe(404);
+        await assistant.getByRole("button", {name: "Hide Butler"}).click();
+        if (action === "create") await page.goto(`${core.origin}/settings#${profile.target}`);
+        const heading = page.getByRole("heading", {name: action === "create" ? name : `${name}-renamed`, exact: true});
+        if (action === "delete") await expect(heading).toHaveCount(0);
+        else await expect(heading).toBeVisible({timeout: 20_000});
+        await page.reload();
+        if (action !== "delete") await expect(heading).toBeVisible({timeout: 20_000});
+      }
+    }
+    if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-integration-profiles-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Three disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks."}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
 test("assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser", async ({page}, testInfo) => {
   test.setTimeout(240_000);
   const prompt = "Prepare diagnostics support ZIP";

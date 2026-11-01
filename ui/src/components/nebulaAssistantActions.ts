@@ -7,6 +7,7 @@ type Runtime = { kind: "provider" | "harness"; id: string; model: string };
 export type ProjectMode = "docker" | "host";
 export type ProjectScopeMode = "bounded" | "all_destinations" | "allow_all";
 export type SettingClientAction =
+  | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" }
   | { kind: "open_setting"; setting: SettingCatalogEntry }
   | { kind: "navigate"; destination: AssistantDestination }
   | { kind: "device_theme"; theme: ThemePreference }
@@ -116,7 +117,7 @@ export function validScopeChanges(value: unknown): value is Record<string, unkno
 export function settingClientAction(event: ChatStreamEvent, projectId?: string): SettingClientAction | undefined {
   if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
   const receipt = event.receipt;
-  if (receipt?.state !== "pending_browser_apply") return undefined;
+  if (receipt?.state !== "pending_browser_apply" && receipt?.state !== "core_settings_saved") return undefined;
   if ((event.capability === "nebula.capabilities.change" || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability))
     && !butlerGatewayOperation(event, projectId)) return undefined;
@@ -127,6 +128,15 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (receipt.state === "core_settings_saved") {
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && operation === "nebula.settings.api_request" && receipt.read_back === true
+        && value.kind === "settings_profile_refresh"
+        && (value.resource === "providers" || value.resource === "harnesses" || value.resource === "mcp-servers")) {
+      return {kind: "settings_profile_refresh", projectId, resource: value.resource};
+    }
+    return undefined;
+  }
   if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
     if (operation === "nebula.diagnostics.export" && value.kind === "diagnostics_export") {
       return {kind: "diagnostics_export", projectId};

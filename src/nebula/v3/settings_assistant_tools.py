@@ -197,6 +197,11 @@ SETTINGS_API_REQUEST_SCHEMA = {
         "path": {"type": "string", "minLength": 1, "maxLength": 600},
         "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
         "body": {"type": ["object", "array", "null"]},
+        "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Current revision from an exact profile GET; required when deleting a provider, harness, MCP server or operator profile.",
+        },
     },
     "required": ["path", "method"],
 }
@@ -722,6 +727,7 @@ def provider_plugins(
             path=arguments.get("path"),
             method=arguments.get("method"),
             body=arguments.get("body"),
+            expected_revision=arguments.get("expected_revision"),
         )
 
     async def read_notebook(_arguments: dict[str, Any]) -> dict[str, Any]:
@@ -800,7 +806,7 @@ def provider_plugins(
         AnalysisTool(
             ToolSpec(
                 name="nebula.settings.api_request",
-                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Core validates and saves. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
+                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Profile DELETE requires expected_revision from the exact profile GET and forwards Core's If-Match guard. A create reads back the exact new identity. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
                 input_schema=SETTINGS_API_REQUEST_SCHEMA,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.WORKSPACE_WRITE,

@@ -434,6 +434,19 @@ def test_product_search_finds_butler_mcp_credential_attachment(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_integration_profile_lifecycle(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create rename or delete an integration provider profile at its current revision?"
+    )
+    assert any(
+        "profile" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        and "read" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_diagnostics_export(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

@@ -160,6 +160,19 @@ describe("settings assistant actions", () => {
       client_action: {kind: "credential_create", project_id: "project"}}}, "project"))
       .toEqual({kind: "credential_create", projectId: "project"});
   });
+  it("refreshes profile catalogs only from a scoped Core-verified settings receipt", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "settings-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project",
+        state: "core_settings_saved", read_back: true,
+        client_action: {kind: "settings_profile_refresh", project_id: "project", resource: "providers"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "settings_profile_refresh", projectId: "project", resource: "providers"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
+  });
   it("accepts an exact provider credential attachment and rejects unsafe receipt fields", () => {
     const providerId = "b96e898d-207f-4943-846e-c00f4415fc26";
     const reference = `session:${"a".repeat(32)}`;

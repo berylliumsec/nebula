@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
     {"name": "harness-catalog-refresh", "patterns": ["ui/src/components/HarnessSettings.tsx", "ui/src/state/WorkspaceContext.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["harness-catalog-refresh"]},
     {"name": "assistant-browser-viewer", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "src/nebula/v3/browser_companion.py", "tests/v3/application_model_fixture.py", "ui/playwright.application-model.config.ts"], "areas": ["assistant-browser-viewer"]},
     {"name": "working-knowledge", "patterns": ["ui/src/pages/ProjectPage.tsx", "src/nebula/v3/application_model/**", "tests/v3/application_model_fixture.py", "ui/playwright.application-model.config.ts"], "areas": ["working-knowledge"]},
@@ -104,6 +105,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "butler-integration-profiles": [
+      {"area":"butler-integration-profiles","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "harness-catalog-refresh": [
       {"area":"harness-catalog-refresh","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness catalog refresh","runtime":"real-core","shard":"1/1"},
       {"area":"harness-catalog-refresh","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness catalog refresh","runtime":"real-core","shard":"1/1"},

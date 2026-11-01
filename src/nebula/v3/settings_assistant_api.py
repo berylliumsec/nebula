@@ -198,6 +198,7 @@ async def execute_settings_api(
     method: str,
     path: str,
     body: dict[str, Any] | list[Any] | None = None,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     """Call only an existing Settings route, with the active project supplied by Core."""
 
@@ -213,12 +214,31 @@ async def execute_settings_api(
         raise ValueError("this Settings operation is not in the current Core build")
     if selected == "GET" and body is not None:
         raise ValueError("GET Settings requests have no body")
+    if expected_revision is not None and (
+        selected != "DELETE"
+        or type(expected_revision) is not int
+        or expected_revision < 1
+    ):
+        raise ValueError("expected_revision is a positive current revision for DELETE")
+    if (
+        selected == "DELETE"
+        and re.fullmatch(
+            r"/api/v1/(?:providers|harnesses|mcp-servers|operator-profiles)/[^/]+",
+            candidate,
+        )
+        and expected_revision is None
+    ):
+        raise ValueError(
+            "read the exact profile and supply expected_revision before deleting"
+        )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://127.0.0.1",
         timeout=30.0,
     ) as client:
         headers = {"Authorization": f"Bearer {token}"}
+        if expected_revision is not None:
+            headers["If-Match"] = str(expected_revision)
         response = await client.request(selected, candidate, json=body, headers=headers)
         if response.is_error:
             try:
@@ -234,27 +254,63 @@ async def execute_settings_api(
             )
         result = response.json() if response.content else None
         observed = None
-        if selected != "GET" and _route_exists(app, "GET", candidate):
-            readback = await client.get(candidate, headers=headers)
+        readback_path: str | None = candidate
+        if selected == "POST" and isinstance(result, dict) and "id" in result:
+            # A collection GET cannot verify the identity returned by a create.
+            # Only use Core's new ID when that exact GET route is allowlisted.
+            created_id = result["id"]
+            readback_path = None
+            if (
+                isinstance(created_id, str)
+                and re.fullmatch(r"[A-Za-z0-9_.~:-]{1,200}", created_id)
+                and created_id not in {".", ".."}
+            ):
+                exact = f"{candidate}/{created_id}"
+                if _route_exists(app, "GET", exact):
+                    readback_path = exact
+        if (
+            selected != "GET"
+            and readback_path is not None
+            and _route_exists(app, "GET", readback_path)
+        ):
+            readback = await client.get(readback_path, headers=headers)
             if readback.is_success:
-                observed = readback.json()
+                value = readback.json()
+                if not (
+                    selected == "POST" and isinstance(result, dict) and "id" in result
+                ) or (isinstance(value, dict) and value.get("id") == result["id"]):
+                    observed = value
             elif selected == "DELETE" and readback.status_code == 404:
                 observed = {"deleted": True}
         rendered = json.dumps(
             _safe_result(observed if observed is not None else result), default=str
         )
         if len(rendered) > 30_000:
-            return {
+            outcome: dict[str, Any] = {
                 "status": response.status_code,
                 "read_back": observed is not None,
                 "truncated": True,
                 "result_excerpt": rendered[:30_000],
             }
-        return {
-            "status": response.status_code,
-            "read_back": observed is not None or selected == "GET",
-            "result": json.loads(rendered),
-        }
+        else:
+            outcome = {
+                "status": response.status_code,
+                "read_back": observed is not None or selected == "GET",
+                "result": json.loads(rendered),
+            }
+        profile_route = re.fullmatch(
+            r"/api/v1/(providers|harnesses|mcp-servers)(?:/[^/]+)?", candidate
+        )
+        if selected != "GET" and observed is not None and profile_route:
+            outcome.update(
+                state="core_settings_saved",
+                client_action={
+                    "kind": "settings_profile_refresh",
+                    "project_id": project_id,
+                    "resource": profile_route[1],
+                },
+            )
+        return outcome
 
 
 class SettingsAssistantApi:
@@ -276,9 +332,16 @@ class SettingsAssistantApi:
         method: str | None,
         path: str | None,
         body: dict[str, Any] | list[Any] | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         if not isinstance(method, str) or not isinstance(path, str):
             raise ValueError("provide a Settings method and path")
         return await execute_settings_api(
-            self.app, self.token, project_id, method=method, path=path, body=body
+            self.app,
+            self.token,
+            project_id,
+            method=method,
+            path=path,
+            body=body,
+            expected_revision=expected_revision,
         )

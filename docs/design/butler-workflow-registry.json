@@ -864,7 +864,7 @@
       "core_owner": "Core credential store, host vault or current Core session",
       "butler": {
         "discover": "nebula.settings.api_schema credentials/vault and nebula.credentials.create",
-        "read": "nebula.settings.api credentials/{reference}/status",
+        "read": "nebula.settings.api_request credentials/{reference}/status",
         "change": "nebula.credentials.create"
       },
       "authority": "Interactive selected-project receipt; browser owns secret input and persistence choice, with exact-reference Core status readback",
@@ -882,7 +882,7 @@
       "core_owner": "Core credential store and reference status",
       "butler": {
         "discover": "nebula.credentials.delete",
-        "read": "nebula.settings.api credentials/{reference}/status",
+        "read": "nebula.settings.api_request credentials/{reference}/status",
         "change": "nebula.credentials.delete"
       },
       "authority": "Interactive selected-project receipt; exact vault or session reference, browser confirmation, second status check and Core absence readback",
@@ -901,7 +901,7 @@
       "core_owner": "Core global provider profile revision and credential store",
       "butler": {
         "discover": "nebula.providers.list",
-        "read": "nebula.providers.profile and nebula.settings.api credentials/{reference}/status",
+        "read": "nebula.providers.profile and nebula.settings.api_request credentials/{reference}/status",
         "change": "nebula.providers.attach_credential"
       },
       "authority": "Interactive selected-project receipt; exact provider ID, current revision, managed reference and slot; requesting-browser confirmation and Core readback",
@@ -920,7 +920,7 @@
       "core_owner": "Core global harness profile revision and credential store",
       "butler": {
         "discover": "nebula.harnesses.list",
-        "read": "nebula.harnesses.harness and nebula.settings.api credentials/{reference}/status",
+        "read": "nebula.harnesses.harness and nebula.settings.api_request credentials/{reference}/status",
         "change": "nebula.harnesses.attach_credential"
       },
       "authority": "Interactive selected-project receipt; exact harness ID, current revision, managed reference and coherent authentication mode; requesting-browser confirmation and Core readback",
@@ -939,7 +939,7 @@
       "core_owner": "Core MCP server profile revision and credential store",
       "butler": {
         "discover": "nebula.mcp.list",
-        "read": "nebula.mcp.server and nebula.settings.api credentials/{reference}/status",
+        "read": "nebula.mcp.server and nebula.settings.api_request credentials/{reference}/status",
         "change": "nebula.mcp.attach_credential"
       },
       "authority": "Interactive selected-project receipt; exact MCP ID, transport, current revision, managed reference and slot; requesting-browser confirmation and Core readback",
@@ -1187,6 +1187,67 @@
       "authority": "Butler remains selected-project scoped; the browser owns its chosen board/linked snapshot and live subscription; only same-project items and assignees can be mutated",
       "observed_result_test": "tests/v3/test_control_assistant_work.py::test_butler_manages_project_work_items_with_saved_revisions",
       "result": "Core item and check-in revisions agree with the board; idempotent requests are reused and cross-project item/assignee writes fail",
+      "status": "supported"
+    },
+    {
+      "id": "providers.profile_lifecycle",
+      "entry_point": "Settings or Butler: discover, create, edit, enable, disable or delete a nonsecret provider profile",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::createProvider",
+        "ui/src/state/WorkspaceContext.tsx::updateProvider",
+        "ui/src/state/WorkspaceContext.tsx::deleteProvider",
+        "ui/src/state/WorkspaceContext.tsx::setProviderEnabled",
+        "ui/src/state/WorkspaceContext.tsx::listProviders"
+      ],
+      "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET collection and exact profile",
+        "change": "nebula.settings.api_request POST, PATCH or DELETE with the current revision"
+      },
+      "authority": "Interactive explicit operator request; listed Settings route/schema; current revision for changes and deletion; credentials stay on their browser handoff; saved configuration does not attest to runtime health",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Exact created identity is returned after Core readback; stale edits/deletes fail; live Settings catalogs and reload show saved profile state; confirmed deletion returns exact absence",
+      "status": "supported"
+    },
+    {
+      "id": "harnesses.profile_lifecycle",
+      "entry_point": "Settings or Butler: discover, create, edit, enable, disable or delete a nonsecret Assistant harness profile",
+      "ui_calls": [
+        "ui/src/components/HarnessSettings.tsx::createHarness",
+        "ui/src/components/HarnessSettings.tsx::updateHarness",
+        "ui/src/components/HarnessSettings.tsx::deleteHarness",
+        "ui/src/state/WorkspaceContext.tsx::listHarnesses"
+      ],
+      "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET collection and exact profile",
+        "change": "nebula.settings.api_request POST, PATCH or DELETE with the current revision"
+      },
+      "authority": "Interactive explicit operator request; listed Settings route/schema; current revision for changes and deletion; credentials stay on their browser handoff; saved configuration does not attest to runtime health",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Exact created identity is returned after Core readback; stale edits/deletes fail; live Settings catalogs and reload show saved profile state; confirmed deletion returns exact absence",
+      "status": "supported"
+    },
+    {
+      "id": "mcp.profile_lifecycle",
+      "entry_point": "Settings or Butler: discover, create, edit, enable, disable or delete a nonsecret MCP server profile",
+      "ui_calls": [
+        "ui/src/components/HarnessSettings.tsx::createMcpServer",
+        "ui/src/components/HarnessSettings.tsx::updateMcpServer",
+        "ui/src/components/HarnessSettings.tsx::deleteMcpServer",
+        "ui/src/components/HarnessSettings.tsx::listMcpServers"
+      ],
+      "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET collection and exact profile",
+        "change": "nebula.settings.api_request POST, PATCH or DELETE with the current revision"
+      },
+      "authority": "Interactive explicit operator request; listed Settings route/schema; current revision for changes and deletion; credentials stay on their browser handoff; saved configuration does not attest to runtime health",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Exact created identity is returned after Core readback; stale edits/deletes fail; live Settings catalogs and reload show saved profile state; confirmed deletion returns exact absence",
       "status": "supported"
     }
   ],

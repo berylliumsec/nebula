@@ -4,10 +4,19 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
-from nebula.v3.domain import BrowserSessionStatus, Engagement, ProviderProfile
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.butler_capabilities import ButlerCapabilities
+from nebula.v3.domain import (
+    BrowserSessionStatus,
+    Engagement,
+    HarnessProfile,
+    McpServerProfile,
+    ProviderProfile,
+)
 from nebula.v3.settings_assistant_api import SettingsAssistantApi
 from nebula.v3.storage import NebulaStore
 
@@ -218,11 +227,147 @@ def test_settings_api_confirms_provider_deletion_by_readback(tmp_path):
 
     async def journey():
         result = await gateway.request(
-            project.id, method="DELETE", path=f"providers/{provider.id}"
+            project.id,
+            method="DELETE",
+            path=f"providers/{provider.id}",
+            expected_revision=provider.revision,
         )
         assert result["status"] in (200, 204)
         assert result["read_back"] is True
         assert result["result"] == {"deleted": True}
+
+    asyncio.run(journey())
+
+
+@pytest.mark.parametrize(
+    ("family", "model", "payload"),
+    [
+        ("providers", ProviderProfile, {"provider_type": "ollama", "is_local": True}),
+        (
+            "harnesses",
+            HarnessProfile,
+            {"kind": "codex_app_server", "executable": "/bin/true"},
+        ),
+        (
+            "mcp-servers",
+            McpServerProfile,
+            {"transport": "streamable_http", "url": "https://example.test/mcp"},
+        ),
+    ],
+)
+def test_settings_api_profile_lifecycle_reads_exact_created_identity(
+    tmp_path, family, model, payload
+):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    existing = store.create(model(name="existing-profile", enabled=False, **payload))
+    gateway = SettingsAssistantApi(
+        create_app(store, auth_token="test-token"), "test-token"
+    )
+    assert gateway.schema(path=family, method="POST")["request_body"]
+    capabilities = ButlerCapabilities(
+        store, ArtifactStore(tmp_path / "artifacts"), project.id, settings_api=gateway
+    )
+
+    async def request(**arguments):
+        return await capabilities.invoke(
+            {"operation": "nebula.settings.api_request", "arguments": arguments},
+            change=True,
+        )
+
+    async def journey():
+        created = await request(
+            method="POST",
+            path=family,
+            body={"name": "new-profile", "enabled": False, **payload},
+        )
+        assert created["read_back"] is True
+        assert created["state"] == "core_settings_saved"
+        assert created["client_action"] == {
+            "kind": "settings_profile_refresh",
+            "project_id": project.id,
+            "resource": family,
+        }
+        assert isinstance(created["result"], dict)
+        profile = created["result"]
+        assert profile["id"] != existing.id
+        assert profile["name"] == "new-profile"
+        assert store.get(model, profile["id"]).name == "new-profile"
+        path = f"{family}/{profile['id']}"
+        saved = await request(
+            method="PATCH",
+            path=path,
+            body={
+                "expected_revision": profile["revision"],
+                "changes": {"name": "renamed-profile"},
+            },
+        )
+        assert saved["read_back"] is True
+        assert saved["result"]["id"] == profile["id"]
+        assert saved["result"]["name"] == "renamed-profile"
+        assert saved["result"]["revision"] > profile["revision"]
+        with pytest.raises(ValueError, match="409"):
+            await request(
+                method="PATCH",
+                path=path,
+                body={
+                    "expected_revision": profile["revision"],
+                    "changes": {"name": "stale-profile"},
+                },
+            )
+        assert store.get(model, profile["id"]).name == "renamed-profile"
+        with pytest.raises(ValueError, match="expected_revision"):
+            await request(method="DELETE", path=path)
+        with pytest.raises(ValueError, match="409"):
+            await request(
+                method="DELETE", path=path, expected_revision=profile["revision"]
+            )
+        assert store.get(model, profile["id"]).name == "renamed-profile"
+        deleted = await request(
+            method="DELETE", path=path, expected_revision=saved["result"]["revision"]
+        )
+        assert deleted["read_back"] is True
+        assert deleted["result"] == {"deleted": True}
+        assert store.get(model, existing.id).name == "existing-profile"
+
+    asyncio.run(journey())
+
+
+def test_settings_api_create_keeps_identity_when_exact_readback_fails(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    gateway = SettingsAssistantApi(
+        create_app(store, auth_token="test-token"), "test-token"
+    )
+
+    async def unavailable(client, path, **kwargs):
+        return httpx.Response(
+            503, request=httpx.Request("GET", f"http://127.0.0.1{path}")
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", unavailable)
+
+    async def journey():
+        created = await gateway.request(
+            project.id,
+            method="POST",
+            path="providers",
+            body={
+                "name": "saved-unverified",
+                "provider_type": "ollama",
+                "is_local": True,
+                "enabled": False,
+            },
+        )
+        assert created["read_back"] is False
+        assert "client_action" not in created
+        assert created["result"]["name"] == "saved-unverified"
+        assert (
+            store.get(ProviderProfile, created["result"]["id"]).name
+            == "saved-unverified"
+        )
 
     asyncio.run(journey())
 

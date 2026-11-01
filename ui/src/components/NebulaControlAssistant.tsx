@@ -1701,6 +1701,19 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setView("chat");
       return "Opened write-only credential entry on this browser. No secret has been sent to Butler or saved yet.";
     }
+    if (action.kind === "settings_profile_refresh") {
+      if (!api || coreState !== "online") return "Core confirmed the profile change. Reconnect to refresh Settings.";
+      if (action.resource !== "mcp-servers") {
+        try {
+          await retryResource(action.resource);
+        } catch {
+          // diagnostic-expected: WorkspaceContext records the failed catalog read and provides its Retry control.
+          return "Core confirmed the profile change. The catalog could not refresh; use its Retry control in Settings.";
+        }
+      }
+      if (action.resource !== "providers") window.dispatchEvent(new Event("nebula:mcp-profiles-changed"));
+      return "Core confirmed the profile change. Settings catalogs have been asked to refresh.";
+    }
     if (action.kind === "credential_delete") {
       if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
         throw new Error("Reconnect to Core and select the original project before deleting a credential.");
