@@ -1,5 +1,5 @@
 {
-  "change_digest": "012912accdf45295bcd5ba1422ffcf98fa12171d9f91f887070a5140a311a632",
+  "change_digest": "9a54471d1179649b3f2a63d9c4d8a3b5aef282f8a0241c5e4352294e3430960a",
   "reviewed_by": "Codex focused review for Nebula Core tool-result recovery",
   "reason": "Four collected Python cases exercise large capability pagination, oversized result artifact recovery and replay, failed writes, long UTF-8 line continuation with redaction, and artifact authorization. An authenticated disposable LAN Core also reconstructed a synthetic long line through the real artifact-read API.",
   "exclusions": "No frontend or native source changed, so those layers and Playwright are empty. Existing MCP-backed subagent integration cases stalled in preparation before creating a chat turn in this environment; they do not exercise this result contract and were removed from the focused selection. Unrelated Python suites and research workflows are excluded. The user waived the simulation smoke check.",

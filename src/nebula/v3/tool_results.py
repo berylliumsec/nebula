@@ -1384,7 +1384,7 @@ def preserve_oversized_model_result(
     try:
         try:
             call = store.get(ToolCall, tool_call_id)
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: direct calls lack a record.
             call = None
         if call is not None and (
             call.engagement_id != engagement_id
