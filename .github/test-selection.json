@@ -1,27 +1,24 @@
 {
-  "change_digest": "9f8638c928b2b5d2590d6a68bb2d509734975417a03a4733b314564e719d3bb4",
-  "reviewed_by": "Codex agent, 2026-11-01",
-  "reason": "The goal edit control inserts its form inside the bounded composer context. Selected component cases cover edit focus and existing save/conflict behavior. The real-Core production browser journey checks that Objective is in view and focused immediately in draft and running states, that text selection does not put an action toolbar over Save, and that edits persist through refresh across desktop and emulated phone widths.",
-  "exclusions": "No Python or native code changed. No backend mutation behavior changed. Other provider, harness, transcript, and Butler journeys are outside this presentation defect. The selected browser journey runs across desktop Chromium and emulated mobile Chromium and WebKit; physical devices are unavailable.",
+  "change_digest": "9a54471d1179649b3f2a63d9c4d8a3b5aef282f8a0241c5e4352294e3430960a",
+  "reviewed_by": "Codex focused review for Nebula Core tool-result recovery",
+  "reason": "Four collected Python cases exercise large capability pagination, oversized result artifact recovery and replay, failed writes, long UTF-8 line continuation with redaction, and artifact authorization. An authenticated disposable LAN Core also reconstructed a synthetic long line through the real artifact-read API.",
+  "exclusions": "No frontend or native source changed, so those layers and Playwright are empty. Existing MCP-backed subagent integration cases stalled in preparation before creating a chat turn in this environment; they do not exercise this result contract and were removed from the focused selection. Unrelated Python suites and research workflows are excluded. The user waived the simulation smoke check.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 24,
+    "python": 4,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx"
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_tool_result_recovery.py::test_oversized_capability_result_has_authorized_artifact_and_replays",
+    "tests/v3/test_tool_result_recovery.py::test_failed_large_result_artifact_write_is_explicitly_incomplete",
+    "tests/v3/test_chat_subagents.py::test_capability_summary_pages_every_long_list",
+    "tests/v3/test_automation_runtime.py::test_tool_output_read_resumes_within_utf8_line_and_redacts_every_page"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "provider-goal-lifecycle-core/assistant-real-desktop",
-    "provider-goal-lifecycle-core/assistant-real-compact",
-    "provider-goal-lifecycle-core/assistant-real-chromium-320",
-    "provider-goal-lifecycle-core/assistant-real-chromium-390",
-    "provider-goal-lifecycle-core/assistant-real-chromium-430",
-    "provider-goal-lifecycle-core/assistant-real-webkit-320",
-    "provider-goal-lifecycle-core/assistant-real-webkit-390",
-    "provider-goal-lifecycle-core/assistant-real-webkit-430"
-  ]
+  "playwright": []
 }

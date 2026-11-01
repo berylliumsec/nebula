@@ -2001,6 +2001,58 @@ def test_tool_output_search_rejects_a_cursor_that_no_longer_resolves(tmp_path):
         )
 
 
+def test_tool_output_read_resumes_within_utf8_line_and_redacts_every_page(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Long artifact line"))
+    secret = "Bearer abcdefghijklmnopqrstuvwxyz123456"
+    long_line = "α🛰" * 10_000 + secret + "é" * 4_000
+    body = ("head\n" * 5 + long_line + "\ntail\n").encode("utf-8")
+    assert 68_000 < len(body) < 75_000
+    call = _searchable_tool_call(
+        store, artifacts, engagement, call_id="long-line", body=body
+    )
+    (artifact,) = store.list_tool_call_artifacts(engagement.id, call.id)
+    service = ToolOutputService(store, artifacts)
+    page = service.read(
+        engagement_id=engagement.id,
+        owner_id="mission-owner",
+        artifact_id=artifact.id,
+        starting_line=6,
+        line_count=1,
+    )
+    chunks = []
+    pages = 0
+    while True:
+        pages += 1
+        assert tool_results.model_result_bytes(page) <= 8 * 1024
+        assert secret not in json.dumps(page)
+        if page["lines"][0]["line"] == 7:
+            assert page["lines"] == [{"line": 7, "text": "tail"}]
+            break
+        assert page["lines"][0]["line"] == 6
+        chunks.append(page["lines"][0]["text"])
+        cursor = page["continuation_cursor"]
+        assert cursor is not None
+        with pytest.raises(ToolOutputAccessError):
+            service.read(
+                engagement_id=engagement.id,
+                owner_id="unauthorized",
+                artifact_id=artifact.id,
+                continuation_cursor=cursor,
+            )
+        page = service.read(
+            engagement_id=engagement.id,
+            owner_id="mission-owner",
+            artifact_id=artifact.id,
+            continuation_cursor=cursor,
+            line_count=1,
+        )
+    assert pages > 8
+    assert "".join(chunks) == tool_results.redacted_display(long_line)
+    assert "Bearer [REDACTED]" in "".join(chunks)
+
+
 def test_legacy_results_without_a_recorded_status_are_not_replayed_as_failed():
     for payload in ({}, {"detail": "connection refused"}):
         result = sanitize_model_history_result(
