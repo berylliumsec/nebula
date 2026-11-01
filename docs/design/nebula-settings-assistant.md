@@ -572,6 +572,15 @@ body revision; PUT carries its observed revision in Core's If-Match guard, so a
 concurrent browser change cannot be overwritten after the comparison. A trusted
 MCP program's launch definition also remains under its operator trust choice.
 
+MCP discovery, exact reads, configuration exports, edits and probes include
+shared profiles and profiles owned by the selected project. Another project's
+profile is excluded before export serialization, including warning text.
+Nonsecret edits preserve project ownership, and new project-owned profiles use
+the selected project. Probes receive Core's selected project; Core checks
+ownership at lookup and again before saving a capability snapshot. A refusal
+does not probe or change the foreign profile. The browser's MCP catalog remains
+the visible owner of profile selection and health results.
+
 
 ### Project inventory and candidate findings
 

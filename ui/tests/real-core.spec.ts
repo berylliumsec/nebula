@@ -1452,9 +1452,9 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     if (replies === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_schema"}};
     if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.settings.api_schema", arguments: {path: request.path, method: request.method}}};
     if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_request"}};
-    if (replies === 4 && request.method !== "POST") return {name: "nebula_capabilities_change", arguments: {
+    if (replies === 4 && !["POST", "GET"].includes(request.method)) return {name: "nebula_capabilities_change", arguments: {
       operation: "nebula.settings.api_request", arguments: {method: "GET", path: request.path}}};
-    if (replies === (request.method === "POST" ? 4 : 5)) return {name: "nebula_capabilities_change", arguments: {
+    if (replies === (["POST", "GET"].includes(request.method) ? 4 : 5)) return {name: "nebula_capabilities_change", arguments: {
       operation: "nebula.settings.api_request", arguments: arguments_}};
     return undefined;
   }});
@@ -1480,6 +1480,66 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
     await pairRealCoreBrowser(page, core, "Butler integration LAN browser", {requireReady: false});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    const otherProject = await api.post("engagements", {data: {name: "Other MCP owner", status: "active", metadata: {}}});
+    expect(otherProject.ok(), await otherProject.text()).toBe(true);
+    const otherProjectId = (await otherProject.json() as {id: string}).id;
+    const foreignResponse = await api.post("mcp-servers", {data: {
+      name: "foreign-private-mcp-sentinel", transport: "streamable_http", url: "https://example.test/mcp",
+      enabled: false, metadata: {engagement_id: otherProjectId},
+    }});
+    expect(foreignResponse.ok(), await foreignResponse.text()).toBe(true);
+    const foreign = await foreignResponse.json() as {id: string; revision: number};
+    for (const action of ["list", "export", "read", "rename", "probe"] as const) {
+      request = {prompt: `Check selected-project MCP ${action} boundary.`,
+        method: action === "rename" ? "PATCH" : action === "probe" ? "POST" : "GET",
+        path: action === "list" ? "mcp-servers" : action === "export" ? "mcp-servers/export" : `mcp-servers/${foreign.id}${action === "probe" ? "/probe" : ""}`,
+        ...(action === "rename" ? {body: {expected_revision: foreign.revision, changes: {name: "unexpected-foreign-edit"}}}
+          : action === "probe" ? {body: {}} : {})};
+      stub.responseContent = `Core finished selected-project MCP ${action} inspection.`;
+      const requestStart = stub.requests.length;
+      if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(request.prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      const tools = stub.requests.slice(requestStart).flatMap(body => {
+        const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+        const lastUser = messages.map(message => message.role).lastIndexOf("user");
+        return messages.slice(lastUser + 1).filter(message => message.role === "tool");
+      });
+      const rendered = JSON.stringify(tools);
+      expect(rendered).not.toContain("foreign-private-mcp-sentinel");
+      type ScopeOutcome = {
+        status?: number | string; read_back?: boolean; butler_operation?: string; butler_project_id?: string;
+        error_code?: string; category?: string; side_effects?: string;
+        schema?: string; artifact_id?: string;
+      };
+      const outcomes = tools.map(message => JSON.parse(String(message.content)) as ScopeOutcome);
+      // Large Core results remain metadata-only in model messages. Inspect the
+      // synthetic fixture's durable artifact without forwarding its body to the model.
+      const boundedIds = new Set(outcomes.filter(value => value.schema === "nebula.bounded-result/v1")
+        .map(value => value.artifact_id));
+      for (const artifactId of boundedIds) {
+        expect(artifactId).toBeTruthy();
+        const artifact = await api.get(`artifacts/${artifactId}/content`, {
+          headers: {"X-Nebula-Sensitive-Data-Acknowledged": "true"},
+        });
+        expect(artifact.ok(), await artifact.text()).toBe(true);
+        const bytes = await artifact.body();
+        expect(createHash("sha256").update(bytes).digest("hex")).toBe(artifact.headers()["x-nebula-artifact-sha256"]);
+        expect(bytes.toString()).not.toContain("foreign-private-mcp-sentinel");
+        outcomes.push(JSON.parse(bytes.toString()) as ScopeOutcome);
+      }
+      if (["list", "export"].includes(action)) {
+        expect(outcomes.some(value => value.butler_operation === "nebula.settings.api_request"
+          && value.butler_project_id === projectId && value.status === 200 && value.read_back === true)).toBe(true);
+      } else {
+        expect(outcomes.some(value => value.error_code === "mcp_project_scope"
+          && value.category === "policy_denied" && value.side_effects === "none")).toBe(true);
+      }
+      expect(await (await api.get(`mcp-servers/${foreign.id}`)).json()).toEqual(foreign);
+      await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    }
     for (const profile of profiles) {
       let saved: {id: string; revision: number} | undefined;
       const name = `butler-profile-${profile.family}`;
@@ -1540,7 +1600,7 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-integration-profiles-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
-      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Foreign MCP data omitted from collection/export and exact reads, edits and probes refused without changing the profile. Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 

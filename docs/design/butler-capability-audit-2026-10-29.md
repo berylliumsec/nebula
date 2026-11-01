@@ -48,6 +48,17 @@ after a lost write response it reads Core before another retry. The paired LAN
 journey checks cancellation, saved state after refresh and secret isolation.
 See [MCP credential handoff](butler-mcp-credential-handoff.md).
 
+The generic Settings gateway uses the same shared-or-selected-project visibility
+rule. Collection filtering continues past hidden raw pages; exports filter
+before serialization so warnings cannot disclose foreign names. Exact reads,
+edits, deletion and probes refuse other-project profiles. Nonsecret edits retain
+ownership, and Core binds probes to the selected project and rechecks ownership
+before saving either a successful or failed capability snapshot. Fixed public
+scope guidance distinguishes a refused preflight from an uncertain post-write
+readback. The extended profile journey verifies scoped receipts, unchanged
+foreign state and subsequent valid CRUD. Large result artifacts retain the
+existing authenticated sensitive-download acknowledgment and model limits.
+
 ## Branch slice: diagnostics export
 
 Interactive Butler can prepare a sensitive diagnostics support ZIP export on the

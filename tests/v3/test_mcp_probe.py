@@ -112,6 +112,68 @@ def _probe(tmp_path, capabilities, errors=None):
     return report, methods
 
 
+@pytest.mark.parametrize("phase", ["before", "success", "failure"])
+def test_project_mcp_probe_refuses_foreign_lookup_and_save(
+    tmp_path, monkeypatch, phase
+):
+    store = NebulaStore(tmp_path / "scope.db")
+    profile = store.create(
+        McpServerProfile(
+            name="Scoped",
+            transport="streamable_http",
+            url="https://example.test/mcp",
+            metadata={"engagement_id": "other" if phase == "before" else "selected"},
+        )
+    )
+    service = McpProbeService(
+        store, credential_store=CredentialStore(), workspace_resolver=lambda _: tmp_path
+    )
+    calls = []
+
+    class Client:
+        async def request(self, method, params):
+            calls.append(method)
+            if method == "initialize":
+                store.update(
+                    McpServerProfile,
+                    profile.id,
+                    {"metadata": {"engagement_id": "other"}},
+                    expected_revision=profile.revision,
+                )
+                if phase == "failure":
+                    raise mcp.McpProbeError("synthetic failure")
+                return {"protocolVersion": "2025-06-18", "capabilities": {}}
+            return {"tools": []}
+
+        async def notify(self, method):
+            pass
+
+        async def close(self):
+            calls.append("close")
+
+    async def connect(*args, **kwargs):
+        calls.append("connect")
+        return Client()
+
+    monkeypatch.setattr(service, "_connect", connect)
+    with pytest.raises(mcp.McpProbeError, match="not in the selected project"):
+        asyncio.run(service.probe(profile.id, engagement_id="selected"))
+    current = store.get(McpServerProfile, profile.id)
+    assert current.capabilities == profile.capabilities
+    assert current.metadata == {"engagement_id": "other"}
+    assert current.revision == profile.revision + (phase != "before")
+    assert calls == (
+        []
+        if phase == "before"
+        else [
+            "connect",
+            "initialize",
+            *([] if phase == "failure" else ["tools/list"]),
+            "close",
+        ]
+    )
+
+
 def _http_service(tmp_path, *, startup: float, tool: float):
     store = NebulaStore(tmp_path / "mcp.db")
     profile = store.create(
@@ -393,10 +455,18 @@ def test_mcp_display_name_stays_bounded_and_single_line(tmp_path):
     assert len(long) == 80 + 3 + 100
 
 
+@pytest.mark.parametrize("owner", [None, "eng"])
 def test_probe_keeps_discovered_tools_when_the_profile_changes_meanwhile(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, owner
 ):
     store, profile, service, _ = _stdio_service(tmp_path, {"tools": {}})
+    if owner:
+        profile = store.update(
+            McpServerProfile,
+            profile.id,
+            {"metadata": {"engagement_id": owner}},
+            expected_revision=profile.revision,
+        )
     original = McpProbeService._optional_list
 
     async def edit_profile_during_listing(client, method):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from itertools import islice
 from typing import Any
 from urllib.parse import unquote
 
@@ -13,6 +14,9 @@ from pydantic import BaseModel, ValidationError
 from starlette.routing import Match
 
 from .domain import HarnessProfile, McpServerProfile, ProviderProfile
+from .mcp_import import export_mcp_config
+from .mcp_scope import mcp_metadata_is_visible, project_mcp_profiles
+from .tools import GuidedToolError
 
 
 _PROJECT_SETTING = re.compile(
@@ -166,6 +170,7 @@ async def _check_profile_mutation(
     path: str,
     body: dict[str, Any] | list[Any] | None,
     expected_revision: int | None,
+    project_id: str,
 ) -> None:
     route = re.fullmatch(r"/api/v1/(providers|harnesses|mcp-servers)(/[^/]+)?", path)
     if route is None or method not in {"POST", "PATCH", "PUT"}:
@@ -217,6 +222,12 @@ async def _check_profile_mutation(
         ) from exc
     defaults = model.model_construct().model_dump(mode="json")
     before = current if current is not None else defaults
+    if family == "mcp-servers":
+        _require_mcp_scope(candidate, project_id, before_execution=True)
+        if current is not None and candidate["metadata"].get(
+            "engagement_id"
+        ) != current["metadata"].get("engagement_id"):
+            raise ValueError("preserve the MCP server's project ownership")
     protected = _PROFILE_PRIVATE_FIELDS[family]
     changed = any(candidate.get(field) != before.get(field) for field in protected)
     if family in {"providers", "harnesses"}:
@@ -243,6 +254,82 @@ async def _check_profile_mutation(
             f"belong in the requesting browser; use nebula.settings.open setting_id={destination}. "
             "Preserve their current values for a nonsecret profile edit."
         )
+
+
+def _require_mcp_scope(
+    profile: dict[str, Any], project_id: str, *, before_execution: bool = False
+) -> None:
+    if not mcp_metadata_is_visible(profile.get("metadata", {}), project_id):
+        raise GuidedToolError(
+            "MCP server is not in the selected project",
+            code="mcp_project_scope",
+            category="policy_denied",
+            problem="MCP server is not in the selected project.",
+            next_action="List MCP profiles for the selected project and choose a shared or selected-project profile. Do not retry this foreign identity.",
+            before_execution=before_execution,
+        )
+
+
+async def _settings_request(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    project_id: str,
+    method: str,
+    path: str,
+    body: dict[str, Any] | list[Any] | None = None,
+    expected_revision: int | None = None,
+    *,
+    before_execution: bool = True,
+) -> httpx.Response:
+    """Keep globally routed MCP profiles within the UI's selected-project boundary."""
+
+    if method == "GET" and path in {
+        "/api/v1/mcp-servers",
+        "/api/v1/mcp-servers/export",
+    }:
+        # Authenticate through Core before reading its store. Filtering must precede
+        # serialization: exports omit ownership and can include names in warnings.
+        authorized = await client.get("/api/v1/mcp-servers/schema", headers=headers)
+        if not authorized.is_success:
+            return authorized
+        profiles = project_mcp_profiles(app.state.store, project_id)
+        if path.endswith("/export"):
+            result: Any = export_mcp_config(
+                [profile for _, profile in profiles]
+            ).model_dump(mode="json")
+        else:
+            result = [
+                profile.model_dump(mode="json") for _, profile in islice(profiles, 100)
+            ]
+        return httpx.Response(200, json=result)
+    exact = re.fullmatch(r"(/api/v1/mcp-servers/([^/]+))(/probe)?", path)
+    if exact and exact[2] != "schema":
+        current = await client.get(exact[1], headers=headers)
+        if not current.is_success:
+            return current
+        _require_mcp_scope(
+            current.json(), project_id, before_execution=before_execution
+        )
+        if exact[3]:
+            if not isinstance(body, dict) or body.get("engagement_id") not in (
+                None,
+                project_id,
+            ):
+                raise ValueError("probe MCP servers only in the selected project")
+            body = {**body, "engagement_id": project_id}
+    await _check_profile_mutation(
+        client, headers, method, path, body, expected_revision, project_id
+    )
+    response = (
+        await client.get(path, headers=headers)
+        if method == "GET"
+        else await client.request(method, path, json=body, headers=headers)
+    )
+    if exact and not exact[3] and exact[2] != "schema" and response.is_success:
+        if response.content:
+            _require_mcp_scope(response.json(), project_id)
+    return response
 
 
 def _schema_with_refs(schema: Any, components: dict[str, Any], depth: int = 0) -> Any:
@@ -382,10 +469,16 @@ async def execute_settings_api(
         headers = {"Authorization": f"Bearer {token}"}
         if expected_revision is not None:
             headers["If-Match"] = str(expected_revision)
-        await _check_profile_mutation(
-            client, headers, selected, candidate, body, expected_revision
+        response = await _settings_request(
+            app,
+            client,
+            headers,
+            project_id,
+            selected,
+            candidate,
+            body,
+            expected_revision,
         )
-        response = await client.request(selected, candidate, json=body, headers=headers)
         if response.is_error:
             try:
                 detail = response.json().get("detail", response.reason_phrase)
@@ -419,7 +512,15 @@ async def execute_settings_api(
             and readback_path is not None
             and _route_exists(app, "GET", readback_path)
         ):
-            readback = await client.get(readback_path, headers=headers)
+            readback = await _settings_request(
+                app,
+                client,
+                headers,
+                project_id,
+                "GET",
+                readback_path,
+                before_execution=False,
+            )
             if readback.is_success:
                 value = readback.json()
                 if not (

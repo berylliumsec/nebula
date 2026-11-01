@@ -446,6 +446,15 @@ def test_product_search_finds_butler_mcp_credential_attachment(monkeypatch):
         and "browser" in str(item["text"]).lower()
         for item in matches
     )
+    scoped = search_product_knowledge(
+        "Can Butler export or probe an MCP profile owned by another project?"
+    )
+    assert any(
+        "selected project" in str(item["text"]).lower()
+        and "ownership" in str(item["text"]).lower()
+        and "probe" in str(item["text"]).lower()
+        for item in scoped
+    )
 
 
 def test_product_search_finds_butler_integration_profile_lifecycle(monkeypatch):

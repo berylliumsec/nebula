@@ -19,6 +19,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.settings_assistant_api import SettingsAssistantApi
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tools import GuidedToolError
 
 
 def test_settings_api_discovers_existing_routes_and_rejects_other_core_workflows(
@@ -771,5 +772,261 @@ def test_settings_profile_replace_fences_a_concurrent_browser_credential_edit(tm
         current = store.get(ProviderProfile, profile.id)
         assert current.name == profile.name
         assert current.secret_ref == "session:" + "b" * 32
+
+    asyncio.run(journey())
+
+
+def test_settings_mcp_collection_and_export_filter_before_serialization(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    app = create_app(store, auth_token="test-token")
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    for index in range(103):
+        store.create(
+            McpServerProfile(
+                name=f"foreign-private-{index}",
+                transport="streamable_http",
+                url="https://example.test/mcp",
+                enabled=False,
+                metadata={"engagement_id": other.id},
+            )
+        )
+    gateway = SettingsAssistantApi(app, "test-token")
+
+    async def journey():
+        empty = await gateway.request(
+            selected.id, method="GET", path="mcp-servers/export"
+        )
+        assert empty["result"] == {"config": {"mcpServers": {}}, "warnings": []}
+        visible = [
+            store.create(
+                McpServerProfile(
+                    name=name,
+                    transport="streamable_http",
+                    url="https://example.test/mcp",
+                    enabled=False,
+                    metadata=metadata,
+                )
+            )
+            for name, metadata in (
+                ("selected-profile", {"engagement_id": selected.id}),
+                ("shared-profile", {}),
+            )
+        ]
+        listed = await gateway.request(selected.id, method="GET", path="mcp-servers")
+        assert {row["id"] for row in listed["result"]} == {row.id for row in visible}
+        exported = await gateway.request(
+            selected.id, method="GET", path="mcp-servers/export"
+        )
+        assert set(exported["result"]["config"]["mcpServers"]) == {
+            row.name for row in visible
+        }
+        assert "foreign-private" not in str(listed) + str(exported)
+        for path in ("mcp-servers", "mcp-servers/export"):
+            with pytest.raises(ValueError, match="401"):
+                await SettingsAssistantApi(app, "invalid").request(
+                    selected.id, method="GET", path=path
+                )
+
+    asyncio.run(journey())
+
+
+def test_settings_mcp_exact_operations_refuse_another_project(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    app = create_app(store, auth_token="test-token")
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    foreign = store.create(
+        McpServerProfile(
+            name="other-project-profile",
+            transport="streamable_http",
+            url="https://example.test/mcp",
+            enabled=False,
+            metadata={"engagement_id": other.id},
+        )
+    )
+    gateway = SettingsAssistantApi(app, "test-token")
+
+    async def journey():
+        for method, body, revision, suffix in (
+            ("GET", None, None, ""),
+            (
+                "PATCH",
+                {"expected_revision": foreign.revision, "changes": {"name": "changed"}},
+                None,
+                "",
+            ),
+            ("PUT", foreign.model_dump(mode="json"), foreign.revision, ""),
+            ("DELETE", None, foreign.revision, ""),
+            ("POST", {}, None, "/probe"),
+        ):
+            with pytest.raises(
+                GuidedToolError, match="not in the selected project"
+            ) as refusal:
+                await gateway.request(
+                    selected.id,
+                    method=method,
+                    path=f"mcp-servers/{foreign.id}{suffix}",
+                    body=body,
+                    expected_revision=revision,
+                )
+            assert refusal.value.code == "mcp_project_scope"
+            assert getattr(refusal.value, "_nebula_before_execution", False) is True
+            assert store.get(McpServerProfile, foreign.id) == foreign
+
+    asyncio.run(journey())
+
+
+def test_settings_mcp_edits_preserve_project_ownership(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    app = create_app(store, auth_token="test-token")
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    gateway = SettingsAssistantApi(app, "test-token")
+
+    async def journey():
+        body = {
+            "name": "selected-profile",
+            "transport": "streamable_http",
+            "url": "https://example.test/mcp",
+            "enabled": False,
+            "metadata": {"engagement_id": selected.id},
+        }
+        with pytest.raises(GuidedToolError, match="not in the selected project"):
+            await gateway.request(
+                selected.id,
+                method="POST",
+                path="mcp-servers",
+                body={**body, "metadata": {"engagement_id": other.id}},
+            )
+        created = await gateway.request(
+            selected.id, method="POST", path="mcp-servers", body=body
+        )
+        current = created["result"]
+        assert created["read_back"] is True
+        assert current["metadata"]["engagement_id"] == selected.id
+        path = f"mcp-servers/{current['id']}"
+        for method, replacement in (
+            (
+                "PATCH",
+                {"expected_revision": current["revision"], "changes": {"metadata": {}}},
+            ),
+            ("PUT", {**current, "metadata": {}}),
+        ):
+            with pytest.raises(ValueError, match="preserve.*project ownership"):
+                await gateway.request(
+                    selected.id, method=method, path=path, body=replacement
+                )
+        saved = await gateway.request(
+            selected.id,
+            method="PATCH",
+            path=path,
+            body={
+                "expected_revision": current["revision"],
+                "changes": {"name": "renamed"},
+            },
+        )
+        assert saved["read_back"] is True
+        assert saved["result"]["metadata"] == current["metadata"]
+        deleted = await gateway.request(
+            selected.id,
+            method="DELETE",
+            path=path,
+            expected_revision=saved["result"]["revision"],
+        )
+        assert deleted["result"] == {"deleted": True}
+
+    asyncio.run(journey())
+
+
+def test_settings_mcp_probe_pins_the_selected_project(tmp_path, monkeypatch):
+    from nebula.v3.mcp import McpProbeService
+
+    store = NebulaStore(tmp_path / "core.db")
+    app = create_app(store, auth_token="test-token")
+    selected = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        McpServerProfile(
+            name="shared",
+            transport="streamable_http",
+            url="https://example.test/mcp",
+            enabled=False,
+        )
+    )
+    observed = []
+
+    async def probe(self, profile_id, *, engagement_id=None):
+        observed.append((profile_id, engagement_id))
+        return {
+            "profile_id": profile_id,
+            "compatible": True,
+            "capabilities": {"tools": []},
+        }
+
+    monkeypatch.setattr(McpProbeService, "probe", probe)
+    gateway = SettingsAssistantApi(app, "test-token")
+
+    async def journey():
+        path = f"mcp-servers/{profile.id}/probe"
+        for owner in ("another-project", [selected.id]):
+            with pytest.raises(ValueError, match="only in the selected project"):
+                await gateway.request(
+                    selected.id, method="POST", path=path, body={"engagement_id": owner}
+                )
+        assert observed == []
+        await gateway.request(selected.id, method="POST", path=path, body={})
+        assert observed == [(profile.id, selected.id)]
+
+    asyncio.run(journey())
+
+
+def test_settings_mcp_changed_readback_preserves_uncertain_effects(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    app = create_app(store, auth_token="test-token")
+    selected = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    profile = store.create(
+        McpServerProfile(
+            name="selected-profile",
+            transport="streamable_http",
+            url="https://example.test/mcp",
+            enabled=False,
+            metadata={"engagement_id": selected.id},
+        )
+    )
+
+    @app.middleware("http")
+    async def concurrent_owner_change(request, call_next):
+        response = await call_next(request)
+        if (
+            request.method == "PATCH"
+            and request.url.path == f"/api/v1/mcp-servers/{profile.id}"
+        ):
+            current = store.get(McpServerProfile, profile.id)
+            store.update(
+                McpServerProfile,
+                profile.id,
+                {"metadata": {"engagement_id": other.id}},
+                expected_revision=current.revision,
+            )
+        return response
+
+    async def journey():
+        with pytest.raises(
+            GuidedToolError, match="not in the selected project"
+        ) as refusal:
+            await SettingsAssistantApi(app, "test-token").request(
+                selected.id,
+                method="PATCH",
+                path=f"mcp-servers/{profile.id}",
+                body={
+                    "expected_revision": profile.revision,
+                    "changes": {"name": "saved-before-owner-change"},
+                },
+            )
+        assert getattr(refusal.value, "_nebula_before_execution", False) is False
+        assert (
+            store.get(McpServerProfile, profile.id).name == "saved-before-owner-change"
+        )
 
     asyncio.run(journey())

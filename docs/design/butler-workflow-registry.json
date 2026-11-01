@@ -1239,7 +1239,7 @@
         "ui/src/components/HarnessSettings.tsx::deleteMcpServer",
         "ui/src/components/HarnessSettings.tsx::listMcpServers"
       ],
-      "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET",
+      "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET; shared and selected-project metadata ownership, authenticated pre-serialization export filtering and probe-time scope checks",
       "butler": {
         "discover": "nebula.settings.api_schema",
         "read": "nebula.settings.api_request GET collection and exact profile",
@@ -1247,7 +1247,7 @@
       },
       "authority": "Interactive explicit operator request; listed Settings route/schema; current revision for changes and deletion; credentials stay on their browser handoff; saved configuration does not attest to runtime health",
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
-      "result": "Exact created identity is returned after Core readback; stale edits/deletes fail; live Settings catalogs and reload show saved profile state; confirmed deletion returns exact absence",
+      "result": "Exact created identity is returned after Core readback; stale edits/deletes fail; live Settings catalogs and reload show saved profile state; confirmed deletion returns exact absence; foreign profiles never enter scoped reads/exports and cannot be edited, deleted or probed; existing ownership remains intact",
       "status": "supported"
     },
     {

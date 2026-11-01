@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from itertools import islice
 from typing import Any
 
 from .domain import McpServerProfile, McpTransport, RiskClass
+from .mcp_scope import mcp_metadata_is_visible, project_mcp_profiles
 from .storage import NebulaStore
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -60,27 +62,21 @@ class ButlerMcp:
         }
 
     def servers(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        cursor = arguments.get("offset", 0)
-        visible: list[tuple[int, McpServerProfile]] = []
-        while len(visible) < 51:
-            rows = self.store.list_entities(McpServerProfile, offset=cursor, limit=100)
-            for profile in rows:
-                row_offset = cursor
-                cursor += 1
-                if self._visible(profile):
-                    visible.append((row_offset, profile))
-                if len(visible) == 51:
-                    break
-            if len(rows) < 100:
-                break
+        visible = list(
+            islice(
+                project_mcp_profiles(
+                    self.store, self.project_id, offset=arguments.get("offset", 0)
+                ),
+                51,
+            )
+        )
         return {
             "servers": [self._summary(profile) for _, profile in visible[:50]],
             "next_offset": visible[50][0] if len(visible) > 50 else None,
         }
 
     def _visible(self, profile: McpServerProfile) -> bool:
-        owner = profile.metadata.get("engagement_id")
-        return not owner or owner == self.project_id
+        return mcp_metadata_is_visible(profile.metadata, self.project_id)
 
     def _profile(self, server_id: str) -> McpServerProfile:
         profile = self.store.get(McpServerProfile, server_id)
