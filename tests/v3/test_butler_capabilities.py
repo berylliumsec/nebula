@@ -630,6 +630,47 @@ def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
     asyncio.run(scenario())
 
 
+def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
+    _, selected, _, _, capabilities = _capabilities(tmp_path)
+    reference = "session:" + "a" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "create or delete credential"})
+        assert {"nebula.credentials.create", "nebula.credentials.delete"}.issubset(
+            {row["operation"] for row in found["matches"]}
+        )
+        created = await capabilities.invoke(
+            {"operation": "nebula.credentials.create", "arguments": {}}, change=True
+        )
+        assert created["client_action"] == {
+            "kind": "credential_create",
+            "project_id": selected.id,
+        }
+        assert "secret" not in str(created).lower()
+        deleted = await capabilities.invoke(
+            {
+                "operation": "nebula.credentials.delete",
+                "arguments": {"reference": reference},
+            },
+            change=True,
+        )
+        assert deleted["client_action"] == {
+            "kind": "credential_delete",
+            "project_id": selected.id,
+            "reference": reference,
+        }
+        with pytest.raises(CapabilityInputError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.credentials.delete",
+                    "arguments": {"reference": "env:NEBULA_TOKEN"},
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
 def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
     _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
 

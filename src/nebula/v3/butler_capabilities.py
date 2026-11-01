@@ -78,6 +78,8 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.storage.edit_callbacks",
         "nebula.devices.pair",
         "nebula.devices.revoke",
+        "nebula.credentials.create",
+        "nebula.credentials.delete",
         "nebula.workspace.download_file",
         "nebula.library.add",
         "nebula.library.download",
@@ -180,6 +182,10 @@ _CATEGORIES = (
         "id": "devices",
         "description": "Nonsecret paired-device discovery and requesting-browser pairing and revocation handoffs",
     },
+    {
+        "id": "credentials",
+        "description": "Write-only credential creation and exact-reference deletion on the requesting browser",
+    },
     {"id": "help", "description": "Source-linked Nebula help and live project context"},
     {
         "id": "navigate",
@@ -262,6 +268,7 @@ class ButlerCapabilities:
         }
         if background_case_id is None:
             from .butler_chat_export import ButlerChatExport
+            from .butler_credentials import ButlerCredentials
             from .butler_devices import ButlerDevices
             from .butler_evidence import ButlerEvidence
             from .butler_library import ButlerLibrary
@@ -315,6 +322,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerDevices(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerCredentials(project_id).actions()
                 }
             )
             if container_terminals is not None:

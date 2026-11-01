@@ -821,6 +821,43 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser",
       "result": "Confirmed noncurrent device disappears from Core list; current browser is handed to its direct Unpair control",
       "status": "supported"
+    },
+    {
+      "id": "credentials.create",
+      "entry_point": "Butler: enter a write-only credential on the requesting browser",
+      "ui_calls": [
+        "ui/src/components/ButlerCredentialCreate.tsx::credentialVaultStatus",
+        "ui/src/components/ButlerCredentialCreate.tsx::createCredential",
+        "ui/src/components/ButlerCredentialCreate.tsx::credentialStatus"
+      ],
+      "core_owner": "Core credential store, host vault or current Core session",
+      "butler": {
+        "discover": "nebula.settings.api_schema credentials/vault and nebula.credentials.create",
+        "read": "nebula.settings.api credentials/{reference}/status",
+        "change": "nebula.credentials.create"
+      },
+      "authority": "Interactive selected-project receipt; browser owns secret input and persistence choice, with exact-reference Core status readback",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser",
+      "result": "Cancellation creates nothing; browser submits the secret directly to Core and confirms only the new reference and available state",
+      "status": "supported"
+    },
+    {
+      "id": "credentials.delete",
+      "entry_point": "Butler: delete an exact Nebula-managed credential reference",
+      "ui_calls": [
+        "ui/src/components/butlerCredentialAction.ts::credentialStatus",
+        "ui/src/components/butlerCredentialAction.ts::deleteCredential"
+      ],
+      "core_owner": "Core credential store and reference status",
+      "butler": {
+        "discover": "nebula.credentials.delete",
+        "read": "nebula.settings.api credentials/{reference}/status",
+        "change": "nebula.credentials.delete"
+      },
+      "authority": "Interactive selected-project receipt; exact vault or session reference, browser confirmation, second status check and Core absence readback",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser",
+      "result": "Cancellation retains the credential; confirmed deletion reports unavailable only after Core status proves absence",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -978,6 +1015,18 @@
     },
     {
       "key": "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerCredentialCreate.tsx::createCredential",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerCredentialCreate.tsx::credentialStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerCredentialCreate.tsx::credentialVaultStatus",
       "count": 1
     },
     {
@@ -2123,6 +2172,14 @@
     {
       "key": "ui/src/components/assistantSettingsMutations.ts::request::GET path",
       "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerCredentialAction.ts::credentialStatus",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/butlerCredentialAction.ts::deleteCredential",
+      "count": 1
     },
     {
       "key": "ui/src/components/butlerDeviceAction.ts::listPairedDevices",

@@ -33,6 +33,8 @@ import { HostFolderPicker } from "./HostFolderPicker";
 import { applyButlerTerminalStop } from "./butlerTerminalStop";
 import { applyButlerStorageAction, type IssuedStorageToken } from "./butlerStorageAction";
 import { applyButlerDeviceAction } from "./butlerDeviceAction";
+import { ButlerCredentialCreate } from "./ButlerCredentialCreate";
+import { deleteButlerCredential } from "./butlerCredentialAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
@@ -104,6 +106,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [issuedStorageToken, setIssuedStorageToken] = useState<IssuedStorageToken>();
   const [uploadingLibrary, setUploadingLibrary] = useState(false);
   const [pendingEvidenceUpload, setPendingEvidenceUpload] = useState<(Extract<SettingClientAction, {kind: "evidence_upload"}> & {sourceMessageId?: string})>();
+  const [pendingCredentialCreate, setPendingCredentialCreate] = useState<(Extract<SettingClientAction, {kind: "credential_create"}> & {sourceMessageId?: string})>();
   const [pendingWorkspaceUpload, setPendingWorkspaceUpload] = useState<Extract<SettingClientAction, {kind: "workspace_upload"}>>();
   const [uploadingWorkspace, setUploadingWorkspace] = useState(false);
   const [pendingNotebookIndex, setPendingNotebookIndex] = useState<(Extract<SettingClientAction, {kind: "notebook_index_connect" | "notebook_index_remove"}> & {sourceMessageId?: string})>();
@@ -257,6 +260,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setPendingLibraryAdd(undefined);
     setIssuedStorageToken(undefined);
     setPendingEvidenceUpload(undefined);
+    setPendingCredentialCreate(undefined);
     setUploadingLibrary(false);
     workspaceUploadAbort.current?.abort();
     setPendingWorkspaceUpload(undefined);
@@ -1269,6 +1273,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setMessages((messages) => [...messages, {role: "assistant", content}]);
   };
 
+  const appendCredentialOutcome = (action: {projectId: string; sourceMessageId?: string}, content: string): void => {
+    if (!action.sourceMessageId) return;
+    const key = `nebula.control-assistant.session.${action.projectId}.action-outcomes`;
+    const outcomes = readActionOutcomes(key);
+    outcomes[action.sourceMessageId] = [outcomes[action.sourceMessageId], content].filter(Boolean).join("\n\n");
+    writeStorage(key, JSON.stringify(Object.fromEntries(Object.entries(outcomes).slice(-50))));
+    if (activeImageProject.current === action.projectId) setMessages((messages) => [...messages, {role: "assistant", content}]);
+  };
+
   const appendNotebookIndexOutcome = appendBrowserActionOutcome;
 
   const saveReviewedReportTransform = async (result: WritingTransformResponse): Promise<void> => {
@@ -1676,6 +1689,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       return applyButlerDeviceAction(api, action, () => activeImageProject.current,
         (request) => confirm(request), () => openSelectedSetting(settingCatalog.find((item) => item.id === "settings.devices")!));
     }
+    if (action.kind === "credential_create") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId || activeImageProject.current !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before adding a credential.");
+      }
+      setPendingCredentialCreate(action);
+      setView("chat");
+      return "Opened write-only credential entry on this browser. No secret has been sent to Butler or saved yet.";
+    }
+    if (action.kind === "credential_delete") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before deleting a credential.");
+      }
+      return deleteButlerCredential(api, action, () => activeImageProject.current, (request) => confirm(request));
+    }
     if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
     if (action.kind === "workspace_download") return applyWorkspaceDownload(action);
     if (action.kind === "workspace_upload") return applyWorkspaceUpload(action);
@@ -1960,6 +1987,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     let reportTransformRequested = false;
     let projectRelinkRequested = false;
     let evidenceUploadRequested = false;
+    let credentialCreateRequested = false;
     let actionQueue = Promise.resolve();
     try {
       const result = await api.streamChat({
@@ -2003,6 +2031,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           if (action.kind === "report_transform_note") reportTransformRequested = true;
           if (action.kind === "project_relink") projectRelinkRequested = true;
           if (action.kind === "evidence_upload") evidenceUploadRequested = true;
+          if (action.kind === "credential_create") credentialCreateRequested = true;
           actionQueue = actionQueue.then(async () => {
             if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
           });
@@ -2054,6 +2083,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
             ? {...current, sourceMessageId: result.message!.id} : undefined);
           if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
+        }
+        if (credentialCreateRequested) {
+          setPendingCredentialCreate((current) => current?.projectId === engagement.id && result.message!.id
+            ? {...current, sourceMessageId: result.message!.id} : undefined);
+          if (!result.message.id) setError("Butler's saved reply is unavailable. Open credential settings to enter the secret directly.");
         }
         setPendingImages([]);
         if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
@@ -2405,6 +2439,22 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setPendingEvidenceUpload(undefined);
       }}
     />}
+    {pendingCredentialCreate && pendingCredentialCreate.projectId === engagement?.id && pendingCredentialCreate.sourceMessageId && api && <section className={styles.libraryHandoff} aria-label="Write-only credential handoff">
+      <ButlerCredentialCreate key={pendingCredentialCreate.sourceMessageId} api={api}
+        projectId={pendingCredentialCreate.projectId} currentProjectId={() => activeImageProject.current}
+        onSaved={(reference, persistence) => {
+          appendCredentialOutcome(pendingCredentialCreate, `Core saved ${persistence} credential ${reference} and confirmed it is available. Attach this reference to the intended provider or integration. Butler did not receive the secret.`);
+          setPendingCredentialCreate(undefined);
+        }}
+        onUncertain={(reference) => {
+          appendCredentialOutcome(pendingCredentialCreate, `Core issued credential reference ${reference}, but status readback failed or changed. Check that reference before creating another credential. Butler did not receive the secret.`);
+          setPendingCredentialCreate(undefined);
+        }}
+        onCancel={() => {
+          appendCredentialOutcome(pendingCredentialCreate, "No credential was submitted or saved.");
+          setPendingCredentialCreate(undefined);
+        }} />
+    </section>}
     {pendingWorkspaceUpload && pendingWorkspaceUpload.projectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Upload to project workspace">
       <div><strong>Upload to project workspace</strong><small>Choose a file on this device for /workspace/{pendingWorkspaceUpload.directory}. Core will confirm the saved bytes.</small></div>
       <input ref={workspaceInput} type="file" hidden aria-label="Choose project workspace file" onChange={(event) => void uploadWorkspaceFile(event)} />

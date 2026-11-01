@@ -294,6 +294,12 @@ def test_catalog_exposes_stable_choices_for_agents_and_humans():
         == "assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser"
         for entry in MANIFEST["areas"]["butler-devices"]
     )
+    assert len(MANIFEST["areas"]["butler-credentials"]) == 8
+    assert all(
+        entry["grep"]
+        == "assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser"
+        for entry in MANIFEST["areas"]["butler-credentials"]
+    )
 
 
 def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():

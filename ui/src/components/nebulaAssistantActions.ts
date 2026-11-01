@@ -25,6 +25,8 @@ export type SettingClientAction =
   | { kind: "storage_edit_callbacks"; projectId: string; sourceId: string; expectedRevision: number; name: string }
   | { kind: "device_pair"; projectId: string }
   | { kind: "device_revoke"; projectId: string; deviceId: string; name: string; expectedCreatedAt: string }
+  | { kind: "credential_create"; projectId: string }
+  | { kind: "credential_delete"; projectId: string; reference: string }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
   | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
@@ -122,6 +124,14 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
   if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    if (operation === "nebula.credentials.create" && value.kind === "credential_create") {
+      return {kind: "credential_create", projectId};
+    }
+    if (operation === "nebula.credentials.delete" && value.kind === "credential_delete"
+        && typeof value.reference === "string"
+        && /^(?:vault|session):[0-9a-f]{32}$/.test(value.reference)) {
+      return {kind: "credential_delete", projectId, reference: value.reference};
+    }
     if (operation === "nebula.devices.pair" && value.kind === "device_pair") {
       return {kind: "device_pair", projectId};
     }

@@ -144,6 +144,22 @@ describe("settings assistant actions", () => {
       client_action: {kind: "device_pair", project_id: "project"}}}, "project"))
       .toEqual({kind: "device_pair", projectId: "project"});
   });
+  it("accepts only scoped credential handoffs for managed references", () => {
+    const reference = `session:${"a".repeat(32)}`;
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "credential-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.credentials.delete", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "credential_delete", project_id: "project", reference}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "credential_delete", projectId: "project", reference});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "credential_delete", project_id: "project", reference: "env:NEBULA_TOKEN"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.credentials.create",
+      client_action: {kind: "credential_create", project_id: "project"}}}, "project"))
+      .toEqual({kind: "credential_create", projectId: "project"});
+  });
   it("accepts only scoped, typed project lifecycle handoffs", () => {
     const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
     const event: ChatStreamEvent = {

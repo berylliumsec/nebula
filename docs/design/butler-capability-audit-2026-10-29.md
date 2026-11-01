@@ -31,7 +31,22 @@ and reads; these counts are not a coverage percentage.
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; discover active security browser sessions and start a scoped browser automation mission with explicit targets and lease limits; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page selected-project evidence and link targets and request a browser-owned immutable evidence upload with exact Core read-back | Direct control of the visible browser page, browser evidence capture, and other research-data control still lack accepted Butler journeys. A saved browser mission is not an assessment result. Device file bytes stay in the requesting browser. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; prepare an exact linked-note AI section transform for browser runtime choice and operator review; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. The operating system's final download save location remains device-owned. |
-| Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes; prepare selected-project storage enrollment, token, reporting and callback handoffs; list nonsecret paired-device identities and open host pairing or exact-device revocation controls | Pairing redemption belongs to the new device. Credential changes, release deployment, service control and other specialized device workflows remain gaps. One-time source tokens and pairing links stay on the requesting device. |
+| Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes; prepare selected-project storage enrollment, token, reporting and callback handoffs; list nonsecret paired-device identities and open host pairing or exact-device revocation controls; enter write-only credentials on the requesting browser and confirm deletion of exact managed references | Pairing redemption belongs to the new device. Attaching new credentials to provider or integration profiles, release deployment, service control and other specialized workflows remain gaps. One-time source tokens, pairing links and credential secrets stay on the requesting device. |
+
+## Branch slice: write-only credentials
+
+Interactive Butler prepares a browser-owned credential entry form or deletion
+of an exact Nebula-managed session or vault reference. The form chooses storage,
+sends the secret directly to Core, and checks the returned reference's status;
+only the reference enters Butler's saved outcome. A failed readback reports an
+uncertain result and warns against replaying creation. Deletion rereads status,
+requires browser confirmation, and claims absence only when Core reports
+`missing` or `session_expired`. Environment and systemd references stay under
+their external owner. The generic model-driven Settings API retains vault and
+reference status reads but no longer accepts credential creation or deletion.
+Attaching a new reference to a provider or integration remains a separate
+workflow. The paired LAN journey covers cancellation, creation, status,
+deletion and absence of the secret from model messages.
 
 ## Branch slice: paired devices
 
@@ -485,9 +500,9 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 44
-reviewed actions. Its source inventory contains 533 distinct `api` call
-signatures in production UI TypeScript, of which 101 are linked to reviewed
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 46
+reviewed actions. Its source inventory contains 538 distinct `api` call
+signatures in production UI TypeScript, of which 106 are linked to reviewed
 actions; 432 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions;
@@ -515,7 +530,7 @@ tool catalog.
    PATCH/PUT rejects path changes. Shared admission across multiple Core server
    processes remains outside the standard single-process CLI contract.
 3. Add specialized device and administration handoffs for local file selection,
-   credentials, release updates and service state. Pairing now opens the host
+   credential attachment to profiles, release updates and service state. Pairing now opens the host
    browser form and exact other-device revocation uses Core list absence;
    redemption stays with the new device. Storage enrollment now opens
    the requesting-device form, while token rotation and revocation use exact

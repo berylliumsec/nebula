@@ -82,6 +82,10 @@
 .storageToken { max-height: min(230px, 40dvh); overflow-y: auto; }
 .storageToken label { display: grid; gap: 3px; min-width: 0; }
 .storageToken input { width: 100%; min-width: 0; color: var(--text); background: var(--surface); }
+.credentialForm { display: grid; gap: 8px; min-width: 0; max-height: min(310px, 45dvh); overflow-y: auto; }
+.credentialForm label { display: grid; gap: 3px; min-width: 0; }
+.credentialForm input, .credentialForm select { width: 100%; min-width: 0; }
+.credentialForm > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .evidenceHandoffForm { display: grid; gap: 8px; min-width: 0; }
 .evidenceHandoffForm > label { display: grid; gap: 3px; min-width: 0; }
 .evidenceHandoffForm input:not([type="checkbox"]), .evidenceHandoffForm select, .evidenceHandoffForm textarea { width: 100%; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; color: var(--text); background: var(--surface); font: inherit; }

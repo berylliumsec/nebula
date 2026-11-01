@@ -946,6 +946,108 @@ test("assistant upgrade Butler opens pairing and revokes a paired device through
   ]);
 });
 
+test("assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  const prompts = ["Prepare write-only credential entry", ""];
+  const secret = "fixture-credential-never-send-to-model";
+  let modelSawSecret = false;
+  let credentialPosts = 0;
+  page.on("request", request => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/credentials") credentialPosts++;
+  });
+  const stub = await startLocalModelStub({responseContent: "The requesting browser handles this credential action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    if (JSON.stringify(messages).includes(secret)) modelSawSecret = true;
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const content = String(messages[lastUser]?.content ?? "");
+    const prompt = prompts.find(value => value && (content === value || content.startsWith(`${value}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`)));
+    if (!prompt) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const operation = prompt === prompts[0] ? "nebula.credentials.create" : "nebula.credentials.delete";
+    const calls = [
+      {name: "nebula_capabilities_search", arguments: {query: "create or delete credential"}},
+      {name: "nebula_capabilities_describe", arguments: {operation}},
+      {name: "nebula_capabilities_change", arguments: {operation, arguments: operation === "nebula.credentials.create"
+        ? {} : {reference: prompt.slice("Delete credential ".length)}}},
+    ];
+    return calls[replies];
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler credential fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler credential model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`,
+      {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts[0]);
+    let form = page.getByRole("form", {name: "Add a write-only credential"});
+    await expect(form).toBeVisible({timeout: 45_000});
+    await form.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("No credential was submitted or saved.")).toBeVisible();
+    expect(credentialPosts).toBe(0);
+    await send(prompts[0]);
+    form = page.getByRole("form", {name: "Add a write-only credential"});
+    await expect(form).toBeVisible({timeout: 45_000});
+    await form.getByLabel("Secret").fill(secret);
+    await form.getByRole("button", {name: "Save credential"}).click();
+    const saved = assistant.getByText(/Core saved session credential session:/);
+    await expect(saved).toBeVisible({timeout: 45_000});
+    const reference = (await saved.textContent())?.match(/session:[0-9a-f]{32}/)?.[0];
+    expect(reference).toBeTruthy();
+    expect(credentialPosts).toBe(1);
+    const status = await api.get(`credentials/${encodeURIComponent(reference!)}/status`);
+    expect(status.ok(), await status.text()).toBe(true);
+    expect((await status.json() as {available: boolean}).available).toBe(true);
+    prompts[1] = `Delete credential ${reference}`;
+    await send(prompts[1]);
+    const confirmation = page.getByRole("dialog", {name: "Delete credential?"});
+    await expect(confirmation).toBeVisible({timeout: 45_000});
+    await confirmation.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(new RegExp(`${reference} was not deleted`))).toBeVisible();
+    expect((await (await api.get(`credentials/${encodeURIComponent(reference!)}/status`)).json() as {available: boolean}).available).toBe(true);
+    await send(prompts[1]);
+    await expect(confirmation).toBeVisible({timeout: 45_000});
+    await confirmation.getByRole("button", {name: "Delete credential"}).click();
+    await expect(assistant.getByText(/Core confirms it is unavailable/)).toBeVisible();
+    const absent = await api.get(`credentials/${encodeURIComponent(reference!)}/status`);
+    expect((await absent.json() as {state: string}).state).toBe("session_expired");
+    expect(modelSawSecret).toBe(false);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-credentials-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      result: "Cancelled creation sent no secret; saved credential returned a Core-verified reference; cancelled deletion retained it; confirmed deletion invalidated it; model saw no secret"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 interface BrowserPentestAuditFixture {
   core: RealCore;
   api: APIRequestContext;

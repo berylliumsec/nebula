@@ -168,6 +168,45 @@ def test_settings_api_cannot_create_unusable_pairing_offer(tmp_path):
     asyncio.run(journey())
 
 
+def test_settings_api_keeps_credential_status_but_blocks_secret_mutations(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    app = create_app(store, auth_token="test-token")
+    gateway = SettingsAssistantApi(app, "test-token")
+    assert (
+        gateway.schema(path="credentials/vault", method="GET")["path"]
+        == "/api/v1/credentials/vault"
+    )
+    reference = "session:" + "a" * 32
+    assert gateway.schema(path=f"credentials/{reference}/status", method="GET")[
+        "path"
+    ].endswith("/status")
+
+    async def journey():
+        vault = await gateway.request(
+            project.id, method="GET", path="credentials/vault"
+        )
+        assert "available" in vault["result"]
+        status = await gateway.request(
+            project.id, method="GET", path=f"credentials/{reference}/status"
+        )
+        assert status["result"]["state"] == "session_expired"
+        for method, path, body in (
+            ("POST", "credentials", {"secret": "model-visible"}),
+            ("DELETE", f"credentials/{reference}", None),
+        ):
+            with pytest.raises(
+                ValueError, match="outside the assistant's Settings API"
+            ):
+                gateway.schema(path=path, method=method)
+            with pytest.raises(
+                ValueError, match="outside the assistant's Settings API"
+            ):
+                await gateway.request(project.id, method=method, path=path, body=body)
+
+    asyncio.run(journey())
+
+
 def test_settings_api_confirms_provider_deletion_by_readback(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     project = store.create(Engagement(name="Selected"))

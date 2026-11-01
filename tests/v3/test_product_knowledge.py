@@ -381,6 +381,18 @@ def test_product_search_finds_butler_device_pairing_boundary(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_write_only_credentials(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create a write-only credential without seeing the secret?"
+    )
+    assert any(
+        "write-only" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
