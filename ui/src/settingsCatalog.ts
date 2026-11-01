@@ -198,7 +198,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Identity & Security",
     scope: "Security",
     target: "device-pairing-settings",
-    keywords: ["device", "pair", "phone", "mobile", "browser", "qr", "revoke"],
+    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke"],
   },
   {
     id: "settings.release",

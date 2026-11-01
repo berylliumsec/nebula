@@ -141,21 +141,29 @@ def test_settings_api_discovers_and_reads_back_nebula_wide_butler_file(tmp_path)
     asyncio.run(journey())
 
 
-def test_settings_api_redacts_pairing_secret(tmp_path):
+def test_settings_api_cannot_create_unusable_pairing_offer(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     project = store.create(Engagement(name="Selected"))
     app = create_app(store, auth_token="test-token", allow_insecure_device_pairing=True)
     gateway = SettingsAssistantApi(app, "test-token")
 
     async def journey():
-        created = await gateway.request(
-            project.id,
-            method="POST",
-            path="auth/pairings",
-            body={"name": "Test device"},
-        )
-        assert created["status"] in (200, 201)
-        assert created["result"]["secret"] == "[redacted]"
+        with pytest.raises(ValueError, match="outside the assistant's Settings API"):
+            gateway.schema(path="auth/pairings", method="POST")
+        with pytest.raises(ValueError, match="outside the assistant's Settings API"):
+            await gateway.request(
+                project.id,
+                method="POST",
+                path="auth/pairings",
+                body={"name": "Test device"},
+            )
+        with pytest.raises(ValueError, match="outside the assistant's Settings API"):
+            await gateway.request(
+                project.id,
+                method="DELETE",
+                path="auth/devices/unused",
+            )
+        assert not app.state.pending_pairings
 
     asyncio.run(journey())
 

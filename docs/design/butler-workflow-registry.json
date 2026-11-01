@@ -782,6 +782,45 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser",
       "result": "Core confirms enabled state and interval after revision-fenced browser apply; callback edit opens the exact source form without claiming a save",
       "status": "supported"
+    },
+    {
+      "id": "devices.pair",
+      "entry_point": "Butler or Paired devices Settings: prepare a host-browser pairing link",
+      "ui_calls": [
+        "ui/src/components/DevicePairingSettings.tsx::getToken",
+        "ui/src/components/DevicePairingSettings.tsx::createDevicePairing",
+        "ui/src/components/DevicePairingSettings.tsx::listPairedDevices"
+      ],
+      "core_owner": "Core host-only, expiring pairing offer and device sessions",
+      "butler": {
+        "discover": "nebula.devices.list",
+        "read": "nebula.devices.device",
+        "change": "nebula.devices.pair"
+      },
+      "authority": "Interactive selected-project receipt; host browser owns one-time link, confirmation code, and redeeming device",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser",
+      "result": "Browser opens host-only pairing control; no offer exists until operator creates it; no code or link enters Butler",
+      "status": "supported"
+    },
+    {
+      "id": "devices.revoke",
+      "entry_point": "Butler or Paired devices Settings: revoke an exact other device",
+      "ui_calls": [
+        "ui/src/components/DevicePairingSettings.tsx::revokePairedDevice",
+        "ui/src/components/DevicePairingSettings.tsx::listPairedDevices",
+        "ui/src/components/butlerDeviceAction.ts::revokePairedDevice",
+        "ui/src/components/butlerDeviceAction.ts::listPairedDevices"
+      ],
+      "core_owner": "Core paired-device session and revocation route",
+      "butler": {
+        "discover": "nebula.devices.list",
+        "read": "nebula.devices.device",
+        "change": "nebula.devices.revoke"
+      },
+      "authority": "Interactive selected-project receipt; exact device ID, immutable creation time, browser confirmation and Core list absence; current browser uses direct Unpair control",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser",
+      "result": "Confirmed noncurrent device disappears from Core list; current browser is handed to its direct Unpair control",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -2084,6 +2123,14 @@
     {
       "key": "ui/src/components/assistantSettingsMutations.ts::request::GET path",
       "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerDeviceAction.ts::listPairedDevices",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerDeviceAction.ts::revokePairedDevice",
+      "count": 1
     },
     {
       "key": "ui/src/components/butlerReportTransform.ts::getObservation",

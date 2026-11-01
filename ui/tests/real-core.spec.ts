@@ -704,7 +704,7 @@ test("stabilization storage public source reaches dashboard chat and approved re
 
 test("assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser", async ({page}, testInfo) => {
   test.setTimeout(360_000);
-  const prompts = ["Open source enrollment", "Configure NAS reporting", "Open NAS callback settings", "Rotate NAS token", "Revoke NAS token"];
+  const prompts = ["Prepare storage source enrollment", "Configure NAS reporting", "Prepare callback editing for Fixture NAS", "Rotate NAS token", "Revoke NAS token"];
   let sourceId = "";
   let sourceRevision = 1;
   let issuedToken = "";
@@ -786,6 +786,8 @@ test("assistant upgrade Butler enrolls and changes a storage source through the 
     expect(configured.reporting_interval_seconds).toBe(3600);
     sourceRevision = configured.revision;
     await send(prompts[2]);
+    await expect(page.getByRole("dialog", {name: "Storage sources"})).toBeVisible({timeout: 45_000});
+    await expect(page.locator(`#storage-source-${sourceId}`)).toBeVisible();
     const callbackForm = page.locator(`#storage-source-${sourceId} .storage-source-edit`);
     await expect(callbackForm.getByRole("button", {name: "Save source settings"})).toBeVisible({timeout: 45_000});
     await expect(callbackForm.getByLabel("Reporting interval (seconds)")).toHaveValue("3600");
@@ -835,6 +837,109 @@ test("assistant upgrade Butler enrolls and changes a storage source through the 
       project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
       result: "Enrollment and exact callback forms opened without a write; reporting enabled with current revision and readback; cancelled rotation retained source; confirmed rotation kept token in requesting browser; old token rejected; revocation disabled source"}), contentType: "application/json"});
   }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser", async ({page}, testInfo) => {
+  test.setTimeout(300_000);
+  const prompts = ["Prepare a new device pairing", "Revoke Fixture phone"];
+  let deviceId = "";
+  let createdAt = "";
+  let pairingSecret = "";
+  let modelSawSecret = false;
+  const stub = await startLocalModelStub({responseContent: "The requesting browser handles this device action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const content = String(messages[lastUser]?.content ?? "");
+    const prompt = prompts.find(value => content === value || content.startsWith(`${value}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`));
+    if (!prompt) return undefined;
+    if (pairingSecret && JSON.stringify(messages).includes(pairingSecret)) modelSawSecret = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const operation = prompt === prompts[0] ? "nebula.devices.pair" : "nebula.devices.revoke";
+    const calls = [
+      {name: "nebula_capabilities_search", arguments: {query: "paired device pairing and revocation"}},
+      {name: "nebula_capabilities_describe", arguments: {operation: "nebula.devices.list"}},
+      {name: "nebula_capabilities_read", arguments: {operation: "nebula.devices.list", arguments: {}}},
+      {name: "nebula_capabilities_describe", arguments: {operation}},
+      {name: "nebula_capabilities_change", arguments: {operation, arguments: operation === "nebula.devices.pair"
+        ? {} : {device_id: deviceId, expected_created_at: createdAt}}},
+    ];
+    return calls[replies];
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const hostApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const companion = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler devices fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler devices model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`,
+      {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler LAN browser", {requireReady: false});
+    const offerResponse = await hostApi.post("auth/pairings", {data: {name: "Fixture phone"}});
+    expect(offerResponse.ok(), await offerResponse.text()).toBe(true);
+    const offer = await offerResponse.json() as {secret: string; confirmation_code: string};
+    pairingSecret = offer.secret;
+    const redeemed = await companion.post("auth/pairings/redeem", {data: {secret: offer.secret,
+      confirmation_code: offer.confirmation_code, name: "Fixture phone"}});
+    expect(redeemed.ok(), await redeemed.text()).toBe(true);
+    const linked = await redeemed.json() as {device: {id: string; created_at: string}};
+    deviceId = linked.device.id;
+    createdAt = linked.device.created_at;
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts[0]);
+    await expect(page.locator(".device-pairing-panel").getByRole("heading", {name: "Paired devices"})).toBeVisible({timeout: 45_000});
+    await expect(page.locator(".device-pairing-capability")).toContainText("Pair new devices from the Nebula host");
+    expect((await (await api.get("auth/devices")).json() as Array<unknown>)).toHaveLength(2);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    await send(prompts[1]);
+    const confirmation = page.getByRole("dialog", {name: "Revoke Fixture phone?"});
+    await expect(confirmation).toBeVisible({timeout: 45_000});
+    await confirmation.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(/Fixture phone was not revoked/)).toBeVisible();
+    expect((await (await api.get("auth/devices")).json() as Array<unknown>)).toHaveLength(2);
+    await send(prompts[1]);
+    await expect(confirmation).toBeVisible({timeout: 45_000});
+    await confirmation.getByRole("button", {name: "Revoke device"}).click();
+    await expect(assistant.getByText(/confirmed that Core no longer lists the device/)).toBeVisible();
+    expect((await (await api.get("auth/devices")).json() as Array<{id: string}>).some(item => item.id === deviceId)).toBe(false);
+    expect((await companion.get("auth/devices")).status()).toBe(401);
+    expect(modelSawSecret).toBe(false);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-devices-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      result: "Pairing opened host-only control without an offer; cancelled revocation retained the companion; confirmed revocation removed it and invalidated its cookie"}), contentType: "application/json"});
+  }, [
+    {name: "companion API", dispose: () => companion.dispose()},
+    {name: "host API", dispose: () => hostApi.dispose()},
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},

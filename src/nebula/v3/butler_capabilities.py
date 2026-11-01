@@ -76,6 +76,8 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.storage.revoke",
         "nebula.storage.configure_reporting",
         "nebula.storage.edit_callbacks",
+        "nebula.devices.pair",
+        "nebula.devices.revoke",
         "nebula.workspace.download_file",
         "nebula.library.add",
         "nebula.library.download",
@@ -174,6 +176,10 @@ _CATEGORIES = (
         "id": "storage",
         "description": "Selected-project storage source discovery and requesting-browser enrollment, token, reporting, and callback controls",
     },
+    {
+        "id": "devices",
+        "description": "Nonsecret paired-device discovery and requesting-browser pairing and revocation handoffs",
+    },
     {"id": "help", "description": "Source-linked Nebula help and live project context"},
     {
         "id": "navigate",
@@ -256,6 +262,7 @@ class ButlerCapabilities:
         }
         if background_case_id is None:
             from .butler_chat_export import ButlerChatExport
+            from .butler_devices import ButlerDevices
             from .butler_evidence import ButlerEvidence
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
@@ -302,6 +309,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerStorage(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerDevices(store, project_id).actions()
                 }
             )
             if container_terminals is not None:

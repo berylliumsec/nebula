@@ -32,6 +32,7 @@ import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
 import { HostFolderPicker } from "./HostFolderPicker";
 import { applyButlerTerminalStop } from "./butlerTerminalStop";
 import { applyButlerStorageAction, type IssuedStorageToken } from "./butlerStorageAction";
+import { applyButlerDeviceAction } from "./butlerDeviceAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
@@ -1667,6 +1668,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       if (result.issued) setIssuedStorageToken(result.issued);
       else if (action.kind === "storage_revoke") setIssuedStorageToken(undefined);
       return result.message;
+    }
+    if (action.kind === "device_pair" || action.kind === "device_revoke") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before changing paired devices.");
+      }
+      return applyButlerDeviceAction(api, action, () => activeImageProject.current,
+        (request) => confirm(request), () => openSelectedSetting(settingCatalog.find((item) => item.id === "settings.devices")!));
     }
     if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
     if (action.kind === "workspace_download") return applyWorkspaceDownload(action);

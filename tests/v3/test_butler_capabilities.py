@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 
@@ -43,6 +44,7 @@ from nebula.v3.domain import (
     HarnessRuntimeOption,
     HarnessSession,
     StorageSource,
+    PairedDeviceSession,
     WorkItem,
     utc_now,
 )
@@ -562,11 +564,80 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
     asyncio.run(scenario())
 
 
+def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    now = utc_now()
+    device = store.create(
+        PairedDeviceSession(
+            name="Fixture phone",
+            token_sha256="a" * 64,
+            csrf_sha256="b" * 64,
+            idle_expires_at=now + timedelta(days=30),
+            absolute_expires_at=now + timedelta(days=90),
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "pair or revoke a device"})
+        assert {"nebula.devices.pair", "nebula.devices.revoke"}.issubset(
+            {row["operation"] for row in found["matches"]}
+        )
+        listed = await capabilities.invoke(
+            {"operation": "nebula.devices.list", "arguments": {}}, change=False
+        )
+        assert [item["device_id"] for item in listed["devices"]] == [device.id]
+        assert "token" not in str(listed).lower()
+        assert "csrf" not in str(listed).lower()
+        paired = await capabilities.invoke(
+            {"operation": "nebula.devices.pair", "arguments": {}}, change=True
+        )
+        assert paired["client_action"] == {
+            "kind": "device_pair",
+            "project_id": selected.id,
+        }
+        assert len(store.find_entities(PairedDeviceSession, {"revoked_at": None})) == 1
+        created_at = listed["devices"][0]["created_at"]
+        revoke = await capabilities.invoke(
+            {
+                "operation": "nebula.devices.revoke",
+                "arguments": {
+                    "device_id": device.id,
+                    "expected_created_at": created_at,
+                },
+            },
+            change=True,
+        )
+        assert revoke["client_action"] == {
+            "kind": "device_revoke",
+            "project_id": selected.id,
+            "device_id": device.id,
+            "name": device.name,
+            "expected_created_at": created_at,
+        }
+        assert store.get(PairedDeviceSession, device.id).revoked_at is None
+        with pytest.raises(ValueError, match="changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.devices.revoke",
+                    "arguments": {
+                        "device_id": device.id,
+                        "expected_created_at": "2000-01-01T00:00:00Z",
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
 def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
     _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
 
     async def scenario():
         assert "projects" not in [
+            row["id"] for row in (await capabilities.search({}))["categories"]
+        ]
+        assert "devices" not in [
             row["id"] for row in (await capabilities.search({}))["categories"]
         ]
         assert not any(

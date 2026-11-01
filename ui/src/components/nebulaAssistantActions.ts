@@ -23,6 +23,8 @@ export type SettingClientAction =
   | { kind: "storage_rotate" | "storage_revoke"; projectId: string; sourceId: string; expectedRevision: number; name: string }
   | { kind: "storage_configure_reporting"; projectId: string; sourceId: string; expectedRevision: number; name: string; changes: {enabled?: boolean; reporting_interval_seconds?: number} }
   | { kind: "storage_edit_callbacks"; projectId: string; sourceId: string; expectedRevision: number; name: string }
+  | { kind: "device_pair"; projectId: string }
+  | { kind: "device_revoke"; projectId: string; deviceId: string; name: string; expectedCreatedAt: string }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
   | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
@@ -120,6 +122,18 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
   if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    if (operation === "nebula.devices.pair" && value.kind === "device_pair") {
+      return {kind: "device_pair", projectId};
+    }
+    if (operation === "nebula.devices.revoke" && value.kind === "device_revoke"
+        && typeof value.device_id === "string" && uuidPattern.test(value.device_id)
+        && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 200
+        && typeof value.expected_created_at === "string"
+        && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)$/.test(value.expected_created_at)
+        && Number.isFinite(Date.parse(value.expected_created_at))) {
+      return {kind: "device_revoke", projectId, deviceId: value.device_id,
+        name: value.name, expectedCreatedAt: value.expected_created_at};
+    }
     if (operation === "nebula.storage.enroll" && value.kind === "storage_enroll") {
       return {kind: "storage_enroll", projectId};
     }

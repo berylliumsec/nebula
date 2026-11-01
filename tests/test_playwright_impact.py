@@ -288,6 +288,12 @@ def test_catalog_exposes_stable_choices_for_agents_and_humans():
     assert "assistant" in catalog["areas"]
     assert "mobile-webkit" in catalog["projects"]
     assert "themes/mobile-webkit" in catalog["entries"]
+    assert len(MANIFEST["areas"]["butler-devices"]) == 8
+    assert all(
+        entry["grep"]
+        == "assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser"
+        for entry in MANIFEST["areas"]["butler-devices"]
+    )
 
 
 def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():

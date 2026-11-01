@@ -33,6 +33,7 @@ Settings assistant and the complete destination catalog.
 | Change target and URL scope | A request for all destinations saves the selected project's URL, network and port scope while retaining unrelated policy fields; Allow all is a separate permission bypass | Core scope revision and assistant browser receipt | Component, browser, real Core and LAN |
 | Start the headless security browser | An explicit start request asks Core to establish the selected project's session and reports the observed status or startup error | Core agent-security session | API, browser, real Core and LAN |
 | Change other Core settings | The assistant discovers this build's existing Settings routes and body schemas, calls the authenticated route, and reports its result only after a successful response and read-back where offered | Core Settings API and current project | Tool unit, real Core and LAN |
+| Pair or revoke a device | Interactive Butler lists nonsecret paired-device identities and opens the requesting browser's Paired devices control. Only the Nebula host browser creates and displays a single-use pairing link; the new device redeems it. For another device, the browser confirms an exact ID and creation time, revokes it, and verifies Core list absence. The current browser uses its direct Unpair control because access ends immediately. The generic Settings API does not create offers or revoke devices | Core paired-device sessions; host and companion browsers own one-time secrets and local access | Butler tool, Core API, component and production LAN browser |
 | Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
 | Manage Nebula-wide Butler instructions | The catalog opens the editable BUTLER.md Markdown code editor above the Settings popup after Core loads the file. The full Settings page retains its file row and preview; upload opens a draft. The API checks the loaded digest before saving and the UI reads Core back before confirming | Core data directory and durable Butler global clock | Tool unit, component and real Core browser |
 | Set Butler model and effort | The catalog opens Butler settings. Full Assistant settings opens Butler's saved conversation with its Assistant settings panel visible. Core saves the selected effort on Butler's chat; the next direct turn and each new scheduled harness check use that saved choice. An unset effort uses the model's advertised default | Core Assistant settings and harness session | Core unit, component and real Core |
@@ -66,7 +67,9 @@ device appearance, provider and harness default models, post-tool preferences,
 project execution mode, target scope and headless browser sessions. For other
 Core-backed settings, `nebula.settings.api_schema` lists only the current build's
 Settings routes and request schemas. `nebula.settings.api_request` calls one of
-those existing routes through Core authentication. The selected project ID is
+those existing routes through Core authentication. Pairing and device mutation
+routes are excluded because their one-time link and destructive confirmation
+belong to the browser. The selected project ID is
 supplied by Core, and the assistant cannot select a different project in a
 route. Existing API validation, revision checks and required acknowledgments
 still apply. Browser appearance remains device-owned. Uploads and local desktop

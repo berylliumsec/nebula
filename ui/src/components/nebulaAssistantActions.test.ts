@@ -125,6 +125,25 @@ describe("settings assistant actions", () => {
         kind: "storage_edit_callbacks", changes: undefined}}}, "project"))
       .toMatchObject({kind: "storage_edit_callbacks", projectId: "project", sourceId});
   });
+  it("accepts only scoped paired-device handoffs with an exact identity", () => {
+    const deviceId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const base: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "device-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.devices.revoke", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "device_revoke", project_id: "project",
+          device_id: deviceId, name: "Fixture phone", expected_created_at: "2026-11-01T12:00:00Z"}},
+    };
+    expect(settingClientAction(base, "project")).toEqual({kind: "device_revoke", projectId: "project",
+      deviceId, name: "Fixture phone", expectedCreatedAt: "2026-11-01T12:00:00Z"});
+    expect(settingClientAction(base, "other")).toBeUndefined();
+    expect(settingClientAction({...base, receipt: {...base.receipt, client_action: {kind: "device_revoke",
+      project_id: "project", device_id: "../other", name: "Fixture phone", expected_created_at: "2026-11-01T12:00:00Z"}}}, "project"))
+      .toBeUndefined();
+    expect(settingClientAction({...base, receipt: {...base.receipt, butler_operation: "nebula.devices.pair",
+      client_action: {kind: "device_pair", project_id: "project"}}}, "project"))
+      .toEqual({kind: "device_pair", projectId: "project"});
+  });
   it("accepts only scoped, typed project lifecycle handoffs", () => {
     const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
     const event: ChatStreamEvent = {
@@ -406,6 +425,9 @@ describe("settings assistant actions", () => {
     expect(settingToOpen("open assistant")).toBeUndefined();
     expect(isSettingNavigationRequest("Where can I fix a host file permission error in Docker mode?")).toBe(false);
     expect(isSettingNavigationRequest("Open sign-off for the synthetic Butler report.")).toBe(false);
+    expect(isSettingNavigationRequest("Prepare storage source enrollment")).toBe(false);
+    expect(isSettingNavigationRequest("Prepare callback editing for Fixture NAS")).toBe(false);
+    expect(isSettingNavigationRequest("Prepare a new device pairing")).toBe(false);
     expect(settingToOpen("Open sign-off for the synthetic Butler report.")).toBeUndefined();
     expect(settingToOpen("Why can't my assistant edit a host file in Docker mode?")).toBeUndefined();
   });

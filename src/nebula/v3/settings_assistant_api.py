@@ -23,7 +23,7 @@ _GLOBAL_SETTINGS = re.compile(
     r"providers|harnesses|mcp-servers|ssh-environments|"
     r"runner-profiles|vpn-profiles|operator-profiles|credentials|skills|"
     r"integrations|automation/runtime|diagnostics/settings|voice/settings|butler/instructions|"
-    r"auth/(?:pairings|devices)|setup|release"
+    r"setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}

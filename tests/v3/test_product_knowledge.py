@@ -368,6 +368,19 @@ def test_product_search_finds_butler_storage_token_handoff(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_device_pairing_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler pair a phone and revoke a paired device without seeing the pairing link?"
+    )
+    assert any(
+        "paired" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "pairing link" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
