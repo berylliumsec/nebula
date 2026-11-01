@@ -9,6 +9,7 @@ import "../storage.css";
 export function StorageIntegrations() {
   const { api, engagements, providers, previewMode } = useWorkspace();
   const [sources, setSources] = useState<StorageSource[]>([]);
+  const [sourcesLoaded, setSourcesLoaded] = useState(false);
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
   const nameRef = useRef<HTMLInputElement>(null);
   const [projectId, setProjectId] = useState("");
@@ -27,6 +28,7 @@ export function StorageIntegrations() {
     if (!api) return;
     const [dashboard, choices] = await Promise.all([api.storageDashboard(), api.listHarnesses()]);
     setSources(dashboard.sources);
+    setSourcesLoaded(true);
     setHarnesses(choices);
   };
   useEffect(() => { void refresh().catch((caught) => {
@@ -34,6 +36,29 @@ export function StorageIntegrations() {
     setError(String(caught));
   }); }, [api]);
   useEffect(() => { if (!projectId && engagements.length) setProjectId(engagements[0].id); }, [engagements, projectId]);
+  useEffect(() => {
+    const openRequestedSource = () => {
+      const raw = sessionStorage.getItem("nebula.butler.storage.callback-edit");
+      if (!raw || !sourcesLoaded) return;
+      sessionStorage.removeItem("nebula.butler.storage.callback-edit");
+      try {
+        const request = JSON.parse(raw) as {sourceId?: string; projectId?: string; expectedRevision?: number};
+        const source = sources.find((item) => item.id === request.sourceId && item.engagement_id === request.projectId);
+        if (!source || source.revision !== request.expectedRevision) {
+          setError("The storage source changed. Ask Butler to read its current revision before editing callbacks.");
+          return;
+        }
+        setEditing(source);
+        requestAnimationFrame(() => document.getElementById(`storage-source-${source.id}`)?.scrollIntoView({block: "center"}));
+      } catch {
+        // diagnostic-expected: A stale or malformed browser-local handoff cannot select a source; the error stays visible.
+        setError("The requested storage source could not be opened. Ask Butler to read it again.");
+      }
+    };
+    openRequestedSource();
+    window.addEventListener("nebula:butler-storage-callback-edit", openRequestedSource);
+    return () => window.removeEventListener("nebula:butler-storage-callback-edit", openRequestedSource);
+  }, [sources, sourcesLoaded]);
 
   const runtimes = useMemo(() => [
     ...providers.filter((item) => item.enabled).map((item) => ({ key: `provider:${item.id}`, name: item.name, models: item.models, defaultModel: item.effectiveDefaultModel ?? item.defaultModel })),
@@ -147,7 +172,7 @@ export function StorageIntegrations() {
       </div><p>Only this operator-configured destination receives callback requests. Every remote change still requires a preview and approval.</p></details>
       <button className="button primary" disabled={busy || previewMode || !chosenRuntime || !model || !projectId} type="submit">Add disabled source</button>
     </form>
-    <div className="storage-source-list" aria-label="Storage sources">{sources.length ? sources.map((source) => <article className="panel" key={source.id}>
+    <div className="storage-source-list" aria-label="Storage sources">{sources.length ? sources.map((source) => <article className="panel" id={`storage-source-${source.id}`} key={source.id}>
       <div className="storage-source-heading"><Database size={19} /><div><strong>{source.name}</strong><small>{source.enabled ? "Enabled" : "Disabled"} · {engagements.find((item) => item.id === source.engagement_id)?.name ?? "Project unavailable"} · {source.last_report_at ? `Last report ${new Date(source.last_report_at).toLocaleString()}` : "No reports yet"}</small></div></div>
       <label className="storage-source-toggle"><input type="checkbox" checked={source.enabled} disabled={busy || previewMode} onChange={(event) => void change(source, { enabled: event.target.checked })} /> Enable reports and alerts</label>
       <div className="storage-source-actions"><button className="button quiet" disabled={busy || previewMode} onClick={() => setEditing(editing?.id === source.id ? undefined : source)} type="button">{editing?.id === source.id ? "Cancel settings" : "Edit reporting and callbacks"}</button><button className="button quiet" disabled={busy || previewMode} onClick={() => void rotate(source)} type="button"><RefreshCw size={15} /> Rotate token</button><button className="button quiet" disabled={busy || previewMode} onClick={() => void revoke(source)} type="button">Revoke</button></div>

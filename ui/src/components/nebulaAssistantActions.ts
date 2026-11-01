@@ -21,6 +21,8 @@ export type SettingClientAction =
   | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
   | { kind: "storage_enroll"; projectId: string }
   | { kind: "storage_rotate" | "storage_revoke"; projectId: string; sourceId: string; expectedRevision: number; name: string }
+  | { kind: "storage_configure_reporting"; projectId: string; sourceId: string; expectedRevision: number; name: string; changes: {enabled?: boolean; reporting_interval_seconds?: number} }
+  | { kind: "storage_edit_callbacks"; projectId: string; sourceId: string; expectedRevision: number; name: string }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
   | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
@@ -122,13 +124,28 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
       return {kind: "storage_enroll", projectId};
     }
     const storageKind = operation === "nebula.storage.rotate" ? "storage_rotate"
-      : operation === "nebula.storage.revoke" ? "storage_revoke" : undefined;
+      : operation === "nebula.storage.revoke" ? "storage_revoke"
+      : operation === "nebula.storage.configure_reporting" ? "storage_configure_reporting"
+      : operation === "nebula.storage.edit_callbacks" ? "storage_edit_callbacks" : undefined;
     if (storageKind && value.kind === storageKind
         && typeof value.source_id === "string" && uuidPattern.test(value.source_id)
         && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
         && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 200) {
-      return {kind: storageKind, projectId, sourceId: value.source_id,
+      const base = {projectId, sourceId: value.source_id,
         expectedRevision: Number(value.expected_revision), name: value.name};
+      if (storageKind === "storage_configure_reporting") {
+        const changes = value.changes;
+        if (!changes || typeof changes !== "object" || Array.isArray(changes)) return undefined;
+        const fields = Object.keys(changes);
+        if (!fields.length || fields.some((field) => !["enabled", "reporting_interval_seconds"].includes(field))) return undefined;
+        const requested = changes as Record<string, unknown>;
+        if ("enabled" in requested && typeof requested.enabled !== "boolean") return undefined;
+        if ("reporting_interval_seconds" in requested
+            && (!Number.isInteger(requested.reporting_interval_seconds) || Number(requested.reporting_interval_seconds) < 60
+              || Number(requested.reporting_interval_seconds) > 604800)) return undefined;
+        return {kind: storageKind, ...base, changes: requested as {enabled?: boolean; reporting_interval_seconds?: number}};
+      }
+      return {kind: storageKind, ...base};
     }
   }
   if (projectAction && operation === "nebula.terminal.stop" && value.kind === "terminal_stop"

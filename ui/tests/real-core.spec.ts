@@ -704,7 +704,7 @@ test("stabilization storage public source reaches dashboard chat and approved re
 
 test("assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser", async ({page}, testInfo) => {
   test.setTimeout(360_000);
-  const prompts = ["Open source enrollment", "Rotate NAS token", "Revoke NAS token"];
+  const prompts = ["Open source enrollment", "Configure NAS reporting", "Open NAS callback settings", "Rotate NAS token", "Revoke NAS token"];
   let sourceId = "";
   let sourceRevision = 1;
   let issuedToken = "";
@@ -717,14 +717,19 @@ test("assistant upgrade Butler enrolls and changes a storage source through the 
     if (!prompt) return undefined;
     if (issuedToken && JSON.stringify(messages).includes(issuedToken)) modelSawToken = true;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
-    const operation = prompt === prompts[0] ? "nebula.storage.enroll" : prompt === prompts[1] ? "nebula.storage.rotate" : "nebula.storage.revoke";
+    const operation = prompt === prompts[0] ? "nebula.storage.enroll"
+      : prompt === prompts[1] ? "nebula.storage.configure_reporting"
+      : prompt === prompts[2] ? "nebula.storage.edit_callbacks"
+      : prompt === prompts[3] ? "nebula.storage.rotate" : "nebula.storage.revoke";
     const calls = [
-      {name: "nebula_capabilities_search", arguments: {query: "storage source enrollment token rotation revocation"}},
+      {name: "nebula_capabilities_search", arguments: {query: "storage source enrollment reporting callbacks token rotation revocation"}},
       {name: "nebula_capabilities_describe", arguments: {operation: "nebula.storage.sources"}},
       {name: "nebula_capabilities_read", arguments: {operation: "nebula.storage.sources", arguments: {}}},
       {name: "nebula_capabilities_describe", arguments: {operation}},
       {name: "nebula_capabilities_change", arguments: {operation, arguments: operation === "nebula.storage.enroll"
-        ? {} : {source_id: sourceId, expected_revision: sourceRevision}}},
+        ? {} : operation === "nebula.storage.configure_reporting"
+          ? {source_id: sourceId, expected_revision: sourceRevision, enabled: true, reporting_interval_seconds: 3600}
+          : {source_id: sourceId, expected_revision: sourceRevision}}},
     ];
     return calls[replies];
   }});
@@ -772,12 +777,27 @@ test("assistant upgrade Butler enrolls and changes a storage source through the 
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
     await send(prompts[1]);
+    const reporting = page.getByRole("dialog", {name: "Change Fixture NAS's storage reporting?"});
+    await expect(reporting).toBeVisible({timeout: 45_000});
+    await reporting.getByRole("button", {name: "Save reporting"}).click();
+    await expect(assistant.getByText(/Core saved Fixture NAS's reporting settings/)).toBeVisible();
+    const configured = (await (await api.get("storage")).json() as {sources: Array<{enabled: boolean; reporting_interval_seconds: number; revision: number}>}).sources[0];
+    expect(configured.enabled).toBe(true);
+    expect(configured.reporting_interval_seconds).toBe(3600);
+    sourceRevision = configured.revision;
+    await send(prompts[2]);
+    const callbackForm = page.locator(`#storage-source-${sourceId} .storage-source-edit`);
+    await expect(callbackForm.getByRole("button", {name: "Save source settings"})).toBeVisible({timeout: 45_000});
+    await expect(callbackForm.getByLabel("Reporting interval (seconds)")).toHaveValue("3600");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    await send(prompts[3]);
     const rotation = page.getByRole("dialog", {name: "Rotate Fixture NAS's storage token?"});
     await expect(rotation).toBeVisible({timeout: 45_000});
     await rotation.getByRole("button", {name: "Cancel"}).click();
     await expect(assistant.getByText(/token was not rotated/)).toBeVisible();
     expect((await (await api.get("storage")).json() as {sources: Array<{revision: number}>}).sources[0].revision).toBe(sourceRevision);
-    await send(prompts[1]);
+    await send(prompts[3]);
     await expect(rotation).toBeVisible({timeout: 45_000});
     await rotation.getByRole("button", {name: "Rotate token"}).click();
     const issued = assistant.getByRole("region", {name: "New storage source token"});
@@ -800,7 +820,7 @@ test("assistant upgrade Butler enrolls and changes a storage source through the 
       await openNebulaAssistantFromShell(page);
       await expect(assistant.getByRole("region", {name: "New storage source token"})).toHaveCount(0);
       sourceRevision = (await (await api.get("storage")).json() as {sources: Array<{revision: number}>}).sources[0].revision;
-      await send(prompts[2]);
+      await send(prompts[4]);
       const revocation = page.getByRole("dialog", {name: "Revoke Fixture NAS's storage token?"});
       await expect(revocation).toBeVisible({timeout: 45_000});
       await revocation.getByRole("button", {name: "Revoke token"}).click();
@@ -813,7 +833,7 @@ test("assistant upgrade Butler enrolls and changes a storage source through the 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-storage-lan", {body: JSON.stringify({origin: core.origin, build: "production",
       project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-      result: "Enrollment form opened without a write; cancelled rotation retained source; confirmed rotation kept token in requesting browser; old token rejected; revocation disabled source"}), contentType: "application/json"});
+      result: "Enrollment and exact callback forms opened without a write; reporting enabled with current revision and readback; cancelled rotation retained source; confirmed rotation kept token in requesting browser; old token rejected; revocation disabled source"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},

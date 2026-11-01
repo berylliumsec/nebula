@@ -102,8 +102,10 @@ or revocation at its current revision. The requesting browser confirms the exact
 source, Core fences the revision, and the browser reads the saved status back.
 A rotated token appears only in that browser's temporary panel and never enters
 the model transcript. If the response is uncertain, inspect the source before
-another rotation. Reporting and callback configuration remain in the Storage
-settings form until their typed handoff is implemented. Remote storage actions
+another rotation. Butler can prepare enabled-state and interval changes for
+browser confirmation and Core readback. Callback editing opens the exact source
+form on the requesting device, where its credential reference stays out of the
+model transcript. Opening that form does not claim a saved change. Remote storage actions
 still require a source preview and an authenticated operator approval in the
 Storage interface.
 The headless security session is independent of the visible-browser desktop

@@ -74,6 +74,8 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.storage.enroll",
         "nebula.storage.rotate",
         "nebula.storage.revoke",
+        "nebula.storage.configure_reporting",
+        "nebula.storage.edit_callbacks",
         "nebula.workspace.download_file",
         "nebula.library.add",
         "nebula.library.download",
@@ -170,7 +172,7 @@ _CATEGORIES = (
     },
     {
         "id": "storage",
-        "description": "Selected-project storage source discovery and requesting-browser enrollment, token rotation, and revocation",
+        "description": "Selected-project storage source discovery and requesting-browser enrollment, token, reporting, and callback controls",
     },
     {"id": "help", "description": "Source-linked Nebula help and live project context"},
     {

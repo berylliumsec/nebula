@@ -357,6 +357,15 @@ def test_product_search_finds_butler_storage_token_handoff(monkeypatch):
         and "token" in str(item["text"]).lower()
         for item in matches
     )
+    configuration = search_product_knowledge(
+        "Can Butler change a storage source reporting interval and edit its callback credential?"
+    )
+    assert any(
+        "reporting" in str(item["text"]).lower()
+        and "callback" in str(item["text"]).lower()
+        and "requesting device" in str(item["text"]).lower()
+        for item in configuration
+    )
 
 
 def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypatch):

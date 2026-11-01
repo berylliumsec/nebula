@@ -12,6 +12,8 @@ const source: StorageSource = {
 };
 const rotate = {kind: "storage_rotate" as const, projectId: "project", sourceId, expectedRevision: 1, name: source.name};
 const revoke = {kind: "storage_revoke" as const, projectId: "project", sourceId, expectedRevision: 1, name: source.name};
+const reporting = {kind: "storage_configure_reporting" as const, projectId: "project", sourceId,
+  expectedRevision: 1, name: source.name, changes: {enabled: false, reporting_interval_seconds: 3600}};
 const dashboard = (item: StorageSource) => ({sources: [item]});
 
 describe("Butler storage handoff", () => {
@@ -81,5 +83,40 @@ describe("Butler storage handoff", () => {
     expect(revoked.message).toContain("confirmed that Core disabled");
     expect(revoked.issued).toBeUndefined();
     expect(revokeApi.revokeStorageSource).toHaveBeenCalledWith(source);
+  });
+
+  it("confirms exact reporting changes and reads Core back", async () => {
+    const changed = {...source, enabled: false, reporting_interval_seconds: 3600, revision: 2};
+    const api = {storageDashboard: vi.fn().mockResolvedValueOnce(dashboard(source))
+      .mockResolvedValueOnce(dashboard(source)).mockResolvedValueOnce(dashboard(changed)),
+      updateStorageSource: vi.fn().mockResolvedValue(changed)} as unknown as ApiClient;
+    const confirmed = await applyButlerStorageAction(api, reporting, () => "project", async () => true, vi.fn());
+    expect(api.updateStorageSource).toHaveBeenCalledWith(source, reporting.changes);
+    expect(confirmed.message).toContain("revision 2");
+    expect(confirmed.message).toContain("Disable reports");
+  });
+
+  it("does not save cancelled or stale reporting changes", async () => {
+    const api = {storageDashboard: vi.fn().mockResolvedValueOnce(dashboard(source))
+      .mockResolvedValueOnce(dashboard(source)).mockResolvedValueOnce(dashboard({...source, revision: 2})),
+      updateStorageSource: vi.fn()} as unknown as ApiClient;
+    const cancelled = await applyButlerStorageAction(api, reporting, () => "project", async () => false, vi.fn());
+    expect(cancelled.message).toContain("not changed");
+    await expect(applyButlerStorageAction(api, reporting, () => "project", async () => true, vi.fn()))
+      .rejects.toThrow("during confirmation");
+    expect(api.updateStorageSource).not.toHaveBeenCalled();
+  });
+
+  it("opens the exact callback form without sending credentials to Butler", async () => {
+    const api = {storageDashboard: vi.fn().mockResolvedValue(dashboard(source)),
+      updateStorageSource: vi.fn()} as unknown as ApiClient;
+    const open = vi.fn();
+    const action = {kind: "storage_edit_callbacks" as const, projectId: "project", sourceId,
+      expectedRevision: 1, name: source.name};
+    const result = await applyButlerStorageAction(api, action, () => "project", vi.fn(), vi.fn(), open);
+    expect(open).toHaveBeenCalledWith(source);
+    expect(result.message).toContain("no settings have changed yet");
+    expect(result.message).not.toContain("STORAGE_CALLBACK_TOKEN");
+    expect(api.updateStorageSource).not.toHaveBeenCalled();
   });
 });

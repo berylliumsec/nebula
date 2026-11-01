@@ -1651,12 +1651,19 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "evidence_upload") return applyEvidenceUpload(action);
     if (action.kind === "evidence_download") return applyEvidenceDownload(action);
     if (action.kind === "chat_export") return applyChatExport(action);
-    if (action.kind === "storage_enroll" || action.kind === "storage_rotate" || action.kind === "storage_revoke") {
+    if (action.kind === "storage_enroll" || action.kind === "storage_rotate" || action.kind === "storage_revoke"
+        || action.kind === "storage_configure_reporting" || action.kind === "storage_edit_callbacks") {
       if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
         throw new Error("Reconnect to Core and select the original project before changing its storage sources.");
       }
       const result = await applyButlerStorageAction(api, action, () => activeImageProject.current,
-        (request) => confirm(request), () => openSelectedSetting(settingCatalog.find((item) => item.id === "settings.storage")!));
+        (request) => confirm(request), () => openSelectedSetting(settingCatalog.find((item) => item.id === "settings.storage")!),
+        (source) => {
+          sessionStorage.setItem("nebula.butler.storage.callback-edit", JSON.stringify({sourceId: source.id,
+            projectId: action.projectId, expectedRevision: source.revision}));
+          openSelectedSetting(settingCatalog.find((item) => item.id === "settings.storage")!);
+          window.dispatchEvent(new Event("nebula:butler-storage-callback-edit"));
+        });
       if (result.issued) setIssuedStorageToken(result.issued);
       else if (action.kind === "storage_revoke") setIssuedStorageToken(undefined);
       return result.message;
@@ -2354,6 +2361,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <button className="button quiet" type="button" onClick={() => void (async () => {
           try { await navigator.clipboard.writeText(issuedStorageToken.token); }
           catch {
+            // diagnostic-expected: Clipboard permission can be denied; selecting the field leaves a manual copy path.
             const input = document.getElementById("butler-storage-token") as HTMLInputElement | null;
             input?.focus(); input?.select();
           }

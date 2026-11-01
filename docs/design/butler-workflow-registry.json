@@ -769,18 +769,19 @@
       "id": "storage.configuration",
       "entry_point": "Storage settings: enable reports or edit reporting and callback settings",
       "ui_calls": [
-        "ui/src/components/StorageIntegrations.tsx::updateStorageSource"
+        "ui/src/components/StorageIntegrations.tsx::updateStorageSource",
+        "ui/src/components/butlerStorageAction.ts::updateStorageSource"
       ],
       "core_owner": "Storage integration service and source revision",
       "butler": {
         "discover": "nebula.storage.sources",
         "read": "nebula.storage.source",
-        "change": "missing: typed reporting and callback configuration handoff"
+        "change": "nebula.storage.configure_reporting; nebula.storage.edit_callbacks"
       },
-      "authority": "Selected project, exact source revision and browser-owned callback credential reference",
-      "observed_result_test": "missing: Butler configuration and production-LAN readback regression",
-      "result": "Only the existing Storage settings form can change reporting and callbacks",
-      "status": "gap"
+      "authority": "Selected project, exact source and current revision; requesting-browser confirmation for reporting and device-owned callback credential form",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser",
+      "result": "Core confirms enabled state and interval after revision-fenced browser apply; callback edit opens the exact source form without claiming a save",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -2106,6 +2107,10 @@
     },
     {
       "key": "ui/src/components/butlerStorageAction.ts::storageDashboard",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerStorageAction.ts::updateStorageSource",
       "count": 1
     },
     {

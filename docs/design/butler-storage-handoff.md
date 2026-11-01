@@ -1,11 +1,11 @@
 # Butler storage-source handoff contract
 
-Journey: from a project-scoped Butler request, the operator reviews an exact storage source on the requesting device, supplies any callback credential reference there, and confirms enrollment, token rotation, or revocation. The one-time token is shown only in that browser. Core owns the source and its revision.
+Journey: from a project-scoped Butler request, the operator reviews an exact storage source on the requesting device, supplies any callback credential reference there, and confirms enrollment, token rotation, revocation, or reporting changes. The one-time token is shown only in that browser. Core owns the source and its revision.
 
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |
 | Entry/discovery | Butler can list only the selected project's nonsecret source metadata and prepare a typed action; the browser names the proposed action and source | Core source records and Butler's selected project | Core tool, component, real-Core browser |
-| Create/mutate | Enroll creates a disabled source; rotate changes one exact source token; revoke disables that source and invalidates its token. Confirmation precedes each write | Core source database and revision; requesting browser for confirmation and credential reference | Core route and real-Core browser |
+| Create/mutate | Enroll creates a disabled source; rotate changes one exact source token; revoke disables that source and invalidates its token; reporting changes apply a specified enabled state or interval after confirmation. Callback editing opens the exact source form and makes no change until the operator saves it | Core source database and revision; requesting browser for confirmation and credential reference | Core route and real-Core browser |
 | Select/use | The browser rejects a changed project or stale source revision. The operator can copy the one-time token and webhook URL before dismissing them; Butler receives neither token nor credential reference | Selected project, Core source revision, browser transient state | Component and real-Core browser |
 | Stream/interrupt | Not applicable: these operations are one request each. Closing a handoff before confirmation creates no source or token change | Browser transient state | Component and real-Core browser |
 | Background | Background Butler cannot acquire a requesting-device handoff | Butler capability boundary | Core tool |

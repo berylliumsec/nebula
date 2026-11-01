@@ -31,6 +31,22 @@ _CHANGE = {
     "additionalProperties": False,
 }
 _ENROLL = {"type": "object", "properties": {}, "additionalProperties": False}
+_REPORTING = {
+    "type": "object",
+    "properties": {
+        "source_id": _SOURCE_ID,
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "enabled": {"type": "boolean"},
+        "reporting_interval_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 604800,
+        },
+    },
+    "required": ["source_id", "expected_revision"],
+    "anyOf": [{"required": ["enabled"]}, {"required": ["reporting_interval_seconds"]}],
+    "additionalProperties": False,
+}
 
 
 class ButlerStorage:
@@ -93,6 +109,15 @@ class ButlerStorage:
             },
         }
 
+    def configure_reporting(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        receipt = self._pending(arguments, "storage_configure_reporting")
+        receipt["client_action"]["changes"] = {
+            key: arguments[key]
+            for key in ("enabled", "reporting_interval_seconds")
+            if key in arguments
+        }
+        return receipt
+
     def actions(self) -> list[AnalysisTool]:
         operations = (
             (
@@ -129,6 +154,20 @@ class ButlerStorage:
                 _CHANGE,
                 RiskClass.WORKSPACE_WRITE,
                 lambda arguments: self._pending(arguments, "storage_revoke"),
+            ),
+            (
+                "nebula.storage.configure_reporting",
+                "Ask the requesting browser to confirm exact-source enablement and/or reporting interval at the current revision. Core validates the runtime and the browser reads back the saved settings. Callback credentials are edited separately on the device.",
+                _REPORTING,
+                RiskClass.WORKSPACE_WRITE,
+                self.configure_reporting,
+            ),
+            (
+                "nebula.storage.edit_callbacks",
+                "Open the exact selected-project source's callback settings on the requesting device at its current revision. The operator supplies the callback origin and credential reference in that browser; this handoff does not claim settings were saved.",
+                _CHANGE,
+                RiskClass.WORKSPACE_WRITE,
+                lambda arguments: self._pending(arguments, "storage_edit_callbacks"),
             ),
         )
         result: list[AnalysisTool] = []

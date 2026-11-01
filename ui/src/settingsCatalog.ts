@@ -108,7 +108,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Integrations",
     scope: "Workspace",
     target: "storage-integration-settings",
-    keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
+    keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "reporting interval", "callback settings", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
   },
   {
     id: "settings.follow-up",

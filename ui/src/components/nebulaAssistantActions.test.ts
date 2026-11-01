@@ -109,6 +109,21 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.storage.enroll",
       client_action: {kind: "storage_enroll", project_id: "project"}}}, "project"))
       .toEqual({kind: "storage_enroll", projectId: "project"});
+    const reporting = {kind: "storage_configure_reporting", project_id: "project", source_id: sourceId,
+      expected_revision: 3, name: "Fixture NAS", changes: {enabled: true, reporting_interval_seconds: 3600}};
+    expect(settingClientAction({...event, receipt: {...event.receipt,
+      butler_operation: "nebula.storage.configure_reporting", client_action: reporting}}, "project"))
+      .toEqual({kind: "storage_configure_reporting", projectId: "project", sourceId,
+        expectedRevision: 3, name: "Fixture NAS", changes: reporting.changes});
+    for (const changes of [{}, {enabled: "yes"}, {reporting_interval_seconds: 10}, {callback_credential_ref: "secret"}]) {
+      expect(settingClientAction({...event, receipt: {...event.receipt,
+        butler_operation: "nebula.storage.configure_reporting", client_action: {...reporting, changes}}}, "project"))
+        .toBeUndefined();
+    }
+    expect(settingClientAction({...event, receipt: {...event.receipt,
+      butler_operation: "nebula.storage.edit_callbacks", client_action: {...reporting,
+        kind: "storage_edit_callbacks", changes: undefined}}}, "project"))
+      .toMatchObject({kind: "storage_edit_callbacks", projectId: "project", sourceId});
   });
   it("accepts only scoped, typed project lifecycle handoffs", () => {
     const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";

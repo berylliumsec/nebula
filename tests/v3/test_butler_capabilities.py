@@ -460,6 +460,8 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
             "nebula.storage.sources",
             "nebula.storage.rotate",
             "nebula.storage.revoke",
+            "nebula.storage.configure_reporting",
+            "nebula.storage.edit_callbacks",
         }.issubset({row["operation"] for row in found["matches"]})
         listed = await capabilities.invoke(
             {"operation": "nebula.storage.sources", "arguments": {}}, change=False
@@ -485,6 +487,7 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
         for operation, kind in (
             ("rotate", "storage_rotate"),
             ("revoke", "storage_revoke"),
+            ("edit_callbacks", "storage_edit_callbacks"),
         ):
             prepared = await capabilities.invoke(
                 {
@@ -526,6 +529,35 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
                     },
                     change=True,
                 )
+        reporting = await capabilities.invoke(
+            {
+                "operation": "nebula.storage.configure_reporting",
+                "arguments": {
+                    "source_id": own.id,
+                    "expected_revision": own.revision,
+                    "enabled": True,
+                    "reporting_interval_seconds": 3600,
+                },
+            },
+            change=True,
+        )
+        assert reporting["client_action"]["changes"] == {
+            "enabled": True,
+            "reporting_interval_seconds": 3600,
+        }
+        assert "credential" not in str(reporting).lower()
+        assert store.get(StorageSource, own.id).revision == own.revision
+        with pytest.raises(CapabilityInputError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.storage.configure_reporting",
+                    "arguments": {
+                        "source_id": own.id,
+                        "expected_revision": own.revision,
+                    },
+                },
+                change=True,
+            )
 
     asyncio.run(scenario())
 

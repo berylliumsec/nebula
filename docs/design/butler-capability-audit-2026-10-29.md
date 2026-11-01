@@ -31,7 +31,7 @@ and reads; these counts are not a coverage percentage.
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; discover active security browser sessions and start a scoped browser automation mission with explicit targets and lease limits; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page selected-project evidence and link targets and request a browser-owned immutable evidence upload with exact Core read-back | Direct control of the visible browser page, browser evidence capture, and other research-data control still lack accepted Butler journeys. A saved browser mission is not an assessment result. Device file bytes stay in the requesting browser. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; prepare an exact linked-note AI section transform for browser runtime choice and operator review; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. The operating system's final download save location remains device-owned. |
-| Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes | Storage source enrollment, secret rotation, deployment, pairing redemption, system service control and one-time token display remain specialized operator workflows. |
+| Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes; prepare selected-project storage enrollment, token, reporting and callback handoffs | Pairing redemption, credential changes, release deployment, service control and other specialized device workflows remain gaps. One-time source tokens stay on the requesting device. |
 
 ## Branch slice: scoped browser automation mission
 
@@ -471,8 +471,8 @@ proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
 checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 42
-reviewed actions. Its source inventory contains 530 distinct `api` call
-signatures in production UI TypeScript, of which 94 are linked to reviewed
+reviewed actions. Its source inventory contains 531 distinct `api` call
+signatures in production UI TypeScript, of which 95 are linked to reviewed
 actions; 436 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions;
@@ -502,8 +502,10 @@ tool catalog.
 3. Add specialized device and administration handoffs for local file selection, pairing,
    credentials, release updates and service state. Storage enrollment now opens
    the requesting-device form, while token rotation and revocation use exact
-   revisions, confirmation and Core readback. Reporting and callback editing
-   still need a typed handoff.
+   revisions, confirmation and Core readback. Reporting enablement and interval
+   changes now use the same revision-fenced browser confirmation; callback
+   editing opens the exact source's device-owned credential form without
+   claiming a save.
    Keep one-time values on the requesting device and preserve existing
    confirmations and recovery paths.
 4. Extend the selected-project browser journey and real-Core regression tests
