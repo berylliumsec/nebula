@@ -671,6 +671,34 @@ def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
     asyncio.run(scenario())
 
 
+def test_interactive_butler_prepares_device_owned_diagnostics_export(tmp_path):
+    _, selected, _, _, capabilities = _capabilities(tmp_path)
+
+    async def scenario():
+        found = await capabilities.search({"query": "export diagnostics support zip"})
+        assert "nebula.diagnostics.export" in {
+            row["operation"] for row in found["matches"]
+        }
+        prepared = await capabilities.invoke(
+            {"operation": "nebula.diagnostics.export", "arguments": {}}, change=True
+        )
+        assert prepared["client_action"] == {
+            "kind": "diagnostics_export",
+            "project_id": selected.id,
+        }
+        assert "zip" not in str(prepared).lower()
+        with pytest.raises(CapabilityInputError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.diagnostics.export",
+                    "arguments": {"include_database": True},
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
 def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
     _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
 

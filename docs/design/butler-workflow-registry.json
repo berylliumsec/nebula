@@ -858,6 +858,24 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser",
       "result": "Cancellation retains the credential; confirmed deletion reports unavailable only after Core status proves absence",
       "status": "supported"
+    },
+    {
+      "id": "diagnostics.export",
+      "entry_point": "Butler or Diagnostics: confirm and download a sensitive support ZIP",
+      "ui_calls": [
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::exportDiagnostics",
+        "ui/src/components/butlerDiagnosticsAction.ts::exportDiagnostics"
+      ],
+      "core_owner": "Core diagnostics exporter and requesting-browser download",
+      "butler": {
+        "discover": "nebula.diagnostics.export",
+        "read": "nebula.diagnostics.export schema and Core response ZIP signature",
+        "change": "nebula.diagnostics.export"
+      },
+      "authority": "Interactive selected-project receipt; browser confirmation of unredacted logs, ZIP signature check and local download",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser",
+      "result": "Cancellation sends no export request; confirmed action starts a valid ZIP download and sends no bundle bytes to Butler",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -2187,6 +2205,10 @@
     },
     {
       "key": "ui/src/components/butlerDeviceAction.ts::revokePairedDevice",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerDiagnosticsAction.ts::exportDiagnostics",
       "count": 1
     },
     {

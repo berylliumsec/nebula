@@ -35,6 +35,7 @@ import { applyButlerStorageAction, type IssuedStorageToken } from "./butlerStora
 import { applyButlerDeviceAction } from "./butlerDeviceAction";
 import { ButlerCredentialCreate } from "./ButlerCredentialCreate";
 import { deleteButlerCredential } from "./butlerCredentialAction";
+import { applyButlerDiagnosticsExport } from "./butlerDiagnosticsAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
@@ -1702,6 +1703,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         throw new Error("Reconnect to Core and select the original project before deleting a credential.");
       }
       return deleteButlerCredential(api, action, () => activeImageProject.current, (request) => confirm(request));
+    }
+    if (action.kind === "diagnostics_export") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before exporting diagnostics.");
+      }
+      return applyButlerDiagnosticsExport(api, action, () => activeImageProject.current, (request) => confirm(request));
     }
     if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
     if (action.kind === "workspace_download") return applyWorkspaceDownload(action);

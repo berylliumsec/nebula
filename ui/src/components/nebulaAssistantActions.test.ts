@@ -160,6 +160,18 @@ describe("settings assistant actions", () => {
       client_action: {kind: "credential_create", project_id: "project"}}}, "project"))
       .toEqual({kind: "credential_create", projectId: "project"});
   });
+  it("accepts only the scoped diagnostics export intent", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "diagnostics-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.diagnostics.export", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "diagnostics_export", project_id: "project"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "diagnostics_export", projectId: "project"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.credentials.create"}}, "project"))
+      .toBeUndefined();
+  });
   it("accepts only scoped, typed project lifecycle handoffs", () => {
     const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
     const event: ChatStreamEvent = {

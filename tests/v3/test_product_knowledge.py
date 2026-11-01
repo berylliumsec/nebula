@@ -393,6 +393,19 @@ def test_product_search_finds_butler_write_only_credentials(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_diagnostics_export(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler export a diagnostics support ZIP without seeing log bytes?"
+    )
+    assert any(
+        "diagnostics" in str(item["text"]).lower()
+        and "ZIP" in str(item["text"])
+        and "browser" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

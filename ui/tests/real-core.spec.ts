@@ -1048,6 +1048,85 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
   ]);
 });
 
+test("assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser", async ({page}, testInfo) => {
+  test.setTimeout(240_000);
+  const prompt = "Prepare diagnostics support ZIP";
+  let exportPosts = 0;
+  page.on("request", request => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/diagnostics/export") exportPosts++;
+  });
+  const stub = await startLocalModelStub({responseContent: "The requesting browser controls the sensitive export.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const content = String(messages[lastUser]?.content ?? "");
+    if (content !== prompt && !content.startsWith(`${prompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`)) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const operation = "nebula.diagnostics.export";
+    return [
+      {name: "nebula_capabilities_search", arguments: {query: "export diagnostics support zip"}},
+      {name: "nebula_capabilities_describe", arguments: {operation}},
+      {name: "nebula_capabilities_change", arguments: {operation, arguments: {}}},
+    ][replies];
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler diagnostics fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler diagnostics model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`,
+      {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async () => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send();
+    const confirmation = page.getByRole("dialog", {name: "Export local diagnostics?"});
+    await expect(confirmation).toBeVisible({timeout: 45_000});
+    await confirmation.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("No diagnostics ZIP was requested.")).toBeVisible();
+    expect(exportPosts).toBe(0);
+    await send();
+    await expect(confirmation).toBeVisible({timeout: 45_000});
+    const downloadPromise = page.waitForEvent("download");
+    await confirmation.getByRole("button", {name: "Export diagnostics"}).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("nebula-diagnostics.zip");
+    const downloaded = await readFile(await download.path());
+    expect(downloaded.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))).toBe(true);
+    await expect(assistant.getByText(/Started a verified diagnostics ZIP download/)).toBeVisible({timeout: 45_000});
+    expect(exportPosts).toBe(1);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-diagnostics-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      result: "Cancelled export sent no request; confirmed export produced a ZIP download on the requesting browser"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 interface BrowserPentestAuditFixture {
   core: RealCore;
   api: APIRequestContext;
