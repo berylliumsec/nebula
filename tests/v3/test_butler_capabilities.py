@@ -833,7 +833,24 @@ def test_interactive_butler_prepares_exact_harness_credential_attachment(tmp_pat
 
 
 def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
-    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    store, selected, other, _, capabilities = _capabilities(tmp_path)
+    foreign = store.create(
+        McpServerProfile(
+            name="foreign",
+            transport=McpTransport.STREAMABLE_HTTP,
+            url="https://example.test/other",
+            metadata={"engagement_id": other.id},
+        )
+    )
+    for number in range(49):
+        store.create(
+            McpServerProfile(
+                name=f"foreign-{number}",
+                transport=McpTransport.STREAMABLE_HTTP,
+                url="https://example.test/other",
+                metadata={"engagement_id": other.id},
+            )
+        )
     http = store.create(
         McpServerProfile(
             name="remote",
@@ -859,7 +876,16 @@ def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
             {"operation": "nebula.mcp.list", "arguments": {}}, change=False
         )
         assert any(row["server_id"] == http.id for row in listed["servers"])
+        assert not any(row["server_id"] == foreign.id for row in listed["servers"])
         assert "secret_ref" not in str(listed)
+        with pytest.raises(ValueError, match="selected project"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.mcp.server",
+                    "arguments": {"server_id": foreign.id},
+                },
+                change=False,
+            )
         prepared = await capabilities.invoke(
             {
                 "operation": "nebula.mcp.attach_credential",
@@ -889,18 +915,21 @@ def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
             (http, "environment", "TOKEN"),
             (stdio, "header", "X-API-Key"),
             (http, "header", "bad header"),
+            (foreign, "bearer", None),
         ):
             with pytest.raises(ValueError):
+                arguments = {
+                    "server_id": server.id,
+                    "expected_revision": server.revision,
+                    "credential_ref": reference,
+                    "slot": slot,
+                }
+                if key is not None:
+                    arguments["key"] = key
                 await capabilities.invoke(
                     {
                         "operation": "nebula.mcp.attach_credential",
-                        "arguments": {
-                            "server_id": server.id,
-                            "expected_revision": server.revision,
-                            "credential_ref": reference,
-                            "slot": slot,
-                            "key": key,
-                        },
+                        "arguments": arguments,
                     },
                     change=True,
                 )
