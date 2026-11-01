@@ -2615,6 +2615,10 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
             await work.start_mission(
                 selected.id, {**request, "name": "Mismatched lease"}
             )
+        store.delete(BrowserIdentity, identity.id)
+        stale = work.browser_sessions(selected.id)["sessions"][0]
+        assert stale["id"] == session.id
+        assert stale["eligible_for_autonomy"] is False
 
     asyncio.run(scenario())
 

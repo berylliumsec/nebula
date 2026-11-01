@@ -2350,6 +2350,7 @@ class ControlAssistantWork:
                 identity = self.store.get(BrowserIdentity, session.identity_id)
                 available = identity.engagement_id == project_id
             except NotFoundError:
+                # diagnostic-expected: a deleted identity leaves the session ineligible.
                 available = False
             sessions.append(
                 {
