@@ -8480,6 +8480,128 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
 
 const reliabilityTest = test.extend({serviceWorkers: "block"});
 
+reliabilityTest("assistant upgrade harness catalog refresh preserves mounted Workbench drafts and retries on LAN", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(process.env.NEBULA_CATALOG_TEST_HOST ?? localNetworkIpv4(), "settings");
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"))!;
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry]);
+    const projects = await (await core.api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0]!.id;
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(repository, ".venv/bin/python");
+    const seed = spawnSync(python, ["-c", [
+      "import sys",
+      "from nebula.v3.storage import NebulaStore",
+      "from nebula.v3.domain import ChatSession, ChatMessage, HarnessSession",
+      "store = NebulaStore(sys.argv[1])",
+      "project = sys.argv[2]",
+      "store.create(HarnessSession(id='catalog-vendor', engagement_id=project, harness_profile_id='inert-fixture', model='fixture'))",
+      "store.create(ChatSession(id='catalog-chat', engagement_id=project, title='Catalog saved conversation', backend='harness', harness_profile_id='inert-fixture', harness_session_id='catalog-vendor', model='fixture'))",
+      "store.create(ChatMessage(engagement_id=project, session_id='catalog-chat', sequence=1, role='assistant', content='Saved catalog regression context.'))",
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId], {cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8"});
+    expect(seed.status, seed.stderr || seed.stdout).toBe(0);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Catalog regression"}})).json();
+    const pairingPage = await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    expect(pairingPage?.ok(), await pairingPage?.text()).toBe(true);
+    await page.getByLabel("Device name").fill("Catalog regression");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page).toHaveURL(`${core.origin}/`, {timeout: 20_000});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=catalog-chat`);
+    await expect(page.getByText("Saved catalog regression context.")).toBeVisible();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    await composer.fill("Unsent saved conversation draft");
+    const mountedComposer = await composer.elementHandle();
+    const navigationStart = await page.evaluate(() => performance.timeOrigin);
+    const assistant = page.getByRole("dialog", {name: "Assistant settings", exact: true});
+    const lens = page.getByRole("dialog", {name: "Assistant harnesses", exact: true});
+    const openCatalog = async () => {
+      await clickAssistantSettings(page);
+      await assistant.getByRole("region", {name: "Assistant setup"}).getByRole("button", {name: /Assistant harnesses/}).click();
+      await expect(lens).toBeVisible();
+    };
+    const closeCatalog = async () => { await lens.getByRole("button", {name: "Done", exact: true}).click(); };
+    await openCatalog();
+    await lens.getByRole("button", {name: "Add Codex", exact: true}).click();
+    const create = page.getByRole("dialog", {name: /Codex/}).filter({has: page.getByRole("button", {name: "Save harness"})});
+    await create.getByRole("textbox", {name: "Name", exact: true}).fill("Codex catalog fixture");
+    await create.getByRole("textbox", {name: "Absolute executable path"}).fill("/bin/true");
+    await create.getByRole("button", {name: "Save harness", exact: true}).click();
+    const card = lens.locator(".integration-card").filter({has: page.getByRole("heading", {name: "Codex catalog fixture", exact: true})});
+    await expect(card.getByRole("button", {name: "Disable", exact: true})).toBeEnabled();
+    const catalog = await (await core.api.get("harnesses")).json() as Array<{id: string; name: string; enabled: boolean}>;
+    const codexId = catalog.find(profile => profile.name === "Codex catalog fixture")!.id;
+    await closeCatalog();
+    await expect(page).toHaveURL(/session=catalog-chat/);
+    await expect(composer).toHaveValue("Unsent saved conversation draft");
+    expect(await mountedComposer!.evaluate(element => element.isConnected)).toBe(true);
+
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await clickAssistantSettings(page);
+    await expect(assistant.getByRole("combobox", {name: "Chat harness", exact: true}).locator(`option[value="${codexId}"]`)).toHaveText("Codex catalog fixture");
+    await assistant.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption(codexId);
+    await expect(assistant.getByRole("combobox", {name: "Chat harness model"})).toHaveValue("fixture");
+    await assistant.getByRole("button", {name: "Close assistant settings"}).click();
+    await composer.fill("Unsent new conversation draft");
+    await openCatalog();
+    await card.getByRole("button", {name: "Disable", exact: true}).click();
+    await expect(card.getByRole("button", {name: "Enable", exact: true})).toBeEnabled();
+    expect((await (await core.api.get(`harnesses/${codexId}`)).json()).enabled).toBe(false);
+    await closeCatalog();
+    await expect(composer).toHaveValue("Unsent new conversation draft");
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await clickAssistantSettings(page);
+    await expect(assistant.getByRole("combobox", {name: "Chat harness", exact: true}).locator(`option[value="${codexId}"]`)).toHaveCount(0);
+    await assistant.getByRole("button", {name: "Close assistant settings"}).click();
+
+    await composer.fill("Draft while enabling Codex");
+    await openCatalog();
+    await card.getByRole("button", {name: "Enable", exact: true}).click();
+    await expect(card.getByRole("button", {name: "Disable", exact: true})).toBeEnabled();
+    expect((await (await core.api.get(`harnesses/${codexId}`)).json()).enabled).toBe(true);
+    await closeCatalog();
+    await expect(composer).toHaveValue("Draft while enabling Codex");
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await clickAssistantSettings(page);
+    await assistant.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption(codexId);
+    await expect(assistant.getByRole("combobox", {name: "Chat harness model"})).toHaveValue("fixture");
+    await assistant.getByRole("button", {name: "Close assistant settings"}).click();
+
+    // Fail only the read after a successful check; Core still owns the profile.
+    await composer.fill("Draft during catalog outage");
+    await openCatalog();
+    const route = "**/api/v1/harnesses?*";
+    await page.route(route, request => request.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic catalog outage"})}));
+    await card.getByRole("button", {name: "Check", exact: true}).click();
+    await expect(lens.getByRole("alert").filter({hasText: "Catalog refresh failed"})).toBeVisible();
+    expect((await (await core.api.get(`harnesses/${codexId}`)).json()).enabled).toBe(true);
+    await closeCatalog();
+    const retry = page.getByRole("button", {name: "Retry agent harnesses", exact: true});
+    await expect(retry).toBeVisible();
+    await expect(composer).toHaveValue("Draft during catalog outage");
+    await clickAssistantSettings(page);
+    await expect(assistant.getByRole("combobox", {name: "Chat harness", exact: true}).locator('option[value="inert-fixture"]')).toHaveCount(1);
+    await assistant.getByRole("button", {name: "Close assistant settings"}).click();
+    const bounds = await retry.boundingBox();
+    expect(bounds!.width).toBeGreaterThanOrEqual(44);
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({page}).include(".chat-recovery-notice").analyze()).violations).toEqual([]);
+    await page.unroute(route);
+    await retry.focus();
+    await retry.press("Enter");
+    await expect(retry).toHaveCount(0);
+    await expect(composer).toHaveValue("Draft during catalog outage");
+    await clickAssistantSettings(page);
+    await expect(assistant.getByRole("combobox", {name: "Chat harness", exact: true}).locator(`option[value="${codexId}"]`)).toHaveCount(1);
+    await assistant.getByRole("button", {name: "Close assistant settings"}).click();
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(navigationStart);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await testInfo.attach("harness-catalog-lan", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, assetSha256: build.assets[entry], profile: testInfo.project.name, viewport: page.viewportSize(), mutations: "create, check, disable, enable", recovery: "failed list retains catalog; keyboard retry", draft: "preserved", selectedChat: "preserved", reload: false}), contentType: "application/json"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
 reliabilityTest("assistant planning advisory lets a harness work without submitting a plan and survives refresh on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "planning");

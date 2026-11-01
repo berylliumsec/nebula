@@ -232,6 +232,38 @@ describe("workspace resource recovery", () => {
     expect(state().workspace).toBe("ready");
   });
 
+  it("retains the last harness catalog after a refresh fails and replaces it on retry", async () => {
+    const enabled = { id: "codex", enabled: true };
+    fixture.methods.listHarnesses.mockResolvedValue([enabled]);
+    await mount();
+    fixture.methods.listHarnesses.mockRejectedValueOnce(new Error("Catalog temporarily unavailable"));
+
+    fireEvent.click(screen.getByText("Retry harnesses"));
+    await waitFor(() => expect(state().status.harnesses.state).toBe("failed"));
+    expect(state().harnesses).toEqual([enabled]);
+    expect(state().engagement).toBe("project");
+
+    fixture.methods.listHarnesses.mockResolvedValueOnce([{ ...enabled, enabled: false }]);
+    fireEvent.click(screen.getByText("Retry harnesses"));
+    await waitFor(() => expect(state().status.harnesses.state).toBe("ready"));
+    expect(state().harnesses).toEqual([{ ...enabled, enabled: false }]);
+    expect(fixture.methods.listEngagements).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the newest harness catalog when overlapping refreshes finish out of order", async () => {
+    await mount();
+    let finishOlder!: (value: unknown) => void;
+    fixture.methods.listHarnesses.mockImplementationOnce(() => new Promise(resolve => { finishOlder = resolve; }));
+    fireEvent.click(screen.getByText("Retry harnesses"));
+    fixture.methods.listHarnesses.mockResolvedValueOnce([{ id: "codex", enabled: false }]);
+    fireEvent.click(screen.getByText("Retry harnesses"));
+    await waitFor(() => expect(state().harnesses).toEqual([{ id: "codex", enabled: false }]));
+
+    await act(async () => finishOlder([{ id: "codex", enabled: true }]));
+    expect(state().harnesses).toEqual([{ id: "codex", enabled: false }]);
+    expect(state().status.harnesses.state).toBe("ready");
+  });
+
   it("restores mission history, URL selection, and the stream after activity fails", async () => {
     window.history.replaceState({}, "", "/?mission=run-1");
     fixture.methods.listRuns.mockRejectedValueOnce(new Error("unavailable"));

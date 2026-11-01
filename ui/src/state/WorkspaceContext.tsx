@@ -107,6 +107,8 @@ interface WorkspaceContextValue {
   reports: ReportSummary[];
   providers: ProviderHealth[];
   harnesses: HarnessProfile[];
+  refreshHarnesses: () => Promise<HarnessProfile[]>;
+  applyHarnessToolSharing: (updated: HarnessProfile) => void;
   providerCatalog: ProviderCatalogEntry[];
   knowledgeSources: KnowledgeSource[];
   libraryItems: LibraryItem[];
@@ -193,6 +195,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [providers, setProviders] = useState<ProviderHealth[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
+  const harnessRefreshGeneration = useRef(0);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
@@ -583,14 +586,41 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setSetupStatus(next);
   }, [api, workspaceState]);
 
+  const refreshHarnesses = useCallback(async () => {
+    if (!api || coreState !== "online") throw new Error("Core must be available to refresh agent harnesses.");
+    const generation = ++harnessRefreshGeneration.current;
+    setResourceStatus(current => ({ ...current, harnesses: { state: "loading" } }));
+    try {
+      const next = await api.listHarnesses();
+      if (generation === harnessRefreshGeneration.current) {
+        setHarnesses(next);
+        setResourceStatus(current => ({ ...current, harnesses: { state: next.length ? "ready" : "empty" } }));
+      }
+      return next;
+    } catch (error) {
+      if (generation === harnessRefreshGeneration.current) {
+        // Keep the last successful catalog while exposing a retryable failure.
+        setResourceStatus(current => ({ ...current, harnesses: { state: "failed", error } }));
+        void logCaughtDiagnostic("interface.workspace.harness_catalog_failed", "Agent harnesses could not be refreshed.", error, "workspace_context");
+      }
+      throw error;
+    }
+  }, [api, coreState]);
+
+  useEffect(() => () => { harnessRefreshGeneration.current += 1; }, [api, coreState]);
+
+  const applyHarnessToolSharing = useCallback((updated: HarnessProfile) => {
+    setHarnesses(current => current.map(profile => profile.id === updated.id && profile.revision <= updated.revision ? updated : profile));
+  }, []);
+
   const retryResource = useCallback(async (resource: WorkspaceResource) => {
+    if (resource === "harnesses") { await refreshHarnesses(); return; }
     if (!api) throw new Error("Nebula Core must be available to retry this resource.");
     setResourceStatus((current) => ({ ...current, [resource]: { state: "loading" } }));
     try {
       let count = 1;
       if (resource === "projects") { const value = await api.listEngagements(); setEngagements(value.items); count = value.items.length; }
       else if (resource === "providers") { const value = await api.listProviders(); setProviders((current) => providersWithDiscoveredModels(current, value.items)); count = value.items.length; }
-      else if (resource === "harnesses") { const value = await api.listHarnesses(); setHarnesses(value); count = value.length; }
       else if (resource === "library") { const value = await api.listLibraryItems(); setLibraryItems(value.items); count = value.items.length; }
       else if (resource === "providerCatalog") { const value = await api.listProviderCatalog(); setProviderCatalog(value); count = value.length; }
       else if (resource === "operators") { const value = await api.listOperatorProfiles(); setOperatorProfiles(value); count = value.length; }
@@ -619,7 +649,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       setResourceStatus((current) => ({ ...current, [resource]: { state: "failed", error } }));
       throw error;
     }
-  }, [api, engagement]);
+  }, [api, engagement, refreshHarnesses]);
 
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;
@@ -1104,6 +1134,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       reports,
       providers,
       harnesses,
+      refreshHarnesses,
+      applyHarnessToolSharing,
       providerCatalog,
       knowledgeSources,
       libraryItems,
@@ -1168,6 +1200,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       resourceStatus,
       providers,
       harnesses,
+      refreshHarnesses,
+      applyHarnessToolSharing,
       providerCatalog,
       knowledgeSources,
       libraryItems,

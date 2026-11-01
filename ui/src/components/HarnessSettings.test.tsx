@@ -13,9 +13,10 @@ const profile: HarnessProfile = {
   enabled: true, localOnly: true, permitsSensitiveData: false, autoShareToolResults: false, revision: 1,
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
-const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn(), probeMcpServer: vi.fn(), deleteHarness: vi.fn(), deleteMcpServer: vi.fn()};
+const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), updateHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn(), probeMcpServer: vi.fn(), deleteHarness: vi.fn(), deleteMcpServer: vi.fn()};
+const refreshHarnesses = vi.fn(() => api.listHarnesses());
 let selectedProjectId: string | undefined;
-vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", engagement: selectedProjectId ? {id: selectedProjectId} : undefined, previewMode: false})}));
+vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", engagement: selectedProjectId ? {id: selectedProjectId} : undefined, previewMode: false, refreshHarnesses})}));
 vi.mock("../diagnostics", () => ({logCaughtDiagnostic: vi.fn(), DiagnosticErrorNotice: ({error}: {error: string}) => <div role="alert">{error}</div>}));
 afterEach(() => { selectedProjectId = undefined; });
 
@@ -51,6 +52,47 @@ describe("harness settings persistence boundaries", () => {
       expect(api.checkHarness).toHaveBeenCalledTimes(2);
     });
   }
+});
+
+describe("shared harness catalog updates", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    refreshHarnesses.mockImplementation(() => api.listHarnesses());
+    api.listMcpServers.mockResolvedValue([]);
+  });
+
+  for (const enabled of [false, true]) {
+    it(`refreshes downstream choices after ${enabled ? "disabling" : "enabling"} a harness`, async () => {
+      let saved = {...profile, enabled};
+      api.listHarnesses.mockImplementation(async () => [saved]);
+      api.updateHarness.mockImplementation(async (_id, changes) => (saved = {...saved, ...changes, revision: saved.revision + 1}));
+      render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+      await userEvent.click(await screen.findByRole("button", {name: enabled ? "Disable" : "Enable"}));
+      await screen.findByRole("button", {name: enabled ? "Enable" : "Disable"});
+      expect(api.updateHarness).toHaveBeenCalledWith(profile.id, {enabled: !enabled}, profile.revision);
+      expect(refreshHarnesses).toHaveBeenCalledTimes(2);
+    });
+  }
+
+  it("refreshes downstream choices after editing and checking a saved harness", async () => {
+    let saved = profile;
+    api.listHarnesses.mockImplementation(async () => [saved]);
+    api.updateHarness.mockImplementation(async (_id, changes) => (saved = {...saved, ...changes, revision: saved.revision + 1}));
+    api.checkHarness.mockImplementation(async () => saved);
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", {name: `Edit ${profile.name}`}));
+    const dialog = screen.getByRole("dialog");
+    await user.clear(within(dialog).getByRole("textbox", {name: "Name"}));
+    await user.type(within(dialog).getByRole("textbox", {name: "Name"}), "Renamed fixture");
+    await user.click(within(dialog).getByRole("button", {name: "Save harness"}));
+    await screen.findByRole("heading", {name: "Renamed fixture"});
+    await waitFor(() => expect(refreshHarnesses).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", {name: "Check"}));
+    await waitFor(() => expect(refreshHarnesses).toHaveBeenCalledTimes(3));
+    expect(api.updateHarness).toHaveBeenCalledTimes(1);
+    expect(api.checkHarness).toHaveBeenCalledTimes(2);
+  });
 });
 
 it("keeps Check free and makes provider usage explicit for Test turn", async () => {
