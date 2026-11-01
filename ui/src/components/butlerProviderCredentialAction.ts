@@ -22,7 +22,7 @@ export async function attachButlerProviderCredential(
   const readProvider = async (): Promise<ProviderHealth> => {
     const provider = await api.getProvider(action.providerId);
     if (!selected()) throw new Error("The selected project changed. Read the provider again.");
-    if (provider.name !== action.name || provider.revision !== action.expectedRevision) {
+    if (provider.id !== action.providerId || provider.name !== action.name || provider.revision !== action.expectedRevision) {
       throw new Error("The provider changed. Ask Butler to read its current name and revision.");
     }
     if (action.slot === "management" && provider.providerType !== "openrouter") {
@@ -70,7 +70,8 @@ export async function attachButlerProviderCredential(
     return `Core did not confirm ${provider.name}'s ${slotLabel} credential. Inspect the provider before asking Butler to retry; the write may have succeeded.`;
   }
   if (!selected()) return `The selected project changed during ${provider.name}'s credential update. Inspect that provider before retrying.`;
-  if (observed.revision <= action.expectedRevision || slotReference(observed, action.slot) !== action.reference) {
+  if (observed.id !== action.providerId || observed.name !== action.name
+      || observed.revision <= action.expectedRevision || slotReference(observed, action.slot) !== action.reference) {
     if (writeFailed && observed.revision !== action.expectedRevision) {
       throw new Error("The provider changed before the credential could be attached. Ask Butler to read its current state.");
     }

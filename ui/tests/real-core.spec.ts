@@ -948,12 +948,15 @@ test("assistant upgrade Butler opens pairing and revokes a paired device through
 
 test("assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser", async ({page}, testInfo) => {
   test.setTimeout(300_000);
-  const prompts = ["Prepare write-only credential entry", "Attach credential to Credential target model", ""];
+  const prompts = ["Prepare write-only credential entry", "Attach credential to Credential target model",
+    "Attach credential to Credential target harness", ""];
   const secret = "fixture-credential-never-send-to-model";
   let modelSawSecret = false;
   let credentialPosts = 0;
   let targetProviderId = "";
   let targetProviderRevision = 0;
+  let targetHarnessId = "";
+  let targetHarnessRevision = 0;
   let targetReference = "";
   page.on("request", request => {
     if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/credentials") credentialPosts++;
@@ -967,14 +970,18 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     if (!prompt) return undefined;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
     const operation = prompt === prompts[0] ? "nebula.credentials.create"
-      : prompt === prompts[1] ? "nebula.providers.attach_credential" : "nebula.credentials.delete";
+      : prompt === prompts[1] ? "nebula.providers.attach_credential"
+      : prompt === prompts[2] ? "nebula.harnesses.attach_credential" : "nebula.credentials.delete";
     const calls = [
-      {name: "nebula_capabilities_search", arguments: {query: "create attach or delete provider credential"}},
+      {name: "nebula_capabilities_search", arguments: {query: "create attach or delete provider and harness credential"}},
       {name: "nebula_capabilities_describe", arguments: {operation}},
       {name: "nebula_capabilities_change", arguments: {operation, arguments: operation === "nebula.credentials.create"
         ? {} : operation === "nebula.providers.attach_credential"
           ? {provider_id: targetProviderId, expected_revision: targetProviderRevision,
             credential_ref: targetReference, slot: "inference"}
+          : operation === "nebula.harnesses.attach_credential"
+            ? {harness_id: targetHarnessId, expected_revision: targetHarnessRevision,
+              credential_ref: targetReference}
           : {reference: prompt.slice("Delete credential ".length)}}},
     ];
     return calls[replies];
@@ -1008,6 +1015,14 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     const currentProvider = await (await api.get(`providers/${target.id}`)).json() as {revision: number};
     targetProviderId = target.id;
     targetProviderRevision = currentProvider.revision;
+    const targetHarnessResponse = await api.post("harnesses", {data: {
+      name: "Credential target harness", kind: "codex_app_server", executable: "/bin/true",
+      connection_mode: "spawn", transport: "stdio", auth_mode: "existing_session", enabled: false,
+    }});
+    expect(targetHarnessResponse.ok(), await targetHarnessResponse.text()).toBe(true);
+    const targetHarness = await targetHarnessResponse.json() as {id: string; revision: number};
+    targetHarnessId = targetHarness.id;
+    targetHarnessRevision = targetHarness.revision;
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -1058,14 +1073,33 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
     await expect(assistant.getByText(/Core confirmed the reference and credential availability/)).toBeVisible({timeout: 20_000});
     expect((await (await api.get(`providers/${target.id}`)).json() as {secret_ref: string}).secret_ref).toBe(reference);
-    prompts[2] = `Delete credential ${reference}`;
     await send(prompts[2]);
+    const harnessAttachment = page.getByRole("dialog", {name: "Attach credential to Credential target harness?"});
+    await expect(harnessAttachment).toBeVisible({timeout: 45_000});
+    await harnessAttachment.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("No credential was attached to Credential target harness.")).toBeVisible();
+    expect((await (await api.get(`harnesses/${targetHarness.id}`)).json() as {secret_ref: string | null}).secret_ref).toBeNull();
+    await send(prompts[2]);
+    await expect(harnessAttachment).toBeVisible({timeout: 45_000});
+    await harnessAttachment.getByRole("button", {name: "Attach credential"}).click();
+    await expect(assistant.getByText(/Core confirmed the harness authentication mode and credential availability/)).toBeVisible();
+    const attachedHarness = await (await api.get(`harnesses/${targetHarness.id}`)).json() as {
+      secret_ref: string; auth_mode: string; revision: number};
+    expect(attachedHarness.secret_ref).toBe(reference);
+    expect(attachedHarness.auth_mode).toBe("secret_ref");
+    expect(attachedHarness.revision).toBeGreaterThan(targetHarnessRevision);
+    await page.reload();
+    if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
+    await expect(assistant.getByText(/Core confirmed the harness authentication mode and credential availability/)).toBeVisible({timeout: 20_000});
+    expect((await (await api.get(`harnesses/${targetHarness.id}`)).json() as {secret_ref: string}).secret_ref).toBe(reference);
+    prompts[3] = `Delete credential ${reference}`;
+    await send(prompts[3]);
     const confirmation = page.getByRole("dialog", {name: "Delete credential?"});
     await expect(confirmation).toBeVisible({timeout: 45_000});
     await confirmation.getByRole("button", {name: "Cancel"}).click();
     await expect(assistant.getByText(new RegExp(`${reference} was not deleted`))).toBeVisible();
     expect((await (await api.get(`credentials/${encodeURIComponent(reference!)}/status`)).json() as {available: boolean}).available).toBe(true);
-    await send(prompts[2]);
+    await send(prompts[3]);
     await expect(confirmation).toBeVisible({timeout: 45_000});
     await confirmation.getByRole("button", {name: "Delete credential"}).click();
     await expect(assistant.getByText(/Core confirms it is unavailable/)).toBeVisible();
@@ -1076,7 +1110,7 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-credentials-lan", {body: JSON.stringify({origin: core.origin, build: "production",
       project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-      result: "Cancelled creation sent no secret; saved credential returned a Core-verified reference; cancelled provider attachment kept the profile unchanged; confirmed attachment survived refresh; cancelled deletion retained the credential; confirmed deletion invalidated it; model saw no secret"}), contentType: "application/json"});
+      result: "Cancelled creation sent no secret; saved credential returned a Core-verified reference; cancelled provider and harness attachments kept profiles unchanged; confirmed attachments survived refresh; cancelled deletion retained the credential; confirmed deletion invalidated it; model saw no secret"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},

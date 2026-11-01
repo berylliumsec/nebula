@@ -879,6 +879,25 @@
       "status": "supported"
     },
     {
+      "id": "harnesses.attach_credential",
+      "entry_point": "Butler: attach an available managed credential to an exact Assistant harness",
+      "ui_calls": [
+        "ui/src/components/butlerHarnessCredentialAction.ts::getHarness",
+        "ui/src/components/butlerHarnessCredentialAction.ts::credentialStatus",
+        "ui/src/components/butlerHarnessCredentialAction.ts::updateHarness"
+      ],
+      "core_owner": "Core global harness profile revision and credential store",
+      "butler": {
+        "discover": "nebula.harnesses.list",
+        "read": "nebula.harnesses.harness and nebula.settings.api credentials/{reference}/status",
+        "change": "nebula.harnesses.attach_credential"
+      },
+      "authority": "Interactive selected-project receipt; exact harness ID, current revision, managed reference and coherent authentication mode; requesting-browser confirmation and Core readback",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser",
+      "result": "Cancellation leaves the harness untouched; confirmed reference and mode survive browser refresh",
+      "status": "supported"
+    },
+    {
       "id": "diagnostics.export",
       "entry_point": "Butler or Diagnostics: confirm and download a sensitive support ZIP",
       "ui_calls": [
@@ -2224,6 +2243,18 @@
     },
     {
       "key": "ui/src/components/butlerDiagnosticsAction.ts::exportDiagnostics",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerHarnessCredentialAction.ts::credentialStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerHarnessCredentialAction.ts::getHarness",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerHarnessCredentialAction.ts::updateHarness",
       "count": 1
     },
     {

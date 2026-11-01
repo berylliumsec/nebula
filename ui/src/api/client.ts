@@ -6416,6 +6416,10 @@ export class ApiClient {
     );
   }
 
+  getHarness(id: string, signal?: AbortSignal): Promise<HarnessProfile> {
+    return this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`, {signal}).then(mapHarnessProfile);
+  }
+
   createHarness(body: Record<string, unknown>): Promise<HarnessProfile> {
     return this.request<WireHarnessProfile>("harnesses", {
       method: "POST",

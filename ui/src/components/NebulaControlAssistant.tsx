@@ -36,6 +36,7 @@ import { applyButlerDeviceAction } from "./butlerDeviceAction";
 import { ButlerCredentialCreate } from "./ButlerCredentialCreate";
 import { deleteButlerCredential } from "./butlerCredentialAction";
 import { attachButlerProviderCredential } from "./butlerProviderCredentialAction";
+import { attachButlerHarnessCredential } from "./butlerHarnessCredentialAction";
 import { applyButlerDiagnosticsExport } from "./butlerDiagnosticsAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
@@ -1716,6 +1717,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         } catch {
           // diagnostic-expected: WorkspaceContext logs the failed refresh and exposes Retry Model providers.
           return `${result} The Model providers list could not refresh; use Retry Model providers to update it.`;
+        }
+      }
+      return result;
+    }
+    if (action.kind === "harness_attach_credential") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before attaching a harness credential.");
+      }
+      const result = await attachButlerHarnessCredential(api, action, () => activeImageProject.current, (request) => confirm(request));
+      if (result.startsWith("Attached ")) {
+        try {
+          await retryResource("harnesses");
+        } catch {
+          // diagnostic-expected: WorkspaceContext logs the failed refresh and exposes Retry Harnesses.
+          return `${result} The Harnesses list could not refresh; use Retry Harnesses to update it.`;
         }
       }
       return result;

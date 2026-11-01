@@ -27,6 +27,9 @@ describe("Butler provider credential handoff", () => {
       .rejects.toThrow("provider changed");
     expect(api.credentialStatus).not.toHaveBeenCalled();
     expect(api.attachProviderCredential).not.toHaveBeenCalled();
+    vi.mocked(api.getProvider).mockResolvedValue({...provider, id: "other-provider"});
+    await expect(attachButlerProviderCredential(api, action, () => "project", async () => true))
+      .rejects.toThrow("provider changed");
     vi.mocked(api.getProvider).mockResolvedValue(provider);
     vi.mocked(api.credentialStatus).mockResolvedValue({...status, available: false, state: "missing"});
     await expect(attachButlerProviderCredential(api, action, () => "project", async () => true))

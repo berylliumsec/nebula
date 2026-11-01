@@ -77,7 +77,7 @@ function main() {
     throw new Error(`UI API calls changed; review operator workflows and refresh the inventory:\n${changed.slice(0, 30).map((key) => `${key}: ${before.get(key) ?? 0} -> ${after.get(key) ?? 0}`).join("\n")}${changed.length > 30 ? `\n... ${changed.length - 30} more` : ""}`);
   }
   const available = new Set(current.map(({ key }) => key));
-  const catalogs = ["control_assistant_work.py", "butler_projects.py", "butler_chat_export.py", "butler_workspace.py", "butler_library.py", "butler_reports.py", "butler_terminal.py", "butler_storage.py", "butler_devices.py", "butler_credentials.py", "butler_providers.py", "butler_diagnostics.py"]
+  const catalogs = ["control_assistant_work.py", "butler_projects.py", "butler_chat_export.py", "butler_workspace.py", "butler_library.py", "butler_reports.py", "butler_terminal.py", "butler_storage.py", "butler_devices.py", "butler_credentials.py", "butler_providers.py", "butler_harnesses.py", "butler_diagnostics.py"]
     .map((name) => readFileSync(resolve(repoRoot, "src/nebula/v3", name), "utf8"))
     .join("\n");
   const ids = new Set();

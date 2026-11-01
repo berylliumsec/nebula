@@ -674,7 +674,8 @@ def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
 def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_path):
     store, selected, _, _, capabilities = _capabilities(tmp_path)
     profile = next(
-        item for item in store.list_entities(ProviderProfile, limit=10)
+        item
+        for item in store.list_entities(ProviderProfile, limit=10)
         if item.name == "Local"
     )
     management = store.create(
@@ -730,7 +731,10 @@ def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_pa
             change=True,
         )
         assert management_action["client_action"]["slot"] == "management"
-        assert store.get(ProviderProfile, management.id).openrouter_management_secret_ref is None
+        assert (
+            store.get(ProviderProfile, management.id).openrouter_management_secret_ref
+            is None
+        )
         for changes in (
             {"expected_revision": profile.revision + 1},
             {"slot": "management"},
@@ -747,6 +751,78 @@ def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_pa
                             "slot": "inference",
                             **changes,
                         },
+                    },
+                    change=True,
+                )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_exact_harness_credential_attachment(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    harness = store.create(
+        HarnessProfile(name="SDK", kind=HarnessKind.CLAUDE_AGENT_SDK)
+    )
+    grok = store.create(
+        HarnessProfile(name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true")
+    )
+    reference = "session:" + "b" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "attach credential to harness"})
+        assert {
+            "nebula.harnesses.list",
+            "nebula.harnesses.harness",
+            "nebula.harnesses.attach_credential",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.harnesses.list", "arguments": {}}, change=False
+        )
+        assert any(item["harness_id"] == harness.id for item in listed["harnesses"])
+        assert "secret_ref" not in str(listed)
+        attached = await capabilities.invoke(
+            {
+                "operation": "nebula.harnesses.attach_credential",
+                "arguments": {
+                    "harness_id": harness.id,
+                    "expected_revision": harness.revision,
+                    "credential_ref": reference,
+                },
+            },
+            change=True,
+        )
+        assert attached["client_action"] == {
+            "kind": "harness_attach_credential",
+            "project_id": selected.id,
+            "harness_id": harness.id,
+            "name": harness.name,
+            "expected_revision": harness.revision,
+            "credential_ref": reference,
+            "auth_mode": "secret_ref",
+        }
+        assert store.get(HarnessProfile, harness.id).secret_ref is None
+        for invalid in (
+            {
+                "harness_id": harness.id,
+                "expected_revision": harness.revision + 1,
+                "credential_ref": reference,
+            },
+            {
+                "harness_id": grok.id,
+                "expected_revision": grok.revision,
+                "credential_ref": reference,
+            },
+            {
+                "harness_id": harness.id,
+                "expected_revision": harness.revision,
+                "credential_ref": "env:KEY",
+            },
+        ):
+            with pytest.raises((ValueError, CapabilityInputError)):
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.harnesses.attach_credential",
+                        "arguments": invalid,
                     },
                     change=True,
                 )

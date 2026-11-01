@@ -1515,6 +1515,19 @@ describe("ApiClient", () => {
       changes: {openrouter_management_secret_ref: reference}});
   });
 
+  it("reads an exact harness profile with its authentication reference and revision", async () => {
+    const reference = `session:${"b".repeat(32)}`;
+    const harness = {id: "harness/one", revision: 6, name: "Codex endpoint", kind: "codex_app_server",
+      connection_mode: "endpoint", transport: "websocket", endpoint: "ws://127.0.0.1:1234",
+      auth_mode: "endpoint_bearer", secret_ref: reference, enabled: false,
+      created_at: "2026-07-12T11:00:00Z", updated_at: "2026-07-12T11:00:00Z"};
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(harness), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    expect(await client.getHarness("harness/one")).toMatchObject({id: "harness/one", revision: 6,
+      connectionMode: "endpoint", authMode: "endpoint_bearer", secretRef: reference});
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8765/api/v1/harnesses/harness%2Fone");
+  });
+
   it("serializes Vertex and Bedrock runtime options into provider metadata", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
       const body = JSON.parse(String(init?.body));

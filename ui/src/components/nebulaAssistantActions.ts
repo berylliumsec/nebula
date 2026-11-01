@@ -28,6 +28,7 @@ export type SettingClientAction =
   | { kind: "credential_create"; projectId: string }
   | { kind: "credential_delete"; projectId: string; reference: string }
   | { kind: "provider_attach_credential"; projectId: string; providerId: string; name: string; expectedRevision: number; reference: string; slot: "inference" | "management" }
+  | { kind: "harness_attach_credential"; projectId: string; harnessId: string; name: string; expectedRevision: number; reference: string; authMode: "secret_ref" | "endpoint_bearer" }
   | { kind: "diagnostics_export"; projectId: string }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
@@ -147,6 +148,17 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
       return {kind: "provider_attach_credential", projectId, providerId: value.provider_id,
         name: value.name, expectedRevision: Number(value.expected_revision),
         reference: value.credential_ref, slot: value.slot};
+    }
+    if (operation === "nebula.harnesses.attach_credential" && value.kind === "harness_attach_credential"
+        && typeof value.harness_id === "string" && uuidPattern.test(value.harness_id)
+        && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 200
+        && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+        && typeof value.credential_ref === "string"
+        && /^(?:vault|session):[0-9a-f]{32}$/.test(value.credential_ref)
+        && (value.auth_mode === "secret_ref" || value.auth_mode === "endpoint_bearer")) {
+      return {kind: "harness_attach_credential", projectId, harnessId: value.harness_id,
+        name: value.name, expectedRevision: Number(value.expected_revision),
+        reference: value.credential_ref, authMode: value.auth_mode};
     }
     if (operation === "nebula.devices.pair" && value.kind === "device_pair") {
       return {kind: "device_pair", projectId};
