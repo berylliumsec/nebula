@@ -9,6 +9,22 @@ vi.mock("../diagnostics", async (importOriginal) => ({
 }));
 
 describe("ApiClient", () => {
+  it("maps opaque MCP credential references on exact profile readback", async () => {
+    const reference = `session:${"a".repeat(32)}`;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "mcp-1", revision: 4, name: "remote", transport: "streamable_http",
+      url: "https://example.test/mcp", auth_mode: "headers", enabled: false,
+      required: false, trusted_stdio: false, default_approval: "risk_based",
+      bearer_secret_ref: null, header_secret_refs: {"X-API-Key": reference},
+      environment_secret_refs: {},
+    }), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    const server = await client.getMcpServer("mcp-1");
+    expect(server).toMatchObject({id: "mcp-1", revision: 4, authMode: "headers",
+      headerSecretRefs: {"X-API-Key": reference}, environmentSecretRefs: {}});
+    expect(server.bearerSecretRef).toBeUndefined();
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/mcp-servers/mcp-1");
+  });
   it("sends the current storage source revision when rotating and revoking a token", async () => {
     const source = {id: "source/one", revision: 7} as Parameters<ApiClient["rotateStorageSource"]>[0];
     const rotated = {...source, revision: 8};

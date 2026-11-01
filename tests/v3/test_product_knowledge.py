@@ -421,6 +421,19 @@ def test_product_search_finds_butler_harness_credential_attachment(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_mcp_credential_attachment(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler attach a saved credential to an MCP server HTTP header?"
+    )
+    assert any(
+        "mcp" in str(item["text"]).lower()
+        and "credential" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_diagnostics_export(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

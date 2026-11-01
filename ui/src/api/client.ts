@@ -1641,6 +1641,9 @@ interface WireMcpServerProfile extends WireEntity {
   arguments?: string[];
   url?: string | null;
   auth_mode: McpServerProfile["authMode"];
+  bearer_secret_ref?: string | null;
+  header_secret_refs?: Record<string, string>;
+  environment_secret_refs?: Record<string, string>;
   enabled: boolean;
   required: boolean;
   trusted_stdio: boolean;
@@ -4065,6 +4068,9 @@ function mapMcpServer(value: WireMcpServerProfile): McpServerProfile {
     arguments: value.arguments ?? [],
     url: value.url ?? undefined,
     authMode: value.auth_mode,
+    bearerSecretRef: value.bearer_secret_ref ?? undefined,
+    headerSecretRefs: value.header_secret_refs ?? {},
+    environmentSecretRefs: value.environment_secret_refs ?? {},
     enabled: value.enabled,
     required: value.required,
     trustedStdio: value.trusted_stdio,
@@ -7133,6 +7139,10 @@ export class ApiClient {
     return this.listAll<WireMcpServerProfile>("mcp-servers", signal).then(
       (items) => items.map(mapMcpServer),
     );
+  }
+
+  getMcpServer(id: string, signal?: AbortSignal): Promise<McpServerProfile> {
+    return this.request<WireMcpServerProfile>(`mcp-servers/${encodeURIComponent(id)}`, {signal}).then(mapMcpServer);
   }
 
   createMcpServer(body: Record<string, unknown>): Promise<McpServerProfile> {

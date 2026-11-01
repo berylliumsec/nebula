@@ -2740,6 +2740,9 @@ export interface McpServerProfile {
   arguments: string[];
   url?: string;
   authMode: "none" | "bearer" | "headers";
+  bearerSecretRef?: string;
+  headerSecretRefs?: Record<string, string>;
+  environmentSecretRefs?: Record<string, string>;
   enabled: boolean;
   required: boolean;
   trustedStdio: boolean;

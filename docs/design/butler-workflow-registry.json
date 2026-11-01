@@ -898,6 +898,25 @@
       "status": "supported"
     },
     {
+      "id": "mcp.attach_credential",
+      "entry_point": "Butler: attach an available managed credential to an exact MCP server bearer, header or environment slot",
+      "ui_calls": [
+        "ui/src/components/butlerMcpCredentialAction.ts::getMcpServer",
+        "ui/src/components/butlerMcpCredentialAction.ts::credentialStatus",
+        "ui/src/components/butlerMcpCredentialAction.ts::updateMcpServer"
+      ],
+      "core_owner": "Core MCP server profile revision and credential store",
+      "butler": {
+        "discover": "nebula.mcp.list",
+        "read": "nebula.mcp.server and nebula.settings.api credentials/{reference}/status",
+        "change": "nebula.mcp.attach_credential"
+      },
+      "authority": "Interactive selected-project receipt; exact MCP ID, transport, current revision, managed reference and slot; requesting-browser confirmation and Core readback",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser",
+      "result": "Cancellation leaves the server untouched; confirmed reference and mode survive browser refresh",
+      "status": "supported"
+    },
+    {
       "id": "diagnostics.export",
       "entry_point": "Butler or Diagnostics: confirm and download a sensitive support ZIP",
       "ui_calls": [
@@ -2255,6 +2274,18 @@
     },
     {
       "key": "ui/src/components/butlerHarnessCredentialAction.ts::updateHarness",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerMcpCredentialAction.ts::credentialStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerMcpCredentialAction.ts::getMcpServer",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerMcpCredentialAction.ts::updateMcpServer",
       "count": 1
     },
     {

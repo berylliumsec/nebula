@@ -82,6 +82,7 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.credentials.delete",
         "nebula.providers.attach_credential",
         "nebula.harnesses.attach_credential",
+        "nebula.mcp.attach_credential",
         "nebula.diagnostics.export",
         "nebula.workspace.download_file",
         "nebula.library.add",
@@ -283,6 +284,7 @@ class ButlerCapabilities:
             from .butler_projects import ButlerProjects
             from .butler_providers import ButlerProviders
             from .butler_harnesses import ButlerHarnesses
+            from .butler_mcp import ButlerMcp
             from .butler_reports import ButlerReports
             from .butler_storage import ButlerStorage
             from .butler_terminal import ButlerTerminal
@@ -350,6 +352,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerHarnesses(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerMcp(store, project_id).actions()
                 }
             )
             self._actions.update(

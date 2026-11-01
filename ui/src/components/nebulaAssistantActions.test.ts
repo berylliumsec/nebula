@@ -195,6 +195,26 @@ describe("settings assistant actions", () => {
       name: "Codex endpoint", expected_revision: 5, credential_ref: "env:KEY", auth_mode: "endpoint_bearer"}}}, "project")).toBeUndefined();
     expect(settingClientAction(event, "other")).toBeUndefined();
   });
+  it("accepts only an exact MCP credential slot for the selected browser project", () => {
+    const serverId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const reference = `session:${"b".repeat(32)}`;
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "mcp-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.mcp.attach_credential", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "mcp_attach_credential", project_id: "project",
+          server_id: serverId, name: "remote", transport: "streamable_http", expected_revision: 5,
+          credential_ref: reference, slot: "header", key: "X-API-Key"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "mcp_attach_credential", projectId: "project",
+      serverId, name: "remote", transport: "streamable_http", expectedRevision: 5,
+      reference, slot: "header", key: "X-API-Key"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "mcp_attach_credential", project_id: "project", server_id: serverId, name: "remote",
+      transport: "stdio", expected_revision: 5, credential_ref: reference, slot: "header", key: "X-API-Key"}}}, "project"))
+      .toBeUndefined();
+  });
   it("accepts only the scoped diagnostics export intent", () => {
     const event: ChatStreamEvent = {
       type: "tool_completed", turnId: "turn", toolCallId: "diagnostics-call", capability: "nebula.capabilities.change",

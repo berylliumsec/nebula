@@ -43,6 +43,8 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessRuntimeOption,
     HarnessSession,
+    McpServerProfile,
+    McpTransport,
     StorageSource,
     PairedDeviceSession,
     WorkItem,
@@ -823,6 +825,82 @@ def test_interactive_butler_prepares_exact_harness_credential_attachment(tmp_pat
                     {
                         "operation": "nebula.harnesses.attach_credential",
                         "arguments": invalid,
+                    },
+                    change=True,
+                )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    http = store.create(
+        McpServerProfile(
+            name="remote",
+            transport=McpTransport.STREAMABLE_HTTP,
+            url="https://example.test/mcp",
+        )
+    )
+    stdio = store.create(
+        McpServerProfile(
+            name="local", transport=McpTransport.STDIO, command="/bin/true"
+        )
+    )
+    reference = "session:" + "b" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "attach credential to MCP server"})
+        assert {
+            "nebula.mcp.list",
+            "nebula.mcp.server",
+            "nebula.mcp.attach_credential",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.mcp.list", "arguments": {}}, change=False
+        )
+        assert any(row["server_id"] == http.id for row in listed["servers"])
+        assert "secret_ref" not in str(listed)
+        prepared = await capabilities.invoke(
+            {
+                "operation": "nebula.mcp.attach_credential",
+                "arguments": {
+                    "server_id": http.id,
+                    "expected_revision": http.revision,
+                    "credential_ref": reference,
+                    "slot": "header",
+                    "key": "X-API-Key",
+                },
+            },
+            change=True,
+        )
+        assert prepared["client_action"] == {
+            "kind": "mcp_attach_credential",
+            "project_id": selected.id,
+            "server_id": http.id,
+            "name": "remote",
+            "transport": "streamable_http",
+            "expected_revision": http.revision,
+            "credential_ref": reference,
+            "slot": "header",
+            "key": "X-API-Key",
+        }
+        assert store.get(McpServerProfile, http.id).header_secret_refs == {}
+        for server, slot, key in (
+            (http, "environment", "TOKEN"),
+            (stdio, "header", "X-API-Key"),
+            (http, "header", "bad header"),
+        ):
+            with pytest.raises(ValueError):
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.mcp.attach_credential",
+                        "arguments": {
+                            "server_id": server.id,
+                            "expected_revision": server.revision,
+                            "credential_ref": reference,
+                            "slot": slot,
+                            "key": key,
+                        },
                     },
                     change=True,
                 )

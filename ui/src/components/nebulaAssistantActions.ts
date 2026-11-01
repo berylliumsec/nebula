@@ -29,6 +29,7 @@ export type SettingClientAction =
   | { kind: "credential_delete"; projectId: string; reference: string }
   | { kind: "provider_attach_credential"; projectId: string; providerId: string; name: string; expectedRevision: number; reference: string; slot: "inference" | "management" }
   | { kind: "harness_attach_credential"; projectId: string; harnessId: string; name: string; expectedRevision: number; reference: string; authMode: "secret_ref" | "endpoint_bearer" }
+  | { kind: "mcp_attach_credential"; projectId: string; serverId: string; name: string; transport: "stdio" | "streamable_http"; expectedRevision: number; reference: string; slot: "bearer" | "header" | "environment"; key?: string }
   | { kind: "diagnostics_export"; projectId: string }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
@@ -159,6 +160,23 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
       return {kind: "harness_attach_credential", projectId, harnessId: value.harness_id,
         name: value.name, expectedRevision: Number(value.expected_revision),
         reference: value.credential_ref, authMode: value.auth_mode};
+    }
+    if (operation === "nebula.mcp.attach_credential" && value.kind === "mcp_attach_credential"
+        && typeof value.server_id === "string" && uuidPattern.test(value.server_id)
+        && typeof value.name === "string" && /^[A-Za-z0-9._-]{1,200}$/.test(value.name)
+        && (value.transport === "stdio" || value.transport === "streamable_http")
+        && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+        && typeof value.credential_ref === "string"
+        && /^(?:vault|session):[0-9a-f]{32}$/.test(value.credential_ref)
+        && (value.slot === "bearer" || value.slot === "header" || value.slot === "environment")
+        && (value.slot === "environment") === (value.transport === "stdio")
+        && (value.slot === "bearer" ? value.key == null
+          : typeof value.key === "string" && value.key.length <= 200
+            && (value.slot === "header" ? /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(value.key)
+              : /^[A-Za-z_][A-Za-z0-9_]*$/.test(value.key)))) {
+      return {kind: "mcp_attach_credential", projectId, serverId: value.server_id,
+        name: value.name, transport: value.transport, expectedRevision: Number(value.expected_revision),
+        reference: value.credential_ref, slot: value.slot, key: value.key as string | undefined};
     }
     if (operation === "nebula.devices.pair" && value.kind === "device_pair") {
       return {kind: "device_pair", projectId};

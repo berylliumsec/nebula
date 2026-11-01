@@ -37,6 +37,7 @@ import { ButlerCredentialCreate } from "./ButlerCredentialCreate";
 import { deleteButlerCredential } from "./butlerCredentialAction";
 import { attachButlerProviderCredential } from "./butlerProviderCredentialAction";
 import { attachButlerHarnessCredential } from "./butlerHarnessCredentialAction";
+import { attachButlerMcpCredential } from "./butlerMcpCredentialAction";
 import { applyButlerDiagnosticsExport } from "./butlerDiagnosticsAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
@@ -1735,6 +1736,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         }
       }
       return result;
+    }
+    if (action.kind === "mcp_attach_credential") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before attaching an MCP credential.");
+      }
+      return attachButlerMcpCredential(api, action, () => activeImageProject.current, (request) => confirm(request));
     }
     if (action.kind === "diagnostics_export") {
       if (!api || coreState !== "online" || engagement?.id !== action.projectId) {

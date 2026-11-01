@@ -195,7 +195,9 @@ export function HarnessSettings() {
   useEffect(() => {
     let active = true;
     void reload(() => active);
-    return () => { active = false; };
+    const refreshed = () => { void reload(() => active); };
+    window.addEventListener("nebula:mcp-profiles-changed", refreshed);
+    return () => { active = false; window.removeEventListener("nebula:mcp-profiles-changed", refreshed); };
   }, [reload]);
 
   const openHarness = (profile?: HarnessProfile, requestedKind: HarnessProfile["kind"] = "codex_app_server") => {
