@@ -790,6 +790,60 @@ def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
     assert index.warmed.wait(5)
 
 
+@pytest.mark.parametrize(
+    "phase", ["resolve", "web_search", "catalog", "build", "reserve"]
+)
+def test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation(
+    tmp_path, monkeypatch, phase
+):
+    service, request = _mcp_service(tmp_path, monkeypatch, lambda: None)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def delayed(original):
+        def call(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError(f"{phase} was not released")
+            return original(*args, **kwargs)
+
+        return call
+
+    if phase == "resolve":
+        monkeypatch.setattr(
+            chat_module,
+            "resolve_mcp_profiles",
+            delayed(chat_module.resolve_mcp_profiles),
+        )
+    elif phase == "web_search":
+        service._web_search_selected = delayed(service._web_search_selected)
+    elif phase == "catalog":
+        service._mcp_catalog = delayed(service._mcp_catalog)
+    elif phase == "build":
+        service.tool_platform.chat_components = delayed(
+            service.tool_platform.chat_components
+        )
+    else:
+        service._tool_request_reserve = delayed(service._tool_request_reserve)
+
+    async def exercise():
+        task = asyncio.create_task(service.prepare_async(request))
+
+        async def wait_for_phase():
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+
+        try:
+            await asyncio.wait_for(wait_for_phase(), timeout=2)
+            assert not task.done()
+        finally:
+            release.set()
+        return await task
+
+    prepared = asyncio.run(exercise())
+    assert prepared.tool_components is not None
+
+
 def test_local_picks_tell_the_model_which_server_they_come_from(tmp_path, monkeypatch):
     def fail(_):
         raise AssertionError("Jev must not be called")

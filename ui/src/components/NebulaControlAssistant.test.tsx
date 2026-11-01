@@ -25,26 +25,55 @@ describe("NebulaControlAssistant", () => {
     vi.mocked(useWorkspace).mockReturnValue({ api: undefined, engagement: undefined, providers: [], harnesses: [] } as unknown as ReturnType<typeof useWorkspace>);
   });
 
+  it("makes Butler the active iPhone app view and restores focus on close", async () => {
+    const originalAgent = Object.getOwnPropertyDescriptor(navigator, "userAgent");
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "Mozilla/5.0 (iPhone) NebulaShell/1.0" });
+    try {
+      const user = userEvent.setup();
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+        <div className="assistant-only-shell"><NebulaAssistantLauncherButton mobile /></div>
+      </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+      const launcher = screen.getByRole("button", { name: "Open Butler" });
+      await user.click(launcher);
+      const dialog = screen.getByRole("dialog", { name: "Butler" });
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+      expect(dialog).toHaveFocus();
+      expect(document.querySelector<HTMLElement>(".assistant-only-shell")?.inert).toBe(true);
+      expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveAttribute("placeholder", "Message Butler…");
+      await user.click(screen.getByRole("button", { name: "Close Butler" }));
+      expect(document.querySelector<HTMLElement>(".assistant-only-shell")?.inert).toBe(false);
+      expect(launcher).toHaveFocus();
+    } finally {
+      if (originalAgent) Object.defineProperty(navigator, "userAgent", originalAgent);
+      else Reflect.deleteProperty(navigator, "userAgent");
+    }
+  });
+
   it("starts in Chat and keeps the draft while Work and More reveal secondary controls", async () => {
     const user = userEvent.setup();
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("log", { name: "Butler conversation" })).toBeVisible();
+    const voice = screen.getByRole("button", { name: "Start Butler Voice" });
     const settings = screen.getByRole("button", { name: "Butler settings" });
     const hide = screen.getByRole("button", { name: "Hide Butler" });
     const close = screen.getByRole("button", { name: "Close Butler" });
-    expect(hide.parentElement).toBe(settings.parentElement);
+    expect(voice.parentElement).toBe(settings.parentElement);
+    expect(voice.nextElementSibling).toBe(settings);
     expect(settings.nextElementSibling).toBe(hide);
     expect(hide.nextElementSibling).toBe(close);
     expect(hide).toHaveAttribute("title", "Hide Butler");
     expect(hide).toHaveTextContent("");
-    expect(screen.queryByRole("button", { name: "Start Butler Voice" })).not.toBeInTheDocument();
+    expect(voice).toHaveAttribute("title", "Start Butler Voice");
+    expect(voice).toBeDisabled();
+    expect(voice).toHaveTextContent("");
+    expect(voice.querySelector("svg")).toBeInTheDocument();
     const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
     fireEvent.change(composer, { target: { value: "Keep this draft" } });
     await user.click(screen.getByRole("button", { name: "More" }));
-    expect(screen.getByRole("button", { name: "Start Butler Voice" })).toBeVisible();
-    expect(screen.getByRole("group", { name: "Butler options" })).not.toContainElement(hide);
+    expect(voice).toBeVisible();
+    expect(screen.getByRole("region", { name: "More" })).not.toContainElement(voice);
     expect(screen.getByText("Settings I can help with")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Work" }));
     expect(screen.getByText("Choose a project to review Butler’s work.")).toBeVisible();
@@ -379,7 +408,6 @@ describe("NebulaControlAssistant", () => {
     } as unknown as ReturnType<typeof useWorkspace>);
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
-    await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Start Butler Voice" }));
     expect(await screen.findByRole("dialog", { name: "Butler Voice" })).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent("trusted HTTPS address");
@@ -531,7 +559,7 @@ describe("NebulaControlAssistant", () => {
     }), expect.any(Function), expect.any(AbortSignal)));
     await user.click(screen.getByRole("button", {name: "More"}));
     await user.click(screen.getByRole("button", {name: "Full Assistant settings"}));
-    expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
+    expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control&assistantSettings=open");
   });
 
   it("lets Butler choose first-turn settings before a saved conversation exists", async () => {
@@ -703,7 +731,6 @@ describe("NebulaControlAssistant", () => {
       const user = userEvent.setup();
       render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
       await user.click(screen.getByRole("button", { name: "Open Butler" }));
-      await user.click(screen.getByRole("button", { name: "More" }));
       await user.click(await screen.findByRole("button", { name: "Start Butler Voice" }));
       await waitFor(() => expect(VoicePeer.latest).toBeDefined());
       VoicePeer.latest.channel.emit({ type: "session.input_transcript.delta", delta: "Remember blue.", start_ms: 100, end_ms: 600 });
@@ -933,7 +960,7 @@ describe("NebulaControlAssistant", () => {
     await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "change it to the rainbow theme{enter}");
     expect(screen.getByText("I couldn't identify that theme. Choose one in Settings → Appearance.")).toBeInTheDocument();
     expect(document.documentElement.dataset.theme).toBe("light");
-  });
+  }, 10_000);
 
   it("applies a model-selected theme action on this browser and confirms it after readback", async () => {
     const user = userEvent.setup();

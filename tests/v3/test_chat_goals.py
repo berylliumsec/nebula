@@ -23,6 +23,7 @@ from nebula.v3.chat_goals import (
     GoalWrite,
     goals_router,
 )
+from nebula.v3.chat_goal_tools import GOAL_COMPLETE_TOOL_NAME
 from nebula.v3.context import estimate_model_request
 from nebula.v3.domain import (
     CHAT_GOAL_CHILD_LIMIT,
@@ -39,8 +40,8 @@ from nebula.v3.domain import (
 )
 from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.skill_catalog import SkillSnapshot
-from nebula.v3.providers import ModelMessage, ModelRequest
-from tests.v3.test_chat import FakeProvider
+from nebula.v3.providers import ModelMessage, ModelRequest, ModelResponse, ToolChoice
+from tests.v3.test_chat import FakeProvider, _admitted_stream
 
 
 def setup_goal(tmp_path):
@@ -731,6 +732,136 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
             and "continue making concrete progress" in message.content
             for message in messages
         )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
+    tmp_path, monkeypatch
+):
+    class CompletingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation"):
+                return await super().complete(request)
+            self.requests.append(request)
+            if request.tool_choice != ToolChoice.NONE:
+                assert GOAL_COMPLETE_TOOL_NAME in {tool.name for tool in request.tools}
+                return ModelResponse(
+                    provider_id=self.config.id,
+                    model="model",
+                    tool_calls=[
+                        {
+                            "id": "complete-1",
+                            "name": GOAL_COMPLETE_TOOL_NAME,
+                            "arguments": {
+                                "completion_summary": "Recon handoff is complete.",
+                                "completion_evidence": [
+                                    "The requested artifact is saved."
+                                ],
+                            },
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model",
+                text="Recon handoff is complete; the artifact is saved.",
+                finish_reason="stop",
+            )
+
+    async def scenario() -> None:
+        store, goals = setup_goal(tmp_path)
+        draft = goals.create(
+            "session",
+            GoalCreate(
+                objective="Complete the recon handoff",
+                completion_criteria=["Save the requested artifact"],
+            ),
+        )
+        running = goals.write(
+            "session", GoalWrite(expected_revision=draft.revision, action="start")
+        )
+        profile = store.get(ProviderProfile, "provider")
+        capabilities = profile.capabilities.model_dump(mode="python")
+        capabilities["tool_calling"] = True
+        store.update(
+            ProviderProfile,
+            profile.id,
+            {
+                "capabilities": capabilities,
+                "capability_verifications": {
+                    "model": {"model": "model", "status": "verified"}
+                },
+            },
+        )
+        provider = CompletingProvider("provider", local=True)
+        provider.config.default_model = "model"
+        provider.config.model_allowlist = ["model"]
+        provider.config.capabilities.tools = True
+        provider.config.capabilities.strict_tools = True
+        monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+        workspace = tmp_path / "workspace"
+        skill_path = workspace / ".agents" / "skills" / "recon" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("Finish the synthetic recon handoff.", encoding="utf-8")
+        chat = ChatService(store, workspace_resolver=lambda _: workspace)
+        prepared = await chat.prepare_async(
+            ChatCompletionRequest(
+                provider_id="provider",
+                engagement_id="project",
+                session_id="session",
+                goal_id=running.id,
+                skill={"name": "recon", "path": str(skill_path.resolve())},
+                messages=[{"role": "user", "content": "Finish the recon handoff"}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        assert GOAL_COMPLETE_TOOL_NAME in prepared.tool_components.specs
+        # Completing the goal must remain possible after this turn has used
+        # its ordinary execution-tool budget.
+        store.update(
+            ChatTurn,
+            prepared.turn.id,
+            {"max_tool_calls": 1, "execution_tool_calls": 1},
+        )
+        events = []
+        async for event in _admitted_stream(chat, prepared):
+            if (
+                event[0] == "tool_completed"
+                and event[1]["capability"] == GOAL_COMPLETE_TOOL_NAME
+            ):
+                assert goals.get("session").status == ChatGoalStatus.RUNNING
+            events.append(event)
+        assert [name for name, _ in events].count("done") == 1
+        assert goals.get("session").status == ChatGoalStatus.COMPLETED
+        goal = goals.get("session")
+        assert goal.completion_summary == "Recon handoff is complete."
+        assert goal.completion_evidence == [
+            {
+                "kind": "agent_reported",
+                "detail": "The requested artifact is saved.",
+                "turn_id": prepared.turn.id,
+            }
+        ]
+        settled_turn = store.get(ChatTurn, prepared.turn.id)
+        assert settled_turn.status == ChatTurnStatus.COMPLETE
+        assert settled_turn.execution_tool_calls == 1
+        assert any(
+            message.content == "Recon handoff is complete; the artifact is saved."
+            for message in chat.session_messages("session")
+        )
+        assert len(store.list_entities(ChatTurn, engagement_id="project")) == 1
+        await asyncio.sleep(0.05)
+        assert len(store.list_entities(ChatTurn, engagement_id="project")) == 1
+        model_requests = [
+            request
+            for request in provider.requests
+            if not request.metadata.get("operation")
+        ]
+        assert model_requests[-1].tool_choice == ToolChoice.NONE
         await chat.shutdown()
 
     asyncio.run(scenario())

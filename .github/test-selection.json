@@ -1,11 +1,11 @@
 {
-  "change_digest": "5e212434b307cbbcd8b5fe58c3c5e41f7caaacab547b7ae4b00e9a11cc90034d",
-  "reviewed_by": "Codex agent, 2026-10-21",
+  "change_digest": "9f8638c928b2b5d2590d6a68bb2d509734975417a03a4733b314564e719d3bb4",
+  "reviewed_by": "Codex agent, 2026-11-01",
   "reason": "The goal edit control inserts its form inside the bounded composer context. Selected component cases cover edit focus and existing save/conflict behavior. The real-Core production browser journey checks that Objective is in view and focused immediately in draft and running states, that text selection does not put an action toolbar over Save, and that edits persist through refresh across desktop and emulated phone widths.",
   "exclusions": "No Python or native code changed. No backend mutation behavior changed. Other provider, harness, transcript, and Butler journeys are outside this presentation defect. The selected browser journey runs across desktop Chromium and emulated mobile Chromium and WebKit; physical devices are unavailable.",
   "expected_tests": {
     "python": 0,
-    "frontend": 23,
+    "frontend": 24,
     "native": 0,
     "playwright": 8
   },

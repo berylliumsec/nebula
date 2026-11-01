@@ -61,6 +61,21 @@ it("collapses goal controls while keeping the objective and progress visible", (
   expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
 });
 
+it("shows agent-reported completion evidence after Core closes the goal", () => {
+  const completed: ChatGoal = {
+    ...draft,
+    status: "completed",
+    completionSummary: "Synthetic recon handoff complete.",
+    completionEvidence: [{kind: "agent_reported", detail: "Synthetic artifact saved."}],
+  };
+  render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={completed} onChange={vi.fn()} /></DialogProvider>);
+  expect(screen.getByText("completed", {exact: true})).toBeVisible();
+  fireEvent.click(screen.getByText("Completion evidence"));
+  expect(screen.getByText("Synthetic recon handoff complete.")).toBeVisible();
+  expect(screen.getByText("Synthetic artifact saved.")).toBeVisible();
+  expect(screen.queryByRole("button", {name: "Pause"})).toBeNull();
+});
+
 it("reveals the full saved goal and evidence gates from the session rail", async () => {
   const goal = { ...draft, status: "running" as const, objective: "Investigate a long indexed-store memory-safety hypothesis", completionCriteria: ["Prove the writer reaches the store", "Verify the buffer capacity"], plan: ["Bind the writer", "Check the store"] };
   const view = render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={goal} onChange={vi.fn()} /></DialogProvider>);

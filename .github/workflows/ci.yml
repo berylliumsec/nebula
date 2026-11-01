@@ -102,6 +102,9 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/nebula-security-proxy"
           "$RUNNER_TEMP/nebula-security-proxy/bin/pip" install 'mitmproxy==12.2.3'
+      - name: Install UI dependencies for Playwright selection collection checks
+        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/test_playwright_impact.py')
+        run: npm --prefix ui ci
       - name: Test
         if: env.RUN_SELECTED == 'true'
         env:

@@ -873,7 +873,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       </SettingsGroup>
       <SettingsGroup id="automation-settings" title="Automation" summary="Harnesses, follow-up, and isolated runtimes" open={openAdvancedGroup === "automation-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "automation-settings"}>
       <ButlerCheckIntervalSettings api={api} previewMode={previewMode} />
-      <ButlerInstructionsSettings api={api} previewMode={previewMode} />
+      <ButlerInstructionsSettings api={api} previewMode={previewMode} openEditorOnLoad={embeddedTarget === "butler-instructions-settings"} />
       <PostToolAssistantSettings api={api} engagementId={engagement?.id} providers={providers} previewMode={previewMode} />
       <HarnessSettings />
       <AutomationRuntimeSettings />

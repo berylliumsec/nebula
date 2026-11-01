@@ -112,7 +112,7 @@ export function NewMissionButton({ className = "button primary", children, showS
         if (!active) return;
         const enabled = nextHarnesses.filter((item) => item.enabled);
         setHarnesses(enabled);
-        setMcpServers(nextServers.filter((item) => item.enabled));
+        setMcpServers(nextServers.filter((item) => item.enabled && (!item.projectId || item.projectId === engagement?.id)));
         setHarnessSessions(nextSessions.filter((item) => item.status !== "closed"));
         setHarnessId((current) => enabled.some((item) => item.id === current) ? current : enabled[0]?.id ?? "");
         setHarnessesLoaded(true);

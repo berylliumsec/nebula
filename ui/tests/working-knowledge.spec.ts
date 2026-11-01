@@ -35,13 +35,13 @@ test("working knowledge survives retired model links, reload and project navigat
     await expect(page.getByRole("button", {name: /Inspect recorded application states/})).toHaveCount(0);
     await more.click();
   }
-  const projectLink = page.getByRole("link", {name: "Project", exact: true});
+  const projectLink = page.getByRole("link", {name: "Projects", exact: true});
   if (await more.isVisible()) {
     // Phones reach project pages from the Workbench More tab.
     await more.click();
-    await page.getByRole("dialog", {name: "More"}).getByRole("button", {name: "Project overview"}).click();
+    await page.getByRole("dialog", {name: "More"}).getByRole("button", {name: "Projects", exact: true}).click();
   } else {
-    if (!await projectLink.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click();
+    if (!await projectLink.isVisible()) await page.getByRole("button", {name: "Open navigation", exact: true}).click();
     await projectLink.click();
   }
   await expect(page.getByRole("navigation", {name: "Project sections"})).toBeVisible();

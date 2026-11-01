@@ -47,6 +47,7 @@ import { appendSideToolTab, clearSideToolTabs, removeSideToolTab, sideToolLabel,
 import { SideToolSurface } from "./SideToolSurface";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
+import { applyChatBulkAction, conversationMatchesSearch, type ChatBulkAction } from "./chatBulkActions";
 import { subagentRequestFields } from "./chatSubagentChoice";
 import { groupSubagentTranscriptMessages } from "./subagentTranscriptGroups";
 import { declinedToolSharingMessage, notSentMessage, providerTurnToolFamilies, runWithToolResultConsent, textOnlyToolSharingMessage, ToolResultSharingDeclinedError, type ToolResultFamily } from "./chatToolResultConsent";
@@ -89,6 +90,7 @@ import {
   LayoutGrid,
   LayoutDashboard,
   ListTodo,
+  ListChecks,
   Maximize2,
   MessageSquare,
   MessageSquarePlus,
@@ -206,7 +208,7 @@ import {
   shouldShowActivityItem,
   type HarnessActivityItem,
 } from "./harnessActivity";
-import { beginGuardedStream, detachChatStream } from "./chatStreamLifecycle";
+import { beginGuardedStream, detachChatStream, harnessActivityOwnsStream } from "./chatStreamLifecycle";
 import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } from "./turnElapsed";
 import {
   cancelActiveAssistantMessage,
@@ -1208,6 +1210,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const compact = compactLayout || shellOnly;
   const navigate = useNavigate();
   const [studioGoalOpen, setStudioGoalOpen] = useState(false);
+  const [expandedButlerArchives, setExpandedButlerArchives] = useState<ReadonlySet<string>>(() => new Set());
+  const [prioritySessionId, setPrioritySessionId] = useState<string>();
   useGuideAction("open-goal-editor", () => setStudioGoalOpen(true));
   const {
     assistantDraftNotice,
@@ -1409,6 +1413,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [sessionNextOffset, setSessionNextOffset] = useState<number>();
   const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
   const [loadingAllSessions, setLoadingAllSessions] = useState(false);
+  const [bulkSelectionMode, setBulkSelectionMode] = useState(false);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkAction, setBulkAction] = useState<ChatBulkAction>("archive");
+  const [bulkActionBusy, setBulkActionBusy] = useState(false);
+  const [bulkActionNotice, setBulkActionNotice] = useState<{ kind: "success" | "error"; text: string; error?: unknown }>();
+  const [bulkLoadRetryKey, setBulkLoadRetryKey] = useState(0);
   const fullListProjectRef = useRef("");
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
@@ -1699,6 +1709,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [chatError, setChatError] = useState<unknown>();
   const [chatReconnecting, setChatReconnecting] = useState(false);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
+  const requestedAssistantSettings = searchParams.get("assistantSettings") === "open";
+  useEffect(() => {
+    if (!requestedAssistantSettings || embeddedSideChat || view !== "chat"
+      || (requestedSessionId && (requestedSessionPending || loadingHistory || !sessionReadReady))) return;
+    setAssistantSettingsOpen(true);
+    updateSearchParams(params => params.delete("assistantSettings"), {replace: true});
+  }, [embeddedSideChat, loadingHistory, requestedAssistantSettings, requestedSessionId, requestedSessionPending, sessionReadReady, updateSearchParams, view]);
   const [assistantSettingsStatus, setAssistantSettingsStatus] = useState("");
   const [assistantSettingsError, setAssistantSettingsError] = useState<string>();
   const [assistantSettingsBusy, setAssistantSettingsBusy] = useState(false);
@@ -2011,7 +2028,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (butlerChild) {
       const butler = savedConversations.find(item => item.engagementId === butlerChild.engagementId && item.isControlAssistant && !item.archivedAt)
         ?? savedConversations.find(item => item.engagementId === butlerChild.engagementId && item.isControlAssistant);
-      if (butler) owners.push(butler.id);
+      if (butler) {
+        owners.push(butler.id);
+        if (butlerChild.archivedAt) setExpandedButlerArchives(current => current.has(butler.id) ? current : new Set([...current, butler.id]));
+      }
     }
     if (owners.length) setExpandedSubagentParents(current => {
       if (owners.every(id => current.has(id))) return current;
@@ -2019,8 +2039,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     });
   }, [sessionId, savedConversations, setExpandedSubagentParents]);
   const sidebarConversations = useMemo(() => groupSidebarConversations(
-    savedConversations, sessionActivity, sessionQuery, expandedSubagentParents,
-  ), [savedConversations, sessionActivity, sessionQuery, expandedSubagentParents]);
+    savedConversations, sessionActivity, sessionQuery, expandedSubagentParents, Date.now(), expandedButlerArchives,
+  ), [savedConversations, sessionActivity, sessionQuery, expandedSubagentParents, expandedButlerArchives]);
+  const bulkMatches = useMemo(() => savedConversations.filter(session => conversationMatchesSearch(session, sessionQuery)), [savedConversations, sessionQuery]);
+  const bulkListReady = fullListProjectRef.current === engagement?.id && !loadingAllSessions;
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
   // A saved provider chat is bound by Core. Local picker state can still have
@@ -2466,6 +2488,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       ? ["complete", "failed", "cancelled", "interrupted"].includes(harnessActivity.turnStatus)
       : !harnessActivity.busy;
     if (!terminal) return;
+    if (abortRef.current && !harnessActivityOwnsStream(
+      harnessActivity, streamBackendRef.current, harnessProgress?.turnId,
+    )) return;
     setResolvedApproval(undefined);
     detachActiveChatStream();
     harnessFollowDetachRef.current?.();
@@ -2474,7 +2499,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setPendingResponse(undefined);
     setInterruptedRecovery(undefined);
     setSending(false);
-  }, [harnessActivity, resolvedApproval]);
+  }, [harnessActivity, resolvedApproval, harnessProgress?.turnId]);
 
   useEffect(() => {
     let active = true;
@@ -2697,6 +2722,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     harnessFollowDetachRef.current = undefined;
     setSending(false);
     setSessions([]);
+    setBulkSelectionMode(false);
+    setBulkSelectedIds(new Set());
+    setBulkActionNotice(undefined);
+    setBulkActionBusy(false);
     pendingSessionNavigationRef.current = undefined;
     setSessionId("");
     runtimeSwitchGenerationRef.current += 1;
@@ -2797,7 +2826,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return () => controller.abort();
   }, [api, coreState, engagement?.id, embeddedSideChat, sideRequestedSessionId]);
 
-  const searchingAllConversations = Boolean(sessionQuery.trim());
+  const searchingAllConversations = Boolean(sessionQuery.trim()) || bulkSelectionMode;
   useEffect(() => {
     if (!searchingAllConversations || embeddedSideChat || !api || coreState !== "online" || !engagement
       || (!conversationPanelOpen && !mobileListOpen) || fullListProjectRef.current === engagement.id) return;
@@ -2812,12 +2841,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }).catch((error) => {
       if (controller.signal.aborted) return;
       void logCaughtDiagnostic("interface.sessions_page.conversation_search_failed", "Conversation search could not load saved history.", error, "sessions_page");
-      setChatError(error instanceof Error ? error.message : "Could not search all conversations. Try again.");
+      if (bulkSelectionMode) setBulkActionNotice({ kind: "error", text: "Could not load all conversations. Retry loading before selecting chats." });
+      else setChatError(error instanceof Error ? error.message : "Could not search all conversations. Try again.");
     }).finally(() => {
       if (!controller.signal.aborted) setLoadingAllSessions(false);
     });
     return () => controller.abort();
-  }, [api, coreState, engagement?.id, embeddedSideChat, searchingAllConversations, conversationPanelOpen, mobileListOpen]);
+  }, [api, coreState, engagement?.id, embeddedSideChat, searchingAllConversations, conversationPanelOpen, mobileListOpen, bulkLoadRetryKey]);
 
   useEffect(() => {
     if (embeddedSideChat || !api || !engagement || !sessionId
@@ -3252,6 +3282,92 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setChatError(error instanceof Error ? error.message : `Could not ${archived ? "archive" : "unarchive"} the conversation.`);
     } finally {
       setArchivingSessionId(undefined);
+    }
+  };
+
+  const setConversationPriority = async (
+    session: ChatSessionSummary,
+    changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null },
+  ) => {
+    if (!api || prioritySessionId) return;
+    setSessionActionsId(undefined);
+    setPrioritySessionId(session.id);
+    setChatError(undefined);
+    try {
+      const updated = await api.setChatSessionPriority(session.id, changes, session.revision);
+      setSessions(current => current.map(item => item.id === updated.id ? updated : item));
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.priority_failed", "A conversation pin or flag could not be saved.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not save conversation priority. Try again.");
+    } finally {
+      setPrioritySessionId(undefined);
+    }
+  };
+
+  const toggleBulkConversation = (id: string) => {
+    setBulkSelectedIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setBulkActionNotice(undefined);
+  };
+
+  const applySelectedConversationAction = async () => {
+    if (!api || !engagement || !bulkListReady || bulkActionBusy || !bulkSelectedIds.size) return;
+    const ids = [...bulkSelectedIds];
+    const action = bulkAction;
+    const projectId = engagement.id;
+    if (action === "delete") {
+      const titles = ids.slice(0, 3).map(id => savedConversations.find(session => session.id === id)?.title ?? "Conversation");
+      const approved = await confirm({
+        title: `Delete ${ids.length} selected conversation${ids.length === 1 ? "" : "s"}?`,
+        message: `This permanently deletes their messages and saved working memory. ${titles.join(", ")}${ids.length > 3 ? `, and ${ids.length - 3} more` : ""}.`,
+        confirmLabel: `Delete ${ids.length} conversation${ids.length === 1 ? "" : "s"}`,
+        tone: "danger",
+      });
+      if (!approved || activeEngagementIdRef.current !== projectId) return;
+    }
+    setBulkActionBusy(true);
+    setBulkActionNotice(undefined);
+    try {
+      const result = await applyChatBulkAction(api, projectId, ids, action);
+      if (activeEngagementIdRef.current !== projectId) return;
+      setSessions(result.sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+      fullListProjectRef.current = projectId;
+      setSessionNextOffset(undefined);
+      if (action === "delete") {
+        for (const id of result.succeededIds) {
+          chatPreviews.delete(id);
+          chatImagePreviews.delete(id);
+          draftStore.clear(chatDraftStorageKey(projectId, id));
+          clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(projectId, id));
+        }
+        if (sessionId && result.succeededIds.includes(sessionId)) {
+          resetConversation(false, { discardDraft: true });
+          openUnattachedChatView();
+        }
+      }
+      setBulkSelectedIds(new Set(result.failures.map(failure => failure.id)));
+      if (result.failures.length) {
+        const first = result.failures[0];
+        for (const failure of result.failures) {
+          void logCaughtDiagnostic("interface.sessions_page.bulk_item_failed", `Could not update ${failure.title} during a selected conversation action.`, failure.error, "sessions_page");
+        }
+        setBulkActionNotice({ kind: "error", text: `${result.failures.length} of ${ids.length} conversations could not be updated. ${first.title} remains selected for retry.`, error: first.error });
+      } else {
+        const verb = action === "delete" ? "deleted" : action === "archive" ? "archived" : action === "restore" ? "restored"
+          : action === "pin" ? "pinned" : action === "unpin" ? "unpinned" : action === "clear-flag" ? "cleared of flags" : "flagged";
+        setBulkActionNotice({ kind: "success", text: `${ids.length} conversation${ids.length === 1 ? "" : "s"} ${verb}.` });
+      }
+    } catch (error) {
+      if (activeEngagementIdRef.current === projectId) {
+        void logCaughtDiagnostic("interface.sessions_page.bulk_action_failed", "Selected conversations could not be updated or verified.", error, "sessions_page");
+        setBulkActionNotice({ kind: "error", text: `Could not verify the selected conversations in Core. ${error instanceof Error ? error.message : "Refresh the list and try again."}` });
+      }
+    } finally {
+      if (activeEngagementIdRef.current === projectId) setBulkActionBusy(false);
     }
   };
 
@@ -6280,22 +6396,39 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       sessionActionsButtonRef.current?.focus();
     };
     const closeOnViewportChange = () => setSessionActionsId(undefined);
-    // The menu is placed beside its trigger, so only a scroll that moves the
-    // trigger displaces it; a streaming transcript scrolling must not close it.
-    const closeOnTriggerScroll = (event: Event) => {
+    // Keep the menu beside its trigger when the conversation list scrolls.
+    // A scroll queued by the click that opens it can arrive after the menu mounts.
+    const syncOnTriggerScroll = (event: Event) => {
       const trigger = sessionActionsButtonRef.current;
-      if (!trigger || !(event.target instanceof Node) || event.target === document || event.target.contains(trigger)) closeOnViewportChange();
+      if (!trigger) { closeOnViewportChange(); return; }
+      if (!(event.target instanceof Node) || (event.target !== document && !event.target.contains(trigger))) return;
+      const bounds = trigger.getBoundingClientRect();
+      const scrollBounds = event.target instanceof Element ? event.target.getBoundingClientRect() : undefined;
+      if (bounds.bottom <= Math.max(0, scrollBounds?.top ?? 0)
+        || bounds.top >= Math.min(window.innerHeight, scrollBounds?.bottom ?? window.innerHeight)) {
+        closeOnViewportChange();
+        return;
+      }
+      const menuHeight = sessionActionsMenuRef.current?.getBoundingClientRect().height ?? 310;
+      const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
+      const next = {
+        left: Math.max(8, Math.min(bounds.right - 228, window.innerWidth - 236)),
+        openAbove,
+        top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
+      };
+      setSessionActionsPosition(current => current && current.left === next.left && current.top === next.top
+        && current.openAbove === next.openAbove ? current : next);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
-    document.addEventListener("scroll", closeOnTriggerScroll, true);
+    document.addEventListener("scroll", syncOnTriggerScroll, true);
     window.addEventListener("resize", closeOnViewportChange);
     // The first item an operator can act on, whichever actions this conversation offers.
     requestAnimationFrame(() => sessionActionsMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled):not([hidden])')?.focus());
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
-      document.removeEventListener("scroll", closeOnTriggerScroll, true);
+      document.removeEventListener("scroll", syncOnTriggerScroll, true);
       window.removeEventListener("resize", closeOnViewportChange);
     };
   }, [sessionActionsId]);
@@ -6974,11 +7107,20 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         {view === "chat" && ((!shellOnly && conversationPanelOpen) || mobileListOpen) && <aside ref={(element) => { conversationPanelSize.panelRef.current = element; }} className="session-list" id="workbench-conversations" aria-label="Conversations" style={conversationPanelSize.panelStyle}>
           {conversationPanelSize.resizeHandle}
           {compact && mobileListOpen && <MobileDrawerProject onNavigate={() => setMobileListOpen(false)} />}
-          <header><div><span>Conversations</span><strong>{sessionQuery ? `${sidebarConversations.matchCount} of ${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""}` : `${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!savedConversations.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
+          <header><div><span>Conversations</span><strong>{sessionQuery ? `${sidebarConversations.matchCount} of ${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""}` : `${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""} saved`}</strong></div><div className="session-list-header-actions"><button className="icon-button subtle" type="button" aria-label={bulkSelectionMode ? "Done selecting conversations" : "Select conversations"} title={bulkSelectionMode ? "Done selecting conversations" : "Select conversations"} aria-pressed={bulkSelectionMode} disabled={bulkActionBusy || deletingAllSessions} onClick={() => { setBulkSelectionMode(current => !current); setBulkSelectedIds(new Set()); setBulkActionNotice(undefined); setSessionActionsId(undefined); setRenamingSessionId(undefined); setRenameError(undefined); }}>{bulkSelectionMode ? <X size={17} aria-hidden="true" /> : <ListChecks size={17} aria-hidden="true" />}</button>{!bulkSelectionMode && <details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!savedConversations.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details>}<button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
-          <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
+          <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => { setSessionQuery(event.target.value); if (bulkSelectionMode) setBulkSelectedIds(new Set()); }} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => { setSessionQuery(""); if (bulkSelectionMode) setBulkSelectedIds(new Set()); }}><X size={13} /></button>}</label>
+          {bulkSelectionMode && <div className="session-bulk-toolbar" aria-label="Bulk conversation actions">
+            <div className="session-bulk-summary"><strong>{bulkSelectedIds.size} selected</strong><button type="button" disabled={!bulkListReady || bulkActionBusy || !bulkMatches.length} onClick={() => { setBulkSelectedIds(new Set(bulkMatches.map(session => session.id))); setBulkActionNotice(undefined); }}>Select all {sessionQuery.trim() ? "matches" : "chats"} ({bulkMatches.length})</button><button type="button" disabled={!bulkSelectedIds.size || bulkActionBusy} onClick={() => { setBulkSelectedIds(new Set()); setBulkActionNotice(undefined); }}>Clear</button></div>
+            <div className="session-bulk-apply"><label className="sr-only" htmlFor="conversation-bulk-action">Action for selected conversations</label><select id="conversation-bulk-action" value={bulkAction} disabled={!bulkListReady || bulkActionBusy} onChange={event => setBulkAction(event.target.value as ChatBulkAction)}><option value="archive">Archive</option><option value="restore">Restore</option><option value="pin">Pin to top</option><option value="unpin">Unpin</option><option value="flag:red">Flag red</option><option value="flag:orange">Flag orange</option><option value="flag:yellow">Flag yellow</option><option value="flag:green">Flag green</option><option value="flag:blue">Flag blue</option><option value="flag:purple">Flag purple</option><option value="clear-flag">Clear flag</option><option value="delete">Delete permanently</option></select><button className={bulkAction === "delete" ? "button danger" : "button quiet"} type="button" disabled={!bulkListReady || !bulkSelectedIds.size || bulkActionBusy} onClick={() => void applySelectedConversationAction()}>{bulkActionBusy ? "Applying…" : "Apply"}</button></div>
+            {!bulkListReady && <p role="status">{loadingAllSessions ? "Loading all project chats…" : "Full chat list unavailable."}{!loadingAllSessions && <button type="button" onClick={() => setBulkLoadRetryKey(key => key + 1)}>Retry loading</button>}</p>}
+            {bulkActionNotice && (bulkActionNotice.error
+              ? <DiagnosticErrorNotice error={bulkActionNotice.error} title={bulkActionNotice.text} compact />
+              : <p role={bulkActionNotice.kind === "error" ? "alert" : "status"} className={bulkActionNotice.kind}>{bulkActionNotice.text}</p>)}
+          </div>}
           <nav>
-            {sidebarConversations.groups.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.rootCount}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.rows.map(({ session, depth, childCount, childKind, waitingChildren, workingChildren, expanded, searchRevealed }) => {
+            {sidebarConversations.groups.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.rootCount}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.rows.map(({ session, depth, childCount, childKind, waitingChildren, workingChildren, expanded, searchRevealed, archiveToggle, archivedChildren }) => {
+              if (archiveToggle) return <button className="session-butler-archive-toggle" type="button" key={`archive-${session.id}`} aria-label={`${expanded ? "Hide" : "Show"} ${archivedChildren} archived Butler chats`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedButlerArchives(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={14} className={expanded ? undefined : "collapsed"} aria-hidden="true" /> Archived <span>{archivedChildren}</span></button>;
               const actionsOpen = sessionActionsId === session.id;
               const activityState = (sessionActivity[session.id] === "waiting" && !depth) || (childKind === "chats" && waitingChildren) ? "waiting" : sessionActivity[session.id] === "working" || waitingChildren || workingChildren ? "working" : "idle";
               const childLabel = childKind === "chats" ? "chat" : "subagent";
@@ -6986,13 +7128,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 ? `From ${sessions.find(item => item.id === session.parentSessionId)?.title ?? "parent conversation"}`
                 : childCount
                 ? `${childCount} ${childLabel}${childCount === 1 ? "" : "s"}${waitingChildren ? ` · ${waitingChildren} ${childKind === "chats" ? "need you" : "with supervisor"}` : workingChildren ? ` · ${workingChildren} working` : ""}`
+                : archivedChildren ? `${archivedChildren} archived ${archivedChildren === 1 ? "chat" : "chats"}`
                 : depth && sessionActivity[session.id] === "waiting" ? "Waiting on supervisor"
                   : depth && activityState === "working" ? `Working${session.model ? ` · ${session.model}` : ""}`
                     : session.model || "Saved conversation";
               const displayTitle = session.isSideChat ? session.title.replace(/^Side chat\s*·\s*/, "") : depth ? session.title.replace(/^Subagent\s*·\s*/, "") : session.title;
-              const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
+              const actionsDisabled = bulkSelectionMode || deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || prioritySessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
-              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${session.id === sideChatId ? " side-open" : ""}${session.isSideChat ? " side-chat-item" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}${childCount ? " has-subagents" : ""}${depth === 1 ? " nested-subagent" : depth === 2 ? " nested-subagent nested-subagent-deep" : ""}${activityState === "waiting" ? " waiting" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => selectConversationFromList(session)}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{displayTitle}</strong><small title={subtitle}>{subtitle}</small></span></button>{childCount > 0 && <button className="icon-button subtle session-subagents-toggle" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount} ${childLabel}${childCount === 1 ? "" : "s"} for ${session.title}`} title={searchRevealed ? `Matching ${childLabel}s stay visible while searching` : `${expanded ? "Collapse" : "Expand"} ${childLabel}s`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedSubagentParents(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={16} aria-hidden="true" /></button>}<div className="session-item-actions"><button
+              return <div className={`session-list-item${bulkSelectionMode ? " selecting" : ""}${bulkSelectedIds.has(session.id) ? " bulk-selected" : ""}${session.id === sessionId ? " active" : ""}${session.id === sideChatId ? " side-open" : ""}${session.isSideChat ? " side-chat-item" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}${childCount || archivedChildren ? " has-subagents" : ""}${depth === 1 ? " nested-subagent" : depth === 2 ? " nested-subagent nested-subagent-deep" : ""}${activityState === "waiting" ? " waiting" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <>{bulkSelectionMode && <label className="session-bulk-selector"><input type="checkbox" aria-label={`Select conversation ${session.title}`} checked={bulkSelectedIds.has(session.id)} disabled={!bulkListReady || bulkActionBusy} onChange={() => toggleBulkConversation(session.id)} /></label>}<button className="session-select" data-session-id={session.id} type="button" aria-pressed={bulkSelectionMode ? bulkSelectedIds.has(session.id) : undefined} disabled={bulkSelectionMode && (!bulkListReady || bulkActionBusy)} onClick={() => { if (bulkSelectionMode) toggleBulkConversation(session.id); else selectConversationFromList(session); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}><span className="conversation-title-text">{displayTitle}</span>{session.pinned && !session.archivedAt && <Bookmark className="conversation-pin-marker" size={11} aria-label="Pinned" />}{session.flagColor && <Flag className="conversation-flag-marker" data-color={session.flagColor} size={11} aria-label={`${session.flagColor} flag`} />}</strong><small title={subtitle}>{subtitle}</small></span></button>{(childCount > 0 || Boolean(archivedChildren)) && <button className="icon-button subtle session-subagents-toggle" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount + (archivedChildren ?? 0)} ${childLabel}${childCount + (archivedChildren ?? 0) === 1 ? "" : "s"} for ${session.title}`} title={searchRevealed ? `Matching ${childLabel}s stay visible while searching` : `${expanded ? "Collapse" : "Expand"} ${childLabel}s`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedSubagentParents(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={16} aria-hidden="true" /></button>}<div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
                 id={`conversation-actions-trigger-${session.id}`}
                 className="icon-button subtle session-actions-trigger"
@@ -7010,8 +7153,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     return;
                   }
                   const bounds = event.currentTarget.getBoundingClientRect();
-                  const menuWidth = 196;
-                  const menuHeight = session.backend === "harness" ? 246 : 212;
+                  const menuWidth = 228;
+                  const menuHeight = session.backend === "harness" ? 350 : 310;
                   const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
                   setSessionActionsPosition({
                     left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
@@ -7020,7 +7163,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   });
                   setSessionActionsId(session.id);
                 }}
-              >{deletingSessionId === session.id || archivingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
+              >{deletingSessionId === session.id || archivingSessionId === session.id || prioritySessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
                 ref={sessionActionsMenuRef}
                 id={`conversation-actions-${session.id}`}
                 className="session-actions-menu"
@@ -7036,7 +7179,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
                   items[next]?.focus();
                 }}
-              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button>{!shellOnly && session.backend === "harness" && <button type="button" role="menuitem" disabled={sending || session.id !== sessionId} title={session.id !== sessionId ? "Open this conversation to continue it as a mission" : undefined} onClick={() => { setSessionActionsId(undefined); void continueAsMission(); }} data-guide="continue-mission"><Bot size={15} /> Continue as mission</button>}<button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button type="button" role="menuitem" onClick={() => void setConversationArchived(session, !session.archivedAt)}>{session.archivedAt ? <><ArchiveRestore size={15} /> Unarchive</> : <><Archive size={15} /> Archive</>}</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
+              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button>{!shellOnly && session.backend === "harness" && <button type="button" role="menuitem" disabled={sending || session.id !== sessionId} title={session.id !== sessionId ? "Open this conversation to continue it as a mission" : undefined} onClick={() => { setSessionActionsId(undefined); void continueAsMission(); }} data-guide="continue-mission"><Bot size={15} /> Continue as mission</button>}<button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button type="button" role="menuitem" onClick={() => void setConversationPriority(session, { pinned: !session.pinned })}><Bookmark size={15} /> {session.pinned ? "Unpin" : "Pin to top"}</button><div className="session-flag-picker" role="group" aria-label={`Flag ${session.title}`}><span>Flag</span><div>{(["red", "orange", "yellow", "green", "blue", "purple"] as const).map(color => <button key={color} type="button" role="menuitem" aria-label={`Set ${color} flag for ${session.title}${session.flagColor === color ? ", selected" : ""}`} title={`${color[0].toUpperCase()}${color.slice(1)} flag`} data-selected={session.flagColor === color} data-color={color} onClick={() => void setConversationPriority(session, { flagColor: color })}><Flag size={15} aria-hidden="true" /></button>)}<button type="button" role="menuitem" aria-label={`Clear flag for ${session.title}`} title="Clear flag" disabled={!session.flagColor} onClick={() => void setConversationPriority(session, { flagColor: null })}><X size={14} aria-hidden="true" /></button></div></div><button type="button" role="menuitem" onClick={() => void setConversationArchived(session, !session.archivedAt)}>{session.archivedAt ? <><ArchiveRestore size={15} /> Unarchive</> : <><Archive size={15} /> Archive</>}</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
             })}</section>)}
             {loadingAllSessions && <p role="status">Searching saved conversations…</p>}
             {sessionQuery && !loadingAllSessions && !sidebarConversations.matchCount && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}

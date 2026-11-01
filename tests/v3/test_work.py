@@ -1,6 +1,7 @@
 """Focused Work persistence, scope, and API contracts."""
 
 import asyncio
+import json
 
 from fastapi.testclient import TestClient
 import pytest
@@ -18,7 +19,9 @@ from nebula.v3.domain import (
     WorkUpdate,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
+from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
 from nebula.v3.tools import ToolInvocation, ToolNotPermitted
+from nebula.v3.providers import ModelRequest, ModelResponse
 from nebula.v3.work import (
     WorkCheckIn,
     WorkCreate,
@@ -254,7 +257,11 @@ def test_provider_work_tools_use_chat_scope_and_opt_out(tmp_path):
             components.scope,
         )
 
-    assert asyncio.run(call("work_list", {})).output == {"items": []}
+    assert asyncio.run(call("work_list", {})).output == {
+        "items": [],
+        "offset": 0,
+        "next_offset": None,
+    }
     created = asyncio.run(
         call("work_create", {"title": "Prepare notes", "request_id": "create-1"})
     ).output["item"]
@@ -318,6 +325,10 @@ def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
             "items"
         ]
     ] == [item.id]
+    assert (
+        asyncio.run(call("work_get", {"item_id": item.id})).output["item"]["id"]
+        == item.id
+    )
     update = asyncio.run(
         call(
             "work_check_in",
@@ -333,7 +344,185 @@ def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
     with pytest.raises(NotFoundError):
         asyncio.run(call("work_list", {"project_name": unrelated.name}))
     with pytest.raises(NotFoundError):
+        asyncio.run(call("work_get", {"item_id": other.id}))
+    with pytest.raises(NotFoundError):
         asyncio.run(call("work_check_in", {"item_id": other.id, "summary": "No"}))
+
+
+def test_provider_work_pages_and_reads_full_long_item(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Large Work project"))
+    service = WorkService(store)
+    long_description = "🙂" * 20_000
+    original = store.create(
+        WorkItem(
+            engagement_id=project.id,
+            title="Long description",
+            description=long_description,
+        )
+    )
+    for index in range(75):
+        store.create(
+            WorkItem(
+                engagement_id=project.id,
+                title=f"Task {index:03d}",
+                description="Details " * 125,
+            )
+        )
+    components = work_components(service, project.id, tmp_path)
+    assert "next_offset" in components.specs["work_list"].description
+    assert "next_description_offset" in components.specs["work_get"].description
+
+    async def call(name: str, arguments: dict):
+        return await components.broker.execute(
+            ToolInvocation(
+                engagement_id=project.id,
+                run_id="turn-1",
+                tool_name=name,
+                arguments=arguments,
+                workspace=tmp_path,
+            ),
+            components.scope,
+        )
+
+    offset = None
+    seen: list[str] = []
+    while True:
+        arguments = {} if offset is None else {"offset": offset}
+        page = asyncio.run(call("work_list", arguments)).output
+        delivered = serialize_model_result(page)
+        assert len(delivered.encode("utf-8")) <= MAX_EXCERPT_BYTES
+        assert "nebula.bounded-result/v1" not in delivered
+        assert page["items"]
+        assert all("description_preview" in item for item in page["items"])
+        assert all("description" not in item for item in page["items"])
+        seen.extend(item["id"] for item in page["items"])
+        offset = page["next_offset"]
+        if offset is None:
+            break
+    assert len(seen) == len(set(seen)) == 76
+    assert set(seen) == {item.id for item in service.list(project.id)}
+    assert original.id in seen
+
+    description_offset = None
+    chunks: list[str] = []
+    while True:
+        arguments = {"item_id": original.id}
+        if description_offset is not None:
+            arguments["description_offset"] = description_offset
+        result = asyncio.run(call("work_get", arguments)).output
+        delivered = serialize_model_result(result)
+        assert len(delivered.encode("utf-8")) <= MAX_EXCERPT_BYTES
+        assert "nebula.bounded-result/v1" not in delivered
+        chunks.append(result["item"]["description"])
+        description_offset = result["next_description_offset"]
+        if description_offset is None:
+            break
+    assert "".join(chunks) == long_description
+
+
+def test_provider_work_list_reaches_items_after_previous_500_cap(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Imported tasks"))
+    for index in range(505):
+        store.create(WorkItem(engagement_id=project.id, title=f"Task {index}"))
+    service = WorkService(store)
+    offset = 0
+    seen: list[str] = []
+    while True:
+        page = service.agent_list_page(project.id, offset=offset, limit=100)
+        assert len(serialize_model_result(page).encode("utf-8")) <= MAX_EXCERPT_BYTES
+        seen.extend(item["id"] for item in page["items"])
+        if page["next_offset"] is None:
+            break
+        offset = page["next_offset"]
+    assert len(seen) == len(set(seen)) == 505
+
+
+def test_provider_chat_can_follow_work_list_pages(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Agent pagination"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            capabilities={"tool_calling": True},
+            capability_verifications={
+                "model-a": {"model": "model-a", "status": "verified"}
+            },
+        )
+    )
+    for index in range(45):
+        store.create(
+            WorkItem(
+                engagement_id=project.id,
+                title=f"Task {index}",
+                description="Context " * 125,
+            )
+        )
+
+    class PagingProvider(FakeProvider):
+        def __init__(self):
+            super().__init__(profile.id, local=True)
+            self.config.capabilities.tools = True
+            self.config.capabilities.strict_tools = True
+            self.seen: list[str] = []
+            self.pages = 0
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation"):
+                return await super().complete(request)
+            self.requests.append(request)
+            assert "next_offset" in (request.instructions or "")
+            assert {"work_list", "work_get"} <= {tool.name for tool in request.tools}
+            if request.tool_results:
+                last = request.tool_results[-1].output
+                page = json.loads(last) if isinstance(last, str) else last
+                assert page.get("schema") != "nebula.bounded-result/v1"
+                self.seen.extend(item["id"] for item in page["items"])
+                offset = page["next_offset"]
+                if offset is None:
+                    return ModelResponse(
+                        provider_id=self.config.id,
+                        model="model-a",
+                        text=f"Read {len(self.seen)} tasks.",
+                        finish_reason="stop",
+                    )
+                arguments = {"offset": offset}
+            else:
+                arguments = {}
+            self.pages += 1
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                tool_calls=[
+                    {
+                        "id": f"page-{self.pages}",
+                        "name": "work_list",
+                        "arguments": arguments,
+                    }
+                ],
+                finish_reason="tool_calls",
+            )
+
+    provider = PagingProvider()
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    chat = ChatService(store, workspace_resolver=lambda _: tmp_path)
+    prepared = chat.prepare(
+        ChatCompletionRequest(
+            engagement_id=project.id,
+            provider_id=profile.id,
+            model="model-a",
+            messages=[{"role": "user", "content": "List all tasks"}],
+            include_knowledge=False,
+        )
+    )
+    response = asyncio.run(chat.complete(prepared))
+    assert response.message.content == "Read 45 tasks."
+    assert provider.pages > 1
+    assert len(provider.seen) == len(set(provider.seen)) == 45
 
 
 def test_new_project_advertises_work_on_provider_turn_without_timed_prompt(
@@ -370,7 +559,7 @@ def test_new_project_advertises_work_on_provider_turn_without_timed_prompt(
     )
     assert "Project Work is available" in prepared.model_request.instructions
     assert "minutes" not in prepared.model_request.instructions
-    assert {"work_list", "work_create", "work_check_in"} <= set(
+    assert {"work_list", "work_get", "work_create", "work_check_in"} <= set(
         prepared.tool_components.specs
     )
     assert "work_agents" in prepared.tool_components.specs

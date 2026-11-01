@@ -4762,7 +4762,7 @@ class NativeHookExecution(Entity):
 
 
 class WorkspaceProvenanceObservation(Entity):
-    """One bounded before/after observation used to attribute dirty paths.
+    """One time-bounded before/after observation used to attribute dirty paths.
 
     The workspace remains authoritative for file content.  This record is an
     append-only attribution receipt for lifecycle hooks; it never grants write
@@ -4782,9 +4782,15 @@ class WorkspaceProvenanceObservation(Entity):
     status: Literal["active", "complete"] = "active"
     supported: bool = True
     unsupported_reason: str | None = Field(default=None, max_length=1_000)
+    # New observations keep large maps in content-addressed, shared chunks.
+    # The inline fields remain readable for observations written before the
+    # provenance ledger was introduced.
+    baseline_snapshot_id: str | None = Field(default=None, max_length=64)
+    current_snapshot_id: str | None = Field(default=None, max_length=64)
+    attribution_snapshot_id: str | None = Field(default=None, max_length=64)
     baseline: dict[str, dict[str, Any]] = Field(default_factory=dict)
     current: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    mutations: list[dict[str, Any]] = Field(default_factory=list, max_length=2_000)
+    mutations: list[dict[str, Any]] = Field(default_factory=list)
     attribution: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     confidence: Literal["exact", "uncertain_parallel_turns", "unsupported"] = "exact"
     concurrent_scope_ids: list[str] = Field(default_factory=list, max_length=128)

@@ -542,7 +542,9 @@ class SetupService:
 
     async def status(self) -> SetupStatus:
         self.start()
-        return self._snapshot()
+        # The snapshot reads persisted profiles. A busy database must not hold
+        # the HTTP event loop while the UI checks health or setup status.
+        return await asyncio.to_thread(self._snapshot)
 
     async def refresh(self) -> SetupStatus:
         if self.tool_platform is None or not self.tool_platform.execution_enabled:

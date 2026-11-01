@@ -1,7 +1,7 @@
 import {render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {MemoryRouter} from "react-router-dom";
-import {beforeEach, describe, expect, it, vi} from "vitest";
+import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import type {HarnessProfile, McpServerProfile} from "../api/types";
 import {DialogProvider} from "./DialogSystem";
 import {HarnessSettings} from "./HarnessSettings";
@@ -14,8 +14,10 @@ const profile: HarnessProfile = {
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
 const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn(), probeMcpServer: vi.fn(), deleteHarness: vi.fn(), deleteMcpServer: vi.fn()};
-vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", previewMode: false})}));
+let selectedProjectId: string | undefined;
+vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", engagement: selectedProjectId ? {id: selectedProjectId} : undefined, previewMode: false})}));
 vi.mock("../diagnostics", () => ({logCaughtDiagnostic: vi.fn(), DiagnosticErrorNotice: ({error}: {error: string}) => <div role="alert">{error}</div>}));
+afterEach(() => { selectedProjectId = undefined; });
 
 describe("harness settings persistence boundaries", () => {
   beforeEach(() => {vi.resetAllMocks(); api.listMcpServers.mockResolvedValue([]);});
@@ -143,6 +145,28 @@ const importedServer: McpServerProfile = {
   id: "mcp-burp", name: "burp", transport: "stdio", command: "/usr/bin/npx", arguments: ["-y", "burp-mcp"], authMode: "none",
   enabled: false, required: false, trustedStdio: false, defaultApproval: "risk_based", toolOverrides: {}, tools: [], revision: 1,
 };
+
+it("shows shared servers and only the selected project's Notebook grant", async () => {
+  vi.resetAllMocks();
+  selectedProjectId = "project-a";
+  api.listHarnesses.mockResolvedValue([]);
+  api.listMcpServers.mockResolvedValue([
+    importedServer,
+    {...importedServer, id: "notebook-a", name: "Notebook", projectId: "project-a", transport: "builtin", enabled: true, detail: "Notebook for A"},
+    {...importedServer, id: "notebook-b", name: "Notebook", projectId: "project-b", transport: "builtin", enabled: true, detail: "Notebook for B"},
+  ]);
+  const view = render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  expect(await screen.findByText("Notebook for A")).toBeVisible();
+  expect(screen.getByRole("heading", {name: "burp"})).toBeVisible();
+  expect(screen.queryByText("Notebook for B")).not.toBeInTheDocument();
+  expect(screen.getAllByRole("heading", {name: "Notebook"})).toHaveLength(1);
+
+  selectedProjectId = "project-b";
+  view.rerender(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  expect(screen.getByText("Notebook for B")).toBeVisible();
+  expect(screen.queryByText("Notebook for A")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", {name: "burp"})).toBeVisible();
+});
 
 describe("MCP import entry points", () => {
   beforeEach(() => {vi.resetAllMocks(); api.listHarnesses.mockResolvedValue([]);});

@@ -2,12 +2,15 @@ import asyncio
 import json
 import stat
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from nebula.v3.diagnostics import configure_diagnostics, shutdown_diagnostics
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.automation_tools import AutomationBroker
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.butler_capabilities import ButlerCapabilities
 from nebula.v3.domain import (
     Artifact,
     ChatTurn,
@@ -22,7 +25,11 @@ from nebula.v3.providers import ToolCall
 from nebula.v3.sandbox import AnalysisOnlyRunner
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_results import ToolOutputAccessError, ToolOutputService
-from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
+from nebula.v3.tool_results import (
+    ToolOutputPreview,
+    ToolResultReceipt,
+    ToolResultStatus,
+)
 from nebula.v3.tool_failures import FAILURE_SCHEMA, tool_failure
 from nebula.v3.tools import (
     AnalysisTool,
@@ -295,6 +302,110 @@ def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
     ]
 
 
+def test_chat_next_request_keeps_failed_receipt_evidence_and_usage(tmp_path):
+    class FailedBroker:
+        async def execute(self, invocation, scope, *, approval=None):
+            receipt = ToolResultReceipt(
+                tool_call_id=invocation.id,
+                tool_name=invocation.tool_name,
+                tool_version="1",
+                status=ToolResultStatus.FAILED,
+                summary="The command failed.",
+                output_preview=[
+                    ToolOutputPreview(
+                        artifact_id="stderr-id",
+                        kind="stderr",
+                        text="invalid option",
+                    )
+                ],
+            )
+            return ToolExecutionResult(
+                output=receipt.as_model_result(),
+                receipt=receipt,
+                result_artifact_id="receipt-id",
+            )
+
+    responses = [
+        _response(
+            calls=[ToolCall(id="bad", name="safe_read", arguments={"value": "x"})]
+        ),
+        _response(calls=[ToolCall(id="finish", name="finish_response", arguments={})]),
+        _response(text="The call failed and I inspected its result."),
+    ]
+    _, service, prepared, provider = _prepared(tmp_path, responses, RecordingBroker())
+    prepared.tool_components = replace(prepared.tool_components, broker=FailedBroker())
+    completed = asyncio.run(service.complete(prepared))
+    assert "inspected" in completed.message.content
+    failure = provider.requests[1].tool_results[0].output
+    assert failure["schema"] == FAILURE_SCHEMA
+    assert failure["usage"]["description"]
+    assert "result_receipt" in failure, failure
+    assert failure["result_receipt"]["tool_call_id"]
+    assert failure["result_receipt"]["artifact_id"] == "receipt-id"
+    assert failure["result_receipt"]["output_preview"][0]["text"] == "invalid option"
+
+
+def test_butler_unknown_operation_guidance_reaches_next_provider_request(tmp_path):
+    responses = [
+        _response(
+            calls=[
+                ToolCall(
+                    id="bad-work-name",
+                    name="nebula.capabilities.read",
+                    arguments={"operation": "work.list", "arguments": {}},
+                )
+            ]
+        ),
+        _response(
+            calls=[
+                ToolCall(
+                    id="discover",
+                    name="nebula.capabilities.search",
+                    arguments={"query": "settings"},
+                )
+            ]
+        ),
+        _response(text="The catalog search returned available actions."),
+    ]
+    store, service, prepared, provider = _prepared(
+        tmp_path, responses, RecordingBroker()
+    )
+    capabilities = ButlerCapabilities(
+        store, ArtifactStore(tmp_path / "artifacts"), "project"
+    )
+    registry = ToolRegistry()
+    plugins = {plugin.spec.name: plugin for plugin in capabilities.plugins()}
+    for plugin in plugins.values():
+        registry.register(plugin)
+    broker = ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=AnalysisOnlyRunner(),
+        ledger=StoreToolLedger(store, enforce_run_budget=False),
+        workspace_resolver=lambda _: tmp_path,
+    )
+    prepared.tool_components = replace(
+        prepared.tool_components,
+        broker=broker,
+        specs={name: plugin.spec for name, plugin in plugins.items()},
+    )
+    completed = asyncio.run(service.complete(prepared))
+    assert completed.message.content == "The catalog search returned available actions."
+    delivered = provider.requests[1].tool_results[0]
+    assert delivered.is_error is True
+    assert delivered.output["category"] == "invalid_arguments"
+    assert delivered.output["invalid_input"] == "operation"
+    assert delivered.output["side_effects"] == "none"
+    assert "nebula.capabilities.search" in delivered.output["next_action"]
+    assert "work_list" in delivered.output["next_action"]
+    assert provider.requests[2].tool_results[-1].is_error is False
+    assert provider.requests[2].tool_results[-1].output["matches"]
+    assert [entry["status"] for entry in store.get(ChatTurn, "turn").tool_history] == [
+        "failed",
+        "complete",
+    ]
+
+
 @pytest.mark.parametrize(
     "error,phase,category,side_effects,retry_safe",
     [
@@ -419,6 +530,11 @@ def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(tmp_
                 tool_name=invocation.tool_name,
                 tool_version="1",
                 status=ToolResultStatus.TIMED_OUT,
+                output_preview=[
+                    ToolOutputPreview(
+                        artifact_id="stderr-id", kind="stderr", text="partial result"
+                    )
+                ],
             )
             return ToolExecutionResult(
                 output=receipt.as_model_result(),
@@ -452,6 +568,8 @@ def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(tmp_
     assert failure["category"] == "timeout"
     assert failure["side_effects"] == "unknown"
     assert failure["retry_safe"] is False
+    assert failure["result_receipt"]["tool_call_id"]
+    assert failure["result_receipt"]["output_preview"][0]["text"] == "partial result"
     assert (
         failure["effective_input_schema"] == specialist.specs["nmap.tcp"].input_schema
     )
@@ -509,7 +627,10 @@ def test_gateway_preserves_mcp_schema_and_name_on_denial():
     }
 
     class Gateway:
-        def _gateway_catalog(self, session, params=None):
+        def _active_gateway_turn(self, session_id):
+            return None
+
+        def _gateway_catalog(self, session, params=None, *, turn=None):
             return {
                 "tools": [
                     {
@@ -529,7 +650,7 @@ def test_gateway_preserves_mcp_schema_and_name_on_denial():
     response = asyncio.run(
         HarnessRuntimeService._gateway_call(
             Gateway(),
-            None,
+            SimpleNamespace(id="session"),
             "mcp_abc_readFile",
             {"path": "file.txt"},
         )
@@ -622,7 +743,7 @@ def test_rule_refusal_is_not_permitted_and_other_failures_carry_no_limit():
     assert denied["category"] == "permission_denied"
     assert denied["side_effects"] == "none"
     assert denied["retry_safe"] is False
-    assert "do not repeat" in denied["next_action"]
+    assert "do not retry unchanged" in denied["next_action"]
     assert "limit" not in denied
     assert "own subagents" not in json.dumps(denied)
 

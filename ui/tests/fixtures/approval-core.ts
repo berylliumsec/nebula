@@ -28,7 +28,7 @@ export async function startApprovalCore(host: string, scenario: string) {
     await expect.poll(async () => {
       if (processHandle.exitCode !== null || processHandle.signalCode !== null) throw new Error(logs);
       try {return (await api.get("health")).ok();} catch {return false;}
-    }, {timeout: 30_000}).toBe(true);
+    }, {timeout: Number(process.env.NEBULA_TEST_CORE_STARTUP_TIMEOUT_MS ?? 30_000)}).toBe(true);
   };
   const kill = async () => {
     if (processHandle?.exitCode === null && processHandle.signalCode === null) {

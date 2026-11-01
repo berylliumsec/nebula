@@ -42,6 +42,7 @@ export function HarnessSettings() {
   const [kind, setKind] = useState<HarnessProfile["kind"]>("codex_app_server");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
   const [servers, setServers] = useState<McpServerProfile[]>([]);
+  const visibleServers = servers.filter((server) => !server.projectId || server.projectId === engagement?.id);
   const [harnessDialog, setHarnessDialog] = useState(false);
   const [mcpDialog, setMcpDialog] = useState(false);
   const [importDialog, setImportDialog] = useState(false);
@@ -450,9 +451,9 @@ export function HarnessSettings() {
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings" data-guide="mcp-settings">
-      <div className="section-heading"><div><h2>MCP servers</h2><p>Shared tools for agents and missions</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => setImportDialog(true)}><FileUp size={16} /> Import</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openMcp()}><Plus size={16} /> Add MCP server</button></div></div>
+      <div className="section-heading"><div><h2>MCP servers</h2><p>Shared tools and Notebook access for the selected project</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => setImportDialog(true)}><FileUp size={16} /> Import</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openMcp()}><Plus size={16} /> Add MCP server</button></div></div>
       {importNotice && <SurfaceNotice title={importNotice.title} detail={importNotice.detail} severity={importNotice.detail ? "warning" : "informational"} dismissLabel="Dismiss import notice" onDismiss={() => setImportNotice(undefined)} />}
-      {servers.length ? <div className="provider-grid">{servers.map((server) => <article className="panel provider-card integration-card" key={server.id}>
+      {visibleServers.length ? <div className="provider-grid">{visibleServers.map((server) => <article className="panel provider-card integration-card" key={server.id}>
         <header className="integration-card-heading"><span className={`status-dot ${server.enabled ? server.checkedAt ? "healthy" : "warning" : "unavailable"}`} /><div><small>{server.transport === "builtin" ? "Built into Nebula · Core-owned" : server.transport === "stdio" ? server.trustedStdio ? "Trusted local program" : "Local program · not trusted" : "Streamable HTTP"}</small><h3>{server.name}</h3></div></header>
         {server.description && <p className="mcp-server-description" title={server.description}>{server.description}</p>}
         {server.transport === "stdio" && <p className="provider-dialog-note"><ShieldAlert size={14} /> Runs outside the automation-container boundary. Enable only after trusting this executable.</p>}

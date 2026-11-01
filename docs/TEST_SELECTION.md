@@ -90,3 +90,41 @@ For an explicitly approved local full UI run, both `NEBULA_FULL_SUITE_APPROVAL`
 (`RUN_FULL_SUITE`) and `NEBULA_FULL_SUITE_REASON` must be set for that one command.
 Do not persist these variables in agent profiles or CI defaults. Backend full runs
 likewise need explicit user approval; ordinary CI only accepts individual files.
+
+## Focused Core fixture journeys
+
+The following areas are catalogued in `ui/playwright-impact.json`. Each has one
+case in each of the eight permanent `model-*` projects (desktop 1440/1024 and
+Chromium/WebKit mobile 320/390/430). Select only journeys affected by the change.
+
+| Area / spec basename | Fixture configuration |
+| --- | --- |
+| `assistant-browser-viewer`, `working-knowledge` | `playwright.application-model.config.ts` |
+| `catch-up` | `playwright.catch-up.config.ts` |
+| `host-mode` | `playwright.host-mode.config.ts` |
+| `project-deletion` | `playwright.project-deletion.config.ts` |
+| `workspace-quota` | `playwright.workspace-quota.config.ts` |
+| `workspace-recovery` | `playwright.workspace-recovery.config.ts` |
+
+The guarded default configuration routes an exact spec filename to its fixture;
+CI and local commands use the same entry point. Incompatible fixture files in a
+single invocation are rejected instead of silently running against the wrong
+server. For example, collect before running:
+
+```sh
+npm --prefix ui run test:e2e -- tests/catch-up.spec.ts --project=model-desktop --list
+NEBULA_TEST_PYTHON='poetry run python' npm --prefix ui run test:e2e -- tests/catch-up.spec.ts --project=model-desktop
+```
+
+Build the candidate production UI before browser execution. Fixtures own temporary
+Core databases and workspaces; browser pairing remains enabled. Core owns saved
+objects and read state; the URL owns navigation identity. Existing journey
+assertions cover read-state retry, linked-folder deletion safety, host policy
+rollover, knowledge navigation, large-workspace uploads, saved failure recovery,
+and read-only browser input/reconnect. This wiring does not add product features
+or claim live-provider, physical-device, or installed-desktop coverage.
+
+CI supplies the Poetry interpreter and stages managed Chromium for the browser
+viewer even when its viewing browser is WebKit. The quota configuration enables
+the large-workspace fixture explicitly; host-mode uses its own port. Required
+results must distinguish collection from execution and report unavailable gates.

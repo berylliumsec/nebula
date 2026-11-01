@@ -12,10 +12,10 @@ test("large linked workspace accepts upload and reload without quota rejection",
   await expect(page.locator(".workspace-reset-summary")).toContainText("Linked folder");
   const filename = `upload-${info.project.name}.txt`;
   await page.getByLabel("Choose workspace file").setInputFiles({ name: filename, mimeType: "text/plain", buffer: Buffer.from("Saved in the original large workspace.") });
-  await page.getByRole("button", { name: new RegExp(filename) }).click();
+  await page.getByRole("button").and(page.getByTitle(filename, { exact: true })).click();
   await expect(page.locator(".workspace-file-preview pre")).toContainText("Saved in the original large workspace.");
   await page.reload();
-  await page.getByRole("button", { name: new RegExp(filename) }).click();
+  await page.getByRole("button").and(page.getByTitle(filename, { exact: true })).click();
   await expect(page.locator(".workspace-file-preview pre")).toContainText("Saved in the original large workspace.");
   await expect(page.getByText(/50,000 entries|5 GiB allocated|1 GiB per file/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);

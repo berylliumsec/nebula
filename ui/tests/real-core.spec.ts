@@ -416,7 +416,7 @@ async function clickAssistantSettings(page: Page) {
   await trigger.click();
 }
 
-async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string>; tls?: boolean } = {}): Promise<RealCore> {
+async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string>; tls?: boolean; startupTimeoutMs?: number } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   // Match the production-test override used by the shared real-Core harness.
   const coreCandidates = [
@@ -487,7 +487,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
   );
   let output = "";
   const origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), 30_000);
+    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), options.startupTimeoutMs ?? 30_000);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = output.match(/"url"\s*:\s*"(https?):\/\/[^:\"]+:(\d+)"/);
@@ -6518,13 +6518,17 @@ test("assistant upgrade control assistant starts project work on production LAN 
     await openNebulaAssistantFromShell(page);
     const assistant = page.getByRole("dialog", {name: "Butler"});
     await expect(assistant.getByRole("button", {name: "Chat"})).toHaveAttribute("aria-current", "page");
+    const voiceButton = assistant.getByRole("button", {name: "Start Butler Voice"});
     const settingsButton = assistant.getByRole("button", {name: "Butler settings"});
     const hideButton = assistant.getByRole("button", {name: "Hide Butler"});
     const closeButton = assistant.getByRole("button", {name: "Close Butler"});
-    const [settingsBox, hideBox, closeBox] = await Promise.all([
-      settingsButton.boundingBox(), hideButton.boundingBox(), closeButton.boundingBox(),
+    const [voiceBox, settingsBox, hideBox, closeBox] = await Promise.all([
+      voiceButton.boundingBox(), settingsButton.boundingBox(), hideButton.boundingBox(), closeButton.boundingBox(),
     ]);
-    expect(settingsBox && hideBox && closeBox && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+    expect(voiceBox && settingsBox && hideBox && closeBox && voiceBox.x < settingsBox.x && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+    expect(voiceBox?.width).toBeGreaterThanOrEqual(44);
+    expect(voiceBox?.height).toBeGreaterThanOrEqual(44);
+    await expect(voiceButton).toHaveText("");
     expect(hideBox?.width).toBeGreaterThanOrEqual(44);
     expect(hideBox?.height).toBeGreaterThanOrEqual(44);
     await expect(hideButton).toHaveText("");
@@ -6985,7 +6989,7 @@ test("assistant upgrade Butler saved table stays readable after reload on produc
     const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
     const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
     const sessionId = "butler-mobile-table-fixture";
-    const answer = "| Goal | What its assistants are checking |\n| --- | --- |\n| Sample Project | One is checking the next task and its owner. |\n| Documentation | One is checking the draft for open questions. |";
+    const answer = "| Goal | ID | Status |\n| --- | --- | --- |\n| Sample Project | 89851bf1-1f41-40e1-8a9d-437f131ab601 | Paused |\n| Documentation | 83f8f1bb-e444-4327-9aa8-1f2c3788ba14 | Paused |";
     const seeded = spawnSync(python, ["-c", [
       "import sys",
       "from nebula.v3.domain import ChatMessage, ChatSession",
@@ -7000,6 +7004,9 @@ test("assistant upgrade Butler saved table stays readable after reload on produc
     expect(seeded.status, seeded.error?.message ?? seeded.stderr).toBe(0);
 
     await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
+    });
     await pairRealCoreBrowser(page, core, "Butler table LAN browser", {requireReady: false});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
@@ -7008,6 +7015,11 @@ test("assistant upgrade Butler saved table stays readable after reload on produc
     const check = async () => {
       await expect(goal).toBeVisible();
       await expect.poll(() => goal.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(80);
+      const bounds = await butler.getByRole("region", {name: "Butler response table"}).evaluate(region => ({
+        tableRight: region.getBoundingClientRect().right,
+        statusRight: region.querySelector("td:last-child")!.getBoundingClientRect().right,
+      }));
+      expect(bounds.statusRight).toBeLessThanOrEqual(bounds.tableRight + 1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     };
     await check();
@@ -7449,6 +7461,110 @@ test("assistant upgrade Butler check interval persists and resolves conflicts on
     expect((await new AxeBuilder({page}).include("#butler-check-interval-settings").analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-interval-lan", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, asset: entry, assetSha256: build.assets[entry!], project: testInfo.project.name, viewport: page.viewportSize(), savedMinutes: saved.check_interval_minutes, conflictResolvedMinutes: 4}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
+test("assistant upgrade Butler settings open the editable file and full Assistant settings on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    const projectResponse = await api.post("engagements", {data: {name: "Butler settings navigation fixture", status: "active"}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string};
+    const harnessResponse = await api.post("harnesses", {data: {
+      name: "Inert Butler settings fixture", kind: "codex_app_server", executable: "/bin/true",
+      default_model: "fixture-model", enabled: true,
+      privacy: {local_only: true, permits_sensitive_data: true}, capabilities: {models: ["fixture-model"]},
+    }});
+    expect(harnessResponse.ok(), await harnessResponse.text()).toBe(true);
+    const harness = await harnessResponse.json() as {id: string};
+    const reserved = await api.post("chat/control-assistant/session", {data: {
+      engagement_id: project.id, backend: "harness", harness_profile_id: harness.id, model: "fixture-model",
+    }});
+    expect(reserved.ok(), await reserved.text()).toBe(true);
+    const session = await reserved.json() as {id: string};
+    const initial = "# Synthetic Butler instructions\nKeep this fixture inert.\n";
+    const seeded = await api.put("butler/instructions", {data: {content: initial, expected_sha256: null}});
+    expect(seeded.ok(), await seeded.text()).toBe(true);
+
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Butler settings navigation browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const butler = page.getByRole("dialog", {name: "Butler"});
+    await butler.getByRole("button", {name: "More"}).click();
+    await butler.getByText("Settings I can help with").click();
+    await butler.getByRole("textbox", {name: "Find a setting"}).fill("Butler instructions");
+    await butler.getByRole("button", {name: /Nebula-wide Butler instructions/}).click();
+    const lens = page.getByRole("dialog", {name: "Nebula-wide Butler instructions"});
+    const editor = page.getByRole("dialog", {name: "BUTLER.md"});
+    const code = editor.getByRole("textbox", {name: "BUTLER.md"});
+    await expect(lens).toBeVisible();
+    await expect(editor.getByRole("button", {name: "Edit Markdown"})).toHaveAttribute("aria-pressed", "true");
+    await expect(code).toContainText("Synthetic Butler instructions");
+    await expect(code).toContainText("Keep this fixture inert.");
+    if (!testInfo.project.name.includes("webkit")) await expect(code).toBeFocused();
+    const stack = await code.evaluate(element => {
+      const backdrop = document.querySelector<HTMLElement>(".dialog-backdrop");
+      const lens = document.querySelector<HTMLElement>(".settings-lens-backdrop");
+      const rect = element.getBoundingClientRect();
+      return {
+        hit: document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest<HTMLElement>("[role='dialog']")?.getAttribute("aria-labelledby"),
+        backdropZ: backdrop ? getComputedStyle(backdrop).zIndex : "missing",
+        lensZ: lens ? getComputedStyle(lens).zIndex : "missing",
+      };
+    });
+    expect(stack).toMatchObject({hit: "butler-instructions-editor-title", backdropZ: "120", lensZ: "110"});
+    await code.click(); // Also verifies that the Settings lens cannot intercept the editor.
+    await expect(code).toBeFocused();
+    await code.press(testInfo.project.name.includes("webkit") ? "Meta+A" : "Control+A");
+    await page.keyboard.insertText(`${initial}Updated from the Settings popup.\n`);
+    await expect(code).toContainText("Updated from the Settings popup.");
+    await editor.getByRole("button", {name: "Save to Core"}).click();
+    await expect(editor.getByText(/Saved on Core/)).toBeVisible();
+    const saved = await (await api.get("butler/instructions")).json() as {content: string};
+    expect(saved.content).toContain("Updated from the Settings popup.");
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-labelledby="butler-instructions-editor-title"]').analyze()).violations).toEqual([]);
+    await page.screenshot({path: testInfo.outputPath("butler-settings-code-editor.png")});
+    await editor.getByRole("button", {name: "Close Butler editor"}).click();
+    await lens.getByRole("button", {name: "Done"}).click();
+
+    await page.goto(`${core.origin}/settings`);
+    const compactEntry = page.locator(".compact-settings").getByRole("button", {name: /Nebula-wide Butler instructions/});
+    if (await compactEntry.isVisible()) {
+      await compactEntry.click();
+      await expect(page.getByRole("dialog", {name: "BUTLER.md"}).getByRole("textbox", {name: "BUTLER.md"}))
+        .toContainText("Updated from the Settings popup.");
+      await page.getByRole("dialog", {name: "BUTLER.md"}).getByRole("button", {name: "Close Butler editor"}).click();
+      await page.getByRole("dialog", {name: "Nebula-wide Butler instructions"}).getByRole("button", {name: "Done"}).click();
+    }
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+
+    await openNebulaAssistantFromShell(page);
+    await butler.getByRole("button", {name: "Butler settings"}).click();
+    await butler.getByRole("button", {name: "Full Assistant settings"}).click();
+    await expect(page).toHaveURL(new RegExp(`session=${session.id}`));
+    const assistantSettings = page.getByRole("dialog", {name: "Assistant settings"});
+    await expect(assistantSettings).toBeVisible();
+    await expect(assistantSettings.getByRole("combobox", {name: "Chat runtime"})).toBeVisible();
+    await expect(butler).toBeHidden();
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat&session=${session.id}&assistantSettings=open`);
+    await expect(assistantSettings).toBeVisible();
+    await testInfo.attach("butler-settings-navigation-lan", {body: JSON.stringify({
+      origin: core.origin, buildCommit: build.commit, asset: entry, assetSha256: build.assets[entry!],
+      project: testInfo.project.name, viewport: page.viewportSize(), savedBytes: saved.content.length, sessionId: session.id,
+    }), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
@@ -8898,7 +9014,7 @@ reliabilityTest("assistant upgrade real Core nests durable subagent conversation
 });
 
 reliabilityTest("assistant upgrade real Core groups Butler initiated chats after reload", async ({page}, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(300_000);
   const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
   await withOwnedCleanup(async () => {
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
@@ -8919,18 +9035,133 @@ reliabilityTest("assistant upgrade real Core groups Butler initiated chats after
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", {name: "Show conversations"}).click();
     const sidebar = page.getByRole("complementary", {name: "Conversations"});
+    const openActions = async (title: string) => {
+      const trigger = sidebar.getByRole("button", {name: `More actions for ${title}`});
+      await sidebar.locator(".session-list-item").filter({hasText: title}).hover();
+      await trigger.click();
+    };
     await expect(sidebar.locator('[data-session-id="sidebar-butler"]')).toBeVisible();
     await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toHaveCount(0);
     await expect(sidebar.locator('[data-session-id="sidebar-ordinary-recovery"]')).toBeVisible();
     await sidebar.getByRole("button", {name: "Expand 2 chats for Butler"}).click();
     await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
     await expect(sidebar.locator('[data-session-id="sidebar-butler-chat"]')).toBeVisible();
+    await openActions("Recover paused goal");
+    await page.getByRole("menu", {name: "Actions for Recover paused goal"}).getByRole("menuitem", {name: "Archive", exact: true}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toHaveCount(0);
+    await expect(sidebar.getByRole("button", {name: "Show 1 archived Butler chats"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-recovery")).json()).metadata.archived_at).toBeTruthy();
+    await sidebar.getByRole("button", {name: "Show 1 archived Butler chats"}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
+    await openActions("Recover paused goal");
+    await page.getByRole("menu", {name: "Actions for Recover paused goal"}).getByRole("menuitem", {name: "Unarchive"}).click();
+    await expect(sidebar.getByRole("button", {name: /archived Butler chats/})).toHaveCount(0);
+    expect((await (await core.api.get("chat-sessions/sidebar-recovery")).json()).metadata.archived_at).toBeUndefined();
+    await openActions("Review blocked goal");
+    await page.getByRole("menu", {name: "Actions for Review blocked goal"}).getByRole("menuitem", {name: "Pin to top"}).click();
+    await expect(sidebar.locator(".session-list-group").first()).toContainText("Pinned");
+    await openActions("Review blocked goal");
+    await page.getByRole("menu", {name: "Actions for Review blocked goal"}).getByRole("menuitem", {name: "Set red flag for Review blocked goal"}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-butler-chat"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
+    expect((await (await core.api.get("chat-sessions/sidebar-butler-chat")).json()).metadata).toMatchObject({pinned: true, flag_color: "red"});
     await sidebar.locator('[data-session-id="sidebar-recovery"]').click();
     await expect(page).toHaveURL(/session=sidebar-recovery/);
     await page.reload();
-    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible();
+    const reopen = page.getByRole("button", {name: "Show conversations"});
+    await expect(sidebar.or(reopen).first()).toBeVisible({timeout: 30_000});
+    if (await reopen.isVisible()) await reopen.click();
+    await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible({timeout: 20_000});
+    await expect(sidebar.locator(".session-list-group").first()).toContainText("Pinned");
+    await expect(sidebar.locator('[data-session-id="sidebar-butler-chat"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
     await testInfo.attach("butler-sidebar-real-core", {body: JSON.stringify({origin: core.origin, build: "production", buildCommit: build.commit, builtAt: build.builtAt, asset: entry, assetSha256: build.assets[entry!], viewport: page.viewportSize(), sessionId: "sidebar-recovery"}), contentType: "application/json"});
     await testInfo.attach("butler-sidebar-screen", {body: await page.screenshot(), contentType: "image/png"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
+reliabilityTest("assistant upgrade bulk chat actions persist and retry on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Bulk chat actions acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await expect(page).toHaveURL(/session=/);
+    const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+    await page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true}).click();
+    const sidebar = page.getByRole("complementary", {name: "Conversations"});
+    await expect(sidebar.getByRole("button", {name: "Select conversations"})).toBeVisible();
+    await sidebar.getByRole("button", {name: "Select conversations"}).click();
+    await expect(sidebar.getByRole("button", {name: "Select all chats (7)"})).toBeEnabled();
+    await sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"}).check();
+    await sidebar.getByRole("checkbox", {name: "Select conversation Recover ordinary goal"}).check();
+    await expect(sidebar.getByText("2 selected")).toBeVisible();
+    const bulkToolbar = sidebar.locator(".session-bulk-toolbar");
+    expect(await bulkToolbar.evaluate(element => Math.round(element.getBoundingClientRect().height))).toBeLessThanOrEqual(100);
+    expect(await bulkToolbar.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"}).evaluate(input => Math.round(input.parentElement!.getBoundingClientRect().width))).toBeGreaterThanOrEqual(44);
+    expect(await sidebar.getByLabel("Action for selected conversations").evaluate(select => Math.round(select.getBoundingClientRect().height))).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({page}).include(".session-bulk-toolbar").analyze()).violations).toEqual([]);
+
+    let refuseOnce = true;
+    await page.route("**/api/v1/chat-sessions/sidebar-branch", async route => {
+      if (route.request().method() === "PATCH" && refuseOnce) {
+        refuseOnce = false;
+        await route.fulfill({status: 409, json: {detail: "Conversation changed on another device", error_id: "err_stale_revision", retryable: true}});
+      } else await route.fallback();
+    });
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("alert")).toContainText("1 of 2 conversations could not be updated");
+    await expect(sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"})).toBeChecked();
+    await expect(sidebar.getByText("1 selected")).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-ordinary-recovery")).json()).metadata.archived_at).toBeTruthy();
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation archived"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.archived_at).toBeTruthy();
+
+    await sidebar.getByRole("searchbox", {name: "Search conversations"}).fill("Ordinary branch");
+    await expect(sidebar.getByRole("button", {name: "Select all matches (1)"})).toBeEnabled();
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("restore");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation restored"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.archived_at).toBeUndefined();
+
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("pin");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation pinned"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.pinned).toBe(true);
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("flag:blue");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await expect(sidebar.getByRole("status").filter({hasText: "1 conversation flagged"})).toBeVisible();
+    expect((await (await core.api.get("chat-sessions/sidebar-branch")).json()).metadata.flag_color).toBe("blue");
+
+    await sidebar.getByRole("button", {name: "Select all matches (1)"}).click();
+    await sidebar.getByLabel("Action for selected conversations").selectOption("delete");
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    const confirmation = page.getByRole("dialog", {name: "Delete 1 selected conversation?"});
+    await expect(confirmation).toContainText("Ordinary branch");
+    await confirmation.getByRole("button", {name: "Cancel"}).click();
+    expect((await core.api.get("chat-sessions/sidebar-branch")).ok()).toBe(true);
+    await sidebar.getByRole("button", {name: "Apply"}).click();
+    await page.getByRole("dialog", {name: "Delete 1 selected conversation?"}).getByRole("button", {name: "Delete 1 conversation"}).click();
+    await expect(sidebar.getByRole("checkbox", {name: "Select conversation Ordinary branch"})).toHaveCount(0);
+    expect((await core.api.get("chat-sessions/sidebar-branch")).status()).toBe(404);
+    await page.reload();
+    const reopen = page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true});
+    await expect(sidebar.or(reopen).first()).toBeVisible({timeout: 20_000});
+    if (await reopen.isVisible()) await reopen.click();
+    await sidebar.getByRole("searchbox", {name: "Search conversations"}).fill("Ordinary branch");
+    await expect(sidebar.getByText("No conversations match")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await testInfo.attach("bulk-chat-actions-real-core", {body: JSON.stringify({origin: core.origin, build: "production", buildCommit: build.commit, builtAt: build.builtAt, asset: entry, assetSha256: build.assets[entry!], viewport: page.viewportSize()}), contentType: "application/json"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
@@ -10088,6 +10319,111 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
   ]);
 });
 
+test("assistant upgrade provider completes a goal from its own tool call on production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(300_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 150_000});
+  const stub = await startLocalModelStub({
+    responseContent: "The synthetic recon handoff is complete.",
+    streamDelayMs: 0,
+    toolCall: body => {
+      const tools = Array.isArray(body.tools) ? body.tools as Array<{function?: {name?: string}}> : [];
+      if (!tools.some(tool => tool.function?.name === "goal_complete")) return undefined;
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string}> : [];
+      if (messages.some(message => message.role === "tool")) return undefined;
+      return {name: "goal_complete", arguments: {
+        completion_summary: "Synthetic recon handoff complete.",
+        completion_evidence: ["Synthetic artifact saved in the test fixture."],
+      }};
+    },
+  });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
+  });
+  await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
+      .toBe(build.assets[entry!]);
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", {data: {
+      name: "Goal completion fixture", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: {model: "security-model", expected_revision: provider.revision},
+    });
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const createdResponse = await api.post("chat/goal-conversations", {data: {
+      engagement_id: projectId, backend: "provider", provider_id: provider.id,
+      model: "security-model", tools_enabled: true,
+      objective: "Finish a synthetic recon handoff",
+      completion_criteria: ["Save the synthetic artifact"], step_budget: 3,
+    }});
+    expect(createdResponse.ok(), await createdResponse.text()).toBe(true);
+    const created = await createdResponse.json() as {session: {id: string}; goal: {id: string; revision: number}};
+
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Goal completion LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/?view=chat&session=${created.session.id}`);
+    const started = await api.post(`chat/sessions/${created.session.id}/goal/actions`, {
+      data: {expected_revision: created.goal.revision, action: "start"},
+    });
+    expect(started.ok(), await started.text()).toBe(true);
+    const readGoal = async () => (await (await api.get(`chat/sessions/${created.session.id}/goal`)).json()) as {
+      status: string; completion_summary: string; completion_evidence: Array<{kind: string; detail: string}>;
+      linked_turn_ids: string[];
+    };
+    await expect.poll(async () => (await readGoal()).status, {timeout: 90_000}).toMatch(/^(completed|paused|blocked|cancelled)$/);
+    const savedGoal = await readGoal();
+    const offeredTools = stub.requests.map(body => (Array.isArray(body.tools) ? body.tools as Array<{function?: {name?: string}}> : [])
+      .map(tool => tool.function?.name).filter(Boolean));
+    const transcript = await (await api.get(`chat/sessions/${created.session.id}/messages`)).json() as Array<{
+      role: string; metadata?: {tool_results?: Array<{capability?: string; status?: string; summary?: string}>};
+    }>;
+    const results = transcript.filter(message => message.role === "assistant").map(message => message.metadata?.tool_results);
+    expect(savedGoal.status, `offered tools: ${JSON.stringify(offeredTools)}; saved results: ${JSON.stringify(results)}`).toBe("completed");
+    expect(savedGoal.completion_summary).toBe("Synthetic recon handoff complete.");
+    expect(savedGoal.completion_evidence).toEqual([{
+      kind: "agent_reported", detail: "Synthetic artifact saved in the test fixture.",
+      turn_id: savedGoal.linked_turn_ids[0],
+    }]);
+    expect(savedGoal.linked_turn_ids).toHaveLength(1);
+    const goalPanel = page.getByRole("region", {name: "Conversation goal"});
+    const reveal = page.getByRole("button", {name: "View full goal and evidence gates"});
+    const showCompletedGoal = async () => {
+      await expect.poll(async () => (await reveal.isVisible()) || (await goalPanel.locator(".chat-goal-status.completed").isVisible()), {timeout: 20_000}).toBe(true);
+      if (!await goalPanel.locator(".chat-goal-status.completed").isVisible()) {
+        await reveal.focus();
+        await reveal.press("Enter");
+      }
+      await expect(goalPanel).toContainText("completed", {timeout: 20_000});
+    };
+    await showCompletedGoal();
+    await goalPanel.getByText("Completion evidence").click();
+    await expect(goalPanel).toContainText("Synthetic artifact saved in the test fixture.");
+    await expect(page.getByText("The synthetic recon handoff is complete.", {exact: true})).toBeVisible();
+    await page.reload();
+    await showCompletedGoal();
+    expect((await readGoal()).linked_turn_ids).toHaveLength(1);
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    await testInfo.attach("provider-goal-completion-lan", {body: JSON.stringify({
+      origin: core.origin, build: "ui/dist production", project: testInfo.project.name,
+      viewport: page.viewportSize(), goalId: created.goal.id, outcome: "tool call, completed, no continuation, refreshed",
+    }), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade real Core shows the live queue position while provider capacity is full", async ({ page }, testInfo) => {
   test.setTimeout(150_000);
   // One provider slot, so a second turn waits in Core's capacity queue.
@@ -11061,7 +11397,13 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await expect(page.getByRole("button", {name: "New chat", exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Open Butler"}).click();
     const controlAssistant = page.getByRole("dialog", {name: "Butler"});
-    await controlAssistant.getByRole("button", {name: "More"}).click();
+    const view = await controlAssistant.evaluate(dialog => {
+      const bounds = dialog.getBoundingClientRect();
+      const visual = window.visualViewport;
+      return {top: bounds.top, height: bounds.height, visualTop: visual?.offsetTop ?? 0, visualHeight: visual?.height ?? innerHeight};
+    });
+    expect(Math.abs(view.top - view.visualTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(view.height - view.visualHeight)).toBeLessThanOrEqual(1);
     await expect(controlAssistant.getByRole("button", {name: "Start Butler Voice"})).toBeVisible();
     await controlAssistant.getByRole("button", {name: "Start Butler Voice"}).click();
     await expect(page.getByRole("dialog", {name: "Butler Voice"}).getByRole("alert")).toContainText("trusted HTTPS address");

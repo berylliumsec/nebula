@@ -37,6 +37,28 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
+def test_product_passages_keep_short_sentences_at_chunk_boundaries(
+    tmp_path, monkeypatch
+):
+    from scripts import build_product_knowledge as builder
+
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    source = tmp_path / "guide.md"
+    sentence = "Butler can save a different main harness and provider subagent on the same chat."
+    source.write_text(
+        "# Assistant\n\n" + "Previous instruction. " * 62 + sentence,
+        encoding="utf-8",
+    )
+
+    entries = builder.passages([source])
+    assert len(entries) == 2
+    assert any(sentence in text for _, _, _, text in entries)
+    assert all(
+        len(text) <= builder.MAX_CHARS + len("Assistant\n\n")
+        for _, _, _, text in entries
+    )
+
+
 def test_product_search_finds_docker_host_access_guidance(monkeypatch):
     # Search must work without a warmed embedding model or a network request.
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
@@ -107,6 +129,19 @@ def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
     )
 
 
+def test_product_search_finds_direct_butler_editor_navigation(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I edit Butler instructions from the Settings popup?"
+    )
+    assert any(
+        "butler" in str(item["text"]).lower()
+        and "code editor" in str(item["text"]).lower()
+        and "settings popup" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_explains_butler_conversation_grouping(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
@@ -158,6 +193,30 @@ def test_product_search_finds_butler_goal_handoff(monkeypatch):
         "How does Butler hand off a paused harness planning goal to DeepSeek?"
     )
     assert any("nebula.global.handoff_goal" in str(item["text"]) for item in matches)
+
+
+def test_product_search_explains_pins_flags_and_butler_archive(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where are pinned flagged chats and archived Butler chats?"
+    )
+    assert any(
+        "Butler's own collapsed Archived section" in str(item["text"])
+        and "pin a chat" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_explains_bulk_chat_actions(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I select multiple chats and bulk archive or delete them?"
+    )
+    assert any(
+        "Select conversations loads the full project chat list" in str(item["text"])
+        and "Delete permanently" in str(item["text"])
+        for item in matches
+    )
 
 
 def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):

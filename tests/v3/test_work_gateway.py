@@ -14,6 +14,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.harnesses import HarnessRuntimeService, _harness_developer_instructions
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tool_results import MAX_EXCERPT_BYTES
 from nebula.v3.work import WorkCreate
 
 
@@ -56,6 +57,7 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
         } >= {
             "work.agents",
             "work.list",
+            "work.get",
             "work.create",
             "work.check_in",
         }
@@ -67,6 +69,8 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
         )
         assert "Project Work is available" in instructions
         assert "work.agents" in instructions
+        assert "next_offset" in instructions
+        assert "next_description_offset" in instructions
         assert "minutes" not in instructions
         runtime._active[session.id] = SimpleNamespace(
             turn_id=turn.id, connection=None, task=None
@@ -212,5 +216,79 @@ def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
         )["isError"] is True
         assert len(runtime.work.updates(child.id, child_item.id)) == 1
         runtime._active.pop(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_gateway_work_pages_and_reads_long_item(tmp_path):
+    async def scenario() -> None:
+        store, project, profile, runtime = _runtime(tmp_path)
+        long_description = "é" * 20_000
+        original = runtime.work.create(
+            project.id,
+            WorkCreate(title="Full details", description=long_description),
+            actor_id="operator",
+        )
+        for index in range(35):
+            runtime.work.create(
+                project.id,
+                WorkCreate(title=f"Task {index}", description="note " * 150),
+                actor_id="operator",
+            )
+        _chat, _chat_turn, turn = runtime.prepare_chat(
+            engagement_id=project.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Review Work",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        catalog = {
+            tool["name"]: tool for tool in runtime._gateway_catalog(session)["tools"]
+        }
+        assert "offset" in catalog["work.list"]["inputSchema"]["properties"]
+        assert "description_offset" in catalog["work.get"]["inputSchema"]["properties"]
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=turn.id, connection=None, task=None
+        )
+        try:
+            offset = None
+            seen: list[str] = []
+            while True:
+                arguments = {} if offset is None else {"offset": offset}
+                page = await runtime._gateway_call(session, "work.list", arguments)
+                assert page["isError"] is False
+                assert (
+                    len(page["content"][0]["text"].encode("utf-8")) <= MAX_EXCERPT_BYTES
+                )
+                output = page["structuredContent"]
+                seen.extend(item["id"] for item in output["items"])
+                offset = output["next_offset"]
+                if offset is None:
+                    break
+            assert len(seen) == len(set(seen)) == 36
+            assert original.id in seen
+
+            description_offset = None
+            chunks: list[str] = []
+            while True:
+                arguments = {"item_id": original.id}
+                if description_offset is not None:
+                    arguments["description_offset"] = description_offset
+                read = await runtime._gateway_call(session, "work.get", arguments)
+                assert read["isError"] is False
+                assert (
+                    len(read["content"][0]["text"].encode("utf-8")) <= MAX_EXCERPT_BYTES
+                )
+                output = read["structuredContent"]
+                chunks.append(output["item"]["description"])
+                description_offset = output["next_description_offset"]
+                if description_offset is None:
+                    break
+            assert "".join(chunks) == long_description
+        finally:
+            runtime._active.pop(session.id)
 
     asyncio.run(scenario())

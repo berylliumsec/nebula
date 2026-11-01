@@ -1,6 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest } from "../api/types";
-import { beginGuardedStream, detachChatStream } from "./chatStreamLifecycle";
+import { beginGuardedStream, detachChatStream, harnessActivityOwnsStream } from "./chatStreamLifecycle";
+
+describe("harness activity stream ownership", () => {
+  it("keeps a submitted stream attached while the old session closes before acknowledgement", () => {
+    expect(harnessActivityOwnsStream({ lastTurnId: "old-turn" }, "harness", undefined)).toBe(false);
+  });
+
+  it("rejects old-session activity after the replacement turn is acknowledged", () => {
+    expect(harnessActivityOwnsStream({ lastTurnId: "old-turn" }, "harness", "new-turn")).toBe(false);
+  });
+
+  it("recognizes the acknowledged turn while active and after it becomes the last turn", () => {
+    expect(harnessActivityOwnsStream({ turnId: "new-turn", lastTurnId: "old-turn" }, "harness", "new-turn")).toBe(true);
+    expect(harnessActivityOwnsStream({ lastTurnId: "new-turn" }, "harness", "new-turn")).toBe(true);
+  });
+
+  it("does not use previous completion to finish a different active turn", () => {
+    expect(harnessActivityOwnsStream({ turnId: "other-turn", lastTurnId: "new-turn" }, "harness", "new-turn")).toBe(false);
+  });
+
+  it("never treats harness activity as authority over a provider stream", () => {
+    expect(harnessActivityOwnsStream({ lastTurnId: "turn" }, "provider", "turn")).toBe(false);
+  });
+});
 
 describe("detachChatStream", () => {
   it("aborts only the viewer transport and records a harness detachment", () => {

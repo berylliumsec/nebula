@@ -23,6 +23,18 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "src/nebula/v3/product_knowledge.sqlite3.b85"
 MODEL = ONNXMiniLM_L6_V2.MODEL_NAME
 MAX_CHARS = 1_400
+OVERLAP_CHARS = 400
+
+
+def passage_chunks(body: str) -> list[tuple[int, str]]:
+    """Keep short sentences and nearby context intact in overlapping passages."""
+
+    chunks: list[tuple[int, str]] = []
+    for start in range(0, len(body), MAX_CHARS - OVERLAP_CHARS):
+        chunk = body[start : start + MAX_CHARS].strip()
+        if chunk:
+            chunks.append((start, chunk))
+    return chunks
 
 
 def source_paths() -> list[Path]:
@@ -116,8 +128,8 @@ def passages(paths: list[Path]) -> list[tuple[str, str, str, str]]:
                 return
             body = "\n\n".join(paragraphs).strip()
             paragraphs = []
-            for offset in range(0, len(body), MAX_CHARS):
-                text = f"{heading}\n\n{body[offset : offset + MAX_CHARS]}".strip()
+            for offset, chunk in passage_chunks(body):
+                text = f"{heading}\n\n{chunk}".strip()
                 if len(text) < 80:
                     continue
                 identifier = hashlib.sha256(

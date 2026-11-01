@@ -27,6 +27,9 @@ class ModelDescriptor(BaseModel):
     # OpenRouter's ``reasoning.mandatory``: the model always reasons and
     # refuses a request to skip it, so ``effort: none`` is never sent to it.
     reasoning_mandatory: bool = False
+    # Exact effort names the model advertises. None means the catalog did not
+    # provide a list; it must not be treated as permission to remap a request.
+    reasoning_supported_efforts: list[str] | None = None
     route_limits: list["ModelRouteDescriptor"] = Field(default_factory=list)
     route_limits_verified: bool = False
     route_limits_checked_at: str | None = None
@@ -207,6 +210,11 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
                 ),
                 alias_target=_slug(alias_target.get("slug")),
                 reasoning_mandatory=reasoning.get("mandatory") is True,
+                reasoning_supported_efforts=(
+                    _strings(reasoning["supported_efforts"])
+                    if isinstance(reasoning.get("supported_efforts"), list)
+                    else None
+                ),
             ),
         )
     return list(models.values())

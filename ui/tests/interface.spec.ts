@@ -2303,7 +2303,6 @@ reloadTest("stabilization Butler Voice pauses and resumes without losing project
   });
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("button", { name: "Open Butler" }).click();
-  await page.getByRole("dialog", { name: "Butler" }).getByRole("button", { name: "More" }).click();
   await page.getByRole("button", { name: "Start Butler Voice" }).click();
   const voice = page.getByRole("dialog", { name: "Butler Voice" });
   await expect(voice).toBeVisible();
@@ -2406,13 +2405,20 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
   await expect(butler.getByRole("region", { name: "Chat" })).toBeVisible();
   await expect(butler.getByText("Ask Butler", { exact: true })).toBeVisible();
+  const voice = butler.getByRole("button", { name: "Start Butler Voice" });
   const settings = butler.getByRole("button", { name: "Butler settings" });
   const hide = butler.getByRole("button", { name: "Hide Butler" });
   const close = butler.getByRole("button", { name: "Close Butler" });
+  const voiceBox = await voice.boundingBox();
   const settingsBox = await settings.boundingBox();
   const hideBox = await hide.boundingBox();
   const closeBox = await close.boundingBox();
-  expect(settingsBox && hideBox && closeBox && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+  expect(voiceBox && settingsBox && hideBox && closeBox && voiceBox.x < settingsBox.x && settingsBox.x < hideBox.x && hideBox.x < closeBox.x).toBe(true);
+  expectTouchTarget(voiceBox?.width, "Start Butler Voice width");
+  expectTouchTarget(voiceBox?.height, "Start Butler Voice height");
+  await expect(voice).toHaveText("");
+  await expect(voice.locator("svg")).toHaveCount(1);
+  await expect(voice).toHaveAttribute("title", "Start Butler Voice");
   expectTouchTarget(hideBox?.width, "Hide Butler width");
   expectTouchTarget(hideBox?.height, "Hide Butler height");
   await expect(hide).toHaveText("");
@@ -2422,8 +2428,8 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   await expect(butler.getByRole("region", { name: "Butler oversight" })).toBeVisible();
   await expect(composer).toHaveValue("Draft stays with Butler");
   await butler.getByRole("button", { name: "More" }).click();
-  await expect(butler.getByRole("button", { name: "Start Butler Voice" })).toBeVisible();
-  await expect(butler.getByRole("group", { name: "Butler options" }).getByRole("button", { name: "Hide Butler" })).toHaveCount(0);
+  await expect(voice).toBeVisible();
+  await expect(butler.getByRole("region", { name: "More" }).getByRole("button", { name: "Start Butler Voice" })).toHaveCount(0);
   await expect(butler.getByRole("region", { name: "Butler memory" })).toBeVisible();
   await expect(butler.getByText("Settings I can help with")).toBeVisible();
   await butler.getByRole("button", { name: "Chat" }).click();
@@ -2435,13 +2441,45 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   expect(panel && input && input.y + input.height <= panel.y + panel.height).toBe(true);
   const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
   expect(input && input.y + input.height <= visualBottom + 1).toBe(true);
+  const portrait = page.viewportSize()!;
+  if (portrait.width <= 430) {
+    expect(panel!.x).toBeGreaterThanOrEqual(8);
+    expect(panel!.x + panel!.width).toBeLessThanOrEqual(portrait.width - 8);
+    expect(panel!.y).toBeGreaterThanOrEqual(40);
+    expect(panel!.height).toBeLessThanOrEqual(portrait.height * 0.8);
+    await expect(page.getByRole("button", { name: "Dismiss Butler panel" })).toBeVisible();
+    await page.setViewportSize({ width: portrait.width, height: 430 });
+    const keyboardPanel = await butler.boundingBox();
+    const keyboardInput = await composer.boundingBox();
+    expect(keyboardPanel!.y).toBeGreaterThanOrEqual(8);
+    expect(keyboardInput!.y + keyboardInput!.height).toBeLessThanOrEqual(431);
+    await page.setViewportSize(portrait);
+    await page.evaluate(() => {
+      const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
+      const simulated = Object.assign(new EventTarget(), {
+        width: innerWidth, height: 320, offsetLeft: 0, offsetTop: 120, pageLeft: 0, pageTop: 120, scale: 1,
+      });
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: simulated });
+      (window as Window & { restoreButlerViewport?: () => void }).restoreButlerViewport = () => {
+        if (original) Object.defineProperty(window, "visualViewport", original);
+        else delete (window as Window & { visualViewport?: VisualViewport }).visualViewport;
+        window.dispatchEvent(new Event("resize"));
+      };
+      window.dispatchEvent(new Event("resize"));
+    });
+    const shiftedPanel = await butler.boundingBox();
+    const shiftedInput = await composer.boundingBox();
+    expect(shiftedPanel!.y).toBeGreaterThanOrEqual(120);
+    expect(shiftedPanel!.y + shiftedPanel!.height).toBeLessThanOrEqual(440);
+    expect(shiftedInput!.y + shiftedInput!.height).toBeLessThanOrEqual(440);
+    await page.evaluate(() => (window as Window & { restoreButlerViewport?: () => void }).restoreButlerViewport?.());
+  }
   expect(await butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
   for (const name of ["Chat", "Work", "More"]) {
     const button = await butler.getByRole("button", { name }).boundingBox();
     expectTouchTarget(button?.height, `${name} tab height`);
   }
   expect((await new AxeBuilder({ page }).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
-  const portrait = page.viewportSize()!;
   if (portrait.width <= 430) {
     await page.setViewportSize({ width: 844, height: 390 });
     await expect.poll(async () => butler.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
@@ -2454,6 +2492,12 @@ reloadTest("assistant popup Butler separates Chat, Work, and More without losing
   await expect(page.getByRole("button", { name: "Show Butler" })).toBeVisible();
   await page.getByRole("button", { name: "Show Butler" }).click();
   await expect(composer).toHaveValue("Draft stays with Butler");
+  if (portrait.width <= 430) {
+    await page.getByRole("button", { name: "Dismiss Butler panel" }).click({ position: { x: 8, y: 8 } });
+    await expect(butler).toBeHidden();
+    await page.getByRole("button", { name: "Show Butler" }).click();
+    await expect(composer).toHaveValue("Draft stays with Butler");
+  }
   await butler.getByRole("button", { name: "Close Butler" }).click();
   await page.getByRole("button", { name: "Open Butler" }).click();
   await expect(butler.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
@@ -4120,6 +4164,7 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
 });
 
 reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane", async ({ page }) => {
+  test.setTimeout(270_000);
   const butler = { ...entity, id: "group-butler", engagement_id: "scratch-project", title: "Butler", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { control_assistant: true } };
   const recovery = { ...entity, id: "group-recovery", engagement_id: "scratch-project", title: "Recover paused Apple Music goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
   const other = { ...entity, id: "group-other", engagement_id: "scratch-project", title: "Recover blocked Siri AI goal", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { butler_initiated: true } };
@@ -4140,6 +4185,19 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
     }
     if (path.endsWith("/chat/control-assistant/session") && route.request().method() === "GET") return route.fulfill({ json: butler });
     const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && route.request().method() === "PATCH") {
+      const change = route.request().postDataJSON() as { archived?: boolean; pinned?: boolean; flag_color?: string | null; expected_revision: number };
+      if (change.expected_revision !== selected.revision) return route.fulfill({ status: 409, json: { detail: "Conversation changed" } });
+      const metadata: Record<string, unknown> = { ...selected.metadata };
+      if (change.archived === true) metadata.archived_at = "2026-09-22T12:00:00Z";
+      if (change.archived === false) delete metadata.archived_at;
+      if (change.pinned === true) metadata.pinned = true;
+      if (change.pinned === false) delete metadata.pinned;
+      if (change.flag_color) metadata.flag_color = change.flag_color;
+      if (change.flag_color === null) delete metadata.flag_color;
+      Object.assign(selected, { revision: selected.revision + 1, metadata });
+      return route.fulfill({ json: selected });
+    }
     if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
     if (/\/chat\/sessions\/group-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
     if (/\/chat\/sessions\/group-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
@@ -4147,6 +4205,11 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
   });
   await openWorkspace(page, "/?view=chat&session=group-ordinary", "Workbench");
   const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const openActions = async (title: string) => {
+    const trigger = sidebar.getByRole("button", { name: `More actions for ${title}` });
+    await sidebar.locator(".session-list-item").filter({ hasText: title }).hover();
+    await trigger.click();
+  };
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
   if (await show.isVisible()) await show.click();
@@ -4166,19 +4229,37 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
   await sidebar.getByRole("button", { name: "Expand 1 subagent for Recover paused Apple Music goal" }).click();
   await expect(sidebar.locator('[data-session-id="group-subagent"]')).toBeVisible();
   await expect(sidebar.locator('[data-session-id="group-subagent"]').locator("..")).toHaveClass(/nested-subagent-deep/);
-  await sidebar.getByRole("button", { name: "More actions for Recover paused Apple Music goal" }).click();
+  await openActions("Recover paused Apple Music goal");
   await expect(page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Copy link" })).toBeVisible();
   await page.keyboard.press("Escape");
+  await openActions("Recover paused Apple Music goal");
+  const archiveAction = page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Archive", exact: true });
+  await expect(archiveAction).toBeVisible();
+  await sidebar.locator("nav").evaluate(element => { element.scrollTop += 24; });
+  await archiveAction.click();
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: "Show 1 archived Butler chats" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "Show 1 archived Butler chats" }).click();
+  await expect(sidebar.locator('[data-session-id="group-recovery"]')).toBeVisible();
+  await openActions("Recover paused Apple Music goal");
+  await page.getByRole("menu", { name: "Actions for Recover paused Apple Music goal" }).getByRole("menuitem", { name: "Unarchive" }).click();
+  await expect(sidebar.getByRole("button", { name: /archived Butler chats/ })).toHaveCount(0);
+  await openActions("Operator research");
+  await page.getByRole("menu", { name: "Actions for Operator research" }).getByRole("menuitem", { name: "Pin to top" }).click();
+  await expect(sidebar.locator(".session-list-group").first()).toContainText("Pinned");
+  await openActions("Operator research");
+  await page.getByRole("menu", { name: "Actions for Operator research" }).getByRole("menuitem", { name: "Set red flag for Operator research" }).click();
+  await expect(sidebar.locator('[data-session-id="group-ordinary"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
   await sidebar.locator('[data-session-id="group-recovery"]').click();
   await expect(page).toHaveURL(/session=group-recovery/);
   await page.reload();
   const reopened = page.getByRole("complementary", { name: "Conversations" });
   const reopen = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
-  if (mobile) {
-    await expect(reopen).toBeVisible();
-    await reopen.click();
-  } else if (await reopen.isVisible()) await reopen.click();
+  await expect(reopened.or(reopen).first()).toBeVisible({ timeout: 30_000 });
+  if (await reopen.isVisible()) await reopen.click();
   await expect(reopened).toBeVisible();
+  await expect(reopened.locator(".session-list-group").first()).toContainText("Pinned");
+  await expect(reopened.locator('[data-session-id="group-ordinary"] .conversation-flag-marker')).toHaveAttribute("data-color", "red");
   await expect(reopened.locator('[data-session-id="group-recovery"]')).toBeVisible();
   await reopened.getByRole("searchbox", { name: "Search conversations" }).fill("Inspect stream path");
   await expect(reopened.locator('[data-session-id="group-butler"]')).toBeVisible();
@@ -15125,6 +15206,19 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   });
   await installTruthfulCore(page);
   let attentionFail = false;
+  const butlerAnswer = [
+    "| Goal | ID | Status |\n| --- | --- | --- |\n| Example Security Research Project | 89851bf1-1f41-40e1-8a9d-437f131ab601 | Paused |",
+    "| Goal | Owner | Status | Evidence |\n| --- | --- | --- | --- |\n| Research | Sample assistant | Paused | https://example.test/evidence/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |",
+    ...Array.from({length: 20}, (_, index) => `Saved research update ${index + 1}. The operator can continue reading the full conversation.`),
+  ].join("\n\n");
+  await page.route(/\/api\/v1\/chat\/control-assistant\/session(?:\?|$)/, route => route.fulfill({json: {
+    ...entity, id: "iphone-butler", engagement_id: "scratch-project", title: "Butler",
+    backend: "harness", harness_profile_id: "local", model: "model", metadata: {control_assistant: true},
+  }}));
+  await page.route(/\/api\/v1\/chat\/sessions\/iphone-butler\/messages(?:\?|$)/, route => route.fulfill({json: [{
+    ...entity, id: "iphone-butler-answer", engagement_id: "scratch-project", session_id: "iphone-butler",
+    sequence: 1, role: "assistant", content: butlerAnswer, citations: [], metadata: {},
+  }]}));
   await page.route("**/api/v1/chat/attention", async route => {
     if (attentionFail) await route.fulfill({status: 503, json: {detail: "Synthetic connection failure"}});
     else await route.fulfill({json: [{
@@ -15140,24 +15234,84 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
   await page.getByRole("button", {name: "Open Butler"}).click();
   const controlAssistant = page.getByRole("dialog", {name: "Butler"});
   await expect(controlAssistant).toBeVisible();
-  await controlAssistant.getByRole("button", {name: "More"}).click();
+  const tables = controlAssistant.getByRole("region", {name: "Butler response table"});
+  await expect(tables).toHaveCount(2);
+  const table = tables.first();
+  await expect(table.getByRole("cell", {name: "Paused"})).toBeVisible();
+  const nativeLayout = await controlAssistant.evaluate(dialog => {
+    const panel = dialog.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const composer = dialog.querySelector('[aria-label="Ask Butler a question"]')!.getBoundingClientRect();
+    const table = dialog.querySelector('[aria-label="Butler response table"]')!.getBoundingClientRect();
+    const status = dialog.querySelector('[aria-label="Butler response table"] td:last-child')!.getBoundingClientRect();
+    return {panel: {left: panel.left, right: panel.right, top: panel.top, height: panel.height},
+      viewport: {left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0,
+        width: viewport?.width ?? innerWidth, height: viewport?.height ?? innerHeight},
+      composerBottom: composer.bottom, tableRight: table.right, statusRight: status.right};
+  });
+  expect(nativeLayout.panel.left).toBeGreaterThanOrEqual(nativeLayout.viewport.left - 1);
+  expect(nativeLayout.panel.right).toBeLessThanOrEqual(nativeLayout.viewport.left + nativeLayout.viewport.width + 1);
+  expect(Math.abs(nativeLayout.panel.top - nativeLayout.viewport.top)).toBeLessThanOrEqual(1);
+  expect(Math.abs(nativeLayout.panel.height - nativeLayout.viewport.height)).toBeLessThanOrEqual(1);
+  expect(nativeLayout.composerBottom).toBeLessThanOrEqual(nativeLayout.viewport.top + nativeLayout.viewport.height + 1);
+  expect(nativeLayout.statusRight).toBeLessThanOrEqual(nativeLayout.tableRight + 1);
+  if (page.viewportSize()!.width <= 430) {
+    const wideTable = tables.last();
+    expect(await wideTable.evaluate(element => element.scrollWidth - element.clientWidth)).toBeGreaterThan(0);
+    expect(await wideTable.evaluate(element => getComputedStyle(element, "::before").content)).toContain("Swipe for more columns");
+    await wideTable.evaluate(element => { element.scrollLeft = element.scrollWidth; });
+    expect(await wideTable.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+    await wideTable.evaluate(element => { element.scrollLeft = 0; });
+  }
+  await expect(controlAssistant.getByRole("textbox", {name: "Ask Butler a question"})).toHaveAttribute("placeholder", "Message Butler…");
+  await expect(controlAssistant).toHaveAttribute("aria-modal", "true");
+  expect(await page.locator(".assistant-only-shell").evaluate(shell => (shell as HTMLElement).inert)).toBe(true);
+  expect(await controlAssistant.evaluate(dialog => {
+    const body = dialog.querySelector("#butler-view-chat")!.parentElement!;
+    return body.scrollHeight - body.clientHeight;
+  })).toBeGreaterThan(24);
+  await table.scrollIntoViewIfNeeded();
+  await page.screenshot({path: testInfo.outputPath("butler-native-fullscreen.png")});
+  const jump = controlAssistant.getByRole("button", {name: "Scroll to latest message"});
+  await expect(jump).toBeVisible();
+  const jumpBottom = await jump.evaluate(element => element.getBoundingClientRect().bottom);
+  const composerTop = await controlAssistant.getByRole("textbox", {name: "Ask Butler a question"}).evaluate(element => element.getBoundingClientRect().top);
+  expect(jumpBottom).toBeLessThanOrEqual(composerTop + 1);
+  await jump.click();
   const startVoice = controlAssistant.getByRole("button", {name: "Start Butler Voice"});
   await expect(startVoice).toBeVisible();
   if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
     const button = await startVoice.boundingBox();
-    const panel = await controlAssistant.boundingBox();
+    const settingsButton = await controlAssistant.getByRole("button", {name: "Butler settings"}).boundingBox();
     const composer = controlAssistant.getByRole("textbox", {name: "Ask Butler a question"});
     const composerBox = await composer.boundingBox();
     const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
-    expect(button!.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 48);
-    expect(button!.height).toBeGreaterThanOrEqual(48);
-    expect(button!.y).toBeGreaterThanOrEqual(panel!.y + 44);
+    expectTouchTarget(button?.width, "Start Butler Voice width");
+    expectTouchTarget(button?.height, "Start Butler Voice height");
+    expect(Math.abs(button!.y - settingsButton!.y)).toBeLessThanOrEqual(1);
+    expect(button!.x).toBeLessThan(settingsButton!.x);
+    await expect(startVoice).toHaveText("");
     expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(visualBottom + 1);
     await expect(composer).not.toBeFocused();
     await expect(controlAssistant.getByRole("button", {name: "Move Butler"})).toBeHidden();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
+  const butlerComposer = controlAssistant.getByRole("textbox", {name: "Ask Butler a question"});
+  await butlerComposer.focus();
+  await expect(butlerComposer).toBeFocused();
+  if (testInfo.project.name === "mobile-webkit") {
+    const originalViewport = page.viewportSize()!;
+    await page.setViewportSize({width: originalViewport.width, height: originalViewport.height - 180});
+    await expect.poll(() => controlAssistant.evaluate(dialog => {
+      const panel = dialog.getBoundingClientRect();
+      const visual = window.visualViewport;
+      const input = dialog.querySelector('[aria-label="Ask Butler a question"]')!.getBoundingClientRect();
+      return Math.max(Math.abs(panel.height - (visual?.height ?? innerHeight)), input.bottom - ((visual?.offsetTop ?? 0) + (visual?.height ?? innerHeight)));
+    })).toBeLessThanOrEqual(1);
+    await page.setViewportSize(originalViewport);
+  }
   await controlAssistant.getByRole("button", {name: "Close Butler"}).click();
+  expect(await page.locator(".assistant-only-shell").evaluate(shell => (shell as HTMLElement).inert)).toBe(false);
   await page.getByRole("button", {name: "Start new chat"}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
   await expect(composer).toBeVisible();

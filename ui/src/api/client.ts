@@ -3683,6 +3683,9 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     ...chatSessionSubagents(value.metadata),
     allowAgentMessaging: value.metadata?.allow_agent_messaging === true,
     archivedAt: typeof value.metadata?.archived_at === "string" ? value.metadata.archived_at : undefined,
+    pinned: value.metadata?.pinned === true,
+    flagColor: ["red", "orange", "yellow", "green", "blue", "purple"].includes(String(value.metadata?.flag_color))
+      ? value.metadata?.flag_color as ChatSessionSummary["flagColor"] : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
@@ -9573,6 +9576,24 @@ export class ApiClient {
       {
         method: "PATCH",
         body: JSON.stringify({ archived, expected_revision: expectedRevision }),
+      },
+    ).then(mapChatSession);
+  }
+
+  setChatSessionPriority(
+    sessionId: string,
+    changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null },
+    expectedRevision: number,
+  ): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(
+      `chat-sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...(changes.pinned !== undefined ? { pinned: changes.pinned } : {}),
+          ...(changes.flagColor !== undefined ? { flag_color: changes.flagColor } : {}),
+          expected_revision: expectedRevision,
+        }),
       },
     ).then(mapChatSession);
   }

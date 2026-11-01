@@ -1,4 +1,14 @@
-import type { ChatCompletionRequest } from "../api/types";
+import type { ChatCompletionRequest, HarnessSessionActivity } from "../api/types";
+
+/** Idle activity from an old session cannot finish a newly submitted stream. */
+export function harnessActivityOwnsStream(
+  activity: Pick<HarnessSessionActivity, "turnId" | "lastTurnId">,
+  backend: ChatCompletionRequest["backend"] | undefined,
+  acknowledgedTurnId: string | undefined,
+): boolean {
+  return backend === "harness" && Boolean(acknowledgedTurnId)
+    && acknowledgedTurnId === (activity.turnId ?? activity.lastTurnId);
+}
 
 export function detachChatStream(
   controller: AbortController | undefined,

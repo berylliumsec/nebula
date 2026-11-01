@@ -12,13 +12,15 @@ import {logCaughtDiagnostic} from "../diagnostics/logger";
 import styles from "./ButlerInstructionsSettings.module.css";
 
 const MAX_FILE_BYTES = 32_768;
+const EDITOR_START = {line: 1, column: 1, request: 1};
 
 interface Props {
   api?: ApiClient;
   previewMode?: boolean;
+  openEditorOnLoad?: boolean;
 }
 
-export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
+export function ButlerInstructionsSettings({api, previewMode = false, openEditorOnLoad = false}: Props) {
   const [saved, setSaved] = useState<ButlerInstructionsFile>();
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
@@ -40,6 +42,10 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
         setSaved(next);
         setDraft(next.content ?? "");
         setError(undefined);
+        if (openEditorOnLoad) {
+          setView("edit");
+          setOpen(true);
+        }
       })
       .catch((caught) => {
         if (controller.signal.aborted) return;
@@ -48,7 +54,7 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
       })
       .finally(() => {if (!controller.signal.aborted) setLoading(false);});
     return () => controller.abort();
-  }, [api, previewMode]);
+  }, [api, previewMode, openEditorOnLoad]);
 
   const dirty = saved !== undefined && draft !== (saved.content ?? "");
   const bytes = new TextEncoder().encode(draft).length;
@@ -168,7 +174,7 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
       <span className={styles.note}>UTF-8 Markdown · 32 KiB maximum · saved only on Core</span>
     </div>
     {open && saved && createPortal(<ModalSurface className={`${styles.dialog} complex-dialog`} labelledBy="butler-instructions-editor-title" onClose={closeFile}>
-      <header className={styles.dialogHeader}>
+      <header className={styles.dialogHeader} role="presentation">
         <div><small>NEBULA · BUTLER</small><h2 id="butler-instructions-editor-title"><FileText size={19} aria-hidden="true" /> BUTLER.md</h2></div>
         <button type="button" className="icon-button subtle" aria-label="Close Butler editor" title="Close Butler editor" onClick={closeFile}><X size={18} aria-hidden="true" /></button>
       </header>
@@ -184,9 +190,9 @@ export function ButlerInstructionsSettings({api, previewMode = false}: Props) {
       {notice && <p className={styles.dialogNotice} role="status">{notice}</p>}
       {confirmClose && <div className={styles.closePrompt} role="alert"><span>Discard unsaved changes?</span><button type="button" className="button quiet" onClick={() => setConfirmClose(false)}>Keep editing</button><button type="button" className="button danger" onClick={() => {setDraft(saved.content ?? ""); setOpen(false); setConfirmClose(false);}}>Discard draft</button></div>}
       <div className={styles.editorBody}>
-        {view === "preview" ? <EditorMarkdownPreview content={draft} filePath="BUTLER.md" /> : <CodeMirrorSurface active ariaLabel="BUTLER.md" filePath="BUTLER.md" value={draft} onChange={(content) => {setDraft(content); setNotice(undefined);}} onCursorChange={(line, column) => setCursor({line, column})} onSave={() => void save()} wordWrap minimap={false} stickyScroll={false} />}
+        {view === "preview" ? <EditorMarkdownPreview content={draft} filePath="BUTLER.md" /> : <CodeMirrorSurface active ariaLabel="BUTLER.md" filePath="BUTLER.md" reveal={openEditorOnLoad ? EDITOR_START : undefined} value={draft} onChange={(content) => {setDraft(content); setNotice(undefined);}} onCursorChange={(line, column) => setCursor({line, column})} onSave={() => void save()} wordWrap minimap={false} stickyScroll={false} />}
       </div>
-      <footer className={styles.dialogFooter}>
+      <footer className={styles.dialogFooter} role="presentation">
         <span className={styles.editorMeta}>{dirty ? "Unsaved changes" : "Saved version"} · {bytes.toLocaleString()} / {MAX_FILE_BYTES.toLocaleString()} bytes {view === "edit" && `· Ln ${cursor.line}, Col ${cursor.column}`}</span>
         <div className={styles.footerActions}><button type="button" className="button quiet" onClick={() => void loadSaved()} disabled={!api || loading || saving}>{dirty ? "Discard edits and reload" : "Refresh saved file"}</button><button type="button" className="button primary" onClick={() => void save()} disabled={!canSave}>{saving ? "Saving…" : "Save to Core"}</button></div>
       </footer>

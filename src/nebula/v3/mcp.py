@@ -98,9 +98,18 @@ class McpProbeError(RuntimeError):
     error response, so callers can branch on it instead of on message text.
     """
 
-    def __init__(self, message: str, *, code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int | None = None,
+        usage_reason: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.usage_reason = usage_reason
+        if usage_reason is not None:
+            self._nebula_before_execution = True
 
 
 class McpProbeReport(NebulaModel):
@@ -623,45 +632,70 @@ class McpProbeService:
         """Invoke one frozen, selected upstream tool through Core."""
 
         if not profile.enabled:
-            raise McpProbeError("selected MCP server is disabled")
+            raise McpProbeError(
+                "selected MCP server is disabled", usage_reason="server_disabled"
+            )
         snapshot = next(
             (item for item in profile.capabilities.tools if item.name == tool_name),
             None,
         )
         if snapshot is None:
-            raise McpProbeError("selected MCP tool is absent from the frozen snapshot")
+            raise McpProbeError(
+                "selected MCP tool is absent from the frozen snapshot",
+                usage_reason="tool_unavailable",
+            )
         if profile.enabled_tools and tool_name not in profile.enabled_tools:
-            raise McpProbeError("selected MCP tool is outside the server allow list")
+            raise McpProbeError(
+                "selected MCP tool is outside the server allow list",
+                usage_reason="tool_disabled",
+            )
         if tool_name in profile.disabled_tools:
-            raise McpProbeError("selected MCP tool is disabled")
+            raise McpProbeError(
+                "selected MCP tool is disabled", usage_reason="tool_disabled"
+            )
         errors = list(
             Draft202012Validator(snapshot.input_schema).iter_errors(arguments)
         )
         if errors:
-            raise McpProbeError(f"MCP tool arguments are invalid: {errors[0].message}")
+            raise McpProbeError(
+                f"MCP tool arguments are invalid: {errors[0].message}",
+                usage_reason="invalid_arguments",
+            ) from errors[0]
         if profile.transport == McpTransport.BUILTIN:
             if profile.metadata.get("built_in") == "notebook_v1":
                 if self.notebook_tools is None or engagement_id != profile.metadata.get(
                     "engagement_id"
                 ):
-                    raise McpProbeError("Notebook profile belongs to another project")
+                    raise McpProbeError(
+                        "Notebook profile belongs to another project",
+                        usage_reason="project_mismatch",
+                    )
                 current = self.store.get(McpServerProfile, profile.id)
                 if (
                     not current.enabled
                     or current.metadata.get("engagement_id") != engagement_id
                 ):
-                    raise McpProbeError("Notebook MCP grant was revoked")
+                    raise McpProbeError(
+                        "Notebook MCP grant was revoked", usage_reason="grant_revoked"
+                    )
                 if tool_name not in {tool.name for tool in usable_mcp_tools(current)}:
-                    raise McpProbeError("Notebook MCP tool grant was revoked")
+                    raise McpProbeError(
+                        "Notebook MCP tool grant was revoked",
+                        usage_reason="grant_revoked",
+                    )
                 return await self.notebook_tools.call_tool(
                     engagement_id, tool_name, arguments
                 )
             if self.security_tools is None:
-                raise McpProbeError("Security Tools are unavailable in this Core")
+                raise McpProbeError(
+                    "Security Tools are unavailable in this Core",
+                    usage_reason="builtin_unavailable",
+                )
             current = self.store.get(McpServerProfile, profile.id)
             if not current.enabled or current.transport != McpTransport.BUILTIN:
                 raise McpProbeError(
-                    "Security Tools were disabled after this turn began"
+                    "Security Tools were disabled after this turn began",
+                    usage_reason="grant_revoked",
                 )
             return await self.security_tools.call_tool(
                 engagement_id, tool_name, arguments
@@ -886,7 +920,7 @@ def build_mcp_tool_plugins(
     """Freeze selected upstream MCP tools into ordinary broker plugins."""
 
     # Local import keeps MCP transport discovery independent from the broker.
-    from .tools import ToolExecutionResult, ToolPlugin, ToolSpec
+    from .tools import GuidedToolError, ToolExecutionResult, ToolPlugin, ToolSpec
 
     allow_all = bool(
         engagement_id
@@ -909,7 +943,14 @@ def build_mcp_tool_plugins(
             self.spec = ToolSpec(
                 name=mcp_tool_runtime_name(profile.id, snapshot.name),
                 description=(
-                    f"{snapshot.description}\nResults are captured as artifacts and returned "
+                    f"{snapshot.description}"
+                    + (
+                        f"\n{profile.capabilities.instructions}"
+                        if profile.transport == McpTransport.BUILTIN
+                        and profile.capabilities.instructions
+                        else ""
+                    )
+                    + "\nResults are captured as artifacts and returned "
                     "as a nebula.tool-result/v2 receipt."
                 )[:10_000],
                 input_schema=schema,
@@ -976,9 +1017,16 @@ def build_mcp_tool_plugins(
                 is_error = upstream.get("isError") is True
             return ToolExecutionResult(
                 output={},
-                stderr=_safe(failure) if failure is not None else "",
+                stderr=(
+                    failure.problem
+                    if isinstance(failure, GuidedToolError)
+                    else "MCP tool failed; inspect the Core diagnostic reference."
+                    if failure is not None
+                    else ""
+                ),
                 exit_code=1 if is_error else 0,
                 mcp_content_blocks=blocks,
+                failure_error=failure,
                 execution={
                     "runtime": "mcp",
                     "mcp_server_id": self.profile.id,

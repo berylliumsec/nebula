@@ -99,7 +99,7 @@ from .chat_subagents import (
     subagent_limit,
 )
 from .chat_agent_messages import AgentMessageService
-from .work import WorkCheckIn, WorkCreate, WorkService
+from .work import WorkCheckIn, WorkCreate, WorkGetRequest, WorkListRequest, WorkService
 from .automation_runtime import AutomationRuntimeUnavailable
 from .butler_memory import BUTLER_MEMORY_INSTRUCTION
 from .credentials import CredentialError, CredentialStore
@@ -192,9 +192,15 @@ from .tool_results import (
     ToolResultReceipt,
     WorkspaceOutputService,
 )
-from .tool_failures import FAILURE_SCHEMA, tool_failure, unavailable_tool_failure
+from .tool_failures import (
+    FAILURE_SCHEMA,
+    tool_failure,
+    unavailable_tool_failure,
+    with_failed_result_receipt,
+)
 from .tools import (
     ApprovalRequired,
+    GuidedToolError,
     InvalidToolArguments,
     PolicyDenied,
     StoreToolEvidenceRecorder,
@@ -502,12 +508,42 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
         {"type": "object", "properties": {}, "additionalProperties": False},
     ),
     "work.list": (
-        "List this project's work items, or a linked child project's items by name. Use this before creating duplicates.",
+        "List Work summaries. Start without offset, then call again with each returned next_offset until it is null; repeat project_name for a linked child. Use work.get for a full description.",
         {
             "type": "object",
             "properties": {
-                "project_name": {"type": "string", "minLength": 1, "maxLength": 300}
+                "project_name": {"type": "string", "minLength": 1, "maxLength": 300},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Use the previous result's next_offset; omit for the first page.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 20,
+                    "description": "Maximum items requested; Core may return fewer to fit the byte bound.",
+                },
             },
+            "additionalProperties": False,
+        },
+    ),
+    "work.get": (
+        "Read one Work item. Start with item_id only, then repeat with each returned next_description_offset as description_offset until it is null. Concatenate description chunks in order.",
+        {
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "description_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Use the previous result's next_description_offset; omit for the first chunk.",
+                },
+            },
+            "required": ["item_id"],
             "additionalProperties": False,
         },
     ),
@@ -1001,14 +1037,16 @@ def _harness_developer_instructions(
             else ""
         )
         + (
-            "Project Work is available through work.list, work.create, and work.check_in. For a linked child project, pass its name as project_name to work.list or work.create, then check in by item ID. Use these tools to record work when appropriate. "
+            "Project Work is available through work.list, work.get, work.create, and work.check_in. Start work.list without offset, then repeat it with each returned next_offset until null. Repeat project_name for each linked-child page. Use work.get with item_id to read a full description; repeat with each next_description_offset until null. Use these tools to record work when appropriate. "
             if any(
                 str(item.get("name") or "")
                 in {
                     "work.list",
+                    "work.get",
                     "work.create",
                     "work.check_in",
                     "work_list",
+                    "work_get",
                     "work_create",
                     "work_check_in",
                 }
@@ -14942,9 +14980,11 @@ class HarnessRuntimeService:
                         "description": description,
                         "inputSchema": schema,
                         "annotations": {
-                            "readOnlyHint": name in {"work.agents", "work.list"},
+                            "readOnlyHint": name
+                            in {"work.agents", "work.list", "work.get"},
                             "destructiveHint": False,
-                            "idempotentHint": name in {"work.agents", "work.list"},
+                            "idempotentHint": name
+                            in {"work.agents", "work.list", "work.get"},
                             "openWorldHint": False,
                         },
                     }
@@ -15037,7 +15077,14 @@ class HarnessRuntimeService:
                     {
                         "name": gateway_name,
                         "description": (
-                            f"{tool.description}\n\nResults are captured by Nebula and returned "
+                            f"{tool.description}"
+                            + (
+                                f"\n{profile.capabilities.instructions}"
+                                if profile.transport == McpTransport.BUILTIN
+                                and profile.capabilities.instructions
+                                else ""
+                            )
+                            + "\n\nResults are captured by Nebula and returned "
                             "as nebula.tool-result/v2 receipts; use tool_output.search to inspect them."
                         )[:10_000],
                         "inputSchema": tool.input_schema,
@@ -15142,6 +15189,7 @@ class HarnessRuntimeService:
         """Normalize every gateway error before the harness model reads it."""
 
         offered = None
+        available_names: list[str] = []
         cursor = None
         seen_cursors: set[str] = set()
         try:
@@ -15151,6 +15199,11 @@ class HarnessRuntimeService:
                     session,
                     {"cursor": cursor} if cursor else None,
                     turn=turn,
+                )
+                available_names.extend(
+                    str(item.get("name"))
+                    for item in catalog["tools"]
+                    if isinstance(item, dict) and isinstance(item.get("name"), str)
                 )
                 offered = next(
                     (item for item in catalog["tools"] if item["name"] == name),
@@ -15180,7 +15233,9 @@ class HarnessRuntimeService:
             }
         if offered is None:
             failure = unavailable_tool_failure(
-                name, "gateway tool is absent from this session's offered catalog"
+                name,
+                "gateway tool is absent from this session's offered catalog",
+                available_tools=available_names,
             )
             return {
                 "content": [
@@ -15270,12 +15325,7 @@ class HarnessRuntimeService:
                 isinstance(receipt, dict)
                 and receipt.get("schema") == "nebula.tool-result/v2"
             ):
-                failure["result_receipt"] = {
-                    "artifact_id": receipt.get("artifacts", [{}])[0].get("artifact_id")
-                    if receipt.get("artifacts")
-                    else None,
-                    "status": receipt.get("status"),
-                }
+                failure = with_failed_result_receipt(failure, receipt)
             return {
                 "content": [
                     {"type": "text", "text": json.dumps(failure, sort_keys=True)}
@@ -15955,15 +16005,23 @@ class HarnessRuntimeService:
                     ]
                 }
             elif name == "work.list":
+                list_request = WorkListRequest.model_validate(arguments)
                 target_id = self.work.agent_project(
-                    turn.engagement_id, arguments.get("project_name")
+                    turn.engagement_id, list_request.project_name
                 )
-                result = {
-                    "items": [
-                        item.model_dump(mode="json")
-                        for item in self.work.list(target_id)
-                    ]
-                }
+                result = self.work.agent_list_page(
+                    target_id, offset=list_request.offset, limit=list_request.limit
+                )
+            elif name == "work.get":
+                get_request = WorkGetRequest.model_validate(arguments)
+                target_id = self.work.agent_item_project(
+                    turn.engagement_id, get_request.item_id
+                )
+                result = self.work.agent_get_item(
+                    target_id,
+                    get_request.item_id,
+                    description_offset=get_request.description_offset,
+                )
             elif name == "work.create":
                 target_id = self.work.agent_project(
                     turn.engagement_id, arguments.get("project_name")
@@ -16239,7 +16297,13 @@ class HarnessRuntimeService:
         )
         raw_result = ToolExecutionResult(
             output={},
-            stderr=_safe_error(failure) if failure is not None else "",
+            stderr=(
+                failure.problem
+                if isinstance(failure, GuidedToolError)
+                else "MCP tool failed; inspect the Core diagnostic reference."
+                if failure is not None
+                else ""
+            ),
             exit_code=1 if is_error else 0,
             mcp_content_blocks=blocks,
             execution={
@@ -16302,6 +16366,45 @@ class HarnessRuntimeService:
             expected_revision=latest.revision,
         )
         serialized = json.dumps(receipt.as_model_result(), sort_keys=True)
+        if failure is not None:
+            gateway_spec = spec.model_copy(
+                update={
+                    "name": name,
+                    "description": (
+                        tool.description
+                        + (
+                            f"\n{profile.capabilities.instructions}"
+                            if profile.transport == McpTransport.BUILTIN
+                            and profile.capabilities.instructions
+                            else ""
+                        )
+                    ),
+                    "input_schema": tool.input_schema,
+                }
+            )
+            public = tool_failure(
+                gateway_spec,
+                arguments,
+                failure,
+                phase=(
+                    "before_execution"
+                    if getattr(failure, "_nebula_before_execution", False)
+                    else "after_execution"
+                ),
+                call_id=call.id,
+            )
+            public = with_failed_result_receipt(
+                public,
+                receipt.as_model_result(),
+                artifact_id=recorded.result_artifact_id,
+            )
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(public, sort_keys=True)}
+                ],
+                "structuredContent": public,
+                "isError": True,
+            }
         return {
             "content": [{"type": "text", "text": serialized}],
             "structuredContent": receipt.as_model_result(),
