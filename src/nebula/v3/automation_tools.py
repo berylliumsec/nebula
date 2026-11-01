@@ -186,7 +186,7 @@ def command_specs(
         ToolSpec(
             name="tool_output.read",
             parallelism=ParallelismPolicy.SAFE_READ,
-            description="Read a bounded redacted excerpt from one command artifact. line_count must be 1-200; use continuation for more.",
+            description="Read a bounded redacted excerpt from one tool artifact. Use continuation_cursor to resume within a long line; starting_line remains available for line-based reads.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -196,6 +196,7 @@ def command_specs(
                     },
                     "starting_line": {"type": "integer", "minimum": 1},
                     "line_count": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "continuation_cursor": {"type": "string", "maxLength": 4096},
                 },
                 "required": ["artifact_id"],
                 "additionalProperties": False,

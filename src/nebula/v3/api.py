@@ -1413,6 +1413,7 @@ class ToolOutputSearchRequest(NebulaModel):
 class ToolOutputReadRequest(NebulaModel):
     starting_line: int = Field(default=1, ge=1)
     line_count: int = Field(default=100, ge=1, le=200)
+    continuation_cursor: str | None = Field(default=None, max_length=4096)
 
 
 class KnowledgeIngestRequest(NebulaModel):

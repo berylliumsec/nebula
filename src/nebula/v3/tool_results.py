@@ -8,6 +8,7 @@ that may return bounded excerpts from tool or workspace artifacts.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 from collections import deque
@@ -32,7 +33,16 @@ import regex  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .artifacts import ArtifactStore
-from .domain import Artifact, ChatTurn, ToolCall, ToolCallOrigin
+from .diagnostics import record_caught_exception
+from .domain import (
+    Artifact,
+    ChatTurn,
+    Entity,
+    RiskClass,
+    ToolCall,
+    ToolCallOrigin,
+    ToolCallStatus,
+)
 from .redaction import redacted_display
 from .storage import NebulaStore, NotFoundError
 
@@ -505,6 +515,7 @@ class ToolOutputService:
         artifact_id: str,
         starting_line: int = 1,
         line_count: int = 100,
+        continuation_cursor: str | None = None,
     ) -> dict[str, Any]:
         if starting_line < 1:
             raise ToolOutputQueryError("starting_line must be at least 1")
@@ -515,6 +526,16 @@ class ToolOutputService:
             owner_id=owner_id,
             artifact_id=artifact_id,
         )
+        if continuation_cursor is not None:
+            if starting_line != 1:
+                raise ToolOutputQueryError(
+                    "starting_line and continuation_cursor cannot be combined"
+                )
+            starting_line, starting_offset = _decode_read_cursor(
+                continuation_cursor, artifact.id
+            )
+        else:
+            starting_offset = 0
         if not self._artifact_searchable(artifact):
             return {
                 "schema": "nebula.tool-output.read/v1",
@@ -523,43 +544,72 @@ class ToolOutputService:
                 "reason": "binary_or_non_text",
             }
         lines: list[dict[str, Any]] = []
-        encoded_size = 0
-        continuation: int | None = None
+        next_line: int | None = None
+        next_offset = 0
         with self.artifact_store.open(artifact) as stream:
-            for line_no, raw in _iter_lines(stream):
+            for line_no, raw in _iter_complete_read_lines(stream):
                 if line_no < starting_line:
                     continue
                 if len(lines) >= line_count:
-                    continuation = line_no
+                    next_line = line_no
                     break
                 text = redacted_display(
                     raw.decode("utf-8", errors="replace").rstrip("\n")
                 )
-                item = {"line": line_no, "text": text}
-                item_size = len(json.dumps(item, ensure_ascii=False).encode())
-                if lines and encoded_size + item_size > MAX_EXCERPT_BYTES - 768:
-                    continuation = line_no
+                offset = starting_offset if line_no == starting_line else 0
+                if offset >= len(text) and offset:
+                    raise ToolOutputQueryError("continuation cursor is no longer valid")
+                remaining = text[offset:]
+                item = {"line": line_no, "text": remaining}
+                reserved_cursor = _encode_read_cursor(artifact.id, line_no + 1, 0)
+                if (
+                    model_result_bytes(
+                        _read_page(
+                            artifact, starting_line, [*lines, item], reserved_cursor
+                        )
+                    )
+                    <= MAX_EXCERPT_BYTES
+                ):
+                    lines.append(item)
+                    continue
+                if lines:
+                    next_line = line_no
                     break
-                if item_size > MAX_EXCERPT_BYTES - 768:
-                    item["text"] = _utf8_prefix(text, MAX_EXCERPT_BYTES - 1024)
-                    item["line_truncated"] = True
-                    continuation = line_no + 1
+                low, high = 0, len(remaining)
+                while low < high:
+                    middle = (low + high + 1) // 2
+                    cursor = _encode_read_cursor(artifact.id, line_no, offset + middle)
+                    candidate = {
+                        "line": line_no,
+                        "text": remaining[:middle],
+                        "line_truncated": True,
+                    }
+                    if (
+                        model_result_bytes(
+                            _read_page(artifact, starting_line, [candidate], cursor)
+                        )
+                        <= MAX_EXCERPT_BYTES
+                    ):
+                        low = middle
+                    else:
+                        high = middle - 1
+                if low == 0:
+                    raise ToolOutputQueryError("artifact line cannot fit a read page")
+                item = {
+                    "line": line_no,
+                    "text": remaining[:low],
+                    "line_truncated": True,
+                }
+                next_line = line_no
+                next_offset = offset + low
                 lines.append(item)
-                encoded_size += item_size
-                if continuation is not None:
-                    break
-        return {
-            "schema": "nebula.tool-output.read/v1",
-            "artifact_id": artifact.id,
-            "filename": artifact.filename,
-            "searchable": True,
-            "starting_line": starting_line,
-            "lines": lines,
-            "truncated": continuation is not None,
-            "continuation": (
-                {"starting_line": continuation} if continuation is not None else None
-            ),
-        }
+                break
+        read_cursor = (
+            _encode_read_cursor(artifact.id, next_line, next_offset)
+            if next_line is not None
+            else None
+        )
+        return _read_page(artifact, starting_line, lines, read_cursor)
 
     def _authorized_call(
         self, *, engagement_id: str, owner_id: str, tool_call_id: str
@@ -1076,6 +1126,17 @@ def _iter_lines(
         yield line_no, raw
 
 
+def _iter_complete_read_lines(stream: _LineReader) -> Iterator[tuple[int, bytes]]:
+    """Read physical lines without the search iterator's 64 KiB discard."""
+
+    line_no = 0
+    while raw := stream.readline(MAX_CAPTURE_BYTES + 1):
+        if len(raw) > MAX_CAPTURE_BYTES:
+            raise ToolOutputQueryError("artifact line exceeds the read limit")
+        line_no += 1
+        yield line_no, raw
+
+
 def _matching_lines(
     stream: _LineReader,
     *,
@@ -1142,6 +1203,61 @@ def _decode_cursor(cursor: str | None) -> tuple[str | None, int]:
         return value, line
     except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ToolOutputQueryError("invalid continuation cursor") from exc
+
+
+def _encode_read_cursor(artifact_id: str, line: int, offset: int) -> str:
+    payload = json.dumps(
+        {"a": artifact_id, "l": line, "o": offset}, separators=(",", ":")
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_read_cursor(cursor: str, artifact_id: str) -> tuple[int, int]:
+    try:
+        if len(cursor) > 4096:
+            raise ValueError
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        payload = json.loads(raw)
+        line, offset = payload["l"], payload["o"]
+        if (
+            payload["a"] != artifact_id
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or line < 1
+            or not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or offset < 0
+        ):
+            raise ValueError
+        return line, offset
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ToolOutputQueryError("invalid continuation cursor") from exc
+
+
+def _read_page(
+    artifact: Artifact,
+    starting_line: int,
+    lines: list[dict[str, Any]],
+    cursor: str | None,
+) -> dict[str, Any]:
+    offset = _decode_read_cursor(cursor, artifact.id)[1] if cursor else 0
+    return {
+        "schema": "nebula.tool-output.read/v1",
+        "artifact_id": artifact.id,
+        "filename": artifact.filename,
+        "searchable": True,
+        "starting_line": starting_line,
+        "lines": lines,
+        "truncated": cursor is not None,
+        "continuation": (
+            {"continuation_cursor": cursor}
+            if offset
+            else {"starting_line": _decode_read_cursor(cursor, artifact.id)[0]}
+            if cursor
+            else None
+        ),
+        "continuation_cursor": cursor,
+    }
 
 
 def _utf8_prefix(value: str, maximum_bytes: int) -> str:
@@ -1226,6 +1342,124 @@ def serialize_model_result(value: dict[str, Any]) -> str:
         },
         sort_keys=True,
     )
+
+
+def preserve_oversized_model_result(
+    value: dict[str, Any],
+    *,
+    store: NebulaStore,
+    artifact_store: ArtifactStore | None,
+    engagement_id: str,
+    owner_id: str,
+    tool_call_id: str,
+    tool_name: str,
+    origin: ToolCallOrigin,
+    risk_class: RiskClass,
+    chat_session_id: str | None = None,
+    chat_turn_id: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Preserve a large broker result before model serialization can omit it.
+
+    The artifact is linked to a tool call so ordinary artifact authorization
+    applies to every later read, including reads after a turn replay.
+    """
+
+    rendered = _render_model_result(value).encode("utf-8")
+    if len(rendered) <= MAX_EXCERPT_BYTES:
+        return value, None
+
+    def incomplete(warning: str) -> tuple[dict[str, Any], None]:
+        return (
+            {
+                "schema": "nebula.bounded-result/v1",
+                "status": "incomplete",
+                "original_bytes": len(rendered),
+                "warning": warning,
+            },
+            None,
+        )
+
+    if artifact_store is None:
+        return incomplete("tool result artifact storage is unavailable")
+    try:
+        try:
+            call = store.get(ToolCall, tool_call_id)
+        except NotFoundError:  # diagnostic-expected: direct calls lack a record.
+            call = None
+        if call is not None and (
+            call.engagement_id != engagement_id
+            or call.run_id != owner_id
+            or call.tool_name != tool_name
+            or call.origin != origin
+        ):
+            return incomplete("tool result could not be linked to its owner")
+        digest = hashlib.sha256(rendered).hexdigest()
+        if call is not None:
+            for artifact in store.list_tool_call_artifacts(engagement_id, tool_call_id):
+                if (
+                    artifact.metadata.get("kind") == "model_result"
+                    and artifact.sha256 == digest
+                ):
+                    return _oversized_result_receipt(artifact), artifact.id
+        stored = artifact_store.put_bytes_with_status(
+            rendered,
+            engagement_id=engagement_id,
+            filename=f"tool-call-{tool_call_id}-result.json",
+            media_type="application/json",
+            source=f"tool:{tool_name}:model-result",
+            metadata={
+                "kind": "model_result",
+                "tool_call_id": tool_call_id,
+                "searchable": True,
+            },
+        )
+        entities: list[Entity] = [stored.artifact]
+        if call is None:
+            entities.append(
+                ToolCall(
+                    id=tool_call_id,
+                    engagement_id=engagement_id,
+                    run_id=owner_id,
+                    origin=origin,
+                    chat_session_id=chat_session_id,
+                    chat_turn_id=chat_turn_id,
+                    tool_name=tool_name,
+                    status=ToolCallStatus.COMPLETE,
+                    risk_class=risk_class,
+                    result_artifact_id=stored.artifact.id,
+                )
+            )
+        try:
+            store.create_many(entities)
+        except Exception:
+            artifact_store.discard_new_blob(stored)
+            raise
+        return _oversized_result_receipt(stored.artifact), stored.artifact.id
+    except Exception as exc:  # diagnostic-expected: a failed artifact write must yield an explicit incomplete result
+        record_caught_exception(
+            "chat",
+            "chat.tool_result_artifact_persistence_failed",
+            "A large tool result could not be preserved for model retrieval.",
+            exc,
+            stage="tool_result_delivery",
+        )
+        return incomplete("tool result artifact persistence failed")
+
+
+def _oversized_result_receipt(artifact: Artifact) -> dict[str, Any]:
+    return {
+        "schema": "nebula.bounded-result/v1",
+        "status": "incomplete",
+        "original_bytes": artifact.size,
+        "warning": "Full tool result is available through tool_output.read.",
+        "artifact_id": artifact.id,
+        "artifacts": [
+            artifact_ref(artifact, kind="parsed", searchable=True).model_dump(
+                mode="json"
+            )
+        ],
+        "next_actions": ["tool_output.read"],
+    }
 
 
 def without_results_api_key(value: Any) -> Any:
@@ -1362,6 +1596,7 @@ __all__ = [
     "bytes_are_searchable",
     "fit_model_result",
     "model_result_bytes",
+    "preserve_oversized_model_result",
     "sanitize_model_history_result",
     "serialize_model_result",
     "without_results_api_key",

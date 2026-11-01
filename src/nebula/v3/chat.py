@@ -162,6 +162,7 @@ from .domain import (
     NebulaModel,
     message_is_replaced,
     ProviderProfile,
+    RiskClass,
     RunBackend,
     SshEnvironment,
     ToolCallOrigin,
@@ -356,6 +357,7 @@ from .tool_results import (
     ToolResultStatus,
     ToolTimingReceipt,
     artifact_ref,
+    preserve_oversized_model_result,
     sanitize_model_history_result,
     serialize_model_result,
 )
@@ -9295,6 +9297,7 @@ class ChatService:
                 else:
                     fields, waiting_callback = self._tool_result_entry(
                         result,
+                        invocation=invocation,
                         spec=spec,
                         arguments=call.arguments,
                         call_id=durable_call_id,
@@ -11149,7 +11152,7 @@ class ChatService:
             *(execute(invocation) for _, _, _, invocation in work),
             return_exceptions=True,
         )
-        for (call, spec, entry, _), result in zip(work, results, strict=True):
+        for (call, spec, entry, invocation), result in zip(work, results, strict=True):
             if isinstance(result, BaseException):
                 failure = tool_failure(
                     spec,
@@ -11172,6 +11175,7 @@ class ChatService:
             else:
                 fields, waiting_callback = self._tool_result_entry(
                     result,
+                    invocation=invocation,
                     spec=spec,
                     arguments=call.arguments,
                     call_id=str(entry["tool_call_id"]),
@@ -11844,6 +11848,7 @@ class ChatService:
         self,
         result: Any,
         *,
+        invocation: ToolInvocation,
         spec: Any = None,
         arguments: dict[str, Any] | None = None,
         call_id: str | None = None,
@@ -11888,19 +11893,35 @@ class ChatService:
                     artifact_id=result.result_artifact_id,
                 )
             model_result = failure
+        model_result, preserved_artifact_id = preserve_oversized_model_result(
+            model_result,
+            store=self.store,
+            artifact_store=self.artifact_store,
+            engagement_id=invocation.engagement_id,
+            owner_id=invocation.run_id,
+            tool_call_id=call_id or invocation.id,
+            tool_name=invocation.tool_name,
+            origin=invocation.origin,
+            risk_class=spec.risk_class if spec is not None else RiskClass.LOCAL_READ,
+            chat_session_id=invocation.chat_session_id,
+            chat_turn_id=invocation.chat_turn_id,
+        )
         waiting_callback = bool(receipt and receipt.results_url and receipt.process_id)
+        delivery_incomplete = model_result.get("schema") == "nebula.bounded-result/v1"
         fields = {
             "status": (
                 "waiting_callback"
                 if waiting_callback
                 else "failed"
                 if self._tool_result_failed(result)
+                else "incomplete"
+                if delivery_incomplete
                 else "complete"
             ),
             "provider_result": serialize_model_result(model_result),
             "trusted_result": receipt is None,
             "evidence_ids": result.evidence_ids,
-            "result_artifact_id": result.result_artifact_id,
+            "result_artifact_id": preserved_artifact_id or result.result_artifact_id,
             "artifacts": model_result.get("artifacts", []),
             "result_summary": self._result_summary(model_result),
             "process_id": receipt.process_id if receipt else None,
@@ -11910,6 +11931,12 @@ class ChatService:
 
     @staticmethod
     def _result_summary(output: dict[str, Any]) -> str:
+        if output.get("schema") == "nebula.bounded-result/v1":
+            return (
+                "Full tool result saved; read the artifact to continue"
+                if output.get("artifact_id")
+                else "Tool result incomplete; full output could not be saved"
+            )
         if output.get("schema") == "nebula.tool-result/v2":
             status = output.get("status")
             exit_code = output.get("exit_code")
@@ -12014,6 +12041,7 @@ class ChatService:
         else:
             fields, waiting_callback = self._tool_result_entry(
                 result,
+                invocation=invocation,
                 spec=components.specs[invocation.tool_name],
                 arguments=invocation.arguments,
                 call_id=str(entry["tool_call_id"]),

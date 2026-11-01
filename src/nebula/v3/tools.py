@@ -1657,7 +1657,7 @@ def register_artifact_retrieval_tools(
         ),
         (
             "tool_output.read",
-            "Read at most 200 lines and 8 KiB from one authorized tool artifact.",
+            "Read at most 200 lines and 8 KiB from one authorized tool artifact. Follow continuation_cursor to resume inside a long line.",
             {
                 "type": "object",
                 "properties": {
@@ -1672,6 +1672,7 @@ def register_artifact_retrieval_tools(
                         "maximum": 200,
                         "default": 100,
                     },
+                    "continuation_cursor": {"type": "string", "maxLength": 4096},
                 },
                 "required": ["artifact_id"],
                 "additionalProperties": False,
