@@ -43,7 +43,10 @@ def test_registry_rejects_new_ui_api_call_without_review(tmp_path: Path) -> None
     assert "UI API calls changed; review operator workflows" in result.stderr
 
 
-def test_registry_rejects_unsupported_action_marked_supported(tmp_path: Path) -> None:
+@pytest.mark.parametrize("change", ["missing", "missing nebula.work.update_chat"])
+def test_registry_rejects_unsupported_action_marked_supported(
+    tmp_path: Path, change: str
+) -> None:
     inventory = json.loads(REGISTRY.read_text())
     gap = next(
         row
@@ -51,7 +54,7 @@ def test_registry_rejects_unsupported_action_marked_supported(tmp_path: Path) ->
         if row["id"] == "workspace.device_and_directory"
     )
     gap["status"] = "supported"
-    gap["butler"]["change"] = "missing"
+    gap["butler"]["change"] = change
     candidate = tmp_path / "false-support.json"
     candidate.write_text(json.dumps(inventory))
 
@@ -217,3 +220,79 @@ local.listProjects();
         'ui/src/view.ts::request::"PATCH" "two"': 1,
         "ui/src/view.ts::closeContainerTerminal": 1,
     }
+
+
+def _protocol_row(inventory):
+    return next(
+        row
+        for row in inventory["actions"]
+        if row["id"] == "ui.butler_conversation_protocol"
+    )
+
+
+@pytest.mark.parametrize("grant", ["model_operation", "butler_operation", "owner"])
+def test_registry_rejects_protocol_claiming_model_authority(
+    tmp_path: Path, grant: str
+) -> None:
+    inventory = json.loads(REGISTRY.read_text())
+    row = _protocol_row(inventory)
+    if grant == "model_operation":
+        row["transport"]["model_operation"] = True
+    elif grant == "butler_operation":
+        row["butler"]["change"] = "nebula.work.message_chat"
+    else:
+        row["transport"]["owner"] = "model"
+    candidate = tmp_path / "protocol-grant.json"
+    candidate.write_text(json.dumps(inventory))
+    result = _check(candidate)
+    assert result.returncode != 0
+    assert "explicitly grant no model operation" in result.stderr
+
+
+def test_registry_rejects_protocol_without_a_reviewed_parent_workflow(
+    tmp_path: Path,
+) -> None:
+    inventory = json.loads(REGISTRY.read_text())
+    _protocol_row(inventory)["transport"]["workflows"] = ["unreviewed.operator_action"]
+    candidate = tmp_path / "unknown-protocol-parent.json"
+    candidate.write_text(json.dumps(inventory))
+    result = _check(candidate)
+    assert result.returncode != 0
+    assert "must reference reviewed operator workflows" in result.stderr
+
+
+def test_registry_rejects_ordinary_record_mutation_hidden_as_ui_projection(
+    tmp_path: Path,
+) -> None:
+    inventory = json.loads(REGISTRY.read_text())
+    row = next(
+        row for row in inventory["actions"] if row["id"] == "ui.resource_descriptors"
+    )
+    row["ui_calls"].append("ui/src/state/WorkspaceContext.tsx::createFinding")
+    candidate = tmp_path / "hidden-record-change.json"
+    candidate.write_text(json.dumps(inventory))
+    result = _check(candidate)
+    assert result.returncode != 0
+    assert "not an approved UI transport protocol" in result.stderr
+
+
+@pytest.mark.parametrize("retain_protocol", [True, False])
+def test_registry_rejects_ui_protocol_relabelled_as_supported(
+    tmp_path: Path, retain_protocol: bool
+) -> None:
+    inventory = json.loads(REGISTRY.read_text())
+    row = _protocol_row(inventory)
+    row["status"] = "supported"
+    if retain_protocol:
+        row["butler"]["change"] = "nebula.work.message_chat"
+    else:
+        row.pop("transport")
+    candidate = tmp_path / "false-protocol-support.json"
+    candidate.write_text(json.dumps(inventory))
+    result = _check(candidate)
+    assert result.returncode != 0
+    assert (
+        "UI transport cannot be marked as a supported mutation"
+        if retain_protocol
+        else "supported action has no change operation"
+    ) in result.stderr

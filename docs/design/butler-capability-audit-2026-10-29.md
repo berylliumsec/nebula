@@ -555,10 +555,11 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 82
-reviewed actions: 70 supported workflows and twelve operator-owned handoffs. Its
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 94
+reviewed entries: 70 supported workflows, fifteen operator-owned handoffs and
+nine supporting UI protocols that grant no model operation. Its
 source inventory contains 578 distinct API call signatures in production UI
-TypeScript, of which 306 are linked to reviewed actions; 272 still require
+TypeScript, of which 359 are linked to reviewed entries; 219 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions; Butler can page and apply those actions
 to exact chats one at a time. Direct `ApiClient.request` calls are keyed by route
@@ -570,8 +571,13 @@ with matching method names are excluded. Controls without an API call still
 need manual workflow review. `supported` means the named Butler operation and
 observed-result test exist; `gap` identifies missing implementation, while
 `device_handoff` names an exact catalog destination and proves only opening its
-operator-owned control. To review a new call, trace its
-visible control to Core, add or update an action row, then run the script with
+operator-owned control. Supporting UI protocols name their existing owner, a
+narrowly checked protocol kind, reviewed parent workflows and an explicit no-model-operation disposition.
+They cover private conversation transport, authenticated media and connection
+setup, device read state and handoff recovery, resource descriptors, and the
+pre-existing browser worker. They are not counted as new model controls.
+Ordinary Core record mutations cannot be hidden as a descriptor or projection.
+To review a new call, trace its visible control to Core, add or update an action row, then run the script with
 `--write-inventory`. Neither that command nor a registry row changes Butler's
 tool catalog.
 

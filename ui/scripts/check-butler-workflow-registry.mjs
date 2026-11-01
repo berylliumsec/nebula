@@ -12,6 +12,24 @@ const registryPath = registryOption < 0
   : resolve(process.argv[registryOption + 1] ?? "");
 if (registryOption >= 0 && !process.argv[registryOption + 1]) throw new Error("--registry requires a path");
 
+// These are protocols used by existing UI owners, never extra model operations.
+const transportMethods = new Map([
+  ["conversation_protocol", new Set(["cancelChatTurn", "createTemporaryChat", "discardTemporaryChat", "getPendingChatTurn", "keepTemporaryChatAlive", "stopHarnessTurn", "streamChat", "getControlAssistantSession", "getOrCreateControlAssistantSession", "getHarnessTurn", "getHarnessTurnEvents"])],
+  ["authenticated_media", new Set(["fetchChatImagePreview", "uploadChatImage"])],
+  ["device_handoff_protocol", new Set(["createHandoff", "cancelHandoff", "consumeHandoff", "resolveHandoff"])],
+  ["connection_auth", new Set(["getToken", "health", "setupStatus"])],
+  ["ui_projection", new Set(["resolveResourceActions", "resolveResource", "listResourceRelations"])],
+  ["browser_worker_protocol", new Set(["claimSecurityBrowserCommand", "createSecurityBrowserIntercept", "finishSecurityBrowserCommand", "getEngagementScope", "getSecurityBrowserAutomation", "getSecurityBrowserResearch", "getSecurityBrowserWorkspace", "recordSecurityBrowserAttackResult", "recordSecurityBrowserRepeaterResult", "recordSecurityBrowserSiteNode", "transitionSecurityBrowserAttack", "transitionSecurityBrowserCrawl", "transitionSecurityBrowserRepeaterTab", "uploadEvidence", "uploadSecurityBrowserBodyArtifact", "recordSecurityBrowserTraffic", "recordSecurityBrowserWebSocketFrame"])],
+]);
+
+function transportCallIsAllowed(kind, key) {
+  const [, method, request] = key.split("::");
+  if (kind === "device_read_state") {
+    return method === "request" && (/^"PUT" .*\/read-cursor`$/.test(request ?? "") || /^GET .*\/catch-up\?/.test(request ?? ""));
+  }
+  return transportMethods.get(kind)?.has(method) === true;
+}
+
 export function collectCalls(sourceUiRoot = uiRoot) {
   const api = new API();
   try {
@@ -112,7 +130,8 @@ function main() {
     .map((name) => readFileSync(resolve(repoRoot, "src/nebula/v3", name), "utf8"))
     .join("\n");
   const ids = new Set();
-  const validStatus = new Set(["supported", "gap", "device_handoff"]);
+  const validStatus = new Set(["supported", "gap", "device_handoff", "supporting_transport"]);
+  const actionsById = new Map(registry.actions.map(action => [action.id, action]));
   const destinations = new Set(JSON.parse(readFileSync(resolve(repoRoot, "src/nebula/v3/assistant_destinations.json"), "utf8")).map(({id}) => id));
   const settingsSource = readFileSync(resolve(repoRoot, "src/nebula/v3/settings_assistant_tools.py"), "utf8");
   const settingsStart = settingsSource.indexOf("SETTING_DESTINATIONS:");
@@ -134,8 +153,27 @@ function main() {
     if (!action.butler || !["discover", "read", "change"].every((field) => typeof action.butler[field] === "string" && action.butler[field].trim())) {
       throw new Error(`${action.id}: Butler discovery, read, and change disposition are required`);
     }
-    if (action.status === "supported" && action.butler.change.startsWith("missing")) throw new Error(`${action.id}: supported action has no change operation`);
+    if (action.status === "supported" && (action.butler.change.startsWith("missing") || !/\bnebula\.[a-z_]+\.[a-z_]+\b/.test(action.butler.change))) throw new Error(`${action.id}: supported action has no change operation`);
     if (action.status === "gap" && !action.butler.change.startsWith("missing")) throw new Error(`${action.id}: gap must identify the missing action or handoff`);
+    if (action.status === "supporting_transport") {
+      const transport = action.transport;
+      if (!transport || !["core", "requesting_browser"].includes(transport.owner)
+          || transport.model_operation !== false
+          || typeof transport.reason !== "string" || !transport.reason.trim()
+          || !Object.values(action.butler).every(value => value === "not model-callable")) {
+        throw new Error(`${action.id}: UI transport must name its owner and explicitly grant no model operation`);
+      }
+      if (!Array.isArray(transport.workflows) || !transport.workflows.length || transport.workflows.length > 20
+          || new Set(transport.workflows).size !== transport.workflows.length
+          || !transport.workflows.every(id => ["supported", "device_handoff"].includes(actionsById.get(id)?.status))) {
+        throw new Error(`${action.id}: UI transport must reference reviewed operator workflows`);
+      }
+      if (!action.ui_calls.every(key => transportCallIsAllowed(transport.kind, key))) {
+        throw new Error(`${action.id}: this call is not an approved UI transport protocol`);
+      }
+    } else if (action.transport) {
+      throw new Error(`${action.id}: UI transport cannot be marked as a supported mutation or handoff`);
+    }
     if (action.status === "device_handoff") {
       const handoff = action.handoff;
       if (!handoff || handoff.owner !== "requesting_browser" || handoff.observed_result !== "opened"
@@ -155,7 +193,7 @@ function main() {
     } else if (action.handoff) {
       throw new Error(`${action.id}: browser opening cannot be marked as a supported mutation`);
     }
-    if (action.status === "supported" || action.status === "device_handoff") {
+    if (["supported", "device_handoff", "supporting_transport"].includes(action.status)) {
       const [testPath, testName] = action.observed_result_test.split("::");
       const absoluteTest = resolve(repoRoot, testPath ?? "");
       if (!testName || !existsSync(absoluteTest) || !readFileSync(absoluteTest, "utf8").includes(testName)) {
@@ -169,7 +207,8 @@ function main() {
   const unreviewed = current.filter(({ key }) => !reviewed.has(key)).length;
   const gaps = registry.actions.filter(({status}) => status === "gap").length;
   const handoffs = registry.actions.filter(({status}) => status === "device_handoff").length;
-  console.log(`Butler workflow registry: ${registry.actions.length} reviewed actions, ${reviewed.size}/${current.length} UI API call signatures linked, ${unreviewed} unreviewed signatures, ${gaps} gaps, ${handoffs} operator-owned device handoffs`);
+  const transports = registry.actions.filter(({status}) => status === "supporting_transport").length;
+  console.log(`Butler workflow registry: ${registry.actions.length} reviewed actions, ${reviewed.size}/${current.length} UI API call signatures linked, ${unreviewed} unreviewed signatures, ${gaps} gaps, ${handoffs} operator-owned device handoffs, ${transports} supporting UI protocols (no model grants)`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

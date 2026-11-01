@@ -1731,6 +1731,371 @@
         "reason": "Independent verification and attribution belong to the operator evidence review workflow, not a model assertion.",
         "observed_result": "opened"
       }
+    },
+    {
+      "id": "ui.butler_conversation_protocol",
+      "entry_point": "Butler composer opens, streams, polls and stops its own private conversation",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getControlAssistantSession",
+        "ui/src/components/NebulaControlAssistant.tsx::getOrCreateControlAssistantSession",
+        "ui/src/components/NebulaControlAssistant.tsx::getPendingChatTurn",
+        "ui/src/components/NebulaControlAssistant.tsx::streamChat",
+        "ui/src/components/NebulaControlAssistant.tsx::cancelChatTurn",
+        "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn"
+      ],
+      "core_owner": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade control assistant starts project work on production LAN Core",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "conversation_protocol",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "chat.start_and_read",
+          "chat.turn_control",
+          "butler.operator_authority"
+        ],
+        "reason": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself."
+      }
+    },
+    {
+      "id": "ui.temporary_conversation_protocol",
+      "entry_point": "Ask Nebula private selection popup creates and expires its temporary context",
+      "ui_calls": [
+        "ui/src/components/AskNebulaPopup.tsx::createTemporaryChat",
+        "ui/src/components/AskNebulaPopup.tsx::keepTemporaryChatAlive",
+        "ui/src/components/AskNebulaPopup.tsx::discardTemporaryChat",
+        "ui/src/components/AskNebulaPopup.tsx::getPendingChatTurn",
+        "ui/src/components/AskNebulaPopup.tsx::streamChat",
+        "ui/src/components/AskNebulaPopup.tsx::cancelChatTurn",
+        "ui/src/components/AskNebulaPopup.tsx::stopHarnessTurn"
+      ],
+      "core_owner": "The popup snapshots operator-selected context and streams with tools disabled. The browser owns its lease, hidden state and discard. These temporary conversations are deliberately excluded from managed Work chats.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The popup snapshots operator-selected context and streams with tools disabled. The browser owns its lease, hidden state and discard. These temporary conversations are deliberately excluded from managed Work chats.",
+      "observed_result_test": "tests/v3/test_temporary_chat.py::test_snapshot_is_independent_hidden_and_discarded",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "conversation_protocol",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "chat.start_and_read",
+          "chat.turn_control"
+        ],
+        "reason": "The popup snapshots operator-selected context and streams with tools disabled. The browser owns its lease, hidden state and discard. These temporary conversations are deliberately excluded from managed Work chats."
+      }
+    },
+    {
+      "id": "ui.scheduled_transcript_projection",
+      "entry_point": "An operator expands a saved Butler check transcript",
+      "ui_calls": [
+        "ui/src/components/ButlerScheduledTranscript.tsx::getHarnessTurn",
+        "ui/src/components/ButlerScheduledTranscript.tsx::getHarnessTurnEvents"
+      ],
+      "core_owner": "The oversight viewer pages its own saved attempts when the operator expands them. These private check-turn RPCs are a browser projection and do not grant a model arbitrary harness-turn access.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The oversight viewer pages its own saved attempts when the operator expands them. These private check-turn RPCs are a browser projection and do not grant a model arbitrary harness-turn access.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler scheduled retry shows both saved attempts after reload on production LAN Core",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "conversation_protocol",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "butler.operator_authority"
+        ],
+        "reason": "The oversight viewer pages its own saved attempts when the operator expands them. These private check-turn RPCs are a browser projection and do not grant a model arbitrary harness-turn access."
+      }
+    },
+    {
+      "id": "ui.connection_auth",
+      "entry_point": "Authenticated UI startup, connection monitoring and private stream setup",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::getToken",
+        "ui/src/state/WorkspaceContext.tsx::health",
+        "ui/src/state/useCoreConnectionMonitor.ts::health",
+        "ui/src/components/CodeEditorPanel.tsx::getToken",
+        "ui/src/components/ContainerTerminalPanel.tsx::getToken"
+      ],
+      "core_owner": "The browser/API client uses authentication material for its own HTTP and stream connections. Connection monitoring does not reveal the token to a model or confer a new operator mutation.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The browser/API client uses authentication material for its own HTTP and stream connections. Connection monitoring does not reveal the token to a model or confer a new operator mutation.",
+      "observed_result_test": "tests/v3/test_chat_api.py::test_device_pairing_is_single_use_cookie_authenticated_and_revocable",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "connection_auth",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "devices.pair",
+          "code.interactive_debugger",
+          "terminal.lifecycle"
+        ],
+        "reason": "The browser/API client uses authentication material for its own HTTP and stream connections. Connection monitoring does not reveal the token to a model or confer a new operator mutation."
+      }
+    },
+    {
+      "id": "ui.authenticated_chat_media",
+      "entry_point": "An operator chooses chat images and the authenticated browser renders retained previews",
+      "ui_calls": [
+        "ui/src/components/AuthenticatedChatImage.tsx::fetchChatImagePreview",
+        "ui/src/components/ChatResults.tsx::fetchChatImagePreview",
+        "ui/src/components/NebulaControlAssistant.tsx::uploadChatImage",
+        "ui/src/pages/SessionsPage.tsx::uploadChatImage"
+      ],
+      "core_owner": "The requesting browser owns file choice, image transfer and blob URLs. Its selected runtime and data-sharing consent control delivery. A model receives no new upload or arbitrary artifact-byte operation from this RPC inventory.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The requesting browser owns file choice, image transfer and blob URLs. Its selected runtime and data-sharing consent control delivery. A model receives no new upload or arbitrary artifact-byte operation from this RPC inventory.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade image attachment reaches the model and survives a LAN reload",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "authenticated_media",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "chat.start_and_read"
+        ],
+        "reason": "The requesting browser owns file choice, image transfer and blob URLs. Its selected runtime and data-sharing consent control delivery. A model receives no new upload or arbitrary artifact-byte operation from this RPC inventory."
+      }
+    },
+    {
+      "id": "ui.device_handoff_protocol",
+      "entry_point": "Browser selections and revision-bound cross-device handoff recovery",
+      "ui_calls": [
+        "ui/src/state/WorkbenchDraftContext.tsx::createHandoff",
+        "ui/src/state/WorkbenchDraftContext.tsx::cancelHandoff",
+        "ui/src/components/HandoffRecoveryNotice.tsx::resolveHandoff",
+        "ui/src/components/HandoffRecoveryNotice.tsx::consumeHandoff"
+      ],
+      "core_owner": "The browser binds references, hashes and transient unsent selections to its device identity. Core resolution/consumption revisions protect recovery; a model cannot create a generic device envelope or receive unsent bytes through these UI calls.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The browser binds references, hashes and transient unsent selections to its device identity. Core resolution/consumption revisions protect recovery; a model cannot create a generic device envelope or receive unsent bytes through these UI calls.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::production LAN handoff survives reload without persisting unsent bytes",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "device_handoff_protocol",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "notes.lifecycle",
+          "report.create",
+          "workspace.text_files"
+        ],
+        "reason": "The browser binds references, hashes and transient unsent selections to its device identity. Core resolution/consumption revisions protect recovery; a model cannot create a generic device envelope or receive unsent bytes through these UI calls."
+      }
+    },
+    {
+      "id": "ui.device_read_cursor",
+      "entry_point": "The transcript acknowledges only messages rendered on this device",
+      "ui_calls": [
+        "ui/src/components/ChatCatchUp.tsx::request::\"PUT\" `${path}/read-cursor`",
+        "ui/src/components/ChatCatchUp.tsx::request::GET `${path}/catch-up?device_id=${encodeURIComponent(device)}`"
+      ],
+      "core_owner": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work.",
+      "observed_result_test": "tests/v3/test_chat_catchup.py::test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "device_read_state",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "chat.start_and_read",
+          "approval.review"
+        ],
+        "reason": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work."
+      }
+    },
+    {
+      "id": "ui.resource_descriptors",
+      "entry_point": "The browser resolves resource labels, relationship cards and available action menus",
+      "ui_calls": [
+        "ui/src/components/ResourceActionMenu.tsx::resolveResourceActions",
+        "ui/src/components/ResourceRelationsPanel.tsx::listResourceRelations",
+        "ui/src/components/ResourceRelationsPanel.tsx::resolveResource"
+      ],
+      "core_owner": "These read-only descriptor RPCs render the current browser resource and device capabilities. They do not execute menu actions; Butler uses the separately reviewed typed record/report operations and their own project guards.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "These read-only descriptor RPCs render the current browser resource and device capabilities. They do not execute menu actions; Butler uses the separately reviewed typed record/report operations and their own project guards.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "ui_projection",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "assets.create",
+          "findings.update",
+          "report.update"
+        ],
+        "reason": "These read-only descriptor RPCs render the current browser resource and device capabilities. They do not execute menu actions; Butler uses the separately reviewed typed record/report operations and their own project guards."
+      }
+    },
+    {
+      "id": "ui.browser_worker_protocol",
+      "entry_point": "An existing browser worker claims Core-leased commands and reports captured results",
+      "ui_calls": [
+        "ui/src/components/BrowserAutomationWorker.tsx::claimSecurityBrowserCommand",
+        "ui/src/components/BrowserAutomationWorker.tsx::createSecurityBrowserIntercept",
+        "ui/src/components/BrowserAutomationWorker.tsx::finishSecurityBrowserCommand",
+        "ui/src/components/BrowserAutomationWorker.tsx::getEngagementScope",
+        "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserAutomation",
+        "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserResearch",
+        "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserWorkspace",
+        "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserAttackResult",
+        "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserRepeaterResult",
+        "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserSiteNode",
+        "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserAttack",
+        "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserCrawl",
+        "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserRepeaterTab",
+        "ui/src/components/BrowserAutomationWorker.tsx::uploadEvidence",
+        "ui/src/components/BrowserAutomationWorker.tsx::uploadSecurityBrowserBodyArtifact",
+        "ui/src/components/WorkbenchBrowser.tsx::recordSecurityBrowserTraffic",
+        "ui/src/components/WorkbenchBrowser.tsx::recordSecurityBrowserWebSocketFrame",
+        "ui/src/components/WorkbenchBrowser.tsx::uploadSecurityBrowserBodyArtifact"
+      ],
+      "core_owner": "Core leases, session scope, command ownership and the operator browser own this pre-existing worker protocol. Claim/finish, capture and transition RPCs do not add model operations or widen the passive-only Butler delegation; active testing stays in its operator controls.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "Core leases, session scope, command ownership and the operator browser own this pre-existing worker protocol. Claim/finish, capture and transition RPCs do not add model operations or widen the passive-only Butler delegation; active testing stays in its operator controls.",
+      "observed_result_test": "tests/v3/test_browser_automation.py::test_browser_automation_lease_claim_and_finish_are_durable",
+      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "browser_worker_protocol",
+        "owner": "core",
+        "model_operation": false,
+        "workflows": [
+          "browser.scoped_automation_mission",
+          "browser.manual_research",
+          "browser.interactive_page"
+        ],
+        "reason": "Core leases, session scope, command ownership and the operator browser own this pre-existing worker protocol. Claim/finish, capture and transition RPCs do not add model operations or widen the passive-only Butler delegation; active testing stays in its operator controls."
+      }
+    },
+    {
+      "id": "providers.operator_sharing",
+      "entry_point": "Personally review integration sharing permission or local-program trust in Settings",
+      "ui_calls": [
+        "ui/src/api/toolSharingConsent.ts::setProviderToolResultSharing",
+        "ui/src/state/WorkspaceContext.tsx::updateProvider"
+      ],
+      "core_owner": "Core profile revision guards and the requesting operator consent/trust controls",
+      "butler": {
+        "discover": "nebula.settings.open",
+        "read": "Nonsecret profile state through the listed Settings schema",
+        "change": "nebula.settings.open setting_id=providers"
+      },
+      "authority": "Standing permission to share project data with a provider belongs to the operator consent controls. Generic model-driven profile edits preserve it.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "The exact Settings control opens. A browser-opening receipt does not grant sharing permission, trust a program or claim a saved mutation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "providers",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Standing permission to share project data with a provider belongs to the operator consent controls. Generic model-driven profile edits preserve it.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "harnesses.operator_sharing",
+      "entry_point": "Personally review integration sharing permission or local-program trust in Settings",
+      "ui_calls": [
+        "ui/src/api/toolSharingConsent.ts::setHarnessToolResultSharing",
+        "ui/src/components/HarnessSettings.tsx::updateHarness"
+      ],
+      "core_owner": "Core profile revision guards and the requesting operator consent/trust controls",
+      "butler": {
+        "discover": "nebula.settings.open",
+        "read": "Nonsecret profile state through the listed Settings schema",
+        "change": "nebula.settings.open setting_id=harnesses"
+      },
+      "authority": "Standing permission to share project data with an Assistant harness belongs to the operator consent controls. Generic model-driven profile edits preserve it.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "The exact Settings control opens. A browser-opening receipt does not grant sharing permission, trust a program or claim a saved mutation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "harnesses",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Standing permission to share project data with an Assistant harness belongs to the operator consent controls. Generic model-driven profile edits preserve it.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "mcp.operator_program_trust",
+      "entry_point": "Personally review integration sharing permission or local-program trust in Settings",
+      "ui_calls": [
+        "ui/src/components/HarnessSettings.tsx::updateMcpServer"
+      ],
+      "core_owner": "Core profile revision guards and the requesting operator consent/trust controls",
+      "butler": {
+        "discover": "nebula.settings.open",
+        "read": "Nonsecret profile state through the listed Settings schema",
+        "change": "nebula.settings.open setting_id=mcp"
+      },
+      "authority": "Trusting a local MCP program and changing its trusted launch definition belong to the operator control. Generic model-driven profile edits preserve this trust and definition.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "The exact Settings control opens. A browser-opening receipt does not grant sharing permission, trust a program or claim a saved mutation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "mcp",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Trusting a local MCP program and changing its trusted launch definition belong to the operator control. Generic model-driven profile edits preserve this trust and definition.",
+        "observed_result": "opened"
+      }
     }
   ],
   "ui_api_calls": [
