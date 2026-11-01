@@ -38,7 +38,7 @@ function harnessRecovery(profile: HarnessProfile): string | undefined {
 
 export function HarnessSettings() {
   const confirm = useConfirmation();
-  const { api, coreState, engagement, previewMode } = useWorkspace();
+  const { api, coreState, engagement, previewMode, refreshHarnesses } = useWorkspace();
   const [kind, setKind] = useState<HarnessProfile["kind"]>("codex_app_server");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
   const [servers, setServers] = useState<McpServerProfile[]>([]);
@@ -93,7 +93,7 @@ export function HarnessSettings() {
     if (isActive()) setCatalogError(undefined);
     const failures: string[] = [];
     await Promise.all([
-      api.listHarnesses().then(next => { if (isActive()) setHarnesses(next); }).catch(loadError => {
+      refreshHarnesses().then(next => { if (isActive()) setHarnesses(next); }).catch(loadError => {
         void logCaughtDiagnostic("interface.harness_settings.catalog_failed", "The harness catalog could not be refreshed.", loadError, "harness_settings");
         failures.push("Agent harnesses could not be refreshed.");
         if (isActive()) setCatalogError(failures.join(" "));
@@ -104,7 +104,7 @@ export function HarnessSettings() {
         if (isActive()) setCatalogError(failures.join(" "));
       }),
     ]);
-  }, [api, coreState]);
+  }, [api, coreState, refreshHarnesses]);
   const removeHarness = async (profile: HarnessProfile) => {
     if (!await confirm({
       title: "Delete this harness?",
@@ -163,7 +163,7 @@ export function HarnessSettings() {
     }
     try {
       // An unrelated MCP catalog failure must not hide a saved harness.
-      setHarnesses(await api.listHarnesses());
+      setHarnesses(await refreshHarnesses());
     } catch (catalogError) {
       void logCaughtDiagnostic("interface.harness_settings.catalog_failed", "The harness catalog could not be refreshed.", catalogError, "harness_settings");
       failures.push(`Catalog refresh failed: ${catalogError instanceof Error ? catalogError.message : "catalog unavailable"}`);
@@ -178,12 +178,12 @@ export function HarnessSettings() {
     setError(undefined);
     try {
       await api.testHarnessTurn(profile.id);
-      setHarnesses(await api.listHarnesses());
+      setHarnesses(await refreshHarnesses());
     } catch (failure) {
       void logCaughtDiagnostic("interface.harness_settings.test_turn_failed", "A diagnostic harness turn failed.", failure, "harness_settings");
       setError(failure instanceof Error ? failure.message : "Test turn failed.");
       try {
-        setHarnesses(await api.listHarnesses());
+        setHarnesses(await refreshHarnesses());
       } catch (reloadFailure) {
         void logCaughtDiagnostic("interface.harness_settings.test_turn_reload_failed", "Harness status could not be refreshed after a failed diagnostic turn.", reloadFailure, "harness_settings");
       }

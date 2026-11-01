@@ -526,10 +526,10 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 47
-reviewed actions. Its source inventory contains 539 distinct `api` call
-signatures in production UI TypeScript, of which 108 are linked to reviewed
-actions; 431 still require
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 48
+reviewed actions. Its source inventory contains 540 distinct `api` call
+signatures in production UI TypeScript, of which 111 are linked to reviewed
+actions; 429 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
