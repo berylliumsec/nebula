@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX, Pencil } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal, HarnessSkillSummary } from "../api/types";
@@ -111,10 +111,24 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const [evidence, setEvidence] = useState("");
   const [editingSkills, setEditingSkills] = useState(false);
   const [editingGoal, setEditingGoal] = useState(false);
+  const editFormRef = useRef<HTMLDivElement>(null);
   const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const confirm = useConfirmation();
+  useLayoutEffect(() => {
+    if (!editingGoal) return;
+    const form = editFormRef.current;
+    const objective = form?.querySelector<HTMLTextAreaElement>("textarea");
+    if (!form || !objective) return;
+    const viewport = form.closest<HTMLElement>(".chat-composer-context");
+    if (viewport) {
+      viewport.scrollTop += form.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8;
+    } else {
+      form.scrollIntoView?.({ block: "start", inline: "nearest" });
+    }
+    objective.focus({ preventScroll: true });
+  }, [editingGoal]);
   // The active stretch advances between reads, so the panel ticks it locally.
   const [tick, setTick] = useState(() => Date.now());
   useEffect(() => {
@@ -369,7 +383,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       {(goal.status === "paused" || goal.status === "blocked") && !goal.handoffTargetSessionId && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("resume")}><CirclePlay size={14} /> Resume</button>}
       <div className="chat-goal-utilities"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginGoalEdit}><Pencil size={14} aria-hidden="true" /> Edit goal</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button></div>
     </div>}
-    {editingGoal && !terminal && <div className="chat-goal-form">
+    {editingGoal && !terminal && <div className="chat-goal-form" data-selection-actions-disabled ref={editFormRef}>
       <label>Objective<textarea value={objective} maxLength={20_000} required onChange={event => setObjective(event.target.value)} /></label>
       <label>Completion criteria<textarea value={criteria} required placeholder="One criterion per line" onChange={event => setCriteria(event.target.value)} /></label>
       <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
