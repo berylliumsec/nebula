@@ -1,6 +1,6 @@
 import {useEffect, useState, type FormEvent} from "react";
 import type {ApiClient} from "../api/client";
-import {getButlerCheckInterval, updateButlerCheckInterval, type ButlerCheckInterval} from "../api/butlerInstructions";
+import {BUTLER_INTERVAL_CHANGED_EVENT, getButlerCheckInterval, updateButlerCheckInterval, type ButlerCheckInterval} from "../api/butlerInstructions";
 import {logCaughtDiagnostic} from "../diagnostics/logger";
 import {announceSettingsSaved} from "./SettingsSaveFeedback";
 
@@ -11,6 +11,8 @@ export function ButlerCheckIntervalSettings({api, previewMode = false}: {api?: A
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [changedElsewhere, setChangedElsewhere] = useState(false);
 
   useEffect(() => {
     if (!api || previewMode) return;
@@ -21,6 +23,7 @@ export function ButlerCheckIntervalSettings({api, previewMode = false}: {api?: A
         if (controller.signal.aborted) return;
         setSaved(next);
         setDraft(String(next.check_interval_minutes));
+        setChangedElsewhere(false);
         setError(undefined);
       })
       .catch((caught) => {
@@ -30,27 +33,30 @@ export function ButlerCheckIntervalSettings({api, previewMode = false}: {api?: A
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [api, previewMode]);
+  }, [api, previewMode, refreshKey]);
+
+  useEffect(() => {
+    if (!api || previewMode) return;
+    const refresh = () => {
+      if (saved && draft !== String(saved.check_interval_minutes)) {
+        setChangedElsewhere(true);
+        setError("Butler's check interval changed elsewhere. Your draft is kept; reload the current value before saving.");
+        return;
+      }
+      setNotice(undefined);
+      setRefreshKey(current => current + 1);
+    };
+    window.addEventListener(BUTLER_INTERVAL_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(BUTLER_INTERVAL_CHANGED_EVENT, refresh);
+  }, [api, previewMode, saved, draft]);
 
   const minutes = Number(draft);
   const valid = /^\d+$/.test(draft) && Number.isInteger(minutes) && minutes >= 1 && minutes <= 1440;
-  const canSave = !!api && !previewMode && !loading && !saving && !!saved && valid && minutes !== saved.check_interval_minutes;
+  const canSave = !!api && !previewMode && !loading && !saving && !changedElsewhere && !!saved && valid && minutes !== saved.check_interval_minutes;
 
-  const reload = async () => {
-    if (!api) return;
-    setLoading(true);
-    setError(undefined);
-    try {
-      const next = await getButlerCheckInterval(api);
-      setSaved(next);
-      setDraft(String(next.check_interval_minutes));
-      setNotice(undefined);
-    } catch (caught) {
-      void logCaughtDiagnostic("interface.butler_interval.reload_failed", "Butler check interval could not be reloaded.", caught, "butler");
-      setError(caught instanceof Error ? caught.message : "Could not reload Butler check interval.");
-    } finally {
-      setLoading(false);
-    }
+  const reload = () => {
+    setNotice(undefined);
+    setRefreshKey(current => current + 1);
   };
 
   const save = async (event: FormEvent) => {

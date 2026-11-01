@@ -12,6 +12,7 @@ export type SettingClientAction =
   | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
   | { kind: "note_delete"; projectId: string; noteId: string; name: string; expectedRevision: number }
   | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" }
+  | { kind: "butler_interval_refresh"; projectId: string }
   | { kind: "open_setting"; setting: SettingCatalogEntry }
   | { kind: "navigate"; destination: AssistantDestination }
   | { kind: "device_theme"; theme: ThemePreference }
@@ -138,6 +139,11 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
   if (receipt.state === "core_settings_saved") {
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && operation === "nebula.settings.api_request" && receipt.read_back === true
+        && value.kind === "butler_interval_refresh") {
+      return {kind: "butler_interval_refresh", projectId};
+    }
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && operation === "nebula.settings.api_request" && receipt.read_back === true
         && value.kind === "settings_profile_refresh"

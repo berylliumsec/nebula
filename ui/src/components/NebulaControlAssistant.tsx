@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
+import {BUTLER_INTERVAL_CHANGED_EVENT} from "../api/butlerInstructions";
 import { ApiError } from "../api/client";
 import { ACCEPTED_LIBRARY_FILES, encodeLibraryFile, MAX_LIBRARY_ITEM_BYTES, startLibraryArtifactDownload } from "../api/libraryFiles";
 import { isNebulaShell } from "../hooks/useCompactLayout";
@@ -1729,6 +1730,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       if (action.resource !== "providers") window.dispatchEvent(new Event("nebula:mcp-profiles-changed"));
       return "Core confirmed the profile change. Settings catalogs have been asked to refresh.";
+    }
+    if (action.kind === "butler_interval_refresh") {
+      window.dispatchEvent(new Event(BUTLER_INTERVAL_CHANGED_EVENT));
+      return "Core confirmed the Butler check interval. Its Settings control has been asked to refresh.";
     }
     if (action.kind === "credential_delete") {
       if (!api || coreState !== "online" || engagement?.id !== action.projectId) {

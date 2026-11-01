@@ -195,6 +195,11 @@ def test_butler_discovers_and_revision_saves_its_check_interval(tmp_path):
         )
         assert saved["read_back"] is True
         assert saved["result"]["check_interval_minutes"] == 2
+        assert saved["state"] == "core_settings_saved"
+        assert saved["client_action"] == {
+            "kind": "butler_interval_refresh",
+            "project_id": project.id,
+        }
         assert saved["result"]["revision"] > current["result"]["revision"]
         with pytest.raises(ValueError, match="409"):
             await invoke(

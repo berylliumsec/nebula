@@ -68,3 +68,47 @@ def test_registry_rejects_operation_missing_from_core_catalog(tmp_path: Path) ->
     result = _check(candidate)
     assert result.returncode != 0
     assert "Butler operation is not in the Core catalog" in result.stderr
+
+
+def test_registry_rejects_handoff_to_unknown_destination(tmp_path: Path) -> None:
+    inventory = json.loads(REGISTRY.read_text())
+    action = next(
+        row for row in inventory["actions"] if row["id"] == "browser.interactive_page"
+    )
+    action["handoff"]["target_id"] = "unlisted-browser"
+    candidate = tmp_path / "unknown-handoff.json"
+    candidate.write_text(json.dumps(inventory))
+
+    result = _check(candidate)
+    assert result.returncode != 0
+    assert "device handoff destination is not in the Core catalog" in result.stderr
+
+
+def test_registry_rejects_mutation_disguised_as_open_handoff(tmp_path: Path) -> None:
+    inventory = json.loads(REGISTRY.read_text())
+    action = next(
+        row for row in inventory["actions"] if row["id"] == "browser.interactive_page"
+    )
+    action["butler"]["change"] = "nebula.work.start_mission"
+    candidate = tmp_path / "mutation-handoff.json"
+    candidate.write_text(json.dumps(inventory))
+
+    result = _check(candidate)
+    assert result.returncode != 0
+    assert "device handoff may only open its exact catalog destination" in result.stderr
+
+
+def test_registry_rejects_browser_opening_marked_as_saved_mutation(
+    tmp_path: Path,
+) -> None:
+    inventory = json.loads(REGISTRY.read_text())
+    action = next(
+        row for row in inventory["actions"] if row["id"] == "browser.interactive_page"
+    )
+    action["status"] = "supported"
+    candidate = tmp_path / "false-handoff-result.json"
+    candidate.write_text(json.dumps(inventory))
+
+    result = _check(candidate)
+    assert result.returncode != 0
+    assert "browser opening cannot be marked as a supported mutation" in result.stderr

@@ -106,6 +106,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "butler-device-handoffs": [
+      {"area":"butler-device-handoffs","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "butler-notes": [
       {"area":"butler-notes","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-notes","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},

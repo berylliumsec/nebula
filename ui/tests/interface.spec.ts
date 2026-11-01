@@ -2916,8 +2916,10 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     await expect(top).toHaveAttribute("data-lens-open", "false");
     await topHandle.focus();
     await expect(top).toHaveAttribute("data-lens-open", "true");
+    await topHandle.hover();
     await page.mouse.move(370, 320);
     await expect(top).toHaveAttribute("data-lens-open", "true");
+    await expect(topHandle).toBeFocused();
     await topHandle.evaluate(element => (element as HTMLButtonElement).blur());
     await expect(top).toHaveAttribute("data-lens-open", "false");
     await sideHandle.hover();

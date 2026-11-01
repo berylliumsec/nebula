@@ -173,6 +173,19 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
   });
+  it("refreshes the Butler interval only after scoped Core readback", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "interval-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project",
+        state: "core_settings_saved", read_back: true,
+        client_action: {kind: "butler_interval_refresh", project_id: "project"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "butler_interval_refresh", projectId: "project"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, state: "pending_browser_apply"}}, "project")).toBeUndefined();
+  });
   it("accepts only scoped bounded note changes with exact identity and revisions", () => {
     const noteId = "b96e898d-207f-4943-846e-c00f4415fc26";
     const event: ChatStreamEvent = {

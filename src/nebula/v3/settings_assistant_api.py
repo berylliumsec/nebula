@@ -310,6 +310,18 @@ async def execute_settings_api(
                     "resource": profile_route[1],
                 },
             )
+        if (
+            selected == "PUT"
+            and observed is not None
+            and candidate == "/api/v1/butler/check-interval"
+        ):
+            outcome.update(
+                state="core_settings_saved",
+                client_action={
+                    "kind": "butler_interval_refresh",
+                    "project_id": project_id,
+                },
+            )
         return outcome
 
 

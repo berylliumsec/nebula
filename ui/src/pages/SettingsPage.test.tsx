@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +51,8 @@ vi.mock("../components/EnvironmentSettings", () => ({ EnvironmentSettings: () =>
 vi.mock("../components/StorageIntegrations", () => ({ StorageIntegrations: () => null }));
 vi.mock("../components/HarnessSettings", () => ({ HarnessSettings: () => null }));
 vi.mock("../components/PostToolAssistantSettings", () => ({ PostToolAssistantSettings: () => null }));
+vi.mock("../components/ButlerInstructionsSettings", () => ({ ButlerInstructionsSettings: () => null }));
+vi.mock("../components/ButlerCheckIntervalSettings", () => ({ ButlerCheckIntervalSettings: () => null }));
 vi.mock("../components/TypeSafeIntegrationSettings", () => ({ TypeSafeIntegrationSettings: () => null }));
 vi.mock("../components/EngagementPolicySettings", () => ({ EngagementPolicySettings: () => null }));
 vi.mock("../components/ReleaseSettingsPanel", () => ({ ReleaseSettingsPanel: () => null }));
@@ -106,6 +108,33 @@ describe("settings page section routing", () => {
     await waitFor(() => expect(screen.getByRole("link", { name: "Advanced settings" })).toHaveAttribute("aria-current", "page"));
     expect(document.getElementById("models-settings")).toHaveAttribute("open");
     await waitFor(() => expect(screen.getByRole("heading", { name: "Model providers" })).toHaveFocus());
+  });
+
+  it.each(["before", "after"])("preserves shell focus acquired %s Settings schedules deep-link focus", (order) => {
+    const frames: FrameRequestCallback[] = [];
+    const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const shell = document.createElement("header");
+    shell.className = "top-bar";
+    const shellControl = document.createElement("button");
+    shellControl.textContent = "Open top menu";
+    shell.append(shellControl);
+    document.body.append(shell);
+    try {
+      if (order === "before") shellControl.focus();
+      renderSettings("/settings#provider-settings");
+      if (order === "after") shellControl.focus();
+      act(() => { for (const callback of [...frames]) callback(0); });
+      expect(shellControl).toHaveFocus();
+      expect(screen.getByRole("heading", {name: "Model providers"})).not.toHaveFocus();
+    } finally {
+      shell.remove();
+      request.mockRestore();
+      cancel.mockRestore();
+    }
   });
 
   it("keeps the router location in step with the selected tab and group", async () => {

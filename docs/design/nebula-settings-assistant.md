@@ -444,6 +444,8 @@ still stops the investigation, and Core's target policy and approval checks rema
 in force. A check with no running main goals and remaining paused or blocked
 main goals stays marked as needing attention when Butler only reads or changes
 unrelated state.
+A Core-verified Butler save refreshes the mounted interval control immediately.
+An unsaved operator draft stays intact and requires Reload before saving.
 
 When Butler sends immediate guidance to a blocked main agent, Core keeps that
 scheduled check open and follows the accepted chat turn. When the turn finishes,
@@ -517,3 +519,12 @@ The focused test selection must cover the capability catalog, provider and
 harness tool paths, Core authorization and read-back, shell visibility, settings
 handoff, desktop and mobile browser geometry, reconnect, and production LAN
 origin. Physical-device behavior is unverified until exercised on a device.
+
+### Device and operator boundaries
+
+Interactive browser controls, private browser streams, debugger input, terminal
+recording consent and Butler's own authority decisions remain with the requesting
+operator. Butler can open their exact catalog destination. An opening receipt
+means the control is open; it does not claim the operator submitted anything or
+that Core saved a mutation. The [device-boundary audit](butler-device-boundaries.md)
+records those limits and rejects handoffs mislabeled as saved changes.

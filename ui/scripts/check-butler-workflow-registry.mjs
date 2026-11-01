@@ -82,6 +82,11 @@ function main() {
     .join("\n");
   const ids = new Set();
   const validStatus = new Set(["supported", "gap", "device_handoff"]);
+  const destinations = new Set(JSON.parse(readFileSync(resolve(repoRoot, "src/nebula/v3/assistant_destinations.json"), "utf8")).map(({id}) => id));
+  const settingsSource = readFileSync(resolve(repoRoot, "src/nebula/v3/settings_assistant_tools.py"), "utf8");
+  const settingsStart = settingsSource.indexOf("SETTING_DESTINATIONS:");
+  const settingsBlock = settingsSource.slice(settingsStart, settingsSource.indexOf("\n)\n", settingsStart));
+  const settings = new Set([...settingsBlock.matchAll(/\(\s*"([a-z-]+)"\s*,/g)].map((match) => match[1]));
   const reviewed = new Set();
   for (const action of registry.actions) {
     if (!action.id || ids.has(action.id)) throw new Error(`Missing or duplicate workflow ID: ${action.id}`);
@@ -99,20 +104,41 @@ function main() {
       throw new Error(`${action.id}: Butler discovery, read, and change disposition are required`);
     }
     if (action.status === "supported" && action.butler.change.startsWith("missing")) throw new Error(`${action.id}: supported action has no change operation`);
-    if (action.status !== "supported" && !action.butler.change.startsWith("missing")) throw new Error(`${action.id}: gap must identify the missing action or handoff`);
-    if (action.status === "supported") {
+    if (action.status === "gap" && !action.butler.change.startsWith("missing")) throw new Error(`${action.id}: gap must identify the missing action or handoff`);
+    if (action.status === "device_handoff") {
+      const handoff = action.handoff;
+      if (!handoff || handoff.owner !== "requesting_browser" || handoff.observed_result !== "opened"
+          || !["device_interaction", "device_secret", "operator_authority"].includes(handoff.boundary)
+          || typeof handoff.reason !== "string" || !handoff.reason.trim()) {
+        throw new Error(`${action.id}: device handoff must name its browser owner, boundary and opened-only result`);
+      }
+      const navigation = handoff.operation === "nebula.navigate.open";
+      if ((!navigation && handoff.operation !== "nebula.settings.open")
+          || !(navigation ? destinations : settings).has(handoff.target_id)) {
+        throw new Error(`${action.id}: device handoff destination is not in the Core catalog`);
+      }
+      const argument = navigation ? "destination_id" : "setting_id";
+      if (action.butler.change !== `${handoff.operation} ${argument}=${handoff.target_id}`) {
+        throw new Error(`${action.id}: device handoff may only open its exact catalog destination`);
+      }
+    } else if (action.handoff) {
+      throw new Error(`${action.id}: browser opening cannot be marked as a supported mutation`);
+    }
+    if (action.status === "supported" || action.status === "device_handoff") {
       const [testPath, testName] = action.observed_result_test.split("::");
       const absoluteTest = resolve(repoRoot, testPath ?? "");
       if (!testName || !existsSync(absoluteTest) || !readFileSync(absoluteTest, "utf8").includes(testName)) {
         throw new Error(`${action.id}: observed-result test is missing: ${action.observed_result_test}`);
       }
-      for (const operation of Object.values(action.butler).flatMap((value) => value.match(/nebula\.(?:work|projects|chats|workspace|library|reports|terminal|storage|devices|credentials|providers|harnesses|mcp|memory|notes|settings|diagnostics)\.[a-z_]+/g) ?? [])) {
+      for (const operation of Object.values(action.butler).flatMap((value) => value.match(/nebula\.(?:work|projects|chats|workspace|library|reports|terminal|storage|devices|credentials|providers|harnesses|mcp|memory|notes|settings|diagnostics|navigate)\.[a-z_]+/g) ?? [])) {
         if (!catalogs.includes(`"${operation}"`)) throw new Error(`${action.id}: Butler operation is not in the Core catalog: ${operation}`);
       }
     }
   }
   const unreviewed = current.filter(({ key }) => !reviewed.has(key)).length;
-  console.log(`Butler workflow registry: ${registry.actions.length} reviewed actions, ${reviewed.size}/${current.length} UI API call signatures linked, ${unreviewed} unreviewed signatures`);
+  const gaps = registry.actions.filter(({status}) => status === "gap").length;
+  const handoffs = registry.actions.filter(({status}) => status === "device_handoff").length;
+  console.log(`Butler workflow registry: ${registry.actions.length} reviewed actions, ${reviewed.size}/${current.length} UI API call signatures linked, ${unreviewed} unreviewed signatures, ${gaps} gaps, ${handoffs} operator-owned device handoffs`);
 }
 
 main();

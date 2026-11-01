@@ -1316,6 +1316,262 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
       "result": "Core saved value is read back and survives refresh; conflicting writes require a new read",
       "status": "supported"
+    },
+    {
+      "id": "browser.interactive_page",
+      "entry_point": "Interactive page, private login identity, capture and operator browser approvals",
+      "ui_calls": [
+        "ui/src/components/WorkbenchBrowser.tsx::claimSecurityBrowserHandoff",
+        "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserHandoff",
+        "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserIdentity",
+        "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserRepeaterTab",
+        "ui/src/components/WorkbenchBrowser.tsx::createSecurityBrowserSession",
+        "ui/src/components/WorkbenchBrowser.tsx::decideSecurityBrowserAction",
+        "ui/src/components/WorkbenchBrowser.tsx::decideSecurityBrowserIntercept",
+        "ui/src/components/WorkbenchBrowser.tsx::finishSecurityBrowserAction",
+        "ui/src/components/WorkbenchBrowser.tsx::finishSecurityBrowserHandoff",
+        "ui/src/components/WorkbenchBrowser.tsx::getSecurityBrowserResearch",
+        "ui/src/components/WorkbenchBrowser.tsx::getSecurityBrowserWorkspace",
+        "ui/src/components/WorkbenchBrowser.tsx::proposeSecurityBrowserAction",
+        "ui/src/components/WorkbenchBrowser.tsx::startSecurityBrowserAction",
+        "ui/src/components/WorkbenchBrowser.tsx::stopSecurityBrowserAutomation",
+        "ui/src/components/WorkbenchBrowser.tsx::syncSecurityBrowserSession",
+        "ui/src/components/WorkbenchBrowser.tsx::updateSecurityBrowserCapture"
+      ],
+      "core_owner": "Interactive page, private login identity, capture and operator browser approvals services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=browser"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "browser",
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "Interactive page, private login identity, capture and operator browser approvals belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "browser.manual_research",
+      "entry_point": "Operator-controlled research tabs, private traffic inspection and manual testing",
+      "ui_calls": [
+        "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserAttack",
+        "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserCrawl",
+        "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserRepeaterTab",
+        "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserTokenAnalysis",
+        "ui/src/components/BrowserResearchSuite.tsx::decideSecurityBrowserIntercept",
+        "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserAttack",
+        "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserCrawl",
+        "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserRepeaterTab",
+        "ui/src/components/BrowserResearchSuite.tsx::getArtifactContent",
+        "ui/src/components/BrowserResearchSuite.tsx::getSecurityBrowserResearch",
+        "ui/src/components/BrowserResearchSuite.tsx::securityBrowserCompare",
+        "ui/src/components/BrowserResearchSuite.tsx::securityBrowserDecode",
+        "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserAttack",
+        "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserCrawl",
+        "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserRepeaterTab",
+        "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab"
+      ],
+      "core_owner": "Operator-controlled research tabs, private traffic inspection and manual testing services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=browser"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "browser",
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "Operator-controlled research tabs, private traffic inspection and manual testing belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "browser.assessment_consent",
+      "entry_point": "Personal assessment review and validation grant or revocation",
+      "ui_calls": [
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::createSecurityBrowserAssessment",
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::deleteSecurityBrowserAssessment",
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getSecurityBrowserAssessments",
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getToken",
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::grantSecurityBrowserCandidateValidation",
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::refreshSecurityBrowserAssessmentReadiness",
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::revokeSecurityBrowserCandidateValidation",
+        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::transitionSecurityBrowserAssessment"
+      ],
+      "core_owner": "Personal assessment review and validation grant or revocation services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=browser"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "browser",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Personal assessment review and validation grant or revocation belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "browser.dashboard_review",
+      "entry_point": "Visible browser status, intercepted traffic and manual stop controls",
+      "ui_calls": [
+        "ui/src/components/SecurityDashboard.tsx::decideSecurityBrowserIntercept",
+        "ui/src/components/SecurityDashboard.tsx::getSecurityBrowserAutomation",
+        "ui/src/components/SecurityDashboard.tsx::getSecurityBrowserResearch",
+        "ui/src/components/SecurityDashboard.tsx::getSecurityBrowserWorkspace",
+        "ui/src/components/SecurityDashboard.tsx::stopAgentSecurity",
+        "ui/src/components/SecurityDashboard.tsx::stopSecurityBrowserAutomation"
+      ],
+      "core_owner": "Visible browser status, intercepted traffic and manual stop controls services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=browser"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "browser",
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "Visible browser status, intercepted traffic and manual stop controls belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "browser.private_companion",
+      "entry_point": "Private authenticated browser stream and desktop browser transport",
+      "ui_calls": [
+        "ui/src/components/ElectronBrowser.tsx::request::GET path",
+        "ui/src/components/ManagedAssistantBrowser.tsx::openBrowserCompanionStream",
+        "ui/src/components/ManagedAssistantBrowser.tsx::request::GET path"
+      ],
+      "core_owner": "Private authenticated browser stream and desktop browser transport services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=browser"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "browser",
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "Private authenticated browser stream and desktop browser transport belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "terminal.recording_consent",
+      "entry_point": "Private command history, captured output and operator recording consent",
+      "ui_calls": [
+        "ui/src/components/TerminalCommandHistoryPanel.tsx::listTerminalCommands",
+        "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalCommandHistoryStatus",
+        "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalCommandOutput",
+        "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalRecordingTools",
+        "ui/src/components/TerminalCommandHistoryPanel.tsx::updateTerminalRecordingTools"
+      ],
+      "core_owner": "Private command history, captured output and operator recording consent services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=terminal"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "terminal",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Private command history, captured output and operator recording consent belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "code.interactive_debugger",
+      "entry_point": "Interactive debugger streams, editor environment and task controls",
+      "ui_calls": [
+        "ui/src/components/EditorDebuggerPanel.tsx::getToken",
+        "ui/src/components/EditorDebuggerPanel.tsx::startDebugSession",
+        "ui/src/components/EditorDebuggerPanel.tsx::workspaceDebugConfigurations",
+        "ui/src/components/EditorEnvironmentDialog.tsx::containerTerminalCapabilities",
+        "ui/src/components/EditorTasksDialog.tsx::workspaceTasks",
+        "ui/src/components/EditorWorkspaceSearch.tsx::searchWorkspace"
+      ],
+      "core_owner": "Interactive debugger streams, editor environment and task controls services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=code"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "code",
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "Interactive debugger streams, editor environment and task controls belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "butler.operator_authority",
+      "entry_point": "Inspect Butler incidents and personally grant authority or acknowledge incidents",
+      "ui_calls": [
+        "ui/src/api/butlerOverview.ts::request::\"POST\" `engagements/${encodeURIComponent(projectId)}/butler/incidents/${encodeURIComponent(incident.id)}/acknowledge`",
+        "ui/src/api/butlerOverview.ts::request::\"PUT\" `engagements/${encodeURIComponent(policy.projectId)}/butler/authority`",
+        "ui/src/api/butlerOverview.ts::request::GET `engagements/${encodeURIComponent(projectId)}/butler/authority`",
+        "ui/src/api/butlerOverview.ts::request::GET `engagements/${encodeURIComponent(projectId)}/butler/overview${query.size ? `?${query}` : \"\"}`"
+      ],
+      "core_owner": "Inspect Butler incidents and personally grant authority or acknowledge incidents services and the requesting browser",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.catalog",
+        "change": "nebula.navigate.open destination_id=butler-activity"
+      },
+      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "butler-activity",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Inspect Butler incidents and personally grant authority or acknowledge incidents belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
+        "observed_result": "opened"
+      }
     }
   ],
   "ui_api_calls": [
