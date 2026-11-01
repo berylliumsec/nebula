@@ -1337,11 +1337,26 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
         if (action !== "delete") await expect(heading).toBeVisible({timeout: 20_000});
       }
     }
+    const interval = await (await api.get("butler/check-interval")).json() as {revision: number};
+    request = {prompt: "Set the saved Butler check interval to two minutes using Core.", path: "butler/check-interval", method: "PUT",
+      body: {check_interval_minutes: 2, expected_revision: interval.revision}};
+    stub.responseContent = "Core saved the two-minute Butler check interval.";
     if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(request.prompt);
+    await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+    expect((await (await api.get("butler/check-interval")).json() as {check_interval_minutes: number}).check_interval_minutes).toBe(2);
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await page.goto(`${core.origin}/settings#butler-check-interval-settings`);
+    await expect(page.getByRole("region", {name: "Butler check interval"}).getByRole("spinbutton", {name: "Check every"})).toHaveValue("2");
+    await page.reload();
+    await expect(page.getByRole("region", {name: "Butler check interval"}).getByRole("spinbutton", {name: "Check every"})).toHaveValue("2");
+    if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
     expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-integration-profiles-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
-      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Three disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks."}), contentType: "application/json"});
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Three disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 

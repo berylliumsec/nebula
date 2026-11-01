@@ -409,6 +409,10 @@ from that run; a new file version is considered at the next check.
 When the file exists, Core records one Nebula-wide periodic check after the
 saved check interval, five minutes by default. The operator changes it in
 Settings → Automation → Butler check interval from one minute to one day.
+Interactive Butler can also discover `butler-check-interval`, read its current
+value and revision through the Settings gateway, and save a requested interval
+with that revision in the PUT body. Core readback must confirm the requested
+minutes; a conflict requires a fresh read before retrying.
 Core persists the interval with a revision guard, reads it for each due check,
 and reports the next due time from the last saved check. Reducing the interval
 can make the next check due immediately. It can run with no running goals. A

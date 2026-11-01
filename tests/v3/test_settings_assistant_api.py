@@ -150,6 +150,73 @@ def test_settings_api_discovers_and_reads_back_nebula_wide_butler_file(tmp_path)
     asyncio.run(journey())
 
 
+def test_butler_discovers_and_revision_saves_its_check_interval(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    gateway = SettingsAssistantApi(
+        create_app(store, auth_token="test-token"), "test-token"
+    )
+    capabilities = ButlerCapabilities(
+        store, ArtifactStore(tmp_path / "artifacts"), project.id, settings_api=gateway
+    )
+
+    async def invoke(operation, arguments, *, change=False):
+        return await capabilities.invoke(
+            {"operation": operation, "arguments": arguments}, change=change
+        )
+
+    async def journey():
+        opened = await invoke(
+            "nebula.settings.open", {"setting_id": "butler-check-interval"}, change=True
+        )
+        assert opened["state"] == "pending_browser_apply"
+        schema = await invoke(
+            "nebula.settings.api_schema",
+            {"path": "butler/check-interval", "method": "PUT"},
+        )
+        assert schema["request_body"]
+        current = await invoke(
+            "nebula.settings.api_request",
+            {"path": "butler/check-interval", "method": "GET"},
+            change=True,
+        )
+        assert current["result"]["check_interval_minutes"] == 5
+        saved = await invoke(
+            "nebula.settings.api_request",
+            {
+                "path": "butler/check-interval",
+                "method": "PUT",
+                "body": {
+                    "check_interval_minutes": 2,
+                    "expected_revision": current["result"]["revision"],
+                },
+            },
+            change=True,
+        )
+        assert saved["read_back"] is True
+        assert saved["result"]["check_interval_minutes"] == 2
+        assert saved["result"]["revision"] > current["result"]["revision"]
+        with pytest.raises(ValueError, match="409"):
+            await invoke(
+                "nebula.settings.api_request",
+                {
+                    "path": "butler/check-interval",
+                    "method": "PUT",
+                    "body": {
+                        "check_interval_minutes": 10,
+                        "expected_revision": current["result"]["revision"],
+                    },
+                },
+                change=True,
+            )
+        observed = await gateway.request(
+            project.id, method="GET", path="butler/check-interval"
+        )
+        assert observed["result"]["check_interval_minutes"] == 2
+
+    asyncio.run(journey())
+
+
 def test_settings_api_cannot_create_unusable_pairing_offer(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     project = store.create(Engagement(name="Selected"))

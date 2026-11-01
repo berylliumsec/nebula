@@ -54,7 +54,8 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 23
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 24
+    assert any(item["id"] == "butler-check-interval" for item in result["settings"])
     assert (
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"

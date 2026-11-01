@@ -27,6 +27,11 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
         "Nebula-wide Butler instructions",
         "butler-instructions-settings",
     ),
+    (
+        "butler-check-interval",
+        "Butler check interval",
+        "butler-check-interval-settings",
+    ),
     ("butler-effort", "Butler model and effort", "butler-settings"),
     ("butler-activity", "Butler scheduled activity", "butler-oversight"),
     ("butler-voice", "Butler Voice timeout", "butler-settings"),

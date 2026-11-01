@@ -1280,6 +1280,42 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates edits and deletes project Notes on production LAN Core",
       "result": "Saved linked note fields appear in Project Notes and survive reload; report dependency and cancellation retain the note; confirmed deletion reads exact absence without removing its evidence or assets",
       "status": "supported"
+    },
+    {
+      "id": "butler.instructions",
+      "entry_point": "Settings or Butler: read and change the Nebula-wide Butler instruction file",
+      "ui_calls": [
+        "ui/src/api/butlerInstructions.ts::request::GET \"butler/instructions\"",
+        "ui/src/api/butlerInstructions.ts::request::\"PUT\" \"butler/instructions\""
+      ],
+      "core_owner": "Core Butler instructions management and persisted global clock",
+      "butler": {
+        "discover": "nebula.settings.catalog and nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET butler/instructions",
+        "change": "nebula.settings.api_request PUT butler/instructions"
+      },
+      "authority": "Explicit global instruction request; Core SHA-256 compare-and-save, safe regular UTF-8 file handling and exact content readback",
+      "observed_result_test": "tests/v3/test_settings_assistant_api.py::test_settings_api_discovers_and_reads_back_nebula_wide_butler_file",
+      "result": "Core saved value is read back and survives refresh; conflicting writes require a new read",
+      "status": "supported"
+    },
+    {
+      "id": "butler.check_interval",
+      "entry_point": "Settings or Butler: read and change the Butler check interval",
+      "ui_calls": [
+        "ui/src/api/butlerInstructions.ts::request::GET \"butler/check-interval\"",
+        "ui/src/api/butlerInstructions.ts::request::\"PUT\" \"butler/check-interval\""
+      ],
+      "core_owner": "Core Butler instructions management and persisted global clock",
+      "butler": {
+        "discover": "nebula.settings.catalog and nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET butler/check-interval",
+        "change": "nebula.settings.api_request PUT butler/check-interval"
+      },
+      "authority": "Explicit global interval request; 1..1440 minutes and observed revision in PUT body, including the initial revision zero; Core readback and stale-write rejection",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Core saved value is read back and survives refresh; conflicting writes require a new read",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
