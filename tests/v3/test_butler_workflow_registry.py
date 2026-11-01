@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+
+import pytest
 from pathlib import Path
 
 
@@ -58,10 +60,20 @@ def test_registry_rejects_unsupported_action_marked_supported(tmp_path: Path) ->
     assert "supported action has no change operation" in result.stderr
 
 
-def test_registry_rejects_operation_missing_from_core_catalog(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "nebula.work.unlisted_action",
+        "nebula.assets.unlisted_action",
+        "nebula.findings.unlisted_action",
+    ],
+)
+def test_registry_rejects_operation_missing_from_core_catalog(
+    tmp_path: Path, operation: str
+) -> None:
     inventory = json.loads(REGISTRY.read_text())
     action = next(row for row in inventory["actions"] if row["id"] == "chat.archive")
-    action["butler"]["change"] = "nebula.work.unlisted_action"
+    action["butler"]["change"] = operation
     candidate = tmp_path / "unlisted-action.json"
     candidate.write_text(json.dumps(inventory))
 

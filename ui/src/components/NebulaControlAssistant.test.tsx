@@ -1423,6 +1423,38 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it("refreshes Core-saved records and explains a failed visible-list refresh", async () => {
+    const user = userEvent.setup();
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    let calls = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      const resource = ++calls === 1 ? "assets" : "findings";
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `record-${calls}`, capability: "nebula.capabilities.change",
+        status: "complete", summary: "Core saved the record", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: `nebula.${resource}.${resource === "assets" ? "create" : "update"}`, butler_project_id: "project",
+          state: "core_records_saved", read_back: true, client_action: {kind: "records_refresh", project_id: "project", resource}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model", message: {role: "assistant", content: `Stored fixture result ${calls}.`}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+      getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat}, retryResource,
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true, permitsSensitiveData: true,
+        models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "Save the synthetic inventory record{enter}");
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("assets"));
+    expect(await screen.findByText("Core confirmed the record change and refreshed assets.")).toBeVisible();
+    retryResource.mockRejectedValueOnce(new Error("Synthetic list outage"));
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "Revise the synthetic candidate record{enter}");
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("findings"));
+    expect(await screen.findByText("Core confirmed the record change. The findings list could not refresh; use Retry.")).toBeVisible();
+  });
+
   it("lets the requesting browser upload binary workspace bytes after a scoped Butler handoff", async () => {
     const user = userEvent.setup();
     const {sha256Hex} = await import("../sha256");

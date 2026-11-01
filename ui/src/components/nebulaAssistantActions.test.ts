@@ -164,6 +164,23 @@ describe("settings assistant actions", () => {
       client_action: {kind: "credential_create", project_id: "project"}}}, "project"))
       .toEqual({kind: "credential_create", projectId: "project"});
   });
+  it("refreshes records only for scoped exact Core-verified record operations", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "record-call",
+      capability: "nebula.capabilities.change", status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.assets.create", butler_project_id: "project", state: "core_records_saved", read_back: true,
+        client_action: {kind: "records_refresh", project_id: "project", resource: "assets"}}};
+    expect(settingClientAction(event, "project")).toEqual({kind: "records_refresh", projectId: "project", resource: "assets"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, state: "pending_browser_apply"}}, "project")).toBeUndefined();
+    for (const operation of ["nebula.findings.create", "nebula.findings.update"]) {
+      const finding = {...event, receipt: {...event.receipt, butler_operation: operation,
+        client_action: {kind: "records_refresh", project_id: "project", resource: "findings"}}};
+      expect(settingClientAction(finding, "project")).toEqual({kind: "records_refresh", projectId: "project", resource: "findings"});
+    }
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.findings.update"}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_mission"}}, "project")).toBeUndefined();
+  });
   it("refreshes profile catalogs only from a scoped Core-verified settings receipt", () => {
     const event: ChatStreamEvent = {
       type: "tool_completed", turnId: "turn", toolCallId: "settings-call", capability: "nebula.capabilities.change",

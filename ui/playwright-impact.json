@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"butler-records","patterns":["src/nebula/v3/butler_records.py"],"areas":["butler-records"]},
     {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts"],"areas":["butler-notes"]},
     {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
     {"name": "harness-catalog-refresh", "patterns": ["ui/src/components/HarnessSettings.tsx", "ui/src/state/WorkspaceContext.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["harness-catalog-refresh"]},
@@ -115,6 +116,16 @@
       {"area":"butler-settings-catalog","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-settings-catalog","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-settings-catalog","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-records": [
+      {"area":"butler-records","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-private-settings": [
       {"area":"butler-private-settings","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},

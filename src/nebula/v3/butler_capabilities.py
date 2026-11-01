@@ -174,6 +174,14 @@ _CATEGORIES = (
         "description": "Selected-project report and source discovery, draft changes, operator signoff handoff, and requesting-device exports",
     },
     {
+        "id": "assets",
+        "description": "Selected-project inventory discovery and creation without scanning",
+    },
+    {
+        "id": "findings",
+        "description": "Selected-project finding discovery, candidate creation and revision edits without starting validation",
+    },
+    {
         "id": "notes",
         "description": "Selected-project Notes and same-project link discovery with exact browser-owned create, edit and confirmed deletion",
     },
@@ -293,6 +301,7 @@ class ButlerCapabilities:
             from .butler_harnesses import ButlerHarnesses
             from .butler_mcp import ButlerMcp
             from .butler_notes import ButlerNotes
+            from .butler_records import ButlerRecords
             from .butler_reports import ButlerReports
             from .butler_storage import ButlerStorage
             from .butler_terminal import ButlerTerminal
@@ -378,6 +387,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerDiagnostics(project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerRecords(store, project_id).actions()
                 }
             )
             if container_terminals is not None:

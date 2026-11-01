@@ -1012,6 +1012,16 @@ def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path
                 change=True,
             )
 
+        for operation in (
+            "nebula.assets.create",
+            "nebula.findings.create",
+            "nebula.findings.update",
+        ):
+            with pytest.raises(CapabilityInputError, match="listed operation"):
+                await capabilities.invoke(
+                    {"operation": operation, "arguments": {}}, change=True
+                )
+
     asyncio.run(scenario())
 
 

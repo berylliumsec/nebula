@@ -1255,6 +1255,107 @@ test("assistant upgrade Butler creates edits and deletes project Notes on produc
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
+test("assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(240_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  let ownedApi: APIRequestContext | undefined;
+  let ownedModel: LocalModelStub | undefined;
+  await withOwnedCleanup(async () => {
+    const api = ownedApi = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    let step: {prompt: string; operation: string; arguments: Record<string, unknown>; read: string; readArguments: Record<string, unknown>} | undefined;
+    const stub = ownedModel = await startLocalModelStub({toolCall: body => {
+      const messages = Array.isArray(body.messages) ? body.messages as {role?: string; content?: unknown}[] : [];
+      const lastUser = messages.map(message => message.role).lastIndexOf("user");
+      if (!step || !String(messages[lastUser]?.content ?? "").startsWith(step.prompt)) return undefined;
+      const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+      return [
+        {name: "nebula_capabilities_search", arguments: {query: step.operation}},
+        {name: "nebula_capabilities_describe", arguments: {operation: step.operation}},
+        {name: "nebula_capabilities_read", arguments: {operation: step.read, arguments: step.readArguments}},
+        {name: "nebula_capabilities_change", arguments: {operation: step.operation, arguments: step.arguments}},
+      ][replies];
+    }});
+    const created = await api.post("engagements", {data: {name: "Butler record fixture", status: "active", metadata: {}}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const projectId = (await created.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {name: "Record fixture model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, permits_sensitive_data: false}, metadata: {default_model: "security-model", options: {context_window: 32768}}}});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Records LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/assets`);
+    await expect(page.getByRole("heading", {name: "Assets", exact: true})).toBeVisible();
+    let sequence = 0;
+    const ask = async (operation: string, arguments_: Record<string, unknown>, read: string, readArguments: Record<string, unknown> = {}, rejected = false) => {
+      const prompt = `Record fixture action ${++sequence}: ${operation}.`;
+      step = {prompt, operation, arguments: arguments_, read, readArguments};
+      const response = rejected ? `Record action ${sequence} refused. Read the current finding revision before retrying.` : `Record action ${sequence} returned from Core.`;
+      stub.responseContent = response;
+      await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler", exact: true});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByText(response, {exact: true})).toBeVisible({timeout: 45_000});
+      if (!rejected) await expect(assistant.getByText(`Core confirmed the record change and refreshed ${operation.startsWith("nebula.assets.") ? "assets" : "findings"}.`, {exact: true}).last()).toBeVisible();
+      await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    };
+    const assetName = "Butler inventory fixture";
+    const assetArguments = {request_id: "lan-inventory-fixture", name: assetName, asset_type: "host", address: "192.0.2.20", criticality: "low"};
+    await ask("nebula.assets.create", assetArguments, "nebula.assets.list");
+    await expect(page.getByRole("region", {name: "Assets table"}).getByRole("row").filter({hasText: assetName})).toHaveCount(1);
+    await ask("nebula.assets.create", assetArguments, "nebula.assets.list");
+    const assets = await (await api.get(`assets?engagement_id=${encodeURIComponent(projectId)}`)).json() as {id: string; name: string}[];
+    expect(assets.filter(asset => asset.name === assetName)).toHaveLength(1);
+    const assetId = assets.find(asset => asset.name === assetName)!.id;
+    await page.reload();
+    await expect(page.getByRole("region", {name: "Assets table"}).getByRole("row").filter({hasText: assetName})).toHaveCount(1);
+    await page.goto(`${core.origin}/projects/${projectId}/findings`);
+    await expect(page.getByRole("heading", {name: "Findings", exact: true})).toBeVisible();
+    const title = "Butler candidate fixture";
+    await ask("nebula.findings.create", {request_id: "lan-candidate-fixture", title, description: "An unverified synthetic observation.", severity: "low", asset_ids: [assetId]}, "nebula.assets.list");
+    const table = page.getByRole("region", {name: "Findings table"});
+    await expect(table.getByRole("row").filter({hasText: title})).toContainText("candidate");
+    const findings = await (await api.get(`findings?engagement_id=${encodeURIComponent(projectId)}`)).json() as {id: string; title: string; revision: number; asset_ids: string[]}[];
+    const finding = findings.find(row => row.title === title)!;
+    expect(finding).toBeTruthy();
+    expect(finding.asset_ids).toEqual([assetId]);
+    const revisedTitle = "Butler reviewed candidate";
+    await ask("nebula.findings.update", {record_id: finding.id, expected_revision: finding.revision, title: revisedTitle, severity: "medium", cwe_ids: ["CWE-79"]}, "nebula.findings.detail", {record_id: finding.id});
+    await expect(table.getByRole("row").filter({hasText: revisedTitle})).toContainText("medium");
+    const saved = await (await api.get(`findings/${finding.id}`)).json() as {revision: number; title: string; status: string};
+    await ask("nebula.findings.update", {record_id: finding.id, expected_revision: finding.revision, title: "STALE_SHOULD_NOT_APPEAR"}, "nebula.findings.detail", {record_id: finding.id}, true);
+    expect(await (await api.get(`findings/${finding.id}`)).json()).toEqual(saved);
+    await expect(table).not.toContainText("STALE_SHOULD_NOT_APPEAR");
+    const description = "Reviewed record metadata; no testing or independent verification was performed.";
+    await ask("nebula.findings.update", {record_id: finding.id, expected_revision: saved.revision, description}, "nebula.findings.detail", {record_id: finding.id});
+    await page.getByRole("button", {name: `Edit ${revisedTitle}`, exact: true}).click();
+    const inspector = page.getByRole("complementary", {name: revisedTitle});
+    await expect(inspector.getByRole("textbox", {name: "Description", exact: true})).toHaveValue(description);
+    await expect(inspector.getByRole("checkbox", {name: assetName, exact: true})).toBeChecked();
+    await expect(inspector).toContainText("Not independently verified");
+    expect(new URL(page.url()).pathname).toBe(`/projects/${projectId}/findings/${finding.id}`);
+    await page.context().setOffline(true);
+    expect(await page.evaluate(async () => {try {await fetch("/api/v1/health", {cache: "no-store"}); return false;} catch {return true;}})).toBe(true);
+    await page.context().setOffline(false);
+    await page.reload();
+    await expect(inspector.getByRole("textbox", {name: "Description", exact: true})).toHaveValue(description);
+    expect((await (await api.get(`findings/${finding.id}`)).json() as {status: string}).status).toBe("candidate");
+    expect((await new AxeBuilder({page}).include(".findings-page").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-records-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], assetId, findingId: finding.id,
+      result: "Created one inventory asset despite a retry; created a linked candidate, revision-edited it, refused a stale write, recovered with a fresh revision, refreshed visible lists and retained exact details through a paired reload and network transition. No testing or confirmation started."}), contentType: "application/json"});
+    await testInfo.attach("butler-records-final-screen", {body: await page.screenshot(), contentType: "image/png"});
+  }, [{name: "API context", dispose: () => ownedApi?.dispose()}, {name: "model stub", dispose: () => ownedModel ? stopLocalModelStub(ownedModel) : undefined}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
 test("assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), env: {TYPESAFE_API_KEY: ""}});

@@ -1655,6 +1655,82 @@
         "reason": "Imported configuration may contain literal secrets and program-trust choices that belong to private operator input.",
         "observed_result": "opened"
       }
+    },
+    {
+      "id": "assets.create",
+      "entry_point": "Project Assets or Butler: create an inventory record or unconfirmed candidate finding",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::createAsset"
+      ],
+      "core_owner": "Core entity validator, selected-project storage and authoritative relation service",
+      "butler": {
+        "discover": "nebula.assets.list",
+        "read": "nebula.assets.detail",
+        "change": "nebula.assets.create"
+      },
+      "authority": "Interactive selected project; stable creation request key and exact Core-derived identity, or current edit revision; same-project links; no scanner or verification starts; confirmed findings retain operator attribution; archived and scheduled changes refused",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core",
+      "result": "Core reads saved fields and relations back; browser refreshes its owning list. Repeated creation retains one identity; stale edits fail and fresh revision recovers; paired reload and network transition retain visible record details.",
+      "status": "supported"
+    },
+    {
+      "id": "findings.create",
+      "entry_point": "Project Findings or Butler: create an inventory record or unconfirmed candidate finding",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::createFinding"
+      ],
+      "core_owner": "Core entity validator, selected-project storage and authoritative relation service",
+      "butler": {
+        "discover": "nebula.findings.list",
+        "read": "nebula.findings.detail",
+        "change": "nebula.findings.create"
+      },
+      "authority": "Interactive selected project; stable creation request key and exact Core-derived identity, or current edit revision; same-project links; no scanner or verification starts; confirmed findings retain operator attribution; archived and scheduled changes refused",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core",
+      "result": "Core reads saved fields and relations back; browser refreshes its owning list. Repeated creation retains one identity; stale edits fail and fresh revision recovers; paired reload and network transition retain visible record details.",
+      "status": "supported"
+    },
+    {
+      "id": "findings.update",
+      "entry_point": "Project Findings or Butler: update an inventory record or unconfirmed candidate finding",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::updateFinding"
+      ],
+      "core_owner": "Core entity validator, selected-project storage and authoritative relation service",
+      "butler": {
+        "discover": "nebula.findings.list",
+        "read": "nebula.findings.detail",
+        "change": "nebula.findings.update"
+      },
+      "authority": "Interactive selected project; stable creation request key and exact Core-derived identity, or current edit revision; same-project links; no scanner or verification starts; confirmed findings retain operator attribution; archived and scheduled changes refused",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core",
+      "result": "Core reads saved fields and relations back; browser refreshes its owning list. Repeated creation retains one identity; stale edits fail and fresh revision recovers; paired reload and network transition retain visible record details.",
+      "status": "supported"
+    },
+    {
+      "id": "findings.operator_verification",
+      "entry_point": "Findings evidence/verifier review and changes to personally confirmed records",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::updateFinding"
+      ],
+      "core_owner": "Core finding invariants and visible operator attribution controls",
+      "butler": {
+        "discover": "nebula.findings.list",
+        "read": "nebula.findings.detail",
+        "change": "nebula.navigate.open destination_id=findings"
+      },
+      "authority": "The operator retains evidence-backed confirmation and verifier attribution; opening the list grants no verification or mutation authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Findings. Candidate CRUD never claims independent confirmation or starts testing.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "findings",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Independent verification and attribution belong to the operator evidence review workflow, not a model assertion.",
+        "observed_result": "opened"
+      }
     }
   ],
   "ui_api_calls": [

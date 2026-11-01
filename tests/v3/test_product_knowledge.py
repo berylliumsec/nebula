@@ -670,3 +670,16 @@ def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     replaced = index.sync_product_knowledge()
     assert replaced["updated"] is True
     assert index._product_collection.metadata["source_digest"] == first["source_digest"]
+
+
+def test_product_search_finds_butler_inventory_and_candidate_records(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler create inventory assets and edit candidate finding records without verification?"
+    )
+    assert any(
+        "nebula.assets.create" in str(item["text"])
+        and "nebula.findings.update" in str(item["text"])
+        and "verification" in str(item["text"])
+        for item in matches
+    )

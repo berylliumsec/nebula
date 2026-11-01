@@ -1719,6 +1719,18 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       return result.message;
     }
+    if (action.kind === "records_refresh") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId || activeImageProject.current !== action.projectId) {
+        return "Core confirmed the record change. Reconnect and select the original project to refresh its list.";
+      }
+      try {
+        await retryResource(action.resource);
+      } catch {
+        // diagnostic-expected: WorkspaceContext records the read failure and exposes a resource retry.
+        return `Core confirmed the record change. The ${action.resource} list could not refresh; use Retry.`;
+      }
+      return `Core confirmed the record change and refreshed ${action.resource}.`;
+    }
     if (action.kind === "settings_profile_refresh") {
       if (!api || coreState !== "online") return "Core confirmed the profile change. Reconnect to refresh Settings.";
       if (action.resource !== "mcp-servers") {

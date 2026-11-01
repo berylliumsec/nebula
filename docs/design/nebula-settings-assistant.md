@@ -571,3 +571,45 @@ retains these fields, including a full read/edit/PUT. PATCH requires the observe
 body revision; PUT carries its observed revision in Core's If-Match guard, so a
 concurrent browser change cannot be overwritten after the comparison. A trusted
 MCP program's launch definition also remains under its operator trust choice.
+
+
+### Project inventory and candidate findings
+
+| Journey | Invariant | Authority | Evidence |
+| --- | --- | --- | --- |
+| Discover/select | Bounded pages expose only the selected project's IDs and revisions | Core catalog and store | Core and paired browser |
+| Create/retry | An identical request key retains one identity; changed content is refused | Core-derived identity and validators | Core and paired browser |
+| Edit | Only supplied fields change at the observed revision; links remain in project | Core record and relations | Core and paired browser |
+| Refresh/reconnect | Owner lists refresh after readback and exact details survive reload | Core plus project URL | Component and paired browser |
+| Failure/recovery | Stale edits leave saved state intact; a fresh revision can recover | Core revision guard | Core and paired browser |
+| Verification | Candidates never imply independent confirmation or launch testing | Operator evidence and attribution | Core refusal and visible review control |
+| Delete/stream | These record UI paths expose no deletion or streaming lifecycle | Existing UI contract | Not applicable to this slice |
+
+
+Interactive Butler discovers assets with `nebula.assets.list` and
+`nebula.assets.detail`, and creates an inventory record with
+`nebula.assets.create`. It discovers findings with `nebula.findings.list` and
+`nebula.findings.detail`, creates a candidate with `nebula.findings.create`, and
+changes only supplied unconfirmed-record fields with `nebula.findings.update`.
+Page titles and current revisions before choosing targets; description reads
+are bounded. Use listed same-project assets and evidence for finding links.
+These operations store supplied analyst information; they do not start a scan,
+exploit, assessment, or independent verification.
+
+Core derives a creation identity from the selected project, record kind and a
+stable request key. Repeating identical creation arguments returns that saved
+record while it exists; changing content under the same key is refused. An edit
+requires its observed revision. Core applies the same entity and relation
+validators as the public API and reads exact saved fields back before a success
+receipt. That receipt refreshes Assets or Findings in the requesting browser; a
+failed list refresh explains Retry without replaying the write. Saved records
+remain visible after paired reload and reconnect.
+
+Finding confirmation and edits to confirmed findings retain the operator's
+evidence and verifier attribution. Open the Findings destination to review
+those records in its visible controls. Butler cannot forge a verifier or turn
+a candidate record into evidence that a test ran. Archived projects must be
+restored before record changes. Scheduled Butler does not receive these record
+controls. Asset editing/deletion and finding deletion are not operator actions
+on these UI paths; this slice adds the create/edit controls already visible
+there.

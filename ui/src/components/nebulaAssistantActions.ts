@@ -8,6 +8,7 @@ export type ProjectMode = "docker" | "host";
 export type ProjectScopeMode = "bounded" | "all_destinations" | "allow_all";
 type NoteChanges = {title?: string; body?: string; assetIds?: string[]; evidenceIds?: string[]};
 export type SettingClientAction =
+  | { kind: "records_refresh"; projectId: string; resource: "assets" | "findings" }
   | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
   | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
   | { kind: "note_delete"; projectId: string; noteId: string; name: string; expectedRevision: number }
@@ -127,7 +128,7 @@ export function validScopeChanges(value: unknown): value is Record<string, unkno
 export function settingClientAction(event: ChatStreamEvent, projectId?: string): SettingClientAction | undefined {
   if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
   const receipt = event.receipt;
-  if (receipt?.state !== "pending_browser_apply" && receipt?.state !== "core_settings_saved") return undefined;
+  if (receipt?.state !== "pending_browser_apply" && receipt?.state !== "core_settings_saved" && receipt?.state !== "core_records_saved") return undefined;
   if ((event.capability === "nebula.capabilities.change" || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability))
     && !butlerGatewayOperation(event, projectId)) return undefined;
@@ -138,6 +139,16 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (receipt.state === "core_records_saved") {
+    const resource = value.resource;
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && receipt.read_back === true && value.kind === "records_refresh"
+        && ((resource === "assets" && operation === "nebula.assets.create")
+          || (resource === "findings" && ["nebula.findings.create", "nebula.findings.update"].includes(operation)))) {
+      return {kind: "records_refresh", projectId, resource};
+    }
+    return undefined;
+  }
   if (receipt.state === "core_settings_saved") {
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && operation === "nebula.settings.api_request" && receipt.read_back === true
