@@ -8003,6 +8003,27 @@ export class ApiClient {
     );
   }
 
+  getProvider(id: string, signal?: AbortSignal): Promise<ProviderHealth> {
+    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, { signal }).then(mapProvider);
+  }
+
+  attachProviderCredential(
+    id: string,
+    expectedRevision: number,
+    reference: string,
+    slot: "inference" | "management",
+  ): Promise<ProviderHealth> {
+    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expected_revision: expectedRevision,
+        changes: {
+          [slot === "management" ? "openrouter_management_secret_ref" : "secret_ref"]: reference,
+        },
+      }),
+    }).then(mapProvider);
+  }
+
   getRuntimeUsage(refresh = false, signal?: AbortSignal): Promise<RuntimeUsageResponse> {
     type WireUsage = {
       generated_at: string;

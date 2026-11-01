@@ -1495,6 +1495,26 @@ describe("ApiClient", () => {
     });
   });
 
+  it("patches only one provider credential slot at the current revision", async () => {
+    const reference = `session:${"a".repeat(32)}`;
+    const provider = {id: "provider/one", revision: 8, name: "OpenRouter review", provider_type: "openrouter",
+      enabled: true, is_local: false, secret_ref: "env:INFERENCE_KEY",
+      openrouter_management_secret_ref: "env:OLD_MANAGEMENT_KEY", model_allowlist: ["model"],
+      capabilities: {streaming: true}, privacy: {local_only: false, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "model"}, created_at: "2026-07-12T11:00:00Z", updated_at: "2026-07-12T11:00:00Z"};
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => new Response(JSON.stringify(
+      init?.method === "PATCH" ? {...provider, revision: 9, openrouter_management_secret_ref: reference} : provider,
+    ), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    const observed = await client.getProvider("provider/one");
+    expect(observed.openrouterManagementSecretRef).toBe(provider.openrouter_management_secret_ref);
+    const attached = await client.attachProviderCredential("provider/one", observed.revision, reference, "management");
+    expect(attached.openrouterManagementSecretRef).toBe(reference);
+    expect(fetchMock.mock.calls[1][0]).toBe("http://127.0.0.1:8765/api/v1/providers/provider%2Fone");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({expected_revision: 8,
+      changes: {openrouter_management_secret_ref: reference}});
+  });
+
   it("serializes Vertex and Bedrock runtime options into provider metadata", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
       const body = JSON.parse(String(init?.body));

@@ -31,7 +31,7 @@ and reads; these counts are not a coverage percentage.
 | Workspace, Code and terminals | Interactive Butler can page project workspace entries, read bounded UTF-8 text, create or replace text, rename a regular file with its current SHA-256, and ask the requesting browser to confirm deletion or download verified bytes. It can request browser-owned binary upload and create, rename, or delete an empty folder with current directory identity and Core read-back. It can list ticket-free live terminal identities and ask the requesting browser to confirm an exact session stop with Core read-back | Opening Terminal uses the requesting browser's existing UI; scheduled Butler has no workspace file or terminal actions. |
 | Browser, Notebook and research data | Configure Notebook mode and start or stop the Core-owned headless security browser through the requesting device; discover active security browser sessions and start a scoped browser automation mission with explicit targets and lease limits; page Notebook files and cells, create or edit a cell, execute its exact saved hash and interrupt an exact run with Core read-back; read a current kernel identity and installed package version, install a pinned package with selected-environment read-back, and restart an exact idle kernel after worker acknowledgement; connect or remove a project file index through the requesting browser; page shared Library metadata and request browser-owned upload, original-file download, reindex or removal; page selected-project evidence and link targets and request a browser-owned immutable evidence upload with exact Core read-back | Direct control of the visible browser page, browser evidence capture, and other research-data control still lack accepted Butler journeys. A saved browser mission is not an assessment result. Device file bytes stay in the requesting browser. Security testing remains under the project's scope and approval policy. |
 | Reports | Page selected-project reports, findings and notes; create and edit drafts with current revisions; prepare an exact linked-note AI section transform for browser runtime choice and operator review; confirm deletion of a non-final unrendered report; open the operator sign-off form; and confirm PDF or sensitive bundle downloads in the requesting browser | The operator must personally attest to final sign-off. Core retains signed finals and reports referenced by saved renders. The operating system's final download save location remains device-owned. |
-| Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes; prepare selected-project storage enrollment, token, reporting and callback handoffs; list nonsecret paired-device identities and open host pairing or exact-device revocation controls; enter write-only credentials on the requesting browser and confirm deletion of exact managed references; confirm a sensitive diagnostics ZIP download on the requesting browser | Pairing redemption belongs to the new device. Attaching new credentials to provider or integration profiles, release deployment, service control and other specialized workflows remain gaps. One-time source tokens, pairing links, credential secrets and diagnostics ZIP bytes stay on the requesting device. |
+| Integrations and operations | Discover some provider, harness, MCP, environment, credential, diagnostics, release and device Settings routes; prepare selected-project storage enrollment, token, reporting and callback handoffs; list nonsecret paired-device identities and open host pairing or exact-device revocation controls; enter write-only credentials on the requesting browser, confirm deletion of exact managed references, and attach an available reference to an exact provider slot; confirm a sensitive diagnostics ZIP download on the requesting browser | Pairing redemption belongs to the new device. Attaching credentials to other integration profiles, release deployment, service control and other specialized workflows remain gaps. One-time source tokens, pairing links, credential secrets and diagnostics ZIP bytes stay on the requesting device. |
 
 ## Branch slice: diagnostics export
 
@@ -56,9 +56,23 @@ requires browser confirmation, and claims absence only when Core reports
 `missing` or `session_expired`. Environment and systemd references stay under
 their external owner. The generic model-driven Settings API retains vault and
 reference status reads but no longer accepts credential creation or deletion.
-Attaching a new reference to a provider or integration remains a separate
-workflow. The paired LAN journey covers cancellation, creation, status,
-deletion and absence of the secret from model messages.
+The paired LAN journey covers cancellation, creation, status, deletion and
+absence of the secret from model messages. Provider attachment is now a
+separate browser-confirmed workflow; other integrations still need their own.
+
+## Branch slice: provider credential attachment
+
+Interactive Butler pages provider identities and current revisions, then asks
+the requesting browser to attach a managed reference to an exact inference or
+OpenRouter management slot. The browser checks the credential's availability,
+shows the provider and slot, requires confirmation, patches only that field at
+the current Core revision, and reads both provider and credential back. A stale
+provider refuses the change; a lost write response prompts an exact Core read,
+not a duplicate mutation. The linked browser journey verifies cancellation,
+saved state after refresh, and that the secret never reaches model messages.
+Changing an inference credential invalidates prior tool verification, so the
+result directs the operator to refresh health and verify tools before use.
+See [provider credential handoff](butler-provider-credential-handoff.md).
 
 ## Branch slice: paired devices
 

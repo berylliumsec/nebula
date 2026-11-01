@@ -35,6 +35,7 @@ import { applyButlerStorageAction, type IssuedStorageToken } from "./butlerStora
 import { applyButlerDeviceAction } from "./butlerDeviceAction";
 import { ButlerCredentialCreate } from "./ButlerCredentialCreate";
 import { deleteButlerCredential } from "./butlerCredentialAction";
+import { attachButlerProviderCredential } from "./butlerProviderCredentialAction";
 import { applyButlerDiagnosticsExport } from "./butlerDiagnosticsAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
@@ -1703,6 +1704,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         throw new Error("Reconnect to Core and select the original project before deleting a credential.");
       }
       return deleteButlerCredential(api, action, () => activeImageProject.current, (request) => confirm(request));
+    }
+    if (action.kind === "provider_attach_credential") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before attaching a provider credential.");
+      }
+      const result = await attachButlerProviderCredential(api, action, () => activeImageProject.current, (request) => confirm(request));
+      if (result.startsWith("Attached ")) {
+        try {
+          await retryResource("providers");
+        } catch {
+          // diagnostic-expected: WorkspaceContext logs the failed refresh and exposes Retry Model providers.
+          return `${result} The Model providers list could not refresh; use Retry Model providers to update it.`;
+        }
+      }
+      return result;
     }
     if (action.kind === "diagnostics_export") {
       if (!api || coreState !== "online" || engagement?.id !== action.projectId) {

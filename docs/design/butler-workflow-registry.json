@@ -860,6 +860,25 @@
       "status": "supported"
     },
     {
+      "id": "providers.attach_credential",
+      "entry_point": "Butler: attach an available managed credential to an exact model provider slot",
+      "ui_calls": [
+        "ui/src/components/butlerProviderCredentialAction.ts::getProvider",
+        "ui/src/components/butlerProviderCredentialAction.ts::credentialStatus",
+        "ui/src/components/butlerProviderCredentialAction.ts::attachProviderCredential"
+      ],
+      "core_owner": "Core global provider profile revision and credential store",
+      "butler": {
+        "discover": "nebula.providers.list",
+        "read": "nebula.providers.profile and nebula.settings.api credentials/{reference}/status",
+        "change": "nebula.providers.attach_credential"
+      },
+      "authority": "Interactive selected-project receipt; exact provider ID, current revision, managed reference and slot; requesting-browser confirmation and Core readback",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser",
+      "result": "Cancellation leaves the provider untouched; confirmed reference and available credential survive browser refresh",
+      "status": "supported"
+    },
+    {
       "id": "diagnostics.export",
       "entry_point": "Butler or Diagnostics: confirm and download a sensitive support ZIP",
       "ui_calls": [
@@ -2210,6 +2229,18 @@
     {
       "key": "ui/src/components/butlerDiagnosticsAction.ts::exportDiagnostics",
       "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerProviderCredentialAction.ts::attachProviderCredential",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerProviderCredentialAction.ts::credentialStatus",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerProviderCredentialAction.ts::getProvider",
+      "count": 2
     },
     {
       "key": "ui/src/components/butlerReportTransform.ts::getObservation",

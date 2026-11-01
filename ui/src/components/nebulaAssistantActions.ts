@@ -27,6 +27,7 @@ export type SettingClientAction =
   | { kind: "device_revoke"; projectId: string; deviceId: string; name: string; expectedCreatedAt: string }
   | { kind: "credential_create"; projectId: string }
   | { kind: "credential_delete"; projectId: string; reference: string }
+  | { kind: "provider_attach_credential"; projectId: string; providerId: string; name: string; expectedRevision: number; reference: string; slot: "inference" | "management" }
   | { kind: "diagnostics_export"; projectId: string }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
@@ -135,6 +136,17 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
         && typeof value.reference === "string"
         && /^(?:vault|session):[0-9a-f]{32}$/.test(value.reference)) {
       return {kind: "credential_delete", projectId, reference: value.reference};
+    }
+    if (operation === "nebula.providers.attach_credential" && value.kind === "provider_attach_credential"
+        && typeof value.provider_id === "string" && uuidPattern.test(value.provider_id)
+        && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 200
+        && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+        && typeof value.credential_ref === "string"
+        && /^(?:vault|session):[0-9a-f]{32}$/.test(value.credential_ref)
+        && (value.slot === "inference" || value.slot === "management")) {
+      return {kind: "provider_attach_credential", projectId, providerId: value.provider_id,
+        name: value.name, expectedRevision: Number(value.expected_revision),
+        reference: value.credential_ref, slot: value.slot};
     }
     if (operation === "nebula.devices.pair" && value.kind === "device_pair") {
       return {kind: "device_pair", projectId};

@@ -671,6 +671,89 @@ def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
     asyncio.run(scenario())
 
 
+def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    profile = next(
+        item for item in store.list_entities(ProviderProfile, limit=10)
+        if item.name == "Local"
+    )
+    management = store.create(
+        ProviderProfile(name="OpenRouter", provider_type="openrouter")
+    )
+    reference = "session:" + "a" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "attach credential to provider"})
+        assert {
+            "nebula.providers.list",
+            "nebula.providers.profile",
+            "nebula.providers.attach_credential",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.providers.list", "arguments": {"offset": 0}},
+            change=False,
+        )
+        assert listed["providers"][0]["provider_id"] == profile.id
+        assert "secret_ref" not in str(listed)
+        attached = await capabilities.invoke(
+            {
+                "operation": "nebula.providers.attach_credential",
+                "arguments": {
+                    "provider_id": profile.id,
+                    "expected_revision": profile.revision,
+                    "credential_ref": reference,
+                    "slot": "inference",
+                },
+            },
+            change=True,
+        )
+        assert attached["client_action"] == {
+            "kind": "provider_attach_credential",
+            "project_id": selected.id,
+            "provider_id": profile.id,
+            "name": profile.name,
+            "expected_revision": profile.revision,
+            "credential_ref": reference,
+            "slot": "inference",
+        }
+        assert store.get(ProviderProfile, profile.id).secret_ref is None
+        management_action = await capabilities.invoke(
+            {
+                "operation": "nebula.providers.attach_credential",
+                "arguments": {
+                    "provider_id": management.id,
+                    "expected_revision": management.revision,
+                    "credential_ref": reference,
+                    "slot": "management",
+                },
+            },
+            change=True,
+        )
+        assert management_action["client_action"]["slot"] == "management"
+        assert store.get(ProviderProfile, management.id).openrouter_management_secret_ref is None
+        for changes in (
+            {"expected_revision": profile.revision + 1},
+            {"slot": "management"},
+            {"credential_ref": "env:NEBULA_KEY"},
+        ):
+            with pytest.raises((ValueError, CapabilityInputError)):
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.providers.attach_credential",
+                        "arguments": {
+                            "provider_id": profile.id,
+                            "expected_revision": profile.revision,
+                            "credential_ref": reference,
+                            "slot": "inference",
+                            **changes,
+                        },
+                    },
+                    change=True,
+                )
+
+    asyncio.run(scenario())
+
+
 def test_interactive_butler_prepares_device_owned_diagnostics_export(tmp_path):
     _, selected, _, _, capabilities = _capabilities(tmp_path)
 

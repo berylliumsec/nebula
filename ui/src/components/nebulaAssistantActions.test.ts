@@ -160,6 +160,23 @@ describe("settings assistant actions", () => {
       client_action: {kind: "credential_create", project_id: "project"}}}, "project"))
       .toEqual({kind: "credential_create", projectId: "project"});
   });
+  it("accepts an exact provider credential attachment and rejects unsafe receipt fields", () => {
+    const providerId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const reference = `session:${"a".repeat(32)}`;
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "provider-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.providers.attach_credential", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "provider_attach_credential", project_id: "project",
+          provider_id: providerId, name: "Local model", expected_revision: 3, credential_ref: reference, slot: "inference"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "provider_attach_credential", projectId: "project",
+      providerId, name: "Local model", expectedRevision: 3, reference, slot: "inference"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "provider_attach_credential", project_id: "project", provider_id: providerId,
+      name: "Local model", expected_revision: 3, credential_ref: "env:KEY", slot: "inference"}}}, "project")).toBeUndefined();
+  });
   it("accepts only the scoped diagnostics export intent", () => {
     const event: ChatStreamEvent = {
       type: "tool_completed", turnId: "turn", toolCallId: "diagnostics-call", capability: "nebula.capabilities.change",

@@ -948,10 +948,13 @@ test("assistant upgrade Butler opens pairing and revokes a paired device through
 
 test("assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser", async ({page}, testInfo) => {
   test.setTimeout(300_000);
-  const prompts = ["Prepare write-only credential entry", ""];
+  const prompts = ["Prepare write-only credential entry", "Attach credential to Credential target model", ""];
   const secret = "fixture-credential-never-send-to-model";
   let modelSawSecret = false;
   let credentialPosts = 0;
+  let targetProviderId = "";
+  let targetProviderRevision = 0;
+  let targetReference = "";
   page.on("request", request => {
     if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/credentials") credentialPosts++;
   });
@@ -963,12 +966,16 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     const prompt = prompts.find(value => value && (content === value || content.startsWith(`${value}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`)));
     if (!prompt) return undefined;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
-    const operation = prompt === prompts[0] ? "nebula.credentials.create" : "nebula.credentials.delete";
+    const operation = prompt === prompts[0] ? "nebula.credentials.create"
+      : prompt === prompts[1] ? "nebula.providers.attach_credential" : "nebula.credentials.delete";
     const calls = [
-      {name: "nebula_capabilities_search", arguments: {query: "create or delete credential"}},
+      {name: "nebula_capabilities_search", arguments: {query: "create attach or delete provider credential"}},
       {name: "nebula_capabilities_describe", arguments: {operation}},
       {name: "nebula_capabilities_change", arguments: {operation, arguments: operation === "nebula.credentials.create"
-        ? {} : {reference: prompt.slice("Delete credential ".length)}}},
+        ? {} : operation === "nebula.providers.attach_credential"
+          ? {provider_id: targetProviderId, expected_revision: targetProviderRevision,
+            credential_ref: targetReference, slot: "inference"}
+          : {reference: prompt.slice("Delete credential ".length)}}},
     ];
     return calls[replies];
   }});
@@ -990,6 +997,17 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     const verified = await api.post(`providers/${provider.id}/capabilities/verify`,
       {data: {model: "security-model", expected_revision: provider.revision}});
     expect(verified.ok(), await verified.text()).toBe(true);
+    const targetResponse = await api.post("providers", {data: {
+      name: "Credential target model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(targetResponse.ok(), await targetResponse.text()).toBe(true);
+    const target = await targetResponse.json() as {id: string};
+    const currentProvider = await (await api.get(`providers/${target.id}`)).json() as {revision: number};
+    targetProviderId = target.id;
+    targetProviderRevision = currentProvider.revision;
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
@@ -1022,14 +1040,32 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     const status = await api.get(`credentials/${encodeURIComponent(reference!)}/status`);
     expect(status.ok(), await status.text()).toBe(true);
     expect((await status.json() as {available: boolean}).available).toBe(true);
-    prompts[1] = `Delete credential ${reference}`;
+    targetReference = reference!;
     await send(prompts[1]);
+    const attachment = page.getByRole("dialog", {name: "Attach credential to Credential target model?"});
+    await expect(attachment).toBeVisible({timeout: 45_000});
+    await attachment.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText("No credential was attached to Credential target model.")).toBeVisible();
+    expect((await (await api.get(`providers/${target.id}`)).json() as {secret_ref: string | null}).secret_ref).toBeNull();
+    await send(prompts[1]);
+    await expect(attachment).toBeVisible({timeout: 45_000});
+    await attachment.getByRole("button", {name: "Attach credential"}).click();
+    await expect(assistant.getByText(/Core confirmed the reference and credential availability/)).toBeVisible();
+    const attachedProvider = await (await api.get(`providers/${target.id}`)).json() as {secret_ref: string; revision: number};
+    expect(attachedProvider.secret_ref).toBe(reference);
+    expect(attachedProvider.revision).toBeGreaterThan(targetProviderRevision);
+    await page.reload();
+    if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
+    await expect(assistant.getByText(/Core confirmed the reference and credential availability/)).toBeVisible({timeout: 20_000});
+    expect((await (await api.get(`providers/${target.id}`)).json() as {secret_ref: string}).secret_ref).toBe(reference);
+    prompts[2] = `Delete credential ${reference}`;
+    await send(prompts[2]);
     const confirmation = page.getByRole("dialog", {name: "Delete credential?"});
     await expect(confirmation).toBeVisible({timeout: 45_000});
     await confirmation.getByRole("button", {name: "Cancel"}).click();
     await expect(assistant.getByText(new RegExp(`${reference} was not deleted`))).toBeVisible();
     expect((await (await api.get(`credentials/${encodeURIComponent(reference!)}/status`)).json() as {available: boolean}).available).toBe(true);
-    await send(prompts[1]);
+    await send(prompts[2]);
     await expect(confirmation).toBeVisible({timeout: 45_000});
     await confirmation.getByRole("button", {name: "Delete credential"}).click();
     await expect(assistant.getByText(/Core confirms it is unavailable/)).toBeVisible();
@@ -1040,7 +1076,7 @@ test("assistant upgrade Butler creates and deletes a write-only credential throu
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-credentials-lan", {body: JSON.stringify({origin: core.origin, build: "production",
       project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-      result: "Cancelled creation sent no secret; saved credential returned a Core-verified reference; cancelled deletion retained it; confirmed deletion invalidated it; model saw no secret"}), contentType: "application/json"});
+      result: "Cancelled creation sent no secret; saved credential returned a Core-verified reference; cancelled provider attachment kept the profile unchanged; confirmed attachment survived refresh; cancelled deletion retained the credential; confirmed deletion invalidated it; model saw no secret"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
