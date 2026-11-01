@@ -150,7 +150,9 @@
       "id": "project.create",
       "entry_point": "Project switcher or Butler request: create a project",
       "ui_calls": [
-        "ui/src/state/WorkspaceContext.tsx::createEngagement"
+        "ui/src/state/WorkspaceContext.tsx::createEngagement",
+        "ui/src/state/WorkspaceContext.tsx::listEngagements",
+        "ui/src/components/NebulaControlAssistant.tsx::listEngagements"
       ],
       "core_owner": "Core project store and durable create request receipt",
       "butler": {
@@ -474,7 +476,9 @@
       "id": "library.add",
       "entry_point": "Shared Library: add a local file from the requesting device",
       "ui_calls": [
-        "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem"
+        "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem",
+        "ui/src/state/WorkspaceContext.tsx::listLibraryItems",
+        "ui/src/components/NebulaControlAssistant.tsx::listLibraryItems"
       ],
       "core_owner": "Global Core Library and artifact store; requesting browser owns the file picker",
       "butler": {
@@ -511,7 +515,8 @@
       "entry_point": "Shared Library: reindex one exact item from its retained artifact",
       "ui_calls": [
         "ui/src/components/NebulaControlAssistant.tsx::getLibraryItem",
-        "ui/src/components/NebulaControlAssistant.tsx::reindexLibraryItemAtRevision"
+        "ui/src/components/NebulaControlAssistant.tsx::reindexLibraryItemAtRevision",
+        "ui/src/state/WorkspaceContext.tsx::reindexLibraryItem"
       ],
       "core_owner": "Global Core Library item and artifact store",
       "butler": {
@@ -586,7 +591,9 @@
       "entry_point": "Butler request or Reports: create a selected-project draft",
       "ui_calls": [
         "ui/src/state/WorkspaceContext.tsx::createReport",
-        "ui/src/components/NebulaControlAssistant.tsx::getReport"
+        "ui/src/components/NebulaControlAssistant.tsx::getReport",
+        "ui/src/state/WorkspaceContext.tsx::listFindings",
+        "ui/src/state/WorkspaceContext.tsx::listObservations"
       ],
       "core_owner": "Core report API, project reference validator and report ID",
       "butler": {
@@ -956,6 +963,230 @@
       "authority": "Interactive selected-project receipt; browser confirmation of unredacted logs, ZIP signature check and local download",
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser",
       "result": "Cancellation sends no export request; confirmed action starts a valid ZIP download and sends no bundle bytes to Butler",
+      "status": "supported"
+    },
+    {
+      "id": "chat.start_and_read",
+      "entry_point": "Workbench conversations: start a separate project chat and read its durable activity; streaming and polling are presentation transports",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::streamChat",
+        "ui/src/pages/SessionsPage.tsx::getChatSession",
+        "ui/src/pages/SessionsPage.tsx::listChatSessions",
+        "ui/src/pages/SessionsPage.tsx::listChatSessionsPage",
+        "ui/src/pages/SessionsPage.tsx::listChatSessionActivityIfChanged",
+        "ui/src/pages/useSessionState.ts::requestIfChanged"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.catalog and nebula.work.chats",
+        "read": "nebula.work.chat and nebula.work.await_chat_result",
+        "change": "nebula.work.start_chat and nebula.work.message_chat"
+      },
+      "authority": "Selected project and enumerated runtime; private control/temporary chats and delegated children are not ordinary main-chat targets; a start receipt does not certify completion",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_start_chat_saves_a_separate_turn_for_core_owned_work",
+      "result": "Core stores a separate chat and turn; the same durable chat is discoverable while work continues independently of a viewing browser",
+      "status": "supported"
+    },
+    {
+      "id": "chat.turn_control",
+      "entry_point": "Workbench conversation: guide, stop or retry one exact active or failed harness turn",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::cancelChatTurn",
+        "ui/src/pages/SessionsPage.tsx::stopHarnessTurn",
+        "ui/src/pages/SessionsPage.tsx::steerHarnessTurn",
+        "ui/src/pages/SessionsPage.tsx::retryHarnessTurn",
+        "ui/src/pages/SessionsPage.tsx::getPendingChatTurn",
+        "ui/src/pages/SessionsPage.tsx::getPendingChatTurnStatus",
+        "ui/src/pages/SessionsPage.tsx::getHarnessSessionActivity",
+        "ui/src/pages/SessionsPage.tsx::getHarnessTurn",
+        "ui/src/pages/SessionsPage.tsx::getHarnessTurnEvents",
+        "ui/src/pages/SessionsPage.tsx::followChatTurn",
+        "ui/src/pages/SessionsPage.tsx::followHarnessTurnEvents"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat and nebula.work.timeline",
+        "change": "nebula.work.message_chat, nebula.work.stop_chat and nebula.work.retry_chat_turn"
+      },
+      "authority": "Selected main chat; exact failed-turn revision for retry; active harness guidance only when supported; Core state distinguishes requested stop from observed stop",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_selected_harness_chat_can_be_steered_and_stopped",
+      "result": "The selected harness receives guidance and stop; another project cannot be targeted; a linked retry is reused rather than duplicated",
+      "status": "supported"
+    },
+    {
+      "id": "chat.goal_lifecycle",
+      "entry_point": "Workbench goals: create a draft conversation, revise or transition its Core goal, and create a linked child",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::createChatGoalConversation",
+        "ui/src/pages/SessionsPage.tsx::getChatGoal",
+        "ui/src/pages/SessionsPage.tsx::getChatTaskPlans",
+        "ui/src/components/ProviderGoalPanel.tsx::createChatGoal",
+        "ui/src/components/ProviderGoalPanel.tsx::getChatGoal",
+        "ui/src/components/ProviderGoalPanel.tsx::updateChatGoal",
+        "ui/src/components/ProviderGoalPanel.tsx::writeChatGoal",
+        "ui/src/components/ProviderGoalChildren.tsx::listGoalChildren",
+        "ui/src/components/ProviderGoalChildren.tsx::startGoalChild"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.chats and nebula.work.goals",
+        "read": "nebula.work.goal",
+        "change": "nebula.work.create_goal, nebula.work.create_goal_conversation, nebula.work.update_goal, nebula.work.goal_action and nebula.work.create_goal_child"
+      },
+      "authority": "Selected project, current goal revision, existing Core goal transition guards and child lineage; creating a draft does not start a turn",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets",
+      "result": "Core goal detail and roster report the saved revision and transition; stale or foreign targets are rejected",
+      "status": "supported"
+    },
+    {
+      "id": "chat.subagent_control",
+      "entry_point": "Workbench subagents: inspect a delegated child and stop one or all children of its parent",
+      "ui_calls": [
+        "ui/src/components/chat-subagents/ChatSubagentPane.tsx::stopAllChatSubagents",
+        "ui/src/components/chat-subagents/ChatSubagentPane.tsx::stopChatSubagent",
+        "ui/src/components/chat-subagents/useChatSubagents.ts::listChatSubagentsIfChanged"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.subagents",
+        "read": "nebula.work.subagent",
+        "change": "nebula.work.stop_subagent and nebula.work.stop_subagents"
+      },
+      "authority": "Selected project and exact delegated-child identity; parent owns guidance and Core cancellation; child stop does not authorize another project",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_subagent_stop_reads_back_and_rejects_another_project",
+      "result": "The child stop is read from Core and cross-project cancellation fails",
+      "status": "supported"
+    },
+    {
+      "id": "chat.queue_control",
+      "entry_point": "Workbench follow-ups: inspect, edit, reorder, pause, resume, retry or remove a queued message",
+      "ui_calls": [
+        "ui/src/pages/useChatQueue.ts::request::\"POST\" path",
+        "ui/src/pages/useChatQueue.ts::request::GET path",
+        "ui/src/pages/useChatQueue.ts::requestIfChanged"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.queue",
+        "change": "nebula.work.queue_action and nebula.work.message_chat"
+      },
+      "authority": "Selected chat and exact queue revision; only enumerated item IDs and bounded order/text; a queued item is not a completed reply",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_queue_control_is_revision_guarded_and_keeps_project_boundary",
+      "result": "Core queue state is read after each change; stale revisions and foreign chats are refused",
+      "status": "supported"
+    },
+    {
+      "id": "chat.next_turn_settings",
+      "entry_point": "Assistant settings: discover advertised runtime/model/MCP choices and save defaults or next-turn chat settings",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::getEngagementAssistantDefaults",
+        "ui/src/pages/SessionsPage.tsx::updateEngagementAssistantDefaults",
+        "ui/src/pages/SessionsPage.tsx::updateChatAssistantConfig",
+        "ui/src/pages/SessionsPage.tsx::updateChatSessionAssistantSettings",
+        "ui/src/pages/SessionsPage.tsx::listHarnessSkills",
+        "ui/src/pages/SessionsPage.tsx::listMcpServers",
+        "ui/src/pages/SessionsPage.tsx::listSkills",
+        "ui/src/components/McpServerChoices.tsx::getEngagementScope"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.catalog",
+        "read": "nebula.work.chat_settings and nebula.work.assistant_defaults",
+        "change": "nebula.work.set_chat_settings and nebula.work.set_assistant_defaults"
+      },
+      "authority": "Selected project and current settings revision; advertised choices only; running and queued turns retain submitted settings; a saved choice is not an applied provider/harness binding",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message",
+      "result": "The next submitted message uses the saved choice; unsupported or stale values fail without changing active work",
+      "status": "supported"
+    },
+    {
+      "id": "mission.lifecycle",
+      "entry_point": "Missions: create, read, guide, stop or retry selected-project work using an advertised runtime",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::createMission",
+        "ui/src/state/WorkspaceContext.tsx::listRuns",
+        "ui/src/state/WorkspaceContext.tsx::retryMission",
+        "ui/src/state/WorkspaceContext.tsx::stopRun",
+        "ui/src/pages/AgentsPage.tsx::steerRun",
+        "ui/src/components/MissionControls.tsx::getAutomationRuntime",
+        "ui/src/components/MissionControls.tsx::listHarnessSessions",
+        "ui/src/components/MissionControls.tsx::listHarnesses",
+        "ui/src/components/MissionControls.tsx::listMcpServers"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.catalog and nebula.work.overview",
+        "read": "nebula.work.mission",
+        "change": "nebula.work.start_mission, nebula.work.steer_mission, nebula.work.stop_mission and nebula.work.retry_mission"
+      },
+      "authority": "Selected project and Core mission ownership; runtime/privacy/scope controls remain in Core; only supported harness missions can be steered; retry reads the exact source revision",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_mission_interrupt_uses_core_route_and_rejects_foreign_target",
+      "result": "The saved mission status is read back; another project cannot be interrupted; retry reuses its linked Core replacement",
+      "status": "supported"
+    },
+    {
+      "id": "approval.review",
+      "entry_point": "Attention inbox or chat approval: inspect and decide one exact pending request after operator instruction",
+      "ui_calls": [
+        "ui/src/components/MobileAttentionInbox.tsx::listChatAttention",
+        "ui/src/components/chat-subagents/ChatSubagentPane.tsx::decideApproval",
+        "ui/src/pages/SessionsPage.tsx::getApproval",
+        "ui/src/state/WorkspaceContext.tsx::listApprovals",
+        "ui/src/state/WorkspaceContext.tsx::decideApproval"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.attention",
+        "read": "nebula.work.approval",
+        "change": "nebula.work.decide_approval"
+      },
+      "authority": "Exact selected-project request and revision; explicit operator decision; background Act remains limited to triggering local-read/passive approvals; a saved decision does not prove downstream effects",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_control_assistant_reviews_and_decides_exact_project_approval",
+      "result": "The exact pending approval changes in Core; stale, unrelated and cross-project requests fail",
+      "status": "supported"
+    },
+    {
+      "id": "questions.answer",
+      "entry_point": "Chat or mission question: read the prompt and choices, answer or decline a pending nonsecret question",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::listHarnessInteractions",
+        "ui/src/pages/SessionsPage.tsx::decideHarnessInteraction"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.attention",
+        "read": "nebula.work.question",
+        "change": "nebula.work.answer_question"
+      },
+      "authority": "Exact selected-project question revision and explicit operator instruction; secret answers remain in the private chat or mission UI",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_control_assistant_answers_pending_harness_question_without_leaking_secret",
+      "result": "Core records the selected response or decline; Butler cannot read or answer a secret prompt with model-supplied secret content",
+      "status": "supported"
+    },
+    {
+      "id": "work.board_projection",
+      "entry_point": "Project Work board and conversation snapshot: read items, assignments and check-in history from the same durable Work service",
+      "ui_calls": [
+        "ui/src/components/ProjectWorkOverview.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(current.id)}/updates`",
+        "ui/src/components/ProjectWorkOverview.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work`",
+        "ui/src/components/ProjectWorkOverview.tsx::watchWorkChanges",
+        "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(projectId)}/work`",
+        "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(item.id)}/updates`",
+        "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(linked[0].item_id)}`",
+        "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::request::GET `work/updates?source_session_id=${encodeURIComponent(sessionId)}&limit=1`",
+        "ui/src/components/structured-result/ProjectSnapshotPanel.tsx::watchWorkChanges"
+      ],
+      "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
+      "butler": {
+        "discover": "nebula.work.work_items",
+        "read": "nebula.work.work_item, nebula.work.work_updates and nebula.work.work_update",
+        "change": "nebula.work.create_work_item, nebula.work.update_work_item and nebula.work.check_in_work_item"
+      },
+      "authority": "Butler remains selected-project scoped; the browser owns its chosen board/linked snapshot and live subscription; only same-project items and assignees can be mutated",
+      "observed_result_test": "tests/v3/test_control_assistant_work.py::test_butler_manages_project_work_items_with_saved_revisions",
+      "result": "Core item and check-in revisions agree with the board; idempotent requests are reused and cross-project item/assignee writes fail",
       "status": "supported"
     }
   ],
