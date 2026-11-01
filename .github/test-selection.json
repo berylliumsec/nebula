@@ -1,24 +1,26 @@
 {
-  "change_digest": "9a54471d1179649b3f2a63d9c4d8a3b5aef282f8a0241c5e4352294e3430960a",
-  "reviewed_by": "Codex focused review for Nebula Core tool-result recovery",
-  "reason": "Four collected Python cases exercise large capability pagination, oversized result artifact recovery and replay, failed writes, long UTF-8 line continuation with redaction, and artifact authorization. An authenticated disposable LAN Core also reconstructed a synthetic long line through the real artifact-read API.",
-  "exclusions": "No frontend or native source changed, so those layers and Playwright are empty. Existing MCP-backed subagent integration cases stalled in preparation before creating a chat turn in this environment; they do not exercise this result contract and were removed from the focused selection. Unrelated Python suites and research workflows are excluded. The user waived the simulation smoke check.",
+  "change_digest": "204ef7d230062de2087ecab059950ef8b8d2ef7d9e3bd9d6c0adf767c5aa1ac4",
+  "reviewed_by": "Codex focused review for harness catalog refresh",
+  "reason": "The two selected component files cover harness mutation persistence, independent MCP failures, shared catalog recovery, and out-of-order refreshes. One production LAN Core journey in eight permanent browser profiles covers Settings and Workbench mounted together, create/check/enable/disable, preserved draft and selected chat, retained choices on a failed catalog read, and keyboard retry.",
+  "exclusions": "No backend or native product behavior changes, so Python and native unit suites are excluded. The real-Core browser journey uses an existing inert adapter and synthetic data, executes no tools or provider turns, and includes deliberate browser-side read failure injection. Existing settings destinations and actions are unchanged; no new setting or assistant action is introduced. Unrelated UI suites, simulation deployment, physical devices, streaming, and provider execution are outside this catalog-refresh change.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 40,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_tool_result_recovery.py::test_oversized_capability_result_has_authorized_artifact_and_replays",
-    "tests/v3/test_tool_result_recovery.py::test_failed_large_result_artifact_write_is_explicitly_incomplete",
-    "tests/v3/test_chat_subagents.py::test_capability_summary_pages_every_long_list",
-    "tests/v3/test_automation_runtime.py::test_tool_output_read_resumes_within_utf8_line_and_redacts_every_page"
+  "python": [],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/state/WorkspaceContext.recovery.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:harness-catalog-refresh"
+  ]
 }

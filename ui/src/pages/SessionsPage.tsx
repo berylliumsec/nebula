@@ -148,7 +148,6 @@ import type {
   ExecutionCapabilities,
   ExecutionLanguage,
   EngagementScopePolicy,
-  HarnessProfile,
   HarnessActivityEvent,
   HarnessInteraction,
   HarnessSessionActivity,
@@ -1328,6 +1327,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     evidence,
     observations,
     resourceStatus,
+    harnesses: workspaceHarnesses,
+    refreshHarnesses,
+    applyHarnessToolSharing,
     ingestKnowledgeUrlSource,
     knowledgeSources,
     libraryItems,
@@ -1466,7 +1468,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   const [providerId, setProviderId] = useState("");
   const [runtimeKind, setRuntimeKind] = useState<"provider" | "harness">("provider");
-  const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
+  const harnesses = useMemo(() => workspaceHarnesses.filter(profile => profile.enabled), [workspaceHarnesses]);
   // Delegation is opt-in per conversation; Core remembers the choice. A
   // harness chat also picks the provider model its subagents run on.
   const [allowSubagents, setAllowSubagents] = useState(false);
@@ -1480,16 +1482,16 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [subagentLimit, setSubagentLimit] = useState<number>();
   const [subagentReasoningEffort, setSubagentReasoningEffort] = useState<ReasoningEffort>();
 
-  const [harnessesLoaded, setHarnessesLoaded] = useState(false);
-  // Standing tool-sharing consent lives on the runtime profile; mirror the saved
-  // answer locally so later turns in this session stop asking too.
+  const harnessesLoaded = resourceStatus.harnesses.state !== "loading";
+  // Standing tool-sharing consent lives on the runtime profile; publish the saved
+  // answer to the shared catalog so later turns stop asking too.
   const rememberToolSharingRuntime = useCallback((saved: ToolSharingRuntime) => {
     if (saved.kind === "harness") {
-      setHarnesses((current) => current.map((item) => item.id === saved.profile.id ? saved.profile : item));
+      applyHarnessToolSharing(saved.profile);
       return;
     }
     applyProviderToolSharing(saved.profile);
-  }, [applyProviderToolSharing]);
+  }, [applyProviderToolSharing, applyHarnessToolSharing]);
   const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
   const [harnessActivity, setHarnessActivity] = useState<HarnessSessionActivity>();
   const [harnessActivityError, setHarnessActivityError] = useState<string>();
@@ -2504,23 +2506,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   useEffect(() => {
     let active = true;
     if (!api || coreState !== "online" || !engagement) {
-      setHarnesses([]);
-      setHarnessesLoaded(false);
       setHarnessSessions([]);
       setMcpServers([]);
       return () => { active = false; };
     }
-    setHarnessesLoaded(false);
-    void api.listHarnesses().then((nextHarnesses) => {
-      if (!active) return;
-      const enabled = nextHarnesses.filter((item) => item.enabled);
-      setHarnesses(enabled);
-      setHarnessesLoaded(true);
-      setHarnessId((current) => enabled.some((item) => item.id === current) ? current : enabled[0]?.id ?? "");
-    }).catch((caughtError) => {
-      void logCaughtDiagnostic("interface.sessions_page.caught_failure_03", "A handled interface operation failed.", caughtError, "sessions_page");
-      if (active) { setHarnesses([]); setHarnessesLoaded(true); }
-    });
     void api.listHarnessSessions(engagement.id).then((nextSessions) => {
       if (active) setHarnessSessions(nextSessions.filter((item) => item.status !== "closed"));
     }).catch((caughtError) => {
@@ -2537,6 +2526,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
     return () => { active = false; };
   }, [api, coreState, embeddedSideChat, engagement]);
+
+  useEffect(() => {
+    if (!harnessesLoaded || sessionId || requestedSessionId) return;
+    setHarnessId(current => harnesses.some(profile => profile.id === current) ? current : harnesses[0]?.id ?? "");
+  }, [harnesses, harnessesLoaded, requestedSessionId, sessionId]);
 
   useEffect(() => {
     if (
@@ -6972,6 +6966,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 : <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{allowAgentMessaging && /agent messaging/i.test(chatError instanceof Error ? chatError.message : typeof chatError === "string" ? chatError : "") && <button className="button quiet" type="button" disabled={assistantSettingsBusy} onClick={() => void saveAgentMessagingChoice(false)}>Turn off agent messaging</button>}{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>)}
               {activeArchivedSession && <div className="chat-archived-notice" role="status"><Archive size={14} aria-hidden="true" /><span>This conversation is archived. Sending a message moves it back to your conversations.</span><button className="button quiet" type="button" disabled={Boolean(archivingSessionId)} onClick={() => void setConversationArchived(activeArchivedSession, false)}>Unarchive</button></div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
+              {resourceStatus.harnesses.state === "failed" && <div className="chat-recovery-notice" role="alert"><p>Agent harnesses could not be refreshed. Your conversation and draft are safe.</p><button className="icon-button subtle" type="button" aria-label="Retry agent harnesses" title="Retry agent harnesses" onClick={() => void refreshHarnesses().catch(() => { /* diagnostic-expected: refreshHarnesses logs and exposes the retryable failure. */ })}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}
               {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue"><strong>Old browser queue</strong><p>Import these messages into Core, paused for review. Uncertain sending entries need review.</p>{queuedFollowUps.map(item => <div key={item.id}><p>{item.text}</p><button type="button" onClick={() => void (async () => { if (await submit(undefined, item, {paused: true, key: `legacy-${item.id}`, uncertain: item.status !== "queued"})) { setQueuedFollowUps(current => current.filter(row => row.id !== item.id)); } })()}>Import paused</button><button type="button" onClick={() => setQueuedFollowUps(current => current.filter(row => row.id !== item.id))}>Discard</button></div>)}</section>}
               </div>
