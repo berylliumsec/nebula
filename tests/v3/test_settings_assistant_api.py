@@ -514,3 +514,262 @@ def test_headless_session_start_and_status_use_selected_project(tmp_path, monkey
         assert started.json() == {"session_id": "headless", "state": "active"}
         assert observed.json() == {"session_id": "headless", "state": "active"}
         assert calls == [project.id, project.id]
+
+
+@pytest.mark.parametrize(
+    ("family", "payload", "private", "cleared"),
+    [
+        (
+            "providers",
+            {"provider_type": "ollama", "is_local": True},
+            {"secret_ref": "session:" + "a" * 32},
+            {"secret_ref": None},
+        ),
+        (
+            "harnesses",
+            {"kind": "codex_app_server", "executable": "/bin/true"},
+            {"auth_mode": "secret_ref", "secret_ref": "session:" + "a" * 32},
+            {"auth_mode": "existing_session", "secret_ref": None},
+        ),
+        (
+            "mcp-servers",
+            {"transport": "stdio", "command": "/bin/true"},
+            {
+                "trusted_stdio": True,
+                "environment_secret_refs": {"TOKEN": "session:" + "a" * 32},
+            },
+            {"trusted_stdio": False, "environment_secret_refs": {}},
+        ),
+    ],
+)
+def test_settings_profile_edits_preserve_browser_owned_authentication(
+    tmp_path, family, payload, private, cleared
+):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    app = create_app(store, auth_token="test-token")
+    gateway = SettingsAssistantApi(app, "test-token")
+    client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+    body = {"name": "operator-profile", "enabled": False, **payload, **private}
+    response = client.post(f"/api/v1/{family}", json=body)
+    assert response.status_code == 201, response.text
+    original = response.json()
+    path = f"{family}/{original['id']}"
+
+    async def journey():
+        with pytest.raises(ValueError, match="requesting browser"):
+            await gateway.request(project.id, method="POST", path=family, body=body)
+        with pytest.raises(ValueError, match="requesting browser"):
+            await gateway.request(
+                project.id,
+                method="PATCH",
+                path=path,
+                body={"expected_revision": original["revision"], "changes": cleared},
+            )
+        with pytest.raises(ValueError, match="requesting browser"):
+            await gateway.request(
+                project.id,
+                method="PUT",
+                path=path,
+                expected_revision=original["revision"],
+                body={
+                    "id": original["id"],
+                    "name": "implicit-reset",
+                    "enabled": False,
+                    **payload,
+                },
+            )
+        assert client.get(f"/api/v1/{path}").json() == original
+        for method in ("PATCH", "PUT"):
+            current = client.get(f"/api/v1/{path}").json()
+            updated = await gateway.request(
+                project.id,
+                method=method,
+                path=path,
+                body={
+                    "expected_revision": current["revision"],
+                    "changes": {"name": f"renamed-{method}"},
+                }
+                if method == "PATCH"
+                else {**current, "name": f"renamed-{method}"},
+            )
+            assert updated["read_back"] is True
+            assert updated["result"]["name"] == f"renamed-{method}"
+            observed = client.get(f"/api/v1/{path}").json()
+            for key, value in private.items():
+                assert observed[key] == value
+            if family == "mcp-servers":
+                assert updated["result"]["environment_secret_refs"] == {
+                    "TOKEN": "[redacted]"
+                }
+        current = client.get(f"/api/v1/{path}").json()
+        with pytest.raises(ValueError, match="current revision"):
+            await gateway.request(
+                project.id,
+                method="PATCH",
+                path=path,
+                body={"changes": {"name": "unguarded"}},
+            )
+        with pytest.raises(ValueError, match="profile changed"):
+            await gateway.request(
+                project.id,
+                method="PATCH",
+                path=path,
+                body={
+                    "expected_revision": original["revision"],
+                    "changes": {"name": "stale"},
+                },
+            )
+        assert client.get(f"/api/v1/{path}").json() == current
+
+    asyncio.run(journey())
+
+
+@pytest.mark.parametrize(
+    ("family", "payload"),
+    [
+        ("providers", {"provider_type": "ollama", "is_local": True}),
+        ("harnesses", {"kind": "codex_app_server", "executable": "/bin/true"}),
+    ],
+)
+def test_settings_profile_privacy_cannot_grant_or_silently_clear_consent(
+    tmp_path, family, payload
+):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    app = create_app(store, auth_token="test-token")
+    gateway = SettingsAssistantApi(app, "test-token")
+    client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+    privacy = {"permits_sensitive_data": True, "auto_share_tool_results": True}
+    body = {"name": "operator-consent", "enabled": False, **payload, "privacy": privacy}
+    created = client.post(f"/api/v1/{family}", json=body)
+    assert created.status_code == 201, created.text
+    current = created.json()
+    path = f"{family}/{current['id']}"
+
+    async def journey():
+        for flags in (privacy, {"permits_sensitive_data": True}):
+            with pytest.raises(ValueError, match="requesting browser"):
+                await gateway.request(
+                    project.id,
+                    method="POST",
+                    path=family,
+                    body={**body, "privacy": flags},
+                )
+        for flags in (
+            {},
+            {"permits_sensitive_data": True},
+            {"permits_sensitive_data": False},
+        ):
+            with pytest.raises(ValueError, match="requesting browser"):
+                await gateway.request(
+                    project.id,
+                    method="PATCH",
+                    path=path,
+                    body={
+                        "expected_revision": current["revision"],
+                        "changes": {"privacy": flags},
+                    },
+                )
+        assert client.get(f"/api/v1/{path}").json() == current
+        saved = await gateway.request(
+            project.id,
+            method="PATCH",
+            path=path,
+            body={
+                "expected_revision": current["revision"],
+                "changes": {
+                    "name": "retained consent",
+                    "privacy": {
+                        **current["privacy"],
+                        "retention": "unchanged permission",
+                    },
+                },
+            },
+        )
+        assert saved["read_back"] is True
+        assert saved["result"]["privacy"]["auto_share_tool_results"] is True
+        assert saved["result"]["privacy"]["permits_sensitive_data"] is True
+
+    asyncio.run(journey())
+
+
+def test_settings_profile_trust_stays_bound_to_the_operator_program(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        McpServerProfile(
+            name="Trusted",
+            transport="stdio",
+            command="/bin/true",
+            trusted_stdio=True,
+            enabled=False,
+        )
+    )
+    app = create_app(store, auth_token="test-token")
+    gateway = SettingsAssistantApi(app, "test-token")
+
+    async def journey():
+        for changes in (
+            {"command": "/bin/false"},
+            {"arguments": ["--version"]},
+            {"environment": {"MODE": "changed"}},
+            {"cwd_policy": "fixed", "cwd": str(tmp_path)},
+            {
+                "transport": "streamable_http",
+                "command": None,
+                "url": "https://example.test/mcp",
+            },
+        ):
+            with pytest.raises(ValueError, match="local-program trust"):
+                await gateway.request(
+                    project.id,
+                    method="PATCH",
+                    path=f"mcp-servers/{profile.id}",
+                    body={"expected_revision": profile.revision, "changes": changes},
+                )
+        assert store.get(McpServerProfile, profile.id) == profile
+
+    asyncio.run(journey())
+
+
+def test_settings_profile_replace_fences_a_concurrent_browser_credential_edit(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    profile = store.create(
+        ProviderProfile(name="Concurrent", provider_type="ollama", is_local=True)
+    )
+    app = create_app(store, auth_token="test-token")
+    observed_headers = []
+
+    @app.middleware("http")
+    async def concurrent_operator(request, call_next):
+        if (
+            request.method == "PUT"
+            and request.url.path == f"/api/v1/providers/{profile.id}"
+        ):
+            observed_headers.append(request.headers.get("If-Match"))
+            store.update(
+                ProviderProfile,
+                profile.id,
+                {"secret_ref": "session:" + "b" * 32},
+                expected_revision=profile.revision,
+            )
+        return await call_next(request)
+
+    gateway = SettingsAssistantApi(app, "test-token")
+
+    async def journey():
+        with pytest.raises(ValueError, match="revision conflict"):
+            await gateway.request(
+                project.id,
+                method="PUT",
+                path=f"providers/{profile.id}",
+                body={**profile.model_dump(mode="json"), "name": "stale rename"},
+            )
+        assert observed_headers == [str(profile.revision)]
+        current = store.get(ProviderProfile, profile.id)
+        assert current.name == profile.name
+        assert current.secret_ref == "session:" + "b" * 32
+
+    asyncio.run(journey())

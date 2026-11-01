@@ -558,3 +558,16 @@ and an empty credential grant list. Other risk classes and credential grants
 are refused before mission creation. Active testing stays in the visible
 operator-controlled Browser; a passive mission receipt does not claim an
 assessment result.
+
+
+Nonsecret provider, Assistant harness and MCP edits preserve authentication,
+sharing permission and local-program trust. The Settings gateway compares the
+effective profile against a fresh Core read: omitted PUT fields and replaced
+privacy objects cannot silently clear credentials or consent. New profiles use
+uncredentialed, untrusted defaults. Credential attachment uses its exact
+requesting-browser handoff; sharing permission and trusted program changes open
+the corresponding Settings control. Renaming or enabling an existing profile
+retains these fields, including a full read/edit/PUT. PATCH requires the observed
+body revision; PUT carries its observed revision in Core's If-Match guard, so a
+concurrent browser change cannot be overwritten after the comparison. A trusted
+MCP program's launch definition also remains under its operator trust choice.

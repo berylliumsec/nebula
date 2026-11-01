@@ -206,7 +206,7 @@ SETTINGS_API_REQUEST_SCHEMA = {
         "expected_revision": {
             "type": "integer",
             "minimum": 1,
-            "description": "Current revision from an exact profile GET; required when deleting a provider, harness, MCP server or operator profile.",
+            "description": "Current revision from an exact profile GET; required for profile DELETE and for PUT unless the complete body retains its observed revision. PATCH uses body.expected_revision.",
         },
     },
     "required": ["path", "method"],
@@ -812,7 +812,7 @@ def provider_plugins(
         AnalysisTool(
             ToolSpec(
                 name="nebula.settings.api_request",
-                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Profile DELETE requires expected_revision from the exact profile GET and forwards Core's If-Match guard. A create reads back the exact new identity. TypeSafe key entry/removal, VPN profile import/removal and MCP configuration import belong in the requesting browser: use nebula.settings.open with typesafe, vpn-egress or mcp. Never put their private input in tool arguments. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
+                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Profile DELETE requires expected_revision from the exact profile GET. PUT retains the observed body.revision or explicit expected_revision and forwards Core's If-Match guard; PATCH requires body.expected_revision. A create reads back the exact new identity. Preserve authentication references, sharing permissions and trusted program definitions; changes require the corresponding browser Settings or managed-reference handoff. TypeSafe key entry/removal, VPN profile import/removal and MCP configuration import belong in the requesting browser: use nebula.settings.open with typesafe, vpn-egress or mcp. Never put their private input in tool arguments. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
                 input_schema=SETTINGS_API_REQUEST_SCHEMA,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.WORKSPACE_WRITE,

@@ -9,7 +9,10 @@ from urllib.parse import unquote
 
 import httpx
 from fastapi import FastAPI
+from pydantic import BaseModel, ValidationError
 from starlette.routing import Match
+
+from .domain import HarnessProfile, McpServerProfile, ProviderProfile
 
 
 _PROJECT_SETTING = re.compile(
@@ -27,6 +30,22 @@ _GLOBAL_SETTINGS = re.compile(
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_PROFILE_MODELS: dict[str, type[BaseModel]] = {
+    "providers": ProviderProfile,
+    "harnesses": HarnessProfile,
+    "mcp-servers": McpServerProfile,
+}
+_PROFILE_PRIVATE_FIELDS = {
+    "providers": ("secret_ref", "openrouter_management_secret_ref"),
+    "harnesses": ("auth_mode", "secret_ref"),
+    "mcp-servers": (
+        "auth_mode",
+        "bearer_secret_ref",
+        "header_secret_refs",
+        "environment_secret_refs",
+        "trusted_stdio",
+    ),
+}
 _BROWSER_OWNED_OPERATIONS = (
     ("POST", re.compile(r"^/api/v1/mcp-servers/import$"), "mcp"),
     ("PUT", re.compile(r"^/api/v1/integrations/typesafe$"), "typesafe"),
@@ -137,6 +156,92 @@ def _require_public_input(method: str, path: str) -> None:
         raise ValueError(
             "private input and credential removal belong in the requesting browser; "
             f"use nebula.settings.open setting_id={destination}"
+        )
+
+
+async def _check_profile_mutation(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    method: str,
+    path: str,
+    body: dict[str, Any] | list[Any] | None,
+    expected_revision: int | None,
+) -> None:
+    route = re.fullmatch(r"/api/v1/(providers|harnesses|mcp-servers)(/[^/]+)?", path)
+    if route is None or method not in {"POST", "PATCH", "PUT"}:
+        return
+    family, resource = route.groups()
+    if (method == "POST") != (resource is None):
+        return
+    if not isinstance(body, dict):
+        raise ValueError("provide the listed profile object")
+    model = _PROFILE_MODELS[family]
+    destination = {
+        "providers": "providers",
+        "harnesses": "harnesses",
+        "mcp-servers": "mcp",
+    }[family]
+    current: dict[str, Any] | None = None
+    if resource:
+        response = await client.get(path, headers=headers)
+        if not response.is_success:
+            raise ValueError("read the exact current profile before changing it")
+        current = response.json()
+        revision = (
+            body.get("expected_revision")
+            if method == "PATCH"
+            else expected_revision or body.get("revision")
+        )
+        if type(revision) is not int or revision < 1:
+            raise ValueError("read the exact profile and supply its current revision")
+        if revision != current["revision"]:
+            raise ValueError(
+                "Settings profile revision conflict (409): profile changed; read its current revision before retrying"
+            )
+        if method == "PUT":
+            if "revision" in body and body["revision"] != revision:
+                raise ValueError("replacement revision must match the observed profile")
+            headers["If-Match"] = str(revision)
+    if method == "PATCH":
+        if not isinstance(body.get("changes"), dict):
+            raise ValueError("provide the listed profile changes")
+        payload = {**(current or {}), **body["changes"]}
+    else:
+        payload = body
+    try:
+        candidate = model.model_validate(payload).model_dump(mode="json")
+    except ValidationError as exc:
+        # diagnostic-expected: explain invalid model input without echoing private values.
+        raise ValueError(
+            "invalid profile input; read its current Settings schema"
+        ) from exc
+    defaults = model.model_construct().model_dump(mode="json")
+    before = current if current is not None else defaults
+    protected = _PROFILE_PRIVATE_FIELDS[family]
+    changed = any(candidate.get(field) != before.get(field) for field in protected)
+    if family in {"providers", "harnesses"}:
+        changed |= any(
+            candidate["privacy"][field] != before["privacy"][field]
+            for field in ("permits_sensitive_data", "auto_share_tool_results")
+        )
+    if family == "mcp-servers" and before.get("trusted_stdio"):
+        changed |= any(
+            candidate.get(field) != before.get(field)
+            for field in (
+                "transport",
+                "command",
+                "arguments",
+                "environment",
+                "cwd",
+                "cwd_policy",
+                "url",
+            )
+        )
+    if changed:
+        raise ValueError(
+            "credential attachment, private input, sharing consent and local-program trust "
+            f"belong in the requesting browser; use nebula.settings.open setting_id={destination}. "
+            "Preserve their current values for a nonsecret profile edit."
         )
 
 
@@ -251,11 +356,13 @@ async def execute_settings_api(
     if selected == "GET" and body is not None:
         raise ValueError("GET Settings requests have no body")
     if expected_revision is not None and (
-        selected != "DELETE"
+        selected not in {"DELETE", "PUT"}
         or type(expected_revision) is not int
         or expected_revision < 1
     ):
-        raise ValueError("expected_revision is a positive current revision for DELETE")
+        raise ValueError(
+            "expected_revision is a positive current revision for DELETE or PUT"
+        )
     if (
         selected == "DELETE"
         and re.fullmatch(
@@ -275,6 +382,9 @@ async def execute_settings_api(
         headers = {"Authorization": f"Bearer {token}"}
         if expected_revision is not None:
             headers["If-Match"] = str(expected_revision)
+        await _check_profile_mutation(
+            client, headers, selected, candidate, body, expected_revision
+        )
         response = await client.request(selected, candidate, json=body, headers=headers)
         if response.is_error:
             try:

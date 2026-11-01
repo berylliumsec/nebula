@@ -1334,9 +1334,9 @@ test("assistant upgrade Butler opens private TypeSafe VPN and MCP entry on produ
 test("assistant upgrade Butler manages nonsecret integration profiles on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(480_000);
   const profiles = [
-    {family: "providers", target: "provider-settings", payload: {provider_type: "ollama", is_local: true}},
-    {family: "harnesses", target: "harness-settings", payload: {kind: "codex_app_server", executable: "/bin/true"}},
-    {family: "mcp-servers", target: "mcp-settings", payload: {transport: "streamable_http", url: "https://example.test/mcp"}},
+    {family: "providers", target: "provider-settings", payload: {provider_type: "ollama", is_local: true}, privatePayload: {secret_ref: "session:" + "a".repeat(32)}},
+    {family: "harnesses", target: "harness-settings", payload: {kind: "codex_app_server", executable: "/bin/true"}, privatePayload: {auth_mode: "secret_ref", secret_ref: "session:" + "a".repeat(32)}},
+    {family: "mcp-servers", target: "mcp-settings", payload: {transport: "streamable_http", url: "https://example.test/mcp"}, privatePayload: {auth_mode: "bearer", bearer_secret_ref: "session:" + "a".repeat(32)}},
   ];
   let request: {prompt: string; path: string; method: string; body?: Record<string, unknown>; expected_revision?: number} | undefined;
   const stub = await startLocalModelStub({responseContent: "Core returned the profile result.", toolCall: body => {
@@ -1382,25 +1382,28 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     for (const profile of profiles) {
       let saved: {id: string; revision: number} | undefined;
       const name = `butler-profile-${profile.family}`;
-      for (const action of ["create", "rename", "delete"] as const) {
-        request = {prompt: `${action} the ${name} fixture.`, path: action === "create" ? profile.family : `${profile.family}/${saved!.id}`,
-          method: action === "create" ? "POST" : action === "rename" ? "PATCH" : "DELETE",
-          ...(action === "create" ? {body: {name, enabled: false, ...profile.payload}}
+      for (const action of ["private", "create", "rename", "delete"] as const) {
+        const creation = action === "create" || action === "private";
+        request = {prompt: `${action} the ${name} fixture.`, path: creation ? profile.family : `${profile.family}/${saved!.id}`,
+          method: creation ? "POST" : action === "rename" ? "PATCH" : "DELETE",
+          ...(creation ? {body: {name, enabled: false, ...profile.payload, ...(action === "private" ? profile.privatePayload : {})}}
             : action === "rename" ? {body: {expected_revision: saved!.revision, changes: {name: `${name}-renamed`}}}
               : {expected_revision: saved!.revision})};
-        const response = `Core completed ${action} for ${name}.`;
+        const response = action === "private" ? `Use the browser credential control for ${name}. No profile was created.` : `Core completed ${action} for ${name}.`;
         stub.responseContent = response;
         if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
         const assistant = page.getByRole("dialog", {name: "Butler"});
         await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(request.prompt);
         await assistant.getByRole("button", {name: "Send to Butler"}).click();
         await expect(assistant.getByText(response, {exact: true})).toBeVisible({timeout: 60_000});
-        if (action === "create") {
+        if (creation) {
           const rows = await (await api.get(profile.family)).json() as Array<{id: string; name: string; revision: number; enabled: boolean}>;
           const matches = rows.filter(item => item.name === name);
-          expect(matches).toHaveLength(1);
-          expect(matches[0].enabled).toBe(false);
-          saved = matches[0];
+          expect(matches).toHaveLength(action === "private" ? 0 : 1);
+          if (action === "create") {
+            expect(matches[0].enabled).toBe(false);
+            saved = matches[0];
+          }
         } else if (action === "rename") {
           const observed = await (await api.get(`${profile.family}/${saved!.id}`)).json() as {id: string; name: string; revision: number};
           expect(observed.name).toBe(`${name}-renamed`);
@@ -1408,6 +1411,7 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
           saved = observed;
         } else expect((await api.get(`${profile.family}/${saved!.id}`)).status()).toBe(404);
         await assistant.getByRole("button", {name: "Hide Butler"}).click();
+        if (action === "private") continue;
         if (action === "create") await page.goto(`${core.origin}/settings#${profile.target}`);
         const heading = page.getByRole("heading", {name: action === "create" ? name : `${name}-renamed`, exact: true});
         if (action === "delete") await expect(heading).toHaveCount(0);
@@ -1435,7 +1439,7 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-integration-profiles-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
-      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Three disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
