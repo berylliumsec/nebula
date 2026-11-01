@@ -13,7 +13,11 @@ from nebula.v3.chat import (
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.chat_planning import PlanSubmission
-from nebula.v3.chat_subagents import _capability_selection, subagent_specs
+from nebula.v3.chat_subagents import (
+    _capability_selection,
+    _page_capabilities,
+    subagent_specs,
+)
 from nebula.v3.chat_turn_ledger import turn_history
 from nebula.v3.mission_delegation import DelegatedMissionService
 from nebula.v3.missions import MissionService
@@ -61,8 +65,61 @@ from nebula.v3.providers import (
     StreamEventType,
 )
 from nebula.v3.storage import ConflictError, NebulaStore
+from nebula.v3.tool_results import MAX_EXCERPT_BYTES, model_result_bytes
 
 CHILD_MARKER = "You are a subagent."
+
+
+def test_capability_summary_pages_every_long_list() -> None:
+    catalog = {
+        "tool_names": [f"capability.{index:04d}" for index in range(850)],
+        "mcp_servers": [
+            {"id": f"mcp-{index:03d}", "name": f"Server {index}", "selected": False}
+            for index in range(45)
+        ],
+        "skills": [
+            {"name": f"skill-{index}", "path": f"/skills/{index:03d}"}
+            for index in range(35)
+        ],
+        "command_runtime": {
+            "available": True,
+            "selected": True,
+            "tool_names": [f"command-{index:03d}" for index in range(40)],
+        },
+        "hooks": [
+            {"id": f"hook-{index:03d}", "name": f"Hook {index}"} for index in range(30)
+        ],
+        "knowledge": {"ready": True, "selected": False},
+        "subagents": {"available": True, "selected": True, "depth": 0},
+    }
+    assert model_result_bytes(catalog) > 15_772
+    summary = _page_capabilities(catalog, category=None, cursor=None, limit=25)
+    assert model_result_bytes(summary) <= MAX_EXCERPT_BYTES
+    previews = {
+        "tool_names": summary["tool_names"],
+        "mcp_servers": summary["mcp_servers"],
+        "skills": summary["skills"],
+        "command_tools": summary["command_runtime"]["tool_names"],
+        "hooks": summary["hooks"],
+    }
+    expected = {
+        "tool_names": catalog["tool_names"],
+        "mcp_servers": catalog["mcp_servers"],
+        "skills": catalog["skills"],
+        "command_tools": catalog["command_runtime"]["tool_names"],
+        "hooks": catalog["hooks"],
+    }
+    for category, first in previews.items():
+        collected = list(first)
+        cursor = summary["continuations"].get(category)
+        while cursor is not None:
+            page = _page_capabilities(
+                catalog, category=category, cursor=cursor, limit=25
+            )
+            assert model_result_bytes(page) <= MAX_EXCERPT_BYTES
+            collected.extend(page["items"])
+            cursor = page["continuation_cursor"]
+        assert collected == expected[category]
 
 
 def test_graceful_core_update_resumes_safe_child_before_reporting_to_parent(tmp_path):

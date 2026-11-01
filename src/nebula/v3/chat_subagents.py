@@ -42,6 +42,8 @@ received is handed to it at the start of its next turn.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import re
 from collections import OrderedDict
@@ -1348,7 +1350,14 @@ class SubagentService:
             "result_message_id": record.result_message_id,
         }
 
-    def available_capabilities(self, parent_turn_id: str) -> dict[str, Any]:
+    def available_capabilities(
+        self,
+        parent_turn_id: str,
+        *,
+        category: str | None = None,
+        cursor: str | None = None,
+        limit: int = 25,
+    ) -> dict[str, Any]:
         """Names a supervisor can use without guessing project IDs or paths."""
 
         turn = self.store.get(ChatTurn, parent_turn_id)
@@ -1440,7 +1449,7 @@ class SubagentService:
             and isinstance(selected_setting, dict)
             and bool(selected_setting.get("harness_profile_id"))
         )
-        return {
+        catalog = {
             "tool_names": [] if harness_child else sorted(names),
             **(
                 {"runtime": "harness", "model": selected_setting.get("model")}
@@ -1495,6 +1504,9 @@ class SubagentService:
                 for item in hooks
             ],
         }
+        return _page_capabilities(
+            catalog, category=category, cursor=cursor, limit=limit
+        )
 
     def _header(self, record: ChatSubagent) -> dict[str, Any]:
         """What the parent model sees of one subagent besides its news."""
@@ -4958,6 +4970,135 @@ class SubagentService:
         await self._deliver(self.get(record.id))
 
 
+_CAPABILITY_CATEGORIES = (
+    "tool_names",
+    "mcp_servers",
+    "skills",
+    "command_tools",
+    "hooks",
+)
+
+
+def _capability_cursor(category: str, offset: int, digest: str) -> str:
+    encoded = json.dumps(
+        {"c": category, "o": offset, "d": digest}, separators=(",", ":")
+    ).encode()
+    return base64.urlsafe_b64encode(encoded).decode().rstrip("=")
+
+
+def _capability_offset(cursor: str, category: str, digest: str) -> int:
+    try:
+        if len(cursor) > 4096:
+            raise ValueError
+        decoded = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        payload = json.loads(decoded)
+        offset = payload["o"]
+        if (
+            payload["c"] != category
+            or payload["d"] != digest
+            or not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or offset < 0
+        ):
+            raise ValueError
+        return offset
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise InvalidToolArguments(
+            "capability cursor is invalid or the catalog changed; restart this category"
+        ) from exc
+
+
+def _page_capabilities(
+    catalog: dict[str, Any],
+    *,
+    category: str | None,
+    cursor: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if category is not None and category not in _CAPABILITY_CATEGORIES:
+        raise InvalidToolArguments("unknown capability category")
+    if cursor is not None and category is None:
+        raise InvalidToolArguments("category is required with a capability cursor")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise InvalidToolArguments("capability page limit must be 1-100")
+    items = {
+        "tool_names": catalog["tool_names"],
+        "mcp_servers": sorted(catalog["mcp_servers"], key=lambda item: item["id"]),
+        "skills": sorted(catalog["skills"], key=lambda item: item["path"]),
+        "command_tools": catalog["command_runtime"]["tool_names"],
+        "hooks": sorted(catalog["hooks"], key=lambda item: item["id"]),
+    }
+    digests = {
+        name: hashlib.sha256(
+            json.dumps(values, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:16]
+        for name, values in items.items()
+    }
+    if category is not None:
+        values = items[category]
+        offset = (
+            _capability_offset(cursor, category, digests[category])
+            if cursor is not None
+            else 0
+        )
+        if offset >= len(values) and cursor is not None:
+            raise InvalidToolArguments("capability cursor is past the end of its list")
+        page = list(values[offset : offset + limit])
+
+        def response() -> dict[str, Any]:
+            end = offset + len(page)
+            return {
+                "category": category,
+                "total": len(values),
+                "items": page,
+                "continuation_cursor": (
+                    _capability_cursor(category, end, digests[category])
+                    if end < len(values)
+                    else None
+                ),
+            }
+
+        while len(page) > 1 and model_result_bytes(response()) > MAX_EXCERPT_BYTES:
+            page.pop()
+        return response()
+
+    preview = {name: min(10, len(values)) for name, values in items.items()}
+
+    def summary() -> dict[str, Any]:
+        result = {
+            key: value
+            for key, value in catalog.items()
+            if key
+            not in {"tool_names", "mcp_servers", "skills", "hooks", "command_runtime"}
+        }
+        result.update(
+            {
+                "tool_names": items["tool_names"][: preview["tool_names"]],
+                "mcp_servers": items["mcp_servers"][: preview["mcp_servers"]],
+                "skills": items["skills"][: preview["skills"]],
+                "hooks": items["hooks"][: preview["hooks"]],
+                "command_runtime": {
+                    **catalog["command_runtime"],
+                    "tool_names": items["command_tools"][: preview["command_tools"]],
+                },
+                "counts": {name: len(values) for name, values in items.items()},
+                "continuations": {
+                    name: _capability_cursor(name, preview[name], digests[name])
+                    for name, values in items.items()
+                    if preview[name] < len(values)
+                },
+            }
+        )
+        return result
+
+    result = summary()
+    while model_result_bytes(result) > MAX_EXCERPT_BYTES and any(preview.values()):
+        largest = max(preview, key=lambda name: preview[name])
+        preview[largest] -= 1
+        result = summary()
+    return result
+
+
 class SubagentBroker:
     def __init__(self, service: SubagentService):
         self.service = service
@@ -5026,7 +5167,12 @@ class SubagentBroker:
                     InvalidToolArguments("a parent turn is required")
                 )
             return ToolExecutionResult(
-                output=self.service.available_capabilities(invocation.chat_turn_id)
+                output=self.service.available_capabilities(
+                    invocation.chat_turn_id,
+                    category=arguments.get("category"),
+                    cursor=arguments.get("cursor"),
+                    limit=arguments.get("limit", 25),
+                )
             )
         if name == "list_subagents":
             return ToolExecutionResult(output=self.service.list_output(session_id))
@@ -5096,8 +5242,26 @@ def subagent_specs() -> dict[str, ToolSpec]:
     specs = [
         _spec(
             "list_subagent_capabilities",
-            "List tool names, enabled MCP servers, project lifecycle hooks, knowledge and command runtime status, and available skills that a child may be assigned.",
-            {},
+            "Summarize assignable tools, MCP servers, skills, hooks, and runtime status. For long lists, select a category and pass the returned continuation_cursor as cursor to enumerate every item.",
+            {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "tool_names",
+                        "mcp_servers",
+                        "skills",
+                        "command_tools",
+                        "hooks",
+                    ],
+                },
+                "cursor": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "A continuation_cursor returned by this tool.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            optional=frozenset({"category", "cursor", "limit"}),
         ),
         _spec(
             "start_subagent",
