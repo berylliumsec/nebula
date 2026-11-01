@@ -1,32 +1,27 @@
 {
-  "change_digest": "c00bf203b720ee7f1999aa0e78c762b30e1d86c6ae10559c2b7be5391dc743f9",
-  "reviewed_by": "Codex focused review for Core page responsiveness under MCP chat preparation",
-  "reason": "Sixteen collected Python cases cover schema reuse, nested edits, invalid schemas, concurrent first-use validation, five blocking preparation phases, setup-status loop liveness, ranking overlap and cancellation, normal chat completion and streaming, viewer detach, turn cancellation, subagent continuation, and unchanged MCP identity and approval behavior. An isolated production UI on a disposable LAN Core also exercises concurrent synthetic chats and page reloads.",
-  "exclusions": "No frontend or native source changed. Browser selectors do not exercise server-side cold MCP validation, so Playwright selection is empty; a paired desktop Chromium browser and direct page timing against an isolated real Core cover the operator journey. Unrelated Python suites and physical-device testing are excluded.",
+  "change_digest": "9f8638c928b2b5d2590d6a68bb2d509734975417a03a4733b314564e719d3bb4",
+  "reviewed_by": "Codex agent, 2026-11-01",
+  "reason": "The goal edit control inserts its form inside the bounded composer context. Selected component cases cover edit focus and existing save/conflict behavior. The real-Core production browser journey checks that Objective is in view and focused immediately in draft and running states, that text selection does not put an action toolbar over Save, and that edits persist through refresh across desktop and emulated phone widths.",
+  "exclusions": "No Python or native code changed. No backend mutation behavior changed. Other provider, harness, transcript, and Butler journeys are outside this presentation defect. The selected browser journey runs across desktop Chromium and emulated mobile Chromium and WebKit; physical devices are unavailable.",
   "expected_tests": {
-    "python": 16,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 24,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_mcp_probe.py::test_rebuilt_mcp_tools_reuse_validated_schema_but_recheck_nested_edits",
-    "tests/v3/test_mcp_probe.py::test_concurrent_mcp_turns_check_the_same_new_schema_once",
-    "tests/v3/test_mcp_probe.py::test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name",
-    "tests/v3/test_mcp_probe.py::test_open_world_mcp_is_explicitly_network_capable_and_deny_is_bypassable",
-    "tests/v3/test_tool_catalog.py::test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation",
-    "tests/v3/test_turn_preflight_latency.py::test_tool_ranking_overlaps_knowledge_planning",
-    "tests/v3/test_turn_preflight_latency.py::test_a_failed_preparation_cancels_its_pending_ranking",
-    "tests/v3/test_setup.py::test_status_keeps_event_loop_responsive_while_snapshot_waits",
-    "tests/v3/test_chat_api.py::test_chat_api_completes_streams_and_exposes_durable_history",
-    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches",
-    "tests/v3/test_chat_api.py::test_stopping_provider_chat_cancels_the_core_owned_turn",
-    "tests/v3/test_chat_subagent_lifecycle.py::test_goal_continuation_after_reports_keeps_the_operators_turn_settings"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ProviderGoalPanel.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "provider-goal-lifecycle-core/assistant-real-desktop",
+    "provider-goal-lifecycle-core/assistant-real-compact",
+    "provider-goal-lifecycle-core/assistant-real-chromium-320",
+    "provider-goal-lifecycle-core/assistant-real-chromium-390",
+    "provider-goal-lifecycle-core/assistant-real-chromium-430",
+    "provider-goal-lifecycle-core/assistant-real-webkit-320",
+    "provider-goal-lifecycle-core/assistant-real-webkit-390",
+    "provider-goal-lifecycle-core/assistant-real-webkit-430"
+  ]
 }

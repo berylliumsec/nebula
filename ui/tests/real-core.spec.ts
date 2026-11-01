@@ -1366,6 +1366,18 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     const sessionId = new URL(page.url()).searchParams.get("session")!;
     const railGoal = page.getByRole("region", { name: "Goal", exact: true });
     const goalPanel = page.getByRole("region", { name: "Conversation goal" });
+    const expectGoalEditorInView = async () => {
+      const objective = goalPanel.getByRole("textbox", { name: "Objective" });
+      await expect(objective).toBeVisible();
+      await expect.poll(() => objective.evaluate(element => {
+        const viewport = element.closest(".chat-composer-context");
+        if (!viewport) return false;
+        const field = element.getBoundingClientRect();
+        const visible = viewport.getBoundingClientRect();
+        return field.top >= visible.top && field.bottom <= visible.bottom;
+      })).toBe(true);
+      await expect(objective).toBeFocused();
+    };
     let goalObjective = "Prove goal-first conversation lifecycle";
     const openFullGoal = async () => {
       const reveal = railGoal.getByRole("button", { name: "View full goal and evidence gates" });
@@ -1384,7 +1396,9 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await openFullGoal();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("draft");
     await page.getByRole("button", { name: "Edit goal" }).click();
+    await expectGoalEditorInView();
     await page.getByRole("textbox", { name: "Objective" }).fill("Prove editable goal lifecycle");
+    await expect(page.getByRole("toolbar", { name: "Selected text actions" })).toHaveCount(0);
     await page.getByRole("button", { name: "Save changes" }).click();
     goalObjective = "Prove editable goal lifecycle";
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("Prove editable goal lifecycle");
@@ -1406,6 +1420,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(composer).toHaveValue("");
     await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Edit goal" }).click();
+    await expectGoalEditorInView();
     await page.getByRole("textbox", { name: "Completion criteria" }).fill("The first turn is linked\nA running goal edit is durable");
     const resumeInstruction = "Check the saved evidence first, then complete the remaining work.";
     await page.getByRole("textbox", { name: "Resume instruction" }).fill(resumeInstruction);
