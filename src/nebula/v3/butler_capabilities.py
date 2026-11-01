@@ -71,6 +71,9 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.set_project_scope",
         "nebula.settings.headless_session",
         "nebula.chats.export",
+        "nebula.storage.enroll",
+        "nebula.storage.rotate",
+        "nebula.storage.revoke",
         "nebula.workspace.download_file",
         "nebula.library.add",
         "nebula.library.download",
@@ -165,6 +168,10 @@ _CATEGORIES = (
         "id": "settings",
         "description": "Project and next-turn Assistant settings, model choices, and device actions",
     },
+    {
+        "id": "storage",
+        "description": "Selected-project storage source discovery and requesting-browser enrollment, token rotation, and revocation",
+    },
     {"id": "help", "description": "Source-linked Nebula help and live project context"},
     {
         "id": "navigate",
@@ -251,6 +258,7 @@ class ButlerCapabilities:
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
             from .butler_reports import ButlerReports
+            from .butler_storage import ButlerStorage
             from .butler_terminal import ButlerTerminal
             from .butler_workspace import ButlerWorkspace
 
@@ -286,6 +294,12 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerReports(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerStorage(store, project_id).actions()
                 }
             )
             if container_terminals is not None:

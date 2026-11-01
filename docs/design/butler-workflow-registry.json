@@ -710,22 +710,77 @@
     },
     {
       "id": "storage.enrollment",
-      "entry_point": "Storage settings: enroll, rotate or revoke a source",
+      "entry_point": "Butler or Storage settings: open enrollment on the requesting device",
       "ui_calls": [
         "ui/src/components/StorageIntegrations.tsx::createStorageSource",
-        "ui/src/components/StorageIntegrations.tsx::rotateStorageSource",
-        "ui/src/components/StorageIntegrations.tsx::revokeStorageSource"
+        "ui/src/components/StorageIntegrations.tsx::listHarnesses",
+        "ui/src/components/StorageIntegrations.tsx::storageDashboard"
       ],
       "core_owner": "Storage integration service and source revision",
       "butler": {
-        "discover": "nebula.settings.catalog",
-        "read": "nebula.settings.read (nonsecret settings only)",
-        "change": "missing: specialized requesting-device handoff"
+        "discover": "nebula.storage.sources",
+        "read": "nebula.storage.source",
+        "change": "nebula.storage.enroll"
       },
-      "authority": "Requesting device handles credentials, one-time webhook token and confirmation; Core enforces revision and source policy",
-      "observed_result_test": "missing: Butler handoff and LAN enrollment/rotation regression",
-      "result": "Saved source status is read from Core; one-time value stays on requesting device",
-      "status": "device_handoff"
+      "authority": "Selected project; requesting device chooses runtime and callbacks, completes the form and keeps the one-time token",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser",
+      "result": "Butler opens the form without claiming a source was saved; the existing form shows any issued token only to that device",
+      "status": "supported"
+    },
+    {
+      "id": "storage.rotation",
+      "entry_point": "Butler or Storage settings: rotate one selected source token",
+      "ui_calls": [
+        "ui/src/components/StorageIntegrations.tsx::rotateStorageSource",
+        "ui/src/components/butlerStorageAction.ts::rotateStorageSource",
+        "ui/src/components/butlerStorageAction.ts::storageDashboard"
+      ],
+      "core_owner": "Storage integration service, source revision and token digest",
+      "butler": {
+        "discover": "nebula.storage.sources",
+        "read": "nebula.storage.source",
+        "change": "nebula.storage.rotate"
+      },
+      "authority": "Selected project, exact source and revision, requesting-browser confirmation and one-time token display",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser",
+      "result": "Core rejects the old token and readback confirms the new revision; the new token stays in browser memory",
+      "status": "supported"
+    },
+    {
+      "id": "storage.revocation",
+      "entry_point": "Butler or Storage settings: revoke one selected source token",
+      "ui_calls": [
+        "ui/src/components/StorageIntegrations.tsx::revokeStorageSource",
+        "ui/src/components/butlerStorageAction.ts::revokeStorageSource",
+        "ui/src/components/butlerStorageAction.ts::storageDashboard"
+      ],
+      "core_owner": "Storage integration service, source revision and token digest",
+      "butler": {
+        "discover": "nebula.storage.sources",
+        "read": "nebula.storage.source",
+        "change": "nebula.storage.revoke"
+      },
+      "authority": "Selected project, exact source and revision, requesting-browser destructive confirmation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser",
+      "result": "Core disables reporting and rejects the revoked token after browser confirmation and readback",
+      "status": "supported"
+    },
+    {
+      "id": "storage.configuration",
+      "entry_point": "Storage settings: enable reports or edit reporting and callback settings",
+      "ui_calls": [
+        "ui/src/components/StorageIntegrations.tsx::updateStorageSource"
+      ],
+      "core_owner": "Storage integration service and source revision",
+      "butler": {
+        "discover": "nebula.storage.sources",
+        "read": "nebula.storage.source",
+        "change": "missing: typed reporting and callback configuration handoff"
+      },
+      "authority": "Selected project, exact source revision and browser-owned callback credential reference",
+      "observed_result_test": "missing: Butler configuration and production-LAN readback regression",
+      "result": "Only the existing Storage settings form can change reporting and callbacks",
+      "status": "gap"
     }
   ],
   "ui_api_calls": [
@@ -2039,6 +2094,18 @@
     },
     {
       "key": "ui/src/components/butlerReportTransform.ts::updateReport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerStorageAction.ts::revokeStorageSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerStorageAction.ts::rotateStorageSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerStorageAction.ts::storageDashboard",
       "count": 1
     },
     {

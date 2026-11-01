@@ -89,6 +89,27 @@ describe("settings assistant actions", () => {
     expect(settingClientAction(browser, "other")).toBeUndefined();
     expect(settingClientAction({...browser, receipt: {...browser.receipt, butler_operation: "nebula.work.start_chat"}}, "selected")).toBeUndefined();
   });
+  it("accepts only selected-project storage handoffs with an exact source revision", () => {
+    const sourceId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "storage-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.storage.rotate", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "storage_rotate", project_id: "project",
+          source_id: sourceId, expected_revision: 3, name: "Fixture NAS"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "storage_rotate", projectId: "project",
+      sourceId, expectedRevision: 3, name: "Fixture NAS"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "storage_rotate", project_id: "project", source_id: "../other", expected_revision: 3, name: "Fixture NAS"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "storage_rotate", project_id: "project", source_id: sourceId, expected_revision: 0, name: "Fixture NAS"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.storage.revoke"}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.storage.enroll",
+      client_action: {kind: "storage_enroll", project_id: "project"}}}, "project"))
+      .toEqual({kind: "storage_enroll", projectId: "project"});
+  });
   it("accepts only scoped, typed project lifecycle handoffs", () => {
     const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
     const event: ChatStreamEvent = {

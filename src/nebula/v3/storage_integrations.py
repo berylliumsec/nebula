@@ -116,6 +116,10 @@ class StorageSourcePatch(NebulaModel):
     expected_revision: int
 
 
+class StorageSourceRevision(NebulaModel):
+    expected_revision: int = Field(ge=1)
+
+
 class StorageActionApproval(NebulaModel):
     digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -298,14 +302,16 @@ class StorageIntegrationService:
             expected_revision=request.expected_revision,
         )
 
-    def rotate(self, source_id: str) -> tuple[StorageSource, str]:
+    def rotate(
+        self, source_id: str, *, expected_revision: int | None = None
+    ) -> tuple[StorageSource, str]:
         source = self.store.get(StorageSource, source_id)
         raw = secrets.token_urlsafe(36)
         source = self.store.update(
             StorageSource,
             source_id,
             {"token_sha256": hashlib.sha256(raw.encode()).hexdigest()},
-            expected_revision=source.revision,
+            expected_revision=expected_revision or source.revision,
         )
         return source, f"{source.id}.{raw}"
 
@@ -1066,12 +1072,23 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
             raise HTTPException(422, str(exc)) from exc
 
     @router.post("/sources/{source_id}/rotate")
-    async def rotate(source_id: str, _: str = Depends(require_auth)) -> dict[str, Any]:
-        source, token = service.rotate(source_id)
+    async def rotate(
+        source_id: str,
+        body: StorageSourceRevision | None = None,
+        _: str = Depends(require_auth),
+    ) -> dict[str, Any]:
+        source, token = service.rotate(
+            source_id,
+            expected_revision=body.expected_revision if body else None,
+        )
         return {"source": _source_public(source), "token": token}
 
     @router.post("/sources/{source_id}/revoke")
-    async def revoke(source_id: str, _: str = Depends(require_auth)) -> dict[str, Any]:
+    async def revoke(
+        source_id: str,
+        body: StorageSourceRevision | None = None,
+        _: str = Depends(require_auth),
+    ) -> dict[str, Any]:
         source = service.store.get(StorageSource, source_id)
         source = service.store.update(
             StorageSource,
@@ -1080,7 +1097,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
                 "enabled": False,
                 "token_sha256": hashlib.sha256(secrets.token_bytes(48)).hexdigest(),
             },
-            expected_revision=source.revision,
+            expected_revision=body.expected_revision if body else source.revision,
         )
         return _source_public(source)
 

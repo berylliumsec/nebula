@@ -94,10 +94,16 @@ Core checks that revision before saving. The host index must describe the
 selected project folder; removal does not delete the index file. Host consent
 stays on the operator's settings control. Scheduled Butler does not receive
 these Notebook actions.
-Storage source enrollment stays in the visible Storage settings form because its
-webhook token is shown only once. The settings assistant can discover and open
-that form or navigate to the global Storage dashboard; it does not create or
-rotate source tokens through generic Settings API calls. Remote storage actions
+Butler lists selected-project storage sources without token digests or callback
+credential references. Enrollment opens the visible Storage settings form; the
+requesting device chooses a runtime and callbacks, saves the source, and holds
+the one-time webhook token. For an existing source, Butler can prepare rotation
+or revocation at its current revision. The requesting browser confirms the exact
+source, Core fences the revision, and the browser reads the saved status back.
+A rotated token appears only in that browser's temporary panel and never enters
+the model transcript. If the response is uncertain, inspect the source before
+another rotation. Reporting and callback configuration remain in the Storage
+settings form until their typed handoff is implemented. Remote storage actions
 still require a source preview and an authenticated operator approval in the
 Storage interface.
 The headless security session is independent of the visible-browser desktop

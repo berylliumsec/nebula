@@ -192,6 +192,54 @@ def test_enrollment_test_endpoint_and_sender_authorization(tmp_path):
     )
 
 
+def test_source_token_changes_reject_stale_browser_revisions(tmp_path):
+    client, _ = setup(tmp_path)
+    created = enroll(client)
+    source_id = created["source"]["id"]
+    initial_revision = created["source"]["revision"]
+    endpoint = f"/api/v1/storage/sources/{source_id}"
+    rotated = client.post(
+        f"{endpoint}/rotate",
+        headers=AUTH,
+        json={"expected_revision": initial_revision},
+    )
+    assert rotated.status_code == 200, rotated.text
+    current_revision = rotated.json()["source"]["revision"]
+    assert current_revision > initial_revision
+    assert (
+        client.post(
+            f"{endpoint}/rotate",
+            headers=AUTH,
+            json={"expected_revision": initial_revision},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            f"{endpoint}/revoke",
+            headers=AUTH,
+            json={"expected_revision": initial_revision},
+        ).status_code
+        == 409
+    )
+    fresh = {"Authorization": "Bearer " + rotated.json()["token"]}
+    assert (
+        client.post("/api/v1/storage/test", headers=fresh, json=event()).status_code
+        == 200
+    )
+    revoked = client.post(
+        f"{endpoint}/revoke",
+        headers=AUTH,
+        json={"expected_revision": current_revision},
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["enabled"] is False
+    assert (
+        client.post("/api/v1/storage/test", headers=fresh, json=event()).status_code
+        == 401
+    )
+
+
 def test_callback_auth_is_required_and_source_can_be_disabled_after_runtime_fails(
     tmp_path,
 ):

@@ -346,6 +346,19 @@ def test_product_search_finds_butler_device_transcript_export(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_storage_token_handoff(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler rotate or revoke a storage source token on this device?"
+    )
+    assert any(
+        "storage" in str(item["text"]).lower()
+        and "requesting browser" in str(item["text"]).lower()
+        and "token" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

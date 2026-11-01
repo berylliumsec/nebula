@@ -5394,12 +5394,16 @@ export class ApiClient {
     });
   }
 
-  rotateStorageSource(id: string): Promise<{ source: StorageSource; token: string }> {
-    return this.request(`storage/sources/${encodeURIComponent(id)}/rotate`, { method: "POST" });
+  rotateStorageSource(source: StorageSource): Promise<{ source: StorageSource; token: string }> {
+    return this.request(`storage/sources/${encodeURIComponent(source.id)}/rotate`, {
+      method: "POST", body: JSON.stringify({ expected_revision: source.revision }),
+    });
   }
 
-  revokeStorageSource(id: string): Promise<StorageSource> {
-    return this.request(`storage/sources/${encodeURIComponent(id)}/revoke`, { method: "POST" });
+  revokeStorageSource(source: StorageSource): Promise<StorageSource> {
+    return this.request(`storage/sources/${encodeURIComponent(source.id)}/revoke`, {
+      method: "POST", body: JSON.stringify({ expected_revision: source.revision }),
+    });
   }
 
   storageAction(id: string, step: "preview" | "approve" | "reconcile", digest?: string): Promise<StorageAction> {

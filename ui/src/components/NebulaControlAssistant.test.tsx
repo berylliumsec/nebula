@@ -1275,6 +1275,48 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it("shows a rotated storage token only in the requesting browser", async () => {
+    const user = userEvent.setup();
+    const sourceId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const source = {id: sourceId, name: "Fixture NAS", engagement_id: "project", enabled: true,
+      backend: "provider", profile_id: "local", model: "model", revision: 1,
+      reporting_interval_seconds: 900, callback_url: null, callback_credential_ref: null, last_report_at: null};
+    const changed = {...source, revision: 2};
+    const storageDashboard = vi.fn().mockResolvedValueOnce({sources: [source]})
+      .mockResolvedValueOnce({sources: [source]}).mockResolvedValueOnce({sources: [changed]});
+    const rotateStorageSource = vi.fn().mockResolvedValue({source: changed, token: "one-time-secret"});
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: "storage-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.storage.rotate", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "storage_rotate", project_id: "project", source_id: sourceId,
+            expected_revision: 1, name: "Fixture NAS"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {role: "assistant", content: "I asked this browser to rotate the storage token."}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {baseUrl: "/api/v1", getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+        getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, storageDashboard, rotateStorageSource},
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Rotate the NAS token{enter}");
+    expect(await screen.findByRole("heading", {name: "Rotate Fixture NAS's storage token?"})).toBeVisible();
+    expect(rotateStorageSource).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Rotate token"}));
+    const issued = await screen.findByRole("region", {name: "New storage source token"});
+    expect(within(issued).getByLabelText("Source token")).toHaveValue("one-time-secret");
+    expect(within(issued).getByLabelText("Webhook URL")).toHaveValue(`${window.location.origin}/api/v1/storage/events`);
+    expect(screen.getByRole("log", {name: "Butler conversation"})).not.toHaveTextContent("one-time-secret");
+    expect(JSON.stringify(localStorage)).not.toContain("one-time-secret");
+    expect(rotateStorageSource).toHaveBeenCalledWith(source);
+    await user.click(within(issued).getByRole("button", {name: "Done"}));
+    expect(screen.queryByRole("region", {name: "New storage source token"})).not.toBeInTheDocument();
+  });
+
   it("confirms Butler file deletion and verifies the requesting-device download", async () => {
     const user = userEvent.setup();
     const content = "Saved workspace text\n";

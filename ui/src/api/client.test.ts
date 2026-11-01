@@ -9,6 +9,20 @@ vi.mock("../diagnostics", async (importOriginal) => ({
 }));
 
 describe("ApiClient", () => {
+  it("sends the current storage source revision when rotating and revoking a token", async () => {
+    const source = {id: "source/one", revision: 7} as Parameters<ApiClient["rotateStorageSource"]>[0];
+    const rotated = {...source, revision: 8};
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({source: rotated, token: "one-time-secret"}), {status: 200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({...rotated, enabled: false, revision: 9}), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    await client.rotateStorageSource(source);
+    await client.revokeStorageSource(rotated);
+    expect(fetchMock.mock.calls.map(([url, options]) => [url, options?.method, options?.body])).toEqual([
+      ["http://127.0.0.1:8765/api/v1/storage/sources/source%2Fone/rotate", "POST", JSON.stringify({expected_revision: 7})],
+      ["http://127.0.0.1:8765/api/v1/storage/sources/source%2Fone/revoke", "POST", JSON.stringify({expected_revision: 8})],
+    ]);
+  });
   it("sends the last validator on polled reads and treats 304 as unchanged", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 3 }), { status: 200, headers: { ETag: '"state-3"' } }))

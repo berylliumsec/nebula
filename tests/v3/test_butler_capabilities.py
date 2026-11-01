@@ -42,6 +42,7 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessRuntimeOption,
     HarnessSession,
+    StorageSource,
     WorkItem,
     utc_now,
 )
@@ -427,6 +428,104 @@ def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_p
                 },
                 change=True,
             )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
+    store, selected, _, foreign_chat, capabilities = _capabilities(tmp_path)
+    own = store.create(
+        StorageSource(
+            name="Fixture NAS",
+            engagement_id=selected.id,
+            profile_id="runtime",
+            model="model-a",
+            token_sha256="a" * 64,
+            callback_credential_ref="env:STORAGE_CALLBACK_TOKEN",
+        )
+    )
+    foreign = store.create(
+        StorageSource(
+            name="Other source",
+            engagement_id=foreign_chat.engagement_id,
+            profile_id="runtime",
+            model="model-a",
+            token_sha256="b" * 64,
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "storage source token"})
+        assert {
+            "nebula.storage.sources",
+            "nebula.storage.rotate",
+            "nebula.storage.revoke",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.storage.sources", "arguments": {}}, change=False
+        )
+        assert [item["source_id"] for item in listed["sources"]] == [own.id]
+        assert "token" not in str(listed).lower()
+        assert "credential" not in str(listed).lower()
+        with pytest.raises(ValueError, match="selected project"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.storage.source",
+                    "arguments": {"source_id": foreign.id},
+                },
+                change=False,
+            )
+        enrolled = await capabilities.invoke(
+            {"operation": "nebula.storage.enroll", "arguments": {}}, change=True
+        )
+        assert enrolled["client_action"] == {
+            "kind": "storage_enroll",
+            "project_id": selected.id,
+        }
+        for operation, kind in (
+            ("rotate", "storage_rotate"),
+            ("revoke", "storage_revoke"),
+        ):
+            prepared = await capabilities.invoke(
+                {
+                    "operation": f"nebula.storage.{operation}",
+                    "arguments": {
+                        "source_id": own.id,
+                        "expected_revision": own.revision,
+                    },
+                },
+                change=True,
+            )
+            assert prepared["client_action"] == {
+                "kind": kind,
+                "project_id": selected.id,
+                "source_id": own.id,
+                "expected_revision": own.revision,
+                "name": own.name,
+            }
+            assert store.get(StorageSource, own.id).revision == own.revision
+            with pytest.raises(ValueError, match="changed"):
+                await capabilities.invoke(
+                    {
+                        "operation": f"nebula.storage.{operation}",
+                        "arguments": {
+                            "source_id": own.id,
+                            "expected_revision": own.revision + 1,
+                        },
+                    },
+                    change=True,
+                )
+            with pytest.raises(ValueError, match="selected project"):
+                await capabilities.invoke(
+                    {
+                        "operation": f"nebula.storage.{operation}",
+                        "arguments": {
+                            "source_id": foreign.id,
+                            "expected_revision": foreign.revision,
+                        },
+                    },
+                    change=True,
+                )
 
     asyncio.run(scenario())
 

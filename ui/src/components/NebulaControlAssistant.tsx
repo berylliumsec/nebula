@@ -31,6 +31,7 @@ import { ButlerOversight } from "./ButlerOversight";
 import { AuthenticatedChatImage } from "./AuthenticatedChatImage";
 import { HostFolderPicker } from "./HostFolderPicker";
 import { applyButlerTerminalStop } from "./butlerTerminalStop";
+import { applyButlerStorageAction, type IssuedStorageToken } from "./butlerStorageAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
@@ -99,6 +100,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [pendingImages, setPendingImages] = useState<ChatContentBlock[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [pendingLibraryAdd, setPendingLibraryAdd] = useState<Extract<SettingClientAction, {kind: "library_add"}>>();
+  const [issuedStorageToken, setIssuedStorageToken] = useState<IssuedStorageToken>();
   const [uploadingLibrary, setUploadingLibrary] = useState(false);
   const [pendingEvidenceUpload, setPendingEvidenceUpload] = useState<(Extract<SettingClientAction, {kind: "evidence_upload"}> & {sourceMessageId?: string})>();
   const [pendingWorkspaceUpload, setPendingWorkspaceUpload] = useState<Extract<SettingClientAction, {kind: "workspace_upload"}>>();
@@ -252,6 +254,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setPendingImages([]);
     setUploadingImage(false);
     setPendingLibraryAdd(undefined);
+    setIssuedStorageToken(undefined);
     setPendingEvidenceUpload(undefined);
     setUploadingLibrary(false);
     workspaceUploadAbort.current?.abort();
@@ -1648,6 +1651,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "evidence_upload") return applyEvidenceUpload(action);
     if (action.kind === "evidence_download") return applyEvidenceDownload(action);
     if (action.kind === "chat_export") return applyChatExport(action);
+    if (action.kind === "storage_enroll" || action.kind === "storage_rotate" || action.kind === "storage_revoke") {
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
+        throw new Error("Reconnect to Core and select the original project before changing its storage sources.");
+      }
+      const result = await applyButlerStorageAction(api, action, () => activeImageProject.current,
+        (request) => confirm(request), () => openSelectedSetting(settingCatalog.find((item) => item.id === "settings.storage")!));
+      if (result.issued) setIssuedStorageToken(result.issued);
+      else if (action.kind === "storage_revoke") setIssuedStorageToken(undefined);
+      return result.message;
+    }
     if (action.kind === "workspace_delete") return applyWorkspaceDelete(action);
     if (action.kind === "workspace_download") return applyWorkspaceDownload(action);
     if (action.kind === "workspace_upload") return applyWorkspaceUpload(action);
@@ -2333,6 +2346,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     </section>}
     {pendingImages.length > 0 && <div className={styles.imageTray} role="list" aria-label="Butler image attachments">{pendingImages.map((block, index) => <div className={styles.imageItem} role="listitem" key={`${block.artifactId}-${index}`}>{api && <AuthenticatedChatImage api={api} block={block} className={styles.attachedImage} />}<span title={block.alt}>{block.alt}</span><button className="icon-button subtle" type="button" aria-label={`Remove ${block.alt ?? "image"}`} disabled={activeBusy} onClick={() => setPendingImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}><X size={16} /></button></div>)}</div>}
     {uploadingImage && <p className={styles.imageStatus} role="status">Attaching image…</p>}
+    {issuedStorageToken && issuedStorageToken.projectId === engagement?.id && <section className={`${styles.libraryHandoff} ${styles.storageToken}`} aria-label="New storage source token">
+      <div><strong>Save {issuedStorageToken.name}'s new token now</strong><small>Shown once on this device. Update the sender before its next report.</small></div>
+      <label>Webhook URL<input id="butler-storage-webhook" readOnly value={issuedStorageToken.webhookUrl} onFocus={(event) => event.target.select()} /></label>
+      <label>Source token<input id="butler-storage-token" readOnly value={issuedStorageToken.token} onFocus={(event) => event.target.select()} /></label>
+      <div className={styles.libraryHandoffActions}>
+        <button className="button quiet" type="button" onClick={() => void (async () => {
+          try { await navigator.clipboard.writeText(issuedStorageToken.token); }
+          catch {
+            const input = document.getElementById("butler-storage-token") as HTMLInputElement | null;
+            input?.focus(); input?.select();
+          }
+        })()}>Copy token</button>
+        <button className="button quiet" type="button" onClick={() => setIssuedStorageToken(undefined)}>Done</button>
+      </div>
+    </section>}
     {pendingLibraryAdd?.projectId === engagement?.id && <section className={styles.libraryHandoff} aria-label="Add to shared Library">
       <div><strong>Add to shared Library</strong><small>Choose a file from this device. Core will make it available to every project after confirmation.</small></div>
       <input ref={libraryInput} type="file" hidden accept={ACCEPTED_LIBRARY_FILES} aria-label="Choose shared Library file" onChange={(event) => void uploadLibraryFile(event)} />

@@ -19,6 +19,8 @@ export type SettingClientAction =
   | { kind: "project_rename"; projectId: string; expectedRevision: number; oldName: string; name: string }
   | { kind: "project_archive" | "project_restore" | "project_delete"; projectId: string; expectedRevision: number; name: string }
   | { kind: "chat_export"; projectId: string; sessionId: string; expectedRevision: number }
+  | { kind: "storage_enroll"; projectId: string }
+  | { kind: "storage_rotate" | "storage_revoke"; projectId: string; sourceId: string; expectedRevision: number; name: string }
   | { kind: "workspace_delete"; projectId: string; path: string; expectedSha256: string }
   | { kind: "workspace_download"; projectId: string; path: string; expectedSha256: string; size: number }
   | { kind: "workspace_upload"; projectId: string; directory: string; expectedDirectoryIdentity: string }
@@ -115,6 +117,20 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    if (operation === "nebula.storage.enroll" && value.kind === "storage_enroll") {
+      return {kind: "storage_enroll", projectId};
+    }
+    const storageKind = operation === "nebula.storage.rotate" ? "storage_rotate"
+      : operation === "nebula.storage.revoke" ? "storage_revoke" : undefined;
+    if (storageKind && value.kind === storageKind
+        && typeof value.source_id === "string" && uuidPattern.test(value.source_id)
+        && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+        && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 200) {
+      return {kind: storageKind, projectId, sourceId: value.source_id,
+        expectedRevision: Number(value.expected_revision), name: value.name};
+    }
+  }
   if (projectAction && operation === "nebula.terminal.stop" && value.kind === "terminal_stop"
       && typeof projectId === "string" && value.project_id === projectId
       && typeof value.session_id === "string" && uuidPattern.test(value.session_id)

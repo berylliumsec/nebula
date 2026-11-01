@@ -100,7 +100,7 @@ export function StorageIntegrations() {
   const rotate = async (source: StorageSource) => {
     if (!api) return;
     setBusy(true); setError("");
-    try { const result = await api.rotateStorageSource(source.id); setIssued({ ...result, webhook_url: webhook }); await refresh();
+    try { const result = await api.rotateStorageSource(source); setIssued({ ...result, webhook_url: webhook }); await refresh();
       setMessage(`Token rotated for ${source.name}. Update the sender before its next report.`); }
     catch (caught) {
       logCaughtDiagnostic("interface.storage.token_rotation_failed", "The storage source token could not be rotated.", caught, "storage-settings");
@@ -111,7 +111,7 @@ export function StorageIntegrations() {
   const revoke = async (source: StorageSource) => {
     if (!api || !window.confirm(`Revoke ${source.name}'s token and disable its reports?`)) return;
     setBusy(true); setError("");
-    try { await api.revokeStorageSource(source.id); await refresh(); setMessage(`${source.name} was revoked.`); }
+    try { await api.revokeStorageSource(source); await refresh(); setMessage(`${source.name} was revoked.`); }
     catch (caught) {
       logCaughtDiagnostic("interface.storage.source_revoke_failed", "The storage source could not be revoked.", caught, "storage-settings");
       setError(String(caught));

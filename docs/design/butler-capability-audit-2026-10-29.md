@@ -470,10 +470,10 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 39
-reviewed actions. Its source inventory contains 527 distinct `api` call
-signatures in production UI TypeScript, of which 88 are linked to reviewed
-actions; 439 still require
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 42
+reviewed actions. Its source inventory contains 530 distinct `api` call
+signatures in production UI TypeScript, of which 94 are linked to reviewed
+actions; 436 still require
 action-level review. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions;
 Butler can page and apply those actions to exact chats one at a time. Direct `api.request`
@@ -499,8 +499,11 @@ tool catalog.
    Notebook file index, and refreshes the selected project. Generic Engagement
    PATCH/PUT rejects path changes. Shared admission across multiple Core server
    processes remains outside the standard single-process CLI contract.
-3. Add specialized device and administration handoffs for local file selection, pairing, storage
-   enrollment, credentials, release updates and service state.
+3. Add specialized device and administration handoffs for local file selection, pairing,
+   credentials, release updates and service state. Storage enrollment now opens
+   the requesting-device form, while token rotation and revocation use exact
+   revisions, confirmation and Core readback. Reporting and callback editing
+   still need a typed handoff.
    Keep one-time values on the requesting device and preserve existing
    confirmations and recovery paths.
 4. Extend the selected-project browser journey and real-Core regression tests

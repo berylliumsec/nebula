@@ -104,11 +104,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.storage",
     label: "Storage sources",
-    description: "Connect storage systems, reporting intervals, webhook tokens, and optional callbacks",
+    description: "Enroll storage sources, rotate or revoke webhook tokens, and edit reporting intervals and optional callbacks",
     category: "Integrations",
     scope: "Workspace",
     target: "storage-integration-settings",
-    keywords: ["storage", "storage integration", "storage source", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
+    keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
   },
   {
     id: "settings.follow-up",

@@ -702,6 +702,125 @@ test("stabilization storage public source reaches dashboard chat and approved re
   }
 });
 
+test("assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  const prompts = ["Open source enrollment", "Rotate NAS token", "Revoke NAS token"];
+  let sourceId = "";
+  let sourceRevision = 1;
+  let issuedToken = "";
+  let modelSawToken = false;
+  const stub = await startLocalModelStub({responseContent: "The requesting browser handles this storage-source action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const content = String(messages[lastUser]?.content ?? "");
+    const prompt = prompts.find(value => content === value || content.startsWith(`${value}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`));
+    if (!prompt) return undefined;
+    if (issuedToken && JSON.stringify(messages).includes(issuedToken)) modelSawToken = true;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    const operation = prompt === prompts[0] ? "nebula.storage.enroll" : prompt === prompts[1] ? "nebula.storage.rotate" : "nebula.storage.revoke";
+    const calls = [
+      {name: "nebula_capabilities_search", arguments: {query: "storage source enrollment token rotation revocation"}},
+      {name: "nebula_capabilities_describe", arguments: {operation: "nebula.storage.sources"}},
+      {name: "nebula_capabilities_read", arguments: {operation: "nebula.storage.sources", arguments: {}}},
+      {name: "nebula_capabilities_describe", arguments: {operation}},
+      {name: "nebula_capabilities_change", arguments: {operation, arguments: operation === "nebula.storage.enroll"
+        ? {} : {source_id: sourceId, expected_revision: sourceRevision}}},
+    ];
+    return calls[replies];
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Butler storage fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Butler storage model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const enrolled = await api.post("storage/sources", {data: {
+      name: "Fixture NAS", engagement_id: projectId, backend: "provider", profile_id: provider.id,
+      model: "security-model", reporting_interval_seconds: 900,
+    }});
+    expect(enrolled.ok(), await enrolled.text()).toBe(true);
+    const created = await enrolled.json() as {source: {id: string; revision: number}; token: string};
+    sourceId = created.source.id;
+    sourceRevision = created.source.revision;
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Butler storage LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const send = async (prompt: string) => {
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+    };
+    await send(prompts[0]);
+    await expect(page.locator(".storage-settings").getByRole("heading", {name: "Storage"})).toBeVisible({timeout: 45_000});
+    await expect(page.locator(".storage-source-form").getByRole("button", {name: "Add disabled source"})).toBeVisible();
+    expect((await (await api.get("storage")).json() as {sources: unknown[]}).sources).toHaveLength(1);
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await openNebulaAssistantFromShell(page);
+    await send(prompts[1]);
+    const rotation = page.getByRole("dialog", {name: "Rotate Fixture NAS's storage token?"});
+    await expect(rotation).toBeVisible({timeout: 45_000});
+    await rotation.getByRole("button", {name: "Cancel"}).click();
+    await expect(assistant.getByText(/token was not rotated/)).toBeVisible();
+    expect((await (await api.get("storage")).json() as {sources: Array<{revision: number}>}).sources[0].revision).toBe(sourceRevision);
+    await send(prompts[1]);
+    await expect(rotation).toBeVisible({timeout: 45_000});
+    await rotation.getByRole("button", {name: "Rotate token"}).click();
+    const issued = assistant.getByRole("region", {name: "New storage source token"});
+    await expect(issued.getByLabel("Source token")).toBeVisible();
+    const newToken = await issued.getByLabel("Source token").inputValue();
+    issuedToken = newToken;
+    expect(newToken).not.toBe(created.token);
+    expect(await issued.getByLabel("Webhook URL").inputValue()).toBe(`${core.origin}/api/v1/storage/events`);
+    await expect(assistant.getByText(/Rotated Fixture NAS's token in Core/)).toBeVisible();
+    expect(await assistant.getByRole("log", {name: "Butler conversation"}).textContent()).not.toContain(newToken);
+    const observation = {schema_version: 1, event_id: "butler-storage-test", observed_at: new Date().toISOString(),
+      kind: "snapshot", device: {id: "nas", label: "NAS"}, volume: {id: "data", label: "Data", path: "/data"},
+      state: "healthy", free_bytes: 80, total_bytes: 100};
+    const sender = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`});
+    try {
+      expect((await sender.post("storage/test", {headers: {Authorization: `Bearer ${created.token}`}, data: observation})).status()).toBe(401);
+      expect((await sender.post("storage/test", {headers: {Authorization: `Bearer ${newToken}`}, data: observation})).status()).toBe(200);
+      await issued.getByRole("button", {name: "Done"}).click();
+      await page.reload();
+      await openNebulaAssistantFromShell(page);
+      await expect(assistant.getByRole("region", {name: "New storage source token"})).toHaveCount(0);
+      sourceRevision = (await (await api.get("storage")).json() as {sources: Array<{revision: number}>}).sources[0].revision;
+      await send(prompts[2]);
+      const revocation = page.getByRole("dialog", {name: "Revoke Fixture NAS's storage token?"});
+      await expect(revocation).toBeVisible({timeout: 45_000});
+      await revocation.getByRole("button", {name: "Revoke token"}).click();
+      await expect(assistant.getByText(/confirmed that Core disabled its reports/)).toBeVisible();
+      expect((await sender.post("storage/test", {headers: {Authorization: `Bearer ${newToken}`}, data: observation})).status()).toBe(401);
+      expect((await (await api.get("storage")).json() as {sources: Array<{enabled: boolean}>}).sources[0].enabled).toBe(false);
+    } finally { await sender.dispose(); }
+    expect(modelSawToken).toBe(false);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-storage-lan", {body: JSON.stringify({origin: core.origin, build: "production",
+      project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      result: "Enrollment form opened without a write; cancelled rotation retained source; confirmed rotation kept token in requesting browser; old token rejected; revocation disabled source"}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 interface BrowserPentestAuditFixture {
   core: RealCore;
   api: APIRequestContext;
