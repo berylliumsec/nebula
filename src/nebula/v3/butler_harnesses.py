@@ -12,6 +12,7 @@ from .domain import (
     RiskClass,
 )
 from .storage import NebulaStore
+from .read_workers import read_in_worker
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 
@@ -138,8 +139,13 @@ class ButlerHarnesses:
         for name, description, schema, risk, handler in operations:
 
             async def run(
-                arguments: dict[str, Any], *, selected_handler: Any = handler
+                arguments: dict[str, Any],
+                *,
+                selected_handler: Any = handler,
+                selected_read: bool = risk == RiskClass.LOCAL_READ,
             ) -> dict[str, Any]:
+                if selected_read:
+                    return await read_in_worker(selected_handler, arguments)
                 return selected_handler(arguments)
 
             result.append(

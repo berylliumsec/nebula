@@ -6,6 +6,7 @@ from typing import Any
 
 from .domain import Engagement, EngagementStatus, KnowledgeSource, RiskClass
 from .storage import NebulaStore
+from .read_workers import read_in_worker
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 
@@ -157,7 +158,12 @@ class ButlerSources:
                 *,
                 selected: str = name.rsplit(".", 1)[-1],
                 selected_handler: Any = handler,
+                selected_read: bool = read_only,
             ) -> dict[str, Any]:
+                if selected_read:
+                    if selected_handler:
+                        return await read_in_worker(selected_handler, arguments)
+                    return await read_in_worker(self.prepare, selected, arguments)
                 return (
                     selected_handler(arguments)
                     if selected_handler

@@ -65,6 +65,7 @@ from .domain import (
     ChatGoal,
     ChatMessage,
     ChatQueue,
+    ChatSession,
     ChatTurn,
     ENTITY_MODEL_BY_KIND,
     Engagement,
@@ -75,7 +76,9 @@ from .domain import (
     ToolCall,
     ToolCallOrigin,
     RunEvent,
+    ScopePolicy,
     entity_engagement_id,
+    message_is_replaced,
     utc_now,
 )
 
@@ -823,6 +826,79 @@ class NebulaStore:
             return [
                 model.model_validate(row.payload) for row in session.scalars(statement)
             ]
+
+    def recent_chat_messages(
+        self, session_id: str, *, limit: int = 8
+    ) -> list[ChatMessage]:
+        """Read an active transcript tail without materializing its full history.
+
+        Sequence is authoritative even for imported/backdated messages. Stream a
+        small batch at a time so retracted messages retain their existing Python
+        truthiness semantics without constructing every historical message.
+        """
+
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        statement = (
+            select(EntityRow)
+            .where(
+                EntityRow.kind == ChatMessage.entity_kind,
+                EntityRow.chat_session_id == session_id,
+            )
+            .order_by(
+                EntityRow.payload["sequence"].as_integer().desc(),
+                EntityRow.created_at.desc(),
+                EntityRow.id.desc(),
+            )
+            .execution_options(yield_per=16)
+        )
+        messages = []
+        with self.database.session() as session:
+            for row in session.scalars(statement):
+                message = _row_to_entity(row, ChatMessage)
+                if not message_is_replaced(message):
+                    messages.append(message)
+                    if len(messages) == limit:
+                        break
+        messages.reverse()
+        return messages
+
+    def expired_temporary_chat_ids(self, before: datetime) -> list[str]:
+        """Select expired detached popups without loading ordinary/side chats."""
+
+        statement = (
+            select(EntityRow.id)
+            .where(
+                EntityRow.kind == ChatSession.entity_kind,
+                EntityRow.payload["metadata"]["temporary_assistant"]
+                .as_boolean()
+                .is_(True),
+                func.coalesce(
+                    EntityRow.payload["metadata"]["side_chat"].as_boolean(), False
+                ).is_(False),
+                EntityRow.updated_at < before,
+            )
+            .order_by(*_entity_order(False))
+        )
+        with self.database.session() as session:
+            return list(session.scalars(statement))
+
+    def web_search_project_count(self) -> int:
+        """Count cloud-enabled search policies without hydrating their envelopes."""
+
+        statement = (
+            select(func.count())
+            .select_from(EntityRow)
+            .where(
+                EntityRow.kind == ScopePolicy.entity_kind,
+                EntityRow.payload["web_search"].as_boolean().is_(True),
+                func.coalesce(EntityRow.payload["local_only"].as_boolean(), False).is_(
+                    False
+                ),
+            )
+        )
+        with self.database.session() as session:
+            return int(session.scalar(statement) or 0)
 
     def butler_recovery_session_ids(self, session_ids: Iterable[str]) -> set[str]:
         """Find older Butler recovery chats without scanning every project goal."""

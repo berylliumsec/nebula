@@ -83,6 +83,7 @@ from .domain import (
 from .harnesses import HarnessRuntimeService, _session_native_capabilities
 from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
+from .read_workers import read_in_worker
 from .settings_assistant_tools import model_choices
 from .storage import NebulaStore, NotFoundError
 from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService, WorkSettingPatch
@@ -1553,7 +1554,7 @@ class ControlAssistantWork:
 
     def chat_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
         session = self._chat(project_id, session_id)
-        messages = self.chat.session_messages(session.id)
+        messages = self.store.recent_chat_messages(session.id)
         pending = self.chat.pending_turn(session.id)
         queue = self.queue.get(session.id)
         harness_turns = self.store.find_entities(
@@ -3876,7 +3877,9 @@ async def dispatch_work_tool(
     work: ControlAssistantWork, project_id: str, name: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
     if name == "nebula.work.catalog":
-        return work.catalog(project_id, arguments.get("operation"))
+        return await read_in_worker(
+            work.catalog, project_id, arguments.get("operation")
+        )
     if name == "nebula.work.manage":
         operation = _text(arguments.get("operation"), "operation", 200)
         if operation not in _MANAGED_WORK_NAMES:
@@ -3886,25 +3889,29 @@ async def dispatch_work_tool(
             raise ValueError("provide arguments for the managed operation")
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
-        return work.overview(project_id)
+        return await read_in_worker(work.overview, project_id)
     if name == "nebula.work.browser_sessions":
-        return work.browser_sessions(project_id, arguments.get("offset", 0))
+        return await read_in_worker(
+            work.browser_sessions, project_id, arguments.get("offset", 0)
+        )
     if name == "nebula.work.chats":
-        return work.chats(project_id, arguments.get("offset", 0))
+        return await read_in_worker(work.chats, project_id, arguments.get("offset", 0))
     if name == "nebula.work.chat_messages":
-        return work.chat_messages(project_id, arguments)
+        return await read_in_worker(work.chat_messages, project_id, arguments)
     if name == "nebula.work.work_items":
-        return work.work_items(project_id, arguments.get("offset", 0))
+        return await read_in_worker(
+            work.work_items, project_id, arguments.get("offset", 0)
+        )
     if name == "nebula.work.work_item":
-        return work.work_item(project_id, arguments)
+        return await read_in_worker(work.work_item, project_id, arguments)
     if name == "nebula.work.work_setting":
-        return work.work_setting(project_id)
+        return await read_in_worker(work.work_setting, project_id)
     if name == "nebula.work.set_work_setting":
         return await work.set_work_setting(project_id, arguments)
     if name == "nebula.work.work_updates":
-        return work.work_updates(project_id, arguments)
+        return await read_in_worker(work.work_updates, project_id, arguments)
     if name == "nebula.work.work_update":
-        return work.work_update(project_id, arguments)
+        return await read_in_worker(work.work_update, project_id, arguments)
     if name == "nebula.work.create_work_item":
         return await work.create_work_item(project_id, arguments)
     if name == "nebula.work.update_work_item":
@@ -3914,13 +3921,19 @@ async def dispatch_work_tool(
     if name == "nebula.work.harness_quota":
         return await work.harness_quota(project_id, arguments)
     if name == "nebula.work.chat":
-        return work.chat_detail(project_id, arguments.get("session_id"))
+        return await read_in_worker(
+            work.chat_detail, project_id, arguments.get("session_id")
+        )
     if name == "nebula.work.timeline":
-        return work.timeline.read(project_id, arguments)
+        return await read_in_worker(work.timeline.read, project_id, arguments)
     if name == "nebula.work.goals":
-        return work.goals_overview(project_id, arguments.get("offset", 0))
+        return await read_in_worker(
+            work.goals_overview, project_id, arguments.get("offset", 0)
+        )
     if name == "nebula.work.goal":
-        return work.goal_detail(project_id, arguments.get("session_id"))
+        return await read_in_worker(
+            work.goal_detail, project_id, arguments.get("session_id")
+        )
     if name == "nebula.work.create_goal":
         return await work.create_goal(project_id, arguments)
     if name == "nebula.work.create_goal_conversation":
@@ -3934,31 +3947,39 @@ async def dispatch_work_tool(
     if name == "nebula.work.create_goal_child":
         return await work.create_goal_child(project_id, arguments)
     if name == "nebula.work.subagents":
-        return work.subagents_overview(project_id, arguments)
+        return await read_in_worker(work.subagents_overview, project_id, arguments)
     if name == "nebula.work.subagent":
-        return work.subagent_detail(project_id, arguments.get("subagent_id"))
+        return await read_in_worker(
+            work.subagent_detail, project_id, arguments.get("subagent_id")
+        )
     if name == "nebula.work.stop_subagent":
         return await work.stop_subagent(project_id, arguments.get("subagent_id"))
     if name == "nebula.work.stop_subagents":
         return await work.stop_subagents(project_id, arguments.get("session_id"))
     if name == "nebula.work.native_subagent":
-        return work.native_subagent_detail(project_id, arguments)
+        return await read_in_worker(work.native_subagent_detail, project_id, arguments)
     if name == "nebula.work.stop_native_subagent":
         return await work.stop_native_subagent(project_id, arguments)
     if name == "nebula.work.queue":
-        return work.queue_detail(project_id, arguments.get("session_id"))
+        return await read_in_worker(
+            work.queue_detail, project_id, arguments.get("session_id")
+        )
     if name == "nebula.work.queue_action":
         return work.queue_action(project_id, arguments)
     if name == "nebula.work.schedule":
-        return work.schedule_detail(project_id, arguments.get("session_id"))
+        return await read_in_worker(
+            work.schedule_detail, project_id, arguments.get("session_id")
+        )
     if name == "nebula.work.create_schedule":
         return await work.create_schedule(project_id, arguments)
     if name == "nebula.work.set_schedule":
         return await work.set_schedule(project_id, arguments)
     if name == "nebula.work.chat_settings":
-        return work.chat_settings(project_id, arguments.get("session_id"))
+        return await read_in_worker(
+            work.chat_settings, project_id, arguments.get("session_id")
+        )
     if name == "nebula.work.assistant_defaults":
-        return work.assistant_defaults(project_id)
+        return await read_in_worker(work.assistant_defaults, project_id)
     if name == "nebula.work.set_assistant_defaults":
         return work.set_assistant_defaults(project_id, arguments)
     if name == "nebula.work.set_chat_settings":
@@ -3966,7 +3987,9 @@ async def dispatch_work_tool(
     if name == "nebula.work.require_plan":
         return work.require_plan(project_id, arguments)
     if name == "nebula.work.mission":
-        return work.mission_detail(project_id, arguments.get("run_id"))
+        return await read_in_worker(
+            work.mission_detail, project_id, arguments.get("run_id")
+        )
     if name == "nebula.work.start_chat":
         return await work.start_chat(project_id, arguments)
     if name == "nebula.work.message_chat":
@@ -3982,13 +4005,17 @@ async def dispatch_work_tool(
     if name == "nebula.work.stop_mission":
         return await work.stop_mission(project_id, arguments.get("run_id"))
     if name == "nebula.work.attention":
-        return work.attention(project_id)
+        return await read_in_worker(work.attention, project_id)
     if name == "nebula.work.approval":
-        return work.approval_detail(project_id, arguments.get("action_id"))
+        return await read_in_worker(
+            work.approval_detail, project_id, arguments.get("action_id")
+        )
     if name == "nebula.work.decide_approval":
         return await work.decide_approval(project_id, arguments)
     if name == "nebula.work.question":
-        return work.question_detail(project_id, arguments.get("action_id"))
+        return await read_in_worker(
+            work.question_detail, project_id, arguments.get("action_id")
+        )
     if name == "nebula.work.answer_question":
         return await work.answer_question(project_id, arguments)
     if name == "nebula.work.update_chat":

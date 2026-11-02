@@ -215,6 +215,7 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database
+from .read_workers import read_in_worker
 from .work import (
     WorkAgentActivity,
     WorkCheckIn,
@@ -8318,7 +8319,7 @@ def create_app(
         tags=["engagements"],
         dependencies=[Depends(require_auth)],
     )
-    async def engagement_scope(engagement_id: str) -> ScopePolicy:
+    def engagement_scope(engagement_id: str) -> ScopePolicy:
         engagement = store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
             return ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
@@ -8331,16 +8332,16 @@ def create_app(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope/tool-candidates",
         response_model=list[ScopeToolCandidate],
         tags=["engagements"],
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_entity_listing_capacity)],
     )
-    async def engagement_scope_tool_candidates(
+    def engagement_scope_tool_candidates(
         engagement_id: str,
     ) -> list[ScopeToolCandidate]:
         """Tools an operator can pin to every request, from probed MCP servers."""
 
-        scope = await engagement_scope(engagement_id)
+        scope = engagement_scope(engagement_id)
         candidates: list[ScopeToolCandidate] = []
-        for profile in store.list_entities(McpServerProfile, limit=1000):
+        for profile in store.iter_readable_entities(McpServerProfile):
             if not profile.enabled or profile.capabilities.checked_at is None:
                 continue
             if (
@@ -8593,13 +8594,7 @@ def create_app(
         return tool_platform.search_runtime
 
     async def web_search_status() -> WebSearchStatus:
-        projects_using = 0
-        offset = 0
-        while page := store.list_entities(ScopePolicy, offset=offset, limit=1_000):
-            projects_using += sum(
-                1 for scope in page if scope.web_search and not scope.local_only
-            )
-            offset += len(page)
+        projects_using = await read_in_worker(store.web_search_project_count)
         settings = await asyncio.to_thread(load_web_search_settings, store)
         if tool_platform is None:
             return WebSearchStatus(
