@@ -61,14 +61,33 @@ npm --prefix ui run build
 ```
 
 Browser downloads from `cdn.playwright.dev` returned HTTP 403 `Domain forbidden`.
-No managed Chromium or WebKit binary was available. One canonical journey is
-being diagnosed with installed system Chromium 154 at the permanent desktop
-1440-by-900 viewport, using only an uncommitted temporary executable override.
-The first attempt exposed missing origin label/hash metadata in the new inert
-fixture; a fresh independent diagnosis confirmed the fixture mismatch and the
-fields were supplied without weakening Core validation. The rerun is pending.
-This diagnostic does not replace the permanent browser matrix. Physical devices
-are unavailable.
+No managed Chromium or WebKit binary was available. The canonical LAN journey
+with installed system Chromium 154 reached an Envoy HTTP 403 `Domain forbidden`
+when the browser loaded `http://172.26.91.250:44233/`, before pairing or any draft
+action. Core API, build manifest, entry JavaScript and pairing creation had
+returned 200. Fresh independent trace diagnosis confirmed the environment gate.
+
+A temporary copy changing only `localNetworkIpv4()` to loopback passed the same
+journey in system Chromium 154 at 1440 by 900: manual generation stayed ready
+with zero observations; operator acceptance saved exactly one note; its original
+type/provenance and reviewed body were selectable after reload. The scoped Axe
+and no-horizontal-clipping checks passed. The diagnostic copy was removed.
+This is loopback evidence and does not replace the permanent LAN/browser matrix.
+Physical devices are unavailable.
+
+Fresh independent diagnoses also confirmed two fixture omissions: nested source
+origin label/hash metadata, and an unchecked harness catalog with missing saved
+output artifacts. The fixture now preserves Core validation, the journey checks
+the inert harness through the real health route and rereads its advertised
+models, and selecting the saved execution verifies real stored redacted output.
+GitHub's original WebKit run had reproduced the missing-catalog failure; that
+fixture correction is included in the next checkpoint.
+
+The locally served bundle was built from `12793bd2` with `dirty=true`; its entry
+JavaScript SHA-256 is
+`2bda4de5ae36596cdfda5d399fafe60557088e28ab89c4a56f3fbe2c4dde6c21`.
+The test verifies the served manifest and asset hash. This is not a claim that
+the final committed head's complete production/LAN matrix has passed.
 
 The generated product index is absent in this replacement workspace. Its normal
 builder attempted to fetch the embedding model from

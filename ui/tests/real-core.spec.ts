@@ -1264,6 +1264,13 @@ test("assistant upgrade manual harness notes require review and remain visible a
     const projects = await (await api.get("engagements")).json() as {id: string; name: string}[];
     const project = projects.find(item => item.name === "Manual note review fixture")!;
     expect(project).toBeTruthy();
+    const harnesses = await (await api.get("harnesses")).json() as {id: string; name: string}[];
+    const harness = harnesses.find(item => item.name === "Inert local note harness")!;
+    expect(harness).toBeTruthy();
+    const health = await api.post(`harnesses/${harness.id}/health`);
+    expect(health.ok(), await health.text()).toBe(true);
+    const checked = await (await api.get(`harnesses/${harness.id}`)).json() as {capabilities: {models: string[]}};
+    expect(checked.capabilities.models).toEqual(["fixture-note-model"]);
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; dirty: boolean; assets: Record<string, string>};
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"))!;
     expect(entry).toBeTruthy();
@@ -1276,6 +1283,7 @@ test("assistant upgrade manual harness notes require review and remain visible a
     await pairRealCoreBrowser(page, core, "Manual review LAN browser", {requireReady: false});
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=activity`);
     await page.getByRole("complementary", {name: "Execution records"}).getByRole("button", {name: /python · completed/}).click();
+    await expect(page.getByText("Synthetic explanation result.", {exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Draft note", exact: true}).click();
     const dialog = page.getByRole("dialog", {name: "Draft execution note"});
     await expect(dialog.getByRole("option", {name: /Inert local note harness/})).toBeAttached();

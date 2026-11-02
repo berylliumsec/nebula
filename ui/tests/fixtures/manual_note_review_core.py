@@ -72,6 +72,29 @@ def create_fixture_app(*args: Any, **kwargs: Any):
             media_type="text/plain",
         )
     )
+    redacted_outputs = {}
+    for stream, content in (
+        ("stdout", b"Synthetic explanation result.\n"),
+        ("stderr", b""),
+    ):
+        original = store.create(
+            artifacts.put_bytes(
+                content,
+                engagement_id=project.id,
+                filename=f"inert-{stream}.txt",
+                media_type="text/plain",
+            )
+        )
+        redacted = artifacts.put_bytes(
+            content,
+            engagement_id=project.id,
+            filename=f"inert-{stream}-redacted.txt",
+            media_type="text/plain",
+            parent_artifact_id=original.id,
+        )
+        redacted_outputs[stream] = store.create(
+            redacted.model_copy(update={"redacted": True})
+        )
     store.create(
         OperatorExecution(
             engagement_id=project.id,
@@ -105,6 +128,8 @@ def create_fixture_app(*args: Any, **kwargs: Any):
             status="completed",
             exit_code=0,
             completed_at=utc_now(),
+            redacted_stdout_artifact_id=redacted_outputs["stdout"].id,
+            redacted_stderr_artifact_id=redacted_outputs["stderr"].id,
         )
     )
     store.create(
@@ -115,7 +140,6 @@ def create_fixture_app(*args: Any, **kwargs: Any):
             default_model="fixture-note-model",
             enabled=True,
             privacy=ProviderPrivacy(local_only=True),
-            metadata={"models": ["fixture-note-model"]},
         )
     )
     app.state.execution_ai_service.harness_runtime = InertNoteHarness()
