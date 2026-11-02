@@ -54,12 +54,13 @@ from collections.abc import (
 )
 from contextlib import AsyncExitStack, suppress
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import hashlib
 import tempfile
+from threading import Lock
 import weakref
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeVar, cast
 from urllib.parse import unquote, urlsplit
@@ -8852,6 +8853,7 @@ class HarnessRuntimeService:
         )
         # Per-turn mode, plan and goal folded from the ledger up to ``cursor``.
         self._turn_activity_states: OrderedDict[str, _TurnActivityState] = OrderedDict()
+        self._turn_activity_state_lock = Lock()
         # Long gateway work (commands, MCP calls, browser actions) per harness
         # turn, so Stop and the turn's end can cancel what the harness left.
         self._gateway_work: dict[str, set[asyncio.Task[Any]]] = {}
@@ -18847,10 +18849,29 @@ class HarnessRuntimeService:
         output, however long the turn runs.
         """
 
-        state = self._turn_activity_states.pop(turn.id, None) or _TurnActivityState()
-        self._turn_activity_states[turn.id] = state
-        while len(self._turn_activity_states) > MAX_TRACKED_TURN_ACTIVITY_STATES:
-            self._turn_activity_states.popitem(last=False)
+        # Publish snapshots rather than mutating shared entries. Database replay
+        # may overlap a Butler worker and an HTTP reader; never hold this lock
+        # across storage I/O or let an older replay replace a newer cursor.
+        with self._turn_activity_state_lock:
+            cached = self._turn_activity_states.get(turn.id)
+            state = (
+                replace(cached, plan=list(cached.plan))
+                if cached
+                else _TurnActivityState()
+            )
+        state = self._fold_turn_activity_state(turn, state)
+        with self._turn_activity_state_lock:
+            current = self._turn_activity_states.pop(turn.id, None)
+            if current is not None and current.cursor > state.cursor:
+                state = current
+            self._turn_activity_states[turn.id] = state
+            while len(self._turn_activity_states) > MAX_TRACKED_TURN_ACTIVITY_STATES:
+                self._turn_activity_states.popitem(last=False)
+        return state
+
+    def _fold_turn_activity_state(
+        self, turn: HarnessTurn, state: _TurnActivityState
+    ) -> _TurnActivityState:
         if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
             through = self.store.last_operation_event_sequence(turn.id)
             while state.cursor < through:

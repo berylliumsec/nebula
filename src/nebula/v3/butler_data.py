@@ -19,6 +19,7 @@ from .domain import (
     StructuredResult,
 )
 from .storage import NebulaStore
+from .read_workers import read_in_worker
 from .structured_results import summarize
 from .tools import AnalysisTool, GuidedToolError, IdempotencyBehavior, ToolSpec
 
@@ -313,10 +314,13 @@ class ButlerData:
                 arguments: dict[str, Any],
                 *,
                 selected: str = operation.rsplit(".", 1)[-1],
+                selected_read: bool = read_only,
             ) -> dict[str, Any]:
                 handler = getattr(self, selected)
                 if selected in {"search_chats", "set_bookmark"}:
                     return await handler(arguments)
+                if selected_read:
+                    return await read_in_worker(handler, arguments)
                 return handler(arguments)
 
             actions.append(

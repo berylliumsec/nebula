@@ -1060,12 +1060,11 @@ class ChatGoalService:
             NotFoundError
         ):  # diagnostic-expected: a conversation without a goal has no children
             return []
-        children: list[ChatGoal] = []
-        offset = 0
-        while page := self.store.list_entities(ChatGoal, offset=offset, limit=1_000):
-            children.extend(item for item in page if item.parent_goal_id == parent.id)
-            offset += len(page)
-        return children
+        return self.store.find_entities(
+            ChatGoal,
+            {"parent_goal_id": parent.id},
+            engagement_id=parent.engagement_id,
+        )
 
     def _propagate_parent_stop(
         self,

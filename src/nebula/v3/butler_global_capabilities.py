@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import math
 from pathlib import Path
@@ -12,6 +11,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from .butler_instructions import read_butler_instructions
 from .harnesses import HarnessConfigurationError
+from .read_workers import read_in_worker
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
@@ -104,7 +104,6 @@ class ButlerGlobalActions:
         self.instructions_root = instructions_root
         self.case_id = case_id
         self.runtime_local = runtime_local
-        self._settings_read_limit = asyncio.Semaphore(1)
 
     def _case(self) -> ButlerRecoveryCase:
         case = self.store.get(ButlerRecoveryCase, self.case_id)
@@ -169,6 +168,9 @@ class ButlerGlobalActions:
         return project
 
     async def projects(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await read_in_worker(self._projects_read, arguments)
+
+    def _projects_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._case()
         offset = arguments.get("offset", 0)
         projects = sorted(
@@ -205,6 +207,9 @@ class ButlerGlobalActions:
         }
 
     async def project(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await read_in_worker(self._project_read, arguments)
+
+    def _project_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         project = self._project(project_id)
         return {
@@ -214,10 +219,16 @@ class ButlerGlobalActions:
         }
 
     async def goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await read_in_worker(self._goal_read, arguments)
+
+    def _goal_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._project(arguments["project_id"])
         return self.work.goal_detail(arguments["project_id"], arguments["session_id"])
 
     async def assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await read_in_worker(self._assistant_defaults_read, arguments)
+
+    def _assistant_defaults_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._project(arguments["project_id"])
         return self.work.assistant_defaults(arguments["project_id"])
 
@@ -233,24 +244,25 @@ class ButlerGlobalActions:
         )
 
     async def chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await read_in_worker(self._chat_settings_read, arguments)
+
+    def _chat_settings_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._project(arguments["project_id"])
-        async with self._settings_read_limit:
-            return await asyncio.to_thread(
-                self.work.chat_settings,
-                arguments["project_id"],
-                arguments["session_id"],
-            )
+        return self.work.chat_settings(arguments["project_id"], arguments["session_id"])
 
     async def chat_settings_many(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await read_in_worker(self._chat_settings_many_read, arguments)
+
+    def _chat_settings_many_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._project(arguments["project_id"])
-        async with self._settings_read_limit:
-            return await asyncio.to_thread(
-                self.work.chat_settings_many,
-                arguments["project_id"],
-                arguments["session_ids"],
-            )
+        return self.work.chat_settings_many(
+            arguments["project_id"], arguments["session_ids"]
+        )
 
     async def work_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await read_in_worker(self._work_catalog_read, arguments)
+
+    def _work_catalog_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         self._project(project_id)
         return self.work.catalog(project_id, arguments.get("operation"))
@@ -270,7 +282,7 @@ class ButlerGlobalActions:
         if change:
             self._act(project_id, arguments["expected_authority_revision"])
         else:
-            self._project(project_id)
+            await read_in_worker(self._project, project_id)
         operation = arguments["operation"]
         entry = next((item for item in _ALL_WORK_TOOLS if item[0] == operation), None)
         if entry is None or entry[0] == "nebula.work.catalog":

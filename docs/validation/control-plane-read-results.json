@@ -1,0 +1,193 @@
+{
+  "baseline_revision": "70ee6328eddd9660e89b88e6ca59cda6e2e23cb8",
+  "candidate_core_revision": "e5c7a55db9e2f98abffad28edb53e676f2c6cb60",
+  "executed_python_tests": 76,
+  "python_version": "3.12",
+  "ci_run_id": 41520175486,
+  "baseline": {
+    "label": "baseline",
+    "origin": "http://172.26.91.246:51277",
+    "source": "/workspace/nebula-read-audit-baseline/src",
+    "synthetic": true,
+    "auth_enabled": true,
+    "unauthorized_status": 401,
+    "fixture": {
+      "mcp_profiles": 2535,
+      "tools_per_profile": 8,
+      "enabled_profiles": 1,
+      "messages": 5000,
+      "unrelated_goals": 2535,
+      "nonmatching_policies": 2535,
+      "ordinary_chats": 2536
+    },
+    "operations": {
+      "chat_preview": {
+        "count": 3,
+        "median_ms": 285.777,
+        "p95_ms": 324.977,
+        "max_ms": 324.977
+      },
+      "goal_children": {
+        "count": 3,
+        "median_ms": 283.878,
+        "p95_ms": 300.905,
+        "max_ms": 300.905
+      },
+      "scope_candidates": {
+        "count": 3,
+        "median_ms": 98.888,
+        "p95_ms": 255.319,
+        "max_ms": 255.319
+      },
+      "search_status": {
+        "count": 3,
+        "median_ms": 202.548,
+        "p95_ms": 226.122,
+        "max_ms": 226.122
+      }
+    },
+    "outputs": {
+      "chat_preview": {
+        "recent_messages": 8
+      },
+      "goal_children": {
+        "count": 0
+      },
+      "scope_candidates": {
+        "count": 0,
+        "late_server_visible": false
+      },
+      "search_status": {
+        "projects_using": 0
+      }
+    },
+    "concurrent_reads": 140,
+    "latencies": {
+      "settings_reads": {
+        "count": 140,
+        "median_ms": 38089.517,
+        "p95_ms": 70092.089,
+        "max_ms": 71643.535
+      },
+      "ordinary_requests": {
+        "count": 21,
+        "median_ms": 3002.385,
+        "p95_ms": 3316.096,
+        "max_ms": 3610.601
+      }
+    },
+    "ordinary_timeouts_at_10_seconds": 1,
+    "loop_lag": {
+      "count": 186,
+      "median_ms": 5.25,
+      "p95_ms": 1103.735,
+      "max_ms": 1501.275
+    },
+    "server_exit_code": 0,
+    "temporary_directory": "/tmp/nebula-read-audit-bq3gkqlu",
+    "temporary_data_removed": true,
+    "server_stopped": true,
+    "source_files_sha256": {
+      "api.py": "262cc97702cb0b73a7e1fcc843a247417c8a3ce4eaf3ef9cd45a65e51ab738b1",
+      "storage.py": "75d81bae34918007cee110a6a15c1b92daec1093e057d0ca97ba4930c67b983c",
+      "control_assistant_work.py": "ca217f1b40ee2b4d9940d2c216f7d1f816a1d0ff5e4a4cf53373ecd5fa5fd732",
+      "harnesses.py": "eb86afa1ebfe951a523600024d42fa7d3180586fdcee692aa4db52231f2877c9",
+      "butler_global_capabilities.py": "26dd9285f4fe2516f96fe3b6daf22f3acb53cdc83041e2d353d2bf9fe188c5f9",
+      "temporary_chat.py": "8cbaf3403e45cfba35f5287787727fe52e3fe25336514663e03a57bc16bbec71",
+      "read_workers.py": null
+    }
+  },
+  "candidate": {
+    "label": "candidate",
+    "origin": "http://172.26.91.246:53235",
+    "source": "/workspace/nebula/src",
+    "synthetic": true,
+    "auth_enabled": true,
+    "unauthorized_status": 401,
+    "fixture": {
+      "mcp_profiles": 2535,
+      "tools_per_profile": 8,
+      "enabled_profiles": 1,
+      "messages": 5000,
+      "unrelated_goals": 2535,
+      "nonmatching_policies": 2535,
+      "ordinary_chats": 2536
+    },
+    "operations": {
+      "chat_preview": {
+        "count": 3,
+        "median_ms": 28.893,
+        "p95_ms": 57.758,
+        "max_ms": 57.758
+      },
+      "goal_children": {
+        "count": 3,
+        "median_ms": 5.486,
+        "p95_ms": 5.513,
+        "max_ms": 5.513
+      },
+      "scope_candidates": {
+        "count": 3,
+        "median_ms": 526.952,
+        "p95_ms": 666.122,
+        "max_ms": 666.122
+      },
+      "search_status": {
+        "count": 3,
+        "median_ms": 7.75,
+        "p95_ms": 12.881,
+        "max_ms": 12.881
+      }
+    },
+    "outputs": {
+      "chat_preview": {
+        "recent_messages": 8
+      },
+      "goal_children": {
+        "count": 0
+      },
+      "scope_candidates": {
+        "count": 24,
+        "late_server_visible": true
+      },
+      "search_status": {
+        "projects_using": 0
+      }
+    },
+    "concurrent_reads": 140,
+    "latencies": {
+      "settings_reads": {
+        "count": 140,
+        "median_ms": 39625.976,
+        "p95_ms": 73771.542,
+        "max_ms": 76919.729
+      },
+      "ordinary_requests": {
+        "count": 920,
+        "median_ms": 19.376,
+        "p95_ms": 260.368,
+        "max_ms": 487.159
+      }
+    },
+    "ordinary_timeouts_at_10_seconds": 0,
+    "loop_lag": {
+      "count": 2620,
+      "median_ms": 1.629,
+      "p95_ms": 185.225,
+      "max_ms": 355.147
+    },
+    "server_exit_code": 0,
+    "temporary_directory": "/tmp/nebula-read-audit-9wx4vvpm",
+    "temporary_data_removed": true,
+    "server_stopped": true,
+    "source_files_sha256": {
+      "api.py": "9f3d58b9ad2b11c674c63dd7f360b5035e498af5ea9d031cd54a2159cc4bd10a",
+      "storage.py": "4b2f0fb7d1140d390452bd5ad533d41a462af0eba49deac459bc9a1084c2dd45",
+      "control_assistant_work.py": "1b50ad0fe4181e1a14a3f6145ff410fcf67ba9df658e48f9222a407b28ebd14f",
+      "harnesses.py": "9194551f21c64bb4c93c57cb5b5787d9cc5604c23352515014f4eb253d94cb90",
+      "butler_global_capabilities.py": "e758777af80c328bf5ff944c1bcf1dff082cefb863ed01800611ad5c0f06bf6c",
+      "temporary_chat.py": "4237559910ea0c89585dd0ad7a1a8e6fc13a6ed9e84316e02c87687fc49fdfef",
+      "read_workers.py": "3be1b5a3ca30c86c587fa99475c2a3b91c5b949d38b0be94fe6341847c34f694"
+    }
+  }
+}

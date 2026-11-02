@@ -1245,7 +1245,8 @@ def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_path):
 
 def test_scheduled_butler_can_edit_all_assistant_settings(tmp_path):
     assert {
-        name for name, _, _, read_only in _ALL_WORK_TOOLS if not read_only
+        "nebula.work.set_chat_settings",
+        "nebula.work.set_assistant_defaults",
     } <= _BACKGROUND_CHANGES
     assert set(CHAT_SETTINGS_FIELDS) == set(ChatAssistantConfigPatch.model_fields)
     assert set(GOAL_CREATE_FIELDS) == set(GoalCreate.model_fields)

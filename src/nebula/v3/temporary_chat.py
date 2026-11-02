@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .domain import ChatBackend, ChatSession, Engagement, HarnessSession, utc_now
+from .read_workers import read_in_worker
 from .storage import NotFoundError
 
 logger = logging.getLogger(__name__)
@@ -44,11 +45,13 @@ class TemporaryChatRequest(BaseModel):
 
 
 def temporary_chat_router(store, chat_service, harness_runtime):
-    async def discard(session_id):
+    async def discard(session_id, *, expired_only=False):
         try:
             chat = store.get(ChatSession, session_id)
         except NotFoundError:
             # diagnostic-expected: an already-discarded temporary chat needs no cleanup.
+            return
+        if expired_only and not temporary_chat_expired(chat):
             return
         if not is_temporary_chat(chat):
             raise HTTPException(
@@ -74,14 +77,12 @@ def temporary_chat_router(store, chat_service, harness_runtime):
         while True:
             # An unreadable conversation is skipped and recorded; it must not
             # end this sweep for good.
-            expired = [
-                row.id
-                for row in store.iter_readable_entities(ChatSession)
-                if temporary_chat_expired(row)
-            ]
+            expired = await read_in_worker(
+                store.expired_temporary_chat_ids, utc_now() - timedelta(days=1)
+            )
             for session_id in expired:
                 try:
-                    await discard(session_id)
+                    await discard(session_id, expired_only=True)
                 except Exception:
                     # diagnostic-expected: log the cleanup failure and retry on the next sweep.
                     logger.exception("Temporary assistant cleanup failed; will retry")
@@ -103,7 +104,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
     @router.get(
         "/chat/sessions/{session_id}/side-chats", response_model=list[ChatSession]
     )
-    async def list_side_chats(session_id: str):
+    def list_side_chats(session_id: str):
         try:
             parent = store.get(ChatSession, session_id)
         except NotFoundError:

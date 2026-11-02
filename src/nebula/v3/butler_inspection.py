@@ -21,6 +21,7 @@ from .domain import (
     ToolCallOrigin,
 )
 from .tools import AnalysisTool, GuidedToolError, IdempotencyBehavior, ToolSpec
+from .read_workers import read_in_worker
 
 
 _CHUNK = {
@@ -573,14 +574,17 @@ class ButlerInspection(ButlerData):
         for name, description, schema, read_only in definitions:
 
             async def run(
-                arguments: dict[str, Any], *, operation: str = name.rsplit(".", 1)[-1]
+                arguments: dict[str, Any],
+                *,
+                operation: str = name.rsplit(".", 1)[-1],
+                selected_read: bool = read_only,
             ) -> dict[str, Any]:
                 handler = getattr(self, operation)
-                return (
-                    await handler(arguments)
-                    if operation in asynchronous
-                    else handler(arguments)
-                )
+                if operation in asynchronous:
+                    return await handler(arguments)
+                if selected_read:
+                    return await read_in_worker(handler, arguments)
+                return handler(arguments)
 
             actions.append(
                 AnalysisTool(

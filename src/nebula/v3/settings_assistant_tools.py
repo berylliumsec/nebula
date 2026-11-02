@@ -16,6 +16,7 @@ from .domain import (
     RiskClass,
 )
 from .storage import NebulaStore
+from .read_workers import read_in_worker
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 
@@ -704,7 +705,7 @@ def provider_plugins(
         return set_post_tool_preference(store, artifact_store, engagement_id, arguments)
 
     async def list_models(_arguments: dict[str, Any]) -> dict[str, Any]:
-        return model_choices(store)
+        return await read_in_worker(model_choices, store)
 
     async def read_project_context(_arguments: dict[str, Any]) -> dict[str, Any]:
         return project_context(store, engagement_id)

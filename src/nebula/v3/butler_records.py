@@ -12,6 +12,7 @@ from .api_validation import ApiEntityValidator
 from .domain import Asset, Engagement, Finding, FindingStatus, RiskClass
 from .relations import ResourceRelationService
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .read_workers import read_in_worker
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 
@@ -364,8 +365,13 @@ class ButlerRecords:
             for operation, description, schema, read, handler in operations:
 
                 async def run(
-                    arguments: dict[str, Any], *, selected_handler: Any = handler
+                    arguments: dict[str, Any],
+                    *,
+                    selected_handler: Any = handler,
+                    selected_read: bool = read,
                 ) -> dict[str, Any]:
+                    if selected_read:
+                        return await read_in_worker(selected_handler, arguments)
                     return selected_handler(arguments)
 
                 result.append(

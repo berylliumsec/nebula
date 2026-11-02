@@ -8,6 +8,7 @@ from uuid import uuid4
 from .domain import Asset, Evidence, Observation, RiskClass
 from .relations import ResourceRelationService
 from .storage import NebulaStore
+from .read_workers import read_in_worker
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 
@@ -229,8 +230,13 @@ class ButlerNotes:
         for name, description, schema, read, handler in operations:
 
             async def run(
-                arguments: dict[str, Any], *, selected_handler: Any = handler
+                arguments: dict[str, Any],
+                *,
+                selected_handler: Any = handler,
+                selected_read: bool = read,
             ) -> dict[str, Any]:
+                if selected_read:
+                    return await read_in_worker(selected_handler, arguments)
                 return selected_handler(arguments)
 
             result.append(
