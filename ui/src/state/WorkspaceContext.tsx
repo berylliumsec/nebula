@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -614,7 +615,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     }
   }, [api, coreState]);
 
-  useEffect(() => () => { harnessRefreshGeneration.current += 1; }, [api, coreState]);
+  // Invalidate the previous connection before the new workspace is interactive.
+  // A passive cleanup can run after a just-mounted operator retry begins and
+  // discard its result, leaving the catalog stuck in loading.
+  useLayoutEffect(() => () => { harnessRefreshGeneration.current += 1; }, [api, coreState]);
 
   const applyHarnessToolSharing = useCallback((updated: HarnessProfile) => {
     setHarnesses(current => current.map(profile => profile.id === updated.id && profile.revision <= updated.revision ? updated : profile));
