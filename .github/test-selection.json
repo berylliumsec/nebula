@@ -1,27 +1,18 @@
 {
-  "change_digest": "28b209533105d087771dcdab7247c7585f89aff26b5ba8d4bea86a373bf9f9d8",
-  "reviewed_by": "Codex focused harness refresh review with independent root-cause validation, 2026-11-02",
-  "reason": "A pending passive effect cleanup can invalidate the first harness-catalog retry after workspace bootstrap. Move request-generation invalidation to the layout phase so the operator sees the retained catalog and a retryable failure rather than a permanent loading state. Review the existing overlapping-refresh behavior and the real-Core Workbench harness catalog refresh in all selected desktop and emulated mobile profiles.",
-  "exclusions": "No Python, native, Core API, persistence, or layout geometry changed. Unrelated workspace resources, chat journeys, and full suites are excluded. The selected real-Core browser journey uses synthetic data and emulated mobile profiles; physical devices and external harness accounts are not exercised.",
+  "change_digest": "e837cbbe1f85e7cd0ee0bf7603ad51310e393de0d6a92e741b34733c39986ab8",
+  "reviewed_by": "Codex emergency Butler goal creation review with independent root cause validation, 2026-11-02",
+  "reason": "Expose the harness effort field in Butler's goal creation catalog and reject unsupported provider effort values at the tool boundary. The selected Python case checks the advertised schema and a saved Codex harness goal with max effort in a synthetic Core.",
+  "exclusions": "No frontend, native, or browser code changes. The affected entry point is Butler's Core tool catalog and the selected Python case exercises its create route and persistence. The user directed that Core tests on simulation be skipped for this emergency deployment; that deployment exception will be recorded separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 21,
+    "python": 1,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+  "python": [
+    "tests/v3/test_butler_capabilities.py::test_global_create_goal_exposes_and_saves_harness_max_effort"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "harness-catalog-refresh/assistant-real-desktop",
-    "harness-catalog-refresh/assistant-real-compact",
-    "harness-catalog-refresh/assistant-real-chromium-320",
-    "harness-catalog-refresh/assistant-real-chromium-390",
-    "harness-catalog-refresh/assistant-real-chromium-430",
-    "harness-catalog-refresh/assistant-real-webkit-320",
-    "harness-catalog-refresh/assistant-real-webkit-390",
-    "harness-catalog-refresh/assistant-real-webkit-430"
-  ]
+  "playwright": []
 }

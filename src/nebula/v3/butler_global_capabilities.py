@@ -921,7 +921,7 @@ class ButlerGlobalActions:
             ),
             (
                 "nebula.global.create_goal",
-                "Create one unique main goal conversation in an Act project; optionally start it after saving.",
+                "Create one unique main goal conversation in an Act project; optionally start it after saving. Use harness_reasoning_effort for a harness, or reasoning_effort for a provider.",
                 {
                     "type": "object",
                     "additionalProperties": False,

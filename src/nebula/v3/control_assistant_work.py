@@ -607,7 +607,17 @@ START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
             "items": {"type": "string"},
             "maxItems": 64,
         },
-        "reasoning_effort": {"type": "string"},
+        "reasoning_effort": {
+            "type": "string",
+            "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
+            "description": "Provider-only reasoning effort. For a harness, use harness_reasoning_effort instead.",
+        },
+        "harness_reasoning_effort": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Harness-only reasoning effort. Choose an effort advertised for the selected model; Codex may advertise max.",
+        },
         "allow_subagents": {"type": "boolean"},
         "allow_agent_messaging": {"type": "boolean"},
         "max_active_subagents": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -3561,7 +3571,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.create_goal_conversation",
-        "Create a new main assistant chat with a draft goal in the selected project. Choose a listed runtime. Call goal_action to start the saved draft; creation alone does not start work.",
+        "Create a new main assistant chat with a draft goal in the selected project. Choose a listed runtime. Use harness_reasoning_effort for a harness, or reasoning_effort for a provider. Call goal_action to start the saved draft; creation alone does not start work.",
         START_GOAL_CONVERSATION_SCHEMA,
         False,
     ),
