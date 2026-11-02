@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import update
@@ -18,6 +19,7 @@ from nebula.v3.domain import (
     McpToolSnapshot,
     ProviderProfile,
     ScopePolicy,
+    ToolCall,
     utc_now,
 )
 from nebula.v3.mcp import McpGatewaySession, catalog_mcp_profiles
@@ -147,6 +149,7 @@ def test_capability_entry_points_keep_storage_and_sessions_off_the_loop(
         store, project, harness, chat, _, runtime = _setup(tmp_path)
         _, parent, turn = _prepare(runtime, project, harness, "Inspect capabilities")
         session = store.get(HarnessSession, turn.harness_session_id)
+        runtime._active[session.id] = SimpleNamespace(turn_id=turn.id, task=None)
         loop_thread = threading.get_ident()
         entered, release = threading.Event(), threading.Event()
         original = chat.subagents.available_capabilities
@@ -158,10 +161,20 @@ def test_capability_entry_points_keep_storage_and_sessions_off_the_loop(
             return original(*args, **kwargs)
 
         monkeypatch.setattr(chat.subagents, "available_capabilities", delayed)
+        measuring = True
+        for method in ("get", "update", "reserve_tool_call"):
+            selected = getattr(store, method)
+
+            def checked(*args, original=selected, **kwargs):
+                if measuring:
+                    assert threading.get_ident() != loop_thread
+                return original(*args, **kwargs)
+
+            monkeypatch.setattr(store, method, checked)
         gateway = McpGatewaySession(
             list_tools=lambda _: {"tools": []},
-            call_tool=lambda name, arguments: runtime._gateway_subagent(
-                session, turn, name, arguments
+            call_tool=lambda name, arguments: runtime._gateway_call(
+                session, name, arguments
             ),
         )
         launch = await gateway.start()
@@ -195,8 +208,62 @@ def test_capability_entry_points_keep_storage_and_sessions_off_the_loop(
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
+            measuring = False
             await client.close()
             await gateway.close()
+            runtime._active.clear()
+            await runtime.shutdown()
+            await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "state", ["disabled", "analysis", "planner", "invalid_arguments", "plan_required"]
+)
+def test_gateway_capability_read_preserves_offer_and_planning_guards(tmp_path, state):
+    async def scenario():
+        store, project, harness, chat, _, runtime = _setup(tmp_path)
+        _, parent, turn = _prepare(runtime, project, harness, "Inspect capabilities")
+        session = store.get(HarnessSession, turn.harness_session_id)
+        runtime._active[session.id] = SimpleNamespace(turn_id=turn.id, task=None)
+        metadata = dict(session.metadata)
+        if state == "disabled":
+            metadata.pop("provider_subagent", None)
+        elif state == "analysis":
+            metadata["analysis_only"] = True
+        elif state == "planner":
+            metadata["planning_target_turn_id"] = parent.id
+        elif state == "plan_required":
+            store.update(
+                type(parent),
+                parent.id,
+                {
+                    "request_snapshot": {
+                        **parent.request_snapshot,
+                        "planning_enabled": True,
+                        "plan_behavior": "enforced",
+                    }
+                },
+                expected_revision=parent.revision,
+            )
+        store.update(
+            HarnessSession,
+            session.id,
+            {"metadata": metadata},
+            expected_revision=session.revision,
+        )
+        try:
+            response = await runtime._gateway_call(
+                session,
+                "subagent.capabilities",
+                {"unexpected": True} if state == "invalid_arguments" else {},
+            )
+            assert response["isError"] is True
+            assert response["structuredContent"]["schema"] == "nebula.tool-failure/v1"
+            assert not store.list_entities(ToolCall)
+        finally:
+            runtime._active.clear()
             await runtime.shutdown()
             await chat.shutdown()
 

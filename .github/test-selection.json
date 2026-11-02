@@ -1,9 +1,9 @@
 {
   "reviewed_by": "Codex focused review for MCP catalog filtering and worker boundaries",
-  "reason": "Validate SQL exclusion before hydration, catalogs beyond 1000 rows, fresh permissions and project ownership, async provider/harness capability entry points, inherited and explicit child selections, IPC behavior, and existing delegation cancellation/message/wait contracts. A paired disposable LAN Core benchmark exercises 34 concurrent authenticated gateway connections and unrelated HTTP reads. Concurrent explicit selections must recheck child idempotency after the worker read.",
+  "reason": "Validate SQL exclusion before hydration, catalogs beyond 1000 rows, fresh permissions and project ownership, async provider/harness capability entry points, inherited and explicit child selections, IPC behavior, and existing delegation cancellation/message/wait contracts. A paired disposable LAN Core benchmark exercises 34 concurrent authenticated gateway connections and unrelated HTTP reads. Concurrent explicit selections must recheck child idempotency after the worker read. The capability gateway preflight and receipt boundary is worker-owned; test its disabled, analysis-only, planning-only, invalid-argument and enforced-plan guards.",
   "exclusions": "Backend query/scheduling only. No interface controls, settings schemas, origin behavior, native runtime or live vendor changes; frontend, native and Playwright layers are excluded. Source Core with synthetic static assets validates HTTP responsiveness. No full suites, production data or deployment.",
   "expected_tests": {
-    "python": 44,
+    "python": 49,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -29,5 +29,5 @@
   "frontend": [],
   "native": [],
   "playwright": [],
-  "change_digest": "676e4b31d232865c66d513e4f70017b45db8dcc3edd91df9c6b851e92338aa5f"
+  "change_digest": "dc540b723e4024a62367454703d6b312070b2d2c974c0b5f649a2bbc37703a6e"
 }

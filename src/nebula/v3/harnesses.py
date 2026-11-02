@@ -15220,6 +15220,102 @@ class HarnessRuntimeService:
             for option in profile.capabilities.model_options
         )
 
+    def _gateway_capabilities_offer(
+        self, session: HarnessSession
+    ) -> dict[str, Any] | None:
+        """Read the fixed capability offer without rebuilding mutable tool maps."""
+
+        current = self.store.get(HarnessSession, session.id)
+        if (
+            isinstance(current.metadata.get("planning_target_turn_id"), str)
+            or _session_provider_subagent(current) is None
+            or self.provider_subagents is None
+            or current.metadata.get("analysis_only")
+        ):
+            return None
+        kind = self.store.get(HarnessProfile, current.harness_profile_id).kind
+        description, schema = _gateway_subagent_tools(kind)["subagent.capabilities"]
+        return {
+            "name": "subagent.capabilities",
+            "description": description,
+            "inputSchema": schema,
+        }
+
+    def _gateway_capabilities_read(
+        self, session: HarnessSession, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Own preflight, catalog and receipt Sessions in the same bounded worker.
+
+        A burst otherwise leaves fifteen get calls and several receipt writes
+        per capability request on the loop, even after offloading the catalog.
+        No async service or mutable gateway tool map is touched here.
+        """
+
+        offer = self._gateway_capabilities_offer(session)
+        if offer is None:
+            raise ToolNotPermitted(
+                "Subagents are turned off for this conversation.",
+                rule="subagents.turned_off",
+            )
+        turn = self._active_gateway_turn(session.id)
+        if turn.chat_turn_id is not None:
+            parent = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat = self.store.get(ChatSession, parent.session_id)
+            if self.plans.required(parent, chat):
+                self.plans.ensure(parent, chat)
+                self.plans.guard(parent.id, "subagent.capabilities")
+        service = self.provider_subagents
+        if (
+            service is None
+            or turn.origin != HarnessTurnOrigin.CHAT
+            or not turn.chat_session_id
+            or not turn.chat_turn_id
+            or not isinstance(turn.metadata.get("provider_subagent"), dict)
+        ):
+            raise ToolNotPermitted(
+                "Subagents are turned off for this conversation.",
+                rule="subagents.turned_off",
+            )
+        call = self.store.reserve_tool_call(
+            ToolCall(
+                id=str(uuid4()),
+                engagement_id=turn.engagement_id,
+                run_id=turn.chat_turn_id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=turn.chat_session_id,
+                chat_turn_id=turn.chat_turn_id,
+                tool_name="subagent.capabilities",
+                status=ToolCallStatus.RUNNING,
+                risk_class=RiskClass.LOCAL_READ,
+                arguments=arguments,
+                started_at=utc_now(),
+                metadata={"harness_turn_id": turn.id, "budget_class": "subagent"},
+            )
+        )
+        try:
+            call = self._attach_gateway_tool_call(turn, call.id)
+            if not Draft7Validator(offer["inputSchema"]).is_valid(arguments):
+                raise refused_before_execution(
+                    InvalidToolArguments(
+                        "subagent.capabilities accepts an empty arguments object"
+                    )
+                )
+            result = service.available_capabilities(turn.chat_turn_id)
+        except Exception as exc:
+            self._finish_gateway_call(call.id, error=exc)
+            raise
+        self._finish_gateway_call(call.id, result=result)
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(result, ensure_ascii=False, sort_keys=True),
+                }
+            ],
+            "structuredContent": result,
+            "isError": False,
+        }
+
     async def _gateway_call(
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -15230,28 +15326,35 @@ class HarnessRuntimeService:
         cursor = None
         seen_cursors: set[str] = set()
         try:
-            turn = self._active_gateway_turn(session.id)
-            for _ in range(64):
-                catalog = self._gateway_catalog(
-                    session,
-                    {"cursor": cursor} if cursor else None,
-                    turn=turn,
+            if name == "subagent.capabilities":
+                from .read_workers import read_in_worker
+
+                offered = await read_in_worker(
+                    self._gateway_capabilities_offer, session
                 )
-                available_names.extend(
-                    str(item.get("name"))
-                    for item in catalog["tools"]
-                    if isinstance(item, dict) and isinstance(item.get("name"), str)
-                )
-                offered = next(
-                    (item for item in catalog["tools"] if item["name"] == name),
-                    None,
-                )
-                if offered is not None:
-                    break
-                cursor = catalog.get("nextCursor")
-                if not isinstance(cursor, str) or cursor in seen_cursors:
-                    break
-                seen_cursors.add(cursor)
+            else:
+                turn = self._active_gateway_turn(session.id)
+                for _ in range(64):
+                    catalog = self._gateway_catalog(
+                        session,
+                        {"cursor": cursor} if cursor else None,
+                        turn=turn,
+                    )
+                    available_names.extend(
+                        str(item.get("name"))
+                        for item in catalog["tools"]
+                        if isinstance(item, dict) and isinstance(item.get("name"), str)
+                    )
+                    offered = next(
+                        (item for item in catalog["tools"] if item["name"] == name),
+                        None,
+                    )
+                    if offered is not None:
+                        break
+                    cursor = catalog.get("nextCursor")
+                    if not isinstance(cursor, str) or cursor in seen_cursors:
+                        break
+                    seen_cursors.add(cursor)
         except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
             fallback = ToolSpec.model_construct(
                 name=name,
@@ -15375,6 +15478,12 @@ class HarnessRuntimeService:
     async def _gateway_call_unwrapped(
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        if name == "subagent.capabilities":
+            from .read_workers import read_in_worker
+
+            return await read_in_worker(
+                self._gateway_capabilities_read, session, arguments
+            )
         turn = self._active_gateway_turn(session.id)
         planner_target = self.store.get(HarnessSession, session.id).metadata.get(
             "planning_target_turn_id"
@@ -15756,6 +15865,12 @@ class HarnessRuntimeService:
         invalid input.
         """
 
+        if name == "subagent.capabilities":
+            from .read_workers import read_in_worker
+
+            return await read_in_worker(
+                self._gateway_capabilities_read, session, arguments
+            )
         service = self.provider_subagents
         if (
             service is None
@@ -15796,13 +15911,7 @@ class HarnessRuntimeService:
                         "Correct the arguments and retry."
                     )
                 )
-            if name == "subagent.capabilities":
-                from .read_workers import read_in_worker
-
-                result = await read_in_worker(
-                    service.available_capabilities, turn.chat_turn_id
-                )
-            elif name == "subagent.start":
+            if name == "subagent.start":
                 invocation = ToolInvocation(
                     id=call.id,
                     engagement_id=turn.engagement_id,
