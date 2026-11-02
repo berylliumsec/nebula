@@ -764,3 +764,30 @@ browser controls. Cancellation sends no content request. A browser download
 start does not prove the operating system's final save location. Selecting a
 saved source's preview for a chat attachment remains an explicit browser input
 step; closing it transfers no excerpt to Butler.
+
+### Core observations, resource search and guides
+
+Interactive Butler can use `nebula.data.system` for bounded Core health, public
+redacted diagnostic errors/files/settings and incident resolution, recorded
+runtime usage, execution capabilities, desktop browser mode, local issue overview,
+workspace Git status/diff, saved harness session metadata and visible-parent
+side-chat labels. The paths and queries are closed in Core. Sensitive diagnostic
+reveal/copy, retrying an incident, private account history import and publication
+consent remain operator controls. Side-chat transcripts and private harness
+owners are excluded; none of these reads starts a program or vendor model turn.
+
+`nebula.data.search_resources` searches the selected project and shared Library.
+Core excludes private Butler, temporary and side conversations before ranking and
+pagination. Results are metadata with canonical resource identities. Reads return
+at most 4,096 JSON characters per digest-bound chunk; use `page_next_cursor` for
+another search page, preserving the query and kinds. Search never executes an
+advertised resource action.
+
+Use `nebula.data.guides` to discover the actual named guide catalog and current
+local operator's saved progress. `nebula.data.set_guide_progress` requires that
+operator key, current revision (zero for a new guide) and a valid step. Core
+readback precedes a browser refresh; open guide input is preserved. Completion is
+progress metadata, not an operator security attestation. The fixed skill and
+AGENTS.md templates can be created through `nebula.data.create_starter_files` and
+are verified without overwriting existing entries. Registering a hook program
+remains an explicit choice in the lifecycle-hooks guide.

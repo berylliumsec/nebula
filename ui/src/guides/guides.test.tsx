@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/client";
+import { notifyProjectDataChanged } from "../api/projectDataEvents";
 import type { GuideProgress } from "../api/types";
 import { GuideProvider, useGuides } from "./GuideProvider";
 import { guideDestination, placeCard } from "./GuideOverlay";
@@ -133,6 +134,24 @@ describe("GuideProvider", () => {
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(await screen.findByRole("dialog", { name: "Create the hook files" })).toBeInTheDocument();
     await waitFor(() => expect(workspace.api.saveGuideProgress).toHaveBeenLastCalledWith("lifecycle-hooks", { status: "in_progress", stepIndex: 1, expectedRevision: 1 }));
+  });
+
+  it("refreshes scoped saved progress without replacing the open guide step", async () => {
+    const user = userEvent.setup();
+    renderGuides();
+    await user.click(screen.getByRole("button", {name: "Open hub"}));
+    const hub = await screen.findByRole("dialog", {name: "Guides"});
+    await user.click(within(hub).getByRole("button", {name: /^Run your own script/}));
+    const intro = await screen.findByRole("dialog", {name: "What a lifecycle hook does"});
+    await user.click(within(intro).getByRole("button", {name: "Next"}));
+    await screen.findByRole("dialog", {name: "Create the hook files"});
+    const before = workspace.api.listGuideProgress.mock.calls.length;
+    act(() => notifyProjectDataChanged({projectId: "other", resource: "guides"}));
+    expect(workspace.api.listGuideProgress).toHaveBeenCalledTimes(before);
+    workspace.api.listGuideProgress.mockResolvedValue([progress("agents-md", 2, 4, "completed")]);
+    act(() => notifyProjectDataChanged({projectId: "project-1", resource: "guides"}));
+    await waitFor(() => expect(workspace.api.listGuideProgress).toHaveBeenCalledTimes(before + 1));
+    expect(screen.getByRole("dialog", {name: "Create the hook files"})).toBeInTheDocument();
   });
 
   it("resumes where Core says the operator stopped, and replays completed guides from the start", async () => {

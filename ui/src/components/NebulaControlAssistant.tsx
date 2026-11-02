@@ -1812,6 +1812,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       notifyProjectDataChanged({projectId: action.projectId, resource: "post-tool-settings"});
       return "Core confirmed the follow-up settings. Workbench was asked to refresh; open Settings forms retain drafts and offer Reload.";
     }
+    if (action.kind === "guides_refresh") {
+      notifyProjectDataChanged({projectId: action.projectId, resource: "guides"});
+      return "Core confirmed the guide progress. Guides were asked to refresh; an open guide keeps its current input.";
+    }
     if (action.kind === "butler_interval_refresh") {
       window.dispatchEvent(new Event(BUTLER_INTERVAL_CHANGED_EVENT));
       return "Core confirmed the Butler check interval. Its Settings control has been asked to refresh.";

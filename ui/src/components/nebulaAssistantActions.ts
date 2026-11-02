@@ -12,6 +12,7 @@ export type SettingClientAction =
   | { kind: "execution_refresh"; projectId: string; executionId: string }
   | { kind: "result_delete"; projectId: string; resultId: string; expectedRevision: number; title: string }
   | { kind: "bookmarks_refresh"; projectId: string; sessionId: string }
+  | { kind: "guides_refresh"; projectId: string }
   | { kind: "records_refresh"; projectId: string; resource: "assets" | "findings" }
   | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
   | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
@@ -156,6 +157,9 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     return undefined;
   }
   if (receipt.state === "core_project_data_saved") {
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && operation === "nebula.data.set_guide_progress" && receipt.read_back === true
+        && value.kind === "guides_refresh") return {kind: "guides_refresh", projectId};
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && operation === "nebula.data.set_bookmark" && receipt.read_back === true
         && value.kind === "bookmarks_refresh" && validNoteReferences([value.session_id])) {

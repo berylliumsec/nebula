@@ -2905,6 +2905,151 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
       "result": "Exact saved probe metadata is read back without SSH resolution, refreshes the host row and survives reload. The fixture supplies inert probe facts and makes no SSH connection.",
       "status": "supported"
+    },
+    {
+      "id": "data.resource_search",
+      "entry_point": "data resource search",
+      "ui_calls": [
+        "ui/src/components/CommandPalette.tsx::searchResources"
+      ],
+      "core_owner": "FederatedSearch metadata projection and SQL private-conversation predicate",
+      "butler": {
+        "discover": "nebula.data.search_resources",
+        "read": "nebula.data.search_resources",
+        "change": "nebula.data.search_resources"
+      },
+      "authority": "Selected project plus shared Library, fixed active scope, bounded pages; private assistant/side/temporary chats excluded before pagination; no resource action execution",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Core canonical resource identities and visible metadata returned in digest-bound chunks",
+      "status": "supported"
+    },
+    {
+      "id": "workspace.git_inspection",
+      "entry_point": "workspace git inspection",
+      "ui_calls": [
+        "ui/src/components/EditorSourceControl.tsx::sourceControlStatus",
+        "ui/src/components/EditorSourceControl.tsx::sourceControlDiff"
+      ],
+      "core_owner": "WorkspaceService bounded Git inspection with external diff/textconv disabled",
+      "butler": {
+        "discover": "nebula.data.system",
+        "read": "nebula.data.system",
+        "change": "nebula.data.system"
+      },
+      "authority": "Selected project managed or linked workspace; path validated by Core; read-only fixed Git status/diff; no program or repository mutation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Changed synthetic file appears in Core status and bounded diff",
+      "status": "supported"
+    },
+    {
+      "id": "data.runtime_observations",
+      "entry_point": "data runtime observations",
+      "ui_calls": [
+        "ui/src/components/RuntimeUsagePanel.tsx::getRuntimeUsage",
+        "ui/src/pages/SessionsPage.tsx::executionCapabilities",
+        "ui/src/pages/SessionsPage.tsx::request::GET \"desktop-browser-mode\""
+      ],
+      "core_owner": "Core recorded runtime usage, project execution capability and desktop browser descriptors",
+      "butler": {
+        "discover": "nebula.data.system",
+        "read": "nebula.data.system",
+        "change": "nebula.data.system"
+      },
+      "authority": "Fixed read-only Core routes; no model inference, account refresh, terminal or browser creation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Authoritative availability/usage observations returned without claiming runtime execution",
+      "status": "supported"
+    },
+    {
+      "id": "diagnostics.public_inspection",
+      "entry_point": "diagnostics public inspection",
+      "ui_calls": [
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticErrors",
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticsFiles",
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticsSettings",
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::health",
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::resolveDiagnosticIncidents"
+      ],
+      "core_owner": "DiagnosticManager public redacted records/settings and Core-owned incident resolution",
+      "butler": {
+        "discover": "nebula.data.system",
+        "read": "nebula.data.system",
+        "change": "nebula.data.system"
+      },
+      "authority": "Bounded public metadata only; Core resolves its own recent errors, model cannot inject records/actions or retrieve sensitive detail; no incident retry",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Core health, public error/file/settings metadata and current incidents are observed, not synthesized",
+      "status": "supported"
+    },
+    {
+      "id": "data.issue_overview",
+      "entry_point": "data issue overview",
+      "ui_calls": [
+        "ui/src/components/ButlerIssues.tsx::request::GET endpoint(projectId)"
+      ],
+      "core_owner": "ButlerImprovementService selected-project issue overview",
+      "butler": {
+        "discover": "nebula.data.system",
+        "read": "nebula.data.system",
+        "change": "nebula.data.system"
+      },
+      "authority": "Selected project, bounded local metadata; configuring external publication, private repository enumeration and operator public-independence attestation stay in browser controls",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Core local destinations and issue status are inspected without publishing or configuring credentials",
+      "status": "supported"
+    },
+    {
+      "id": "data.session_metadata",
+      "entry_point": "data session metadata",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::listConversationSideChats",
+        "ui/src/pages/SessionsPage.tsx::listHarnessSessions"
+      ],
+      "core_owner": "Core saved harness metadata and selected parent side-chat labels",
+      "butler": {
+        "discover": "nebula.data.system",
+        "read": "nebula.data.system",
+        "change": "nebula.data.system"
+      },
+      "authority": "Selected project; visible main-chat parent required; only side-chat labels, never private transcripts; private harness owners excluded before pagination; no external history import",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Saved session identities and labels are observed without executing or importing a turn",
+      "status": "supported"
+    },
+    {
+      "id": "guides.progress",
+      "entry_point": "guides progress",
+      "ui_calls": [
+        "ui/src/guides/GuideProvider.tsx::listGuideProgress",
+        "ui/src/guides/GuideProvider.tsx::saveGuideProgress"
+      ],
+      "core_owner": "Core guide progress keyed by active local operator",
+      "butler": {
+        "discover": "nebula.data.guides",
+        "read": "nebula.data.guides",
+        "change": "nebula.data.set_guide_progress"
+      },
+      "authority": "Named actual guide catalog; current operator identity plus observed revision (zero if absent); fixed valid step; explicit progress request; no security attestation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Core confirms saved progress, mounted Guides reread it, completion survives reload while open-guide transient input is preserved",
+      "status": "supported"
+    },
+    {
+      "id": "guides.fixed_templates",
+      "entry_point": "guides fixed templates",
+      "ui_calls": [
+        "ui/src/guides/GuideOverlay.tsx::createGuideStarterFiles"
+      ],
+      "core_owner": "Core fixed starter templates and symlink/overwrite guards",
+      "butler": {
+        "discover": "nebula.data.create_starter_files",
+        "read": "nebula.data.create_starter_files",
+        "change": "nebula.data.create_starter_files"
+      },
+      "authority": "Selected project fixed skill/AGENTS templates only, Core readback; hook program registration remains an explicit operator guide action, never a model-supplied program",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
+      "result": "Fixed skill files are created, verified and discovered by Core; existing templates are retained",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [

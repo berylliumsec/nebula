@@ -458,12 +458,29 @@ class FederatedSearch:
         kinds: list[ResourceKind],
         cursor: str | None,
         limit: int,
+        exclude_private_chats: bool = False,
     ) -> SearchResponse:
         offset = _decode_search_cursor(cursor)
         repaired = self.repair_stale_projection()
         terms = [term.casefold() for term in query.split() if term]
         with self.store.database.session() as session:
             statement = select(SearchDocumentRow)
+            if exclude_private_chats:
+                visible_chats = select(EntityRow.id).where(
+                    EntityRow.kind == "chat_sessions",
+                    not_temporary_chat_session(),
+                    func.coalesce(
+                        EntityRow.payload["metadata"]["control_assistant"].as_boolean(),
+                        False,
+                    ).is_(False),
+                )
+                statement = statement.where(
+                    or_(
+                        SearchDocumentRow.resource_kind
+                        != ResourceKind.CONVERSATION.value,
+                        SearchDocumentRow.resource_id.in_(visible_chats),
+                    )
+                )
             if scope == SearchScope.ACTIVE:
                 statement = statement.where(
                     or_(

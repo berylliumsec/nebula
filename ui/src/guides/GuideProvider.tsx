@@ -1,6 +1,7 @@
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ApiError } from "../api/client";
+import { PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange } from "../api/projectDataEvents";
 import type { GuideProgress, GuideProgressStatus } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -41,7 +42,7 @@ export function pageForPath(pathname: string): GuidePage {
 }
 
 export function GuideProvider({ children }: PropsWithChildren) {
-  const { api, workspaceState } = useWorkspace();
+  const { api, workspaceState, engagement } = useWorkspace();
   const location = useLocation();
   const [progress, setProgressState] = useState<Record<string, GuideProgress>>({});
   const [progressState, setLoadState] = useState<"loading" | "ready" | "failed">("loading");
@@ -79,6 +80,17 @@ export function GuideProvider({ children }: PropsWithChildren) {
     void reload(controller.signal);
     return () => controller.abort();
   }, [connected, reload]);
+
+  useEffect(() => {
+    if (!connected) return;
+    const controller = new AbortController();
+    const refresh = (event: Event) => {
+      const change = (event as CustomEvent<ProjectDataChange>).detail;
+      if (change?.resource === "guides" && change.projectId === engagement?.id) void reload(controller.signal);
+    };
+    window.addEventListener(PROJECT_DATA_CHANGED_EVENT, refresh);
+    return () => { controller.abort(); window.removeEventListener(PROJECT_DATA_CHANGED_EVENT, refresh); };
+  }, [connected, engagement?.id, reload]);
 
   const persist = useCallback((guideId: string, status: GuideProgressStatus, stepIndex: number) => {
     if (!api || typeof api.saveGuideProgress !== "function") return;

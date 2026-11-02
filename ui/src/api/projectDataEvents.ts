@@ -5,6 +5,7 @@ export type ProjectDataChange = {projectId: string} & (
   | {resource: "results"; resultId: string}
   | {resource: "executions"; executionId: string}
   | {resource: "post-tool-settings"}
+  | {resource: "guides"}
 );
 export function notifyProjectDataChanged(detail: ProjectDataChange): void {
   window.dispatchEvent(new CustomEvent(PROJECT_DATA_CHANGED_EVENT, {detail}));

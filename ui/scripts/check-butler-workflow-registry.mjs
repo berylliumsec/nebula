@@ -133,6 +133,7 @@ function main() {
   }
   const available = new Set(current.map(({ key }) => key));
   const catalogs = ["settings_assistant_tools.py", "butler_capabilities.py", "control_assistant_work.py", "butler_projects.py", "butler_chat_export.py", "butler_workspace.py", "butler_library.py", "butler_reports.py", "butler_terminal.py", "butler_storage.py", "butler_devices.py", "butler_credentials.py", "butler_providers.py", "butler_harnesses.py", "butler_mcp.py", "butler_notes.py", "butler_records.py", "butler_sources.py", "butler_data.py", "butler_inspection.py", "butler_diagnostics.py"]
+    .concat(["butler_administration.py"])
     .map((name) => readFileSync(resolve(repoRoot, "src/nebula/v3", name), "utf8"))
     .join("\n");
   const ids = new Set();

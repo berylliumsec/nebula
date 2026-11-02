@@ -15296,3 +15296,119 @@ test("iPhone assistant shell production LAN pairs, resolves a pending agent appr
     await testInfo.attach("iphone-assistant-chat", {body: await page.screenshot(), contentType: "image/png"});
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
+
+test("assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(240_000);
+  let operation = "nebula.data.system";
+  let arguments_: Record<string, unknown> = {};
+  let change = false;
+  let prompt = "";
+  let searchObservation = "";
+  let searchChunkCount = 0;
+  const stub = await startLocalModelStub({responseContent: "", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const last = messages.map(item => item.role).lastIndexOf("user");
+    if (!prompt || !String(messages[last]?.content ?? "").startsWith(prompt)) return undefined;
+    const count = messages.slice(last + 1).filter(item => item.role === "tool").length;
+    if (count === 0) return {name: "nebula_capabilities_search", arguments: {query: operation}};
+    if (count === 1) return {name: "nebula_capabilities_describe", arguments: {operation}};
+    if (count === 2) return {name: change ? "nebula_capabilities_change" : "nebula_capabilities_read", arguments: {operation, arguments: arguments_}};
+    if (count >= 3 && operation === "nebula.data.search_resources") {
+      const lastTool = messages.slice(last + 1).filter(item => item.role === "tool").at(-1);
+      const result = JSON.parse(String(lastTool?.content ?? "{}")) as {butler_operation?: string; text?: string; next_offset?: number | null; sha256?: string};
+      expect(result.butler_operation).toBe(operation);
+      expect(typeof result.text).toBe("string");
+      if (count !== searchChunkCount) { searchObservation += result.text; searchChunkCount = count; }
+      if (result.next_offset !== null) {
+        expect(Number.isInteger(result.next_offset)).toBe(true);
+        expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
+        return {name: "nebula_capabilities_read", arguments: {operation, arguments: {...arguments_, offset: result.next_offset, expected_sha256: result.sha256}}};
+      }
+    }
+    return undefined;
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), fixtureScript: path.resolve(import.meta.dirname, "fixtures/butler_administration_core.py")});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string; name: string}>;
+    const projectId = projects.find(item => item.name === "Runtime administration fixture")!.id;
+    const model = await api.post("providers", {data: {name: "Metadata fixture model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model", options: {context_window: 32768}}}});
+    expect(model.ok(), await model.text()).toBe(true);
+    const profile = await model.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${profile.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: profile.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const seededChats = await (await api.get(`chat-sessions?engagement_id=${projectId}`)).json() as Array<{id: string; revision: number}>;
+    expect(seededChats).toHaveLength(2);
+    for (const session of seededChats) {
+      const switched = await api.post(`chat/sessions/${session.id}/runtime-switch`, {data: {provider_id: profile.id, model: "security-model", expected_session_revision: session.revision}});
+      expect(switched.ok(), await switched.text()).toBe(true);
+      const observed = await (await api.get(`chat-sessions/${session.id}`)).json() as {provider_profile_id: string; model: string};
+      expect(observed).toMatchObject({provider_profile_id: profile.id, model: "security-model"});
+    }
+    const operatorResponse = await api.post("operator-profiles", {data: {display_name: "Guide metadata operator"}});
+    expect(operatorResponse.ok(), await operatorResponse.text()).toBe(true);
+    const operator = await operatorResponse.json() as {id: string};
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(item => item.startsWith("assets/index-") && item.endsWith(".js"))!;
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Core metadata LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    const ask = async (name: string, args: Record<string, unknown> = {}, mutate = false) => {
+      operation = name; arguments_ = args; change = mutate; searchObservation = ""; searchChunkCount = 0;
+      const start = stub.requests.length;
+      prompt = `Observe saved Core metadata ${start}.`;
+      stub.responseContent = `Core returned metadata observation ${start}.`;
+      if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      const trace = JSON.stringify(stub.requests.slice(start).flatMap(item => Array.isArray(item.messages) ? item.messages : []).filter(message => message.role === "tool"));
+      expect(trace).toContain('read_back');
+      await assistant.getByRole("button", {name: "Hide Butler"}).click();
+      return trace;
+    };
+    for (const kind of ["health", "runtime_usage", "desktop_browser", "execution_capabilities", "source_control", "diagnostic_settings", "diagnostic_errors", "diagnostic_files", "diagnostic_incidents", "issues", "harness_sessions"]) {
+      const trace = await ask("nebula.data.system", {kind});
+      if (kind === "source_control") expect(trace).toContain("fixture.txt");
+    }
+    expect(await ask("nebula.data.system", {kind: "source_diff", path: "fixture.txt"})).toContain("Changed fixture");
+    const search = await ask("nebula.data.search_resources", {query: "Selected metadata"});
+    expect(search).toContain("Selected metadata note");
+    expect(search).toContain("Selected metadata conversation");
+    expect(search).not.toContain("Selected metadata private Butler");
+    const observed = JSON.parse(searchObservation) as {items: Array<{label: string}>};
+    expect(observed.items.map(item => item.label).sort()).toEqual(["Selected metadata conversation", "Selected metadata note"]);
+    expect(await ask("nebula.data.guides")).toContain("agents-md");
+    expect(await ask("nebula.data.set_guide_progress", {guide_id: "agents-md", operator_key: operator.id, status: "completed", step_index: 2, expected_revision: 0}, true)).toContain("guides_refresh");
+    const progress = await (await api.get("guides/progress")).json() as Array<{guide_id: string; revision: number; status: string}>;
+    expect(progress.find(item => item.guide_id === "agents-md")).toMatchObject({revision: 1, status: "completed"});
+    expect(await ask("nebula.data.create_starter_files", {kind: "skill", name: "butler-guide-fixture"}, true)).toContain("SKILL.md");
+    const skills = await (await api.get(`skills?engagement_id=${projectId}`)).json() as Array<{name: string}>;
+    expect(skills.some(item => item.name === "butler-guide-fixture")).toBe(true);
+    const openGuides = async () => {
+      const trigger = page.getByRole("button", {name: "Guides", exact: true});
+      if (!await trigger.isVisible()) await page.getByRole("button", {name: "Open top menu"}).click();
+      await trigger.click();
+      const hub = page.getByRole("dialog", {name: "Guides", exact: true});
+      await expect(hub.getByText("1 of 17 done", {exact: true})).toBeVisible();
+      await expect(hub.getByRole("searchbox", {name: "Search guides"})).toBeFocused();
+      const close = hub.getByRole("button", {name: "Close guides"});
+      await close.focus();
+      await page.keyboard.press("Shift+Tab");
+      expect(await hub.evaluate(element => element.contains(document.activeElement))).toBe(true);
+      await page.keyboard.press("Tab");
+      await expect(close).toBeFocused();
+      expect((await new AxeBuilder({page}).include('[role="dialog"][aria-labelledby="guides-drawer-title"]').analyze()).violations).toEqual([]);
+      await hub.getByRole("button", {name: "Close guides"}).click();
+    };
+    await openGuides();
+    await page.reload();
+    await openGuides();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-core-metadata-screen", {body: await page.screenshot(), contentType: "image/png"});
+    await testInfo.attach("butler-core-metadata-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry], result: "Closed public Core reads, Git status/diff, selected resource search with private-chat exclusion, saved operator/revision-bound guide progress and verified fixed skill templates; visible guide completion survives paired reload. No model program, container, SSH or vendor account execution."}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});

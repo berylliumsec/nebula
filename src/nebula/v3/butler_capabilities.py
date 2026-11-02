@@ -157,7 +157,7 @@ _CATEGORIES = (
     },
     {
         "id": "data",
-        "description": "Bounded saved structured Results, project conversation search and revision-checked message bookmarks",
+        "description": "Bounded saved Results and resource search, private conversation boundaries, Core metadata and Git inspection, operator/revision-bound guide progress and fixed templates",
     },
     {
         "id": "work",
@@ -308,6 +308,7 @@ class ButlerCapabilities:
             )
         }
         if background_case_id is None:
+            from .butler_administration import ButlerAdministration
             from .butler_chat_export import ButlerChatExport
             from .butler_credentials import ButlerCredentials
             from .butler_diagnostics import ButlerDiagnostics
@@ -335,6 +336,14 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerData(store, project_id, settings_api).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerAdministration(
+                        store, project_id, settings_api
+                    ).actions()
                 }
             )
             self._actions.update(

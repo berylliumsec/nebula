@@ -768,3 +768,14 @@ def test_product_search_finds_butler_inspection_and_sensitive_original_boundary(
     assert "nebula.inspect.download_artifact" in text
     assert "redacted" in text
     assert "requesting browser" in text
+
+
+def test_product_search_finds_butler_core_observations_and_guide_progress(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler Core observations resource search guide progress"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.data.system" in text
+    assert "nebula.data.search_resources" in text
+    assert "nebula.data.guides" in text

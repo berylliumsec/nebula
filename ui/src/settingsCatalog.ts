@@ -229,7 +229,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Diagnostics",
     scope: "Device",
     target: "diagnostics-settings",
-    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry"],
+    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry", "public incidents", "Core health"],
   },
   {
     id: "settings.setup",

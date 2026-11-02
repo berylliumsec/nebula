@@ -3,6 +3,14 @@ import type { ChatStreamEvent, HarnessProfile } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("refreshes guides only for an observed selected-project guide write", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "core_project_data_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.data.set_guide_progress", client_action: {kind: "guides_refresh", project_id: "selected"}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "guides_refresh", projectId: "selected"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.data.system"}}, "selected")).toBeUndefined();
+  });
   it("accepts only verified execution refresh and bounded original artifact receipts", () => {
     const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
       receipt: {state: "core_execution_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.inspect.cancel_execution", client_action: {kind: "execution_refresh", project_id: "selected", execution_id: "execution"}}};
