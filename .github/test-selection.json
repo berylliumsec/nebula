@@ -1,10 +1,10 @@
 {
-  "change_digest": "713b5a69e96ca62ffa9c195964f051304aa577ec5be3d587a86c60ce24868ded",
+  "change_digest": "b06fe21c175707f32da0ad6004dfc6de68dcf5d2d8bacaa7c369e82d8ccbfe86",
   "reviewed_by": "Codex focused review for entity lookup stalls",
-  "reason": "Verify exact artifact and recovery seeks, stable project pages, all entity write projections, legacy migration preservation/rollback/retry, and bounded worker-owned Sessions. Existing horizon, payload-filter and two exact recovery cases exercise the affected integrations. Query plans allow an exact primary-key recovery-page seek. Synthetic benchmark scripts are exercised directly against baseline and candidate code, including restored-backup migration and delayed SQL. No product behavior changed after the passing 44-test run; final additions are benchmark assertions, evidence, and a migration typing annotation.",
+  "reason": "Verify exact artifact/recovery seeks, stable pages, all write projections, atomic legacy migration and thread-owned Sessions. The worker cases cover 2 and 40 AnyIO tokens and bursts of 20 reads, proving shared four-listing admission leaves DB capacity for an authenticated request. Existing horizon, payload-filter and two exact recovery cases cover affected integrations. Scale scripts prove query speedups, restored-backup migration, and delayed-SQL HTTP behavior. Other layers remain excluded as documented.",
   "exclusions": "No UI controls, settings, browser-specific behavior, native code, provider execution or harness behavior changes. Frontend, native and Playwright layers are excluded. The user explicitly replaced LAN/VPN validation with an isolated local Core. No full suites; no production or simulation database migration. PostgreSQL runtime validation is not available in this SQLite production incident.",
   "expected_tests": {
-    "python": 44,
+    "python": 47,
     "frontend": 0,
     "native": 0,
     "playwright": 0

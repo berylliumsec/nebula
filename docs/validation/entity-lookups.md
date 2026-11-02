@@ -51,9 +51,21 @@ The artifact and recovery indexes include their exact predicates and stable
 ordering; the project index matches `(kind, engagement_id, created_at, id)`.
 Both listing handlers are synchronous FastAPI handlers: all their reads and
 enrichment run in AnyIO's shared, capacity-limited thread pool (40 tokens by
-default). No Session is passed to a worker. Tests lower that pool to two tokens,
-hold all read workers, verify the concurrency bound, and trace each Session's
-creation/query/commit/close thread while unrelated authentication still answers.
+default). A shared four-listing semaphore admits work before worker dispatch,
+leaving database connections for ordinary reads. No Session is passed to a worker.
+Tests exercise both two and forty worker tokens, hold read workers during bursts
+of twenty requests, and trace Session creation/query/commit/close ownership while
+an unrelated authenticated database request still answers.
+
+A separate fresh-context burst diagnosis confirmed why the extra admission
+bound is needed: the default database pool has five connections plus ten overflow,
+while the worker pool admits forty operations. Twenty held listing reads consumed
+all fifteen connections; the event loop then spent 1,006 ms inside pool checkout
+for `/auth/devices`, with twenty worker tokens still free. A timer captured the
+loop stack in `list_paired_devices -> find_entities -> QueuePool._do_get ->
+threading.wait`. Fourteen reads answered in 8.4 ms, and limiting the twenty-read
+control to two workers answered in 4.7 ms. The pool-acquisition stack excludes a
+SQLite lock wait; unused worker tokens exclude worker-pool exhaustion.
 
 Downgrade uses native column removal because Alembic's SQLite table-copy operation
 temporarily drops `entities`, invalidating existing event-ledger trigger references.
@@ -76,14 +88,14 @@ PYTHONPATH=/workspace/nebula-entity-baseline/src .venv/bin/python scripts/benchm
 PYTHONPATH=src .venv/bin/python scripts/benchmarks/entity_lookups.py migrate --directory /workspace/nebula-entity-scale
 PYTHONPATH=src .venv/bin/python scripts/benchmarks/entity_lookups.py measure --directory /workspace/nebula-entity-scale --label after
 PYTHONPATH=src .venv/bin/python scripts/benchmarks/entity_listing_http.py --database /workspace/nebula-entity-scale/restored.db --output /workspace/nebula-entity-scale/http-after.json
-PYTHONPATH=src .venv/bin/python scripts/benchmarks/entity_listing_http.py --database /workspace/nebula-entity-scale/restored.db --output /workspace/nebula-entity-scale/http-after-slow.json --slow-read-ms 2500
+PYTHONPATH=src .venv/bin/python scripts/benchmarks/entity_listing_http.py --database /workspace/nebula-entity-scale/restored.db --output /workspace/nebula-entity-scale/http-after-slow.json --slow-read-ms 2500 --listing-requests 20
 ```
 
 The HTTP harness runs a complete Core lifespan on an available loopback port,
 uses actual `/api/v1/artifacts` and `/api/v1/auth/devices` routes, and stops Core
 before exiting. A diagnostic-only authenticated endpoint invokes the actual
 stale-approved-call recovery method in its existing worker context. Three waves
-each combine eight 1,000-artifact lists, one recovery pass, and twenty lightweight
+each combine eight 1,000-artifact lists (twenty in the delayed-SQL burst), one recovery pass, and twenty lightweight
 authenticated HTTP requests. An independent 10 ms heartbeat runs inside the Core
 process; clients run in another process. The delayed-SQL probe adds 2.5 seconds
 inside artifact SQL execution only after startup. Pairing/authentication remain
@@ -102,11 +114,11 @@ plan, latency, and migration evidence is in
 
 | Operation | Before median | After median | Improvement |
 | --- | ---: | ---: | ---: |
-| Artifact hit (3 rows) | 1,640.33 ms | 0.368 ms | 4,452x |
-| Artifact miss | 1,659.73 ms | 0.223 ms | 7,450x |
-| Recovery candidates (3 rows, both SQL stages) | 1,195.70 ms | 0.844 ms | 1,417x |
-| Actual stale-approved-call recovery pass | 1,197.90 ms | 0.808 ms | 1,483x |
-| Project page (1,000 artifacts) | 311.64 ms | 20.103 ms | 15.5x |
+| Artifact hit (3 rows) | 1,499.28 ms | 0.488 ms | 3,075.1x |
+| Artifact miss | 1,459.88 ms | 0.414 ms | 3,523.6x |
+| Recovery candidates (3 rows, both SQL stages) | 1,041.20 ms | 0.798 ms | 1,304.1x |
+| Actual stale-approved-call recovery pass | 978.24 ms | 0.896 ms | 1,091.7x |
+| Project page (1,000 artifacts) | 307.28 ms | 22.574 ms | 13.6x |
 
 The after plans seek `(kind, engagement_id, artifact_tool_call_id)` for artifacts,
 `(kind, tool_call_status, tool_call_origin)` for both recovery stages, and
@@ -115,23 +127,23 @@ None scans a broad kind/project history or uses a temporary ordering B-tree.
 
 | Concurrent Core workload | Before | After | After with 2.5-second SQL delay |
 | --- | ---: | ---: | ---: |
-| Listing HTTP median | 2,787.20 ms | 317.74 ms | 2,825.34 ms |
-| Lightweight HTTP p95 | 1,539.42 ms | 39.98 ms | 5.53 ms |
-| Lightweight HTTP maximum | 3,040.26 ms | 271.84 ms | 8.44 ms |
-| Recovery HTTP median | 3,820.15 ms | 22.16 ms | 19.72 ms |
-| Event-loop lag maximum | 2,691.97 ms | 266.53 ms | 319.27 ms |
+| Listing HTTP median | 2,968.80 ms | 250.17 ms | 8,062.51 ms |
+| Lightweight HTTP p95 | 2,058.94 ms | 31.96 ms | 15.10 ms |
+| Lightweight HTTP maximum | 3,480.23 ms | 329.95 ms | 17.07 ms |
+| Recovery HTTP median | 3,992.31 ms | 14.94 ms | 30.87 ms |
+| Event-loop lag maximum | 3,463.63 ms | 316.46 ms | 378.44 ms |
 
 The tenfold gate applies to the measured database operations above; HTTP list
 latency also includes eight concurrent ORM materializations and responses. All
 candidate unrelated-request and loop-lag maxima passed the sub-second gate.
-Origins were `http://127.0.0.1:35079` (before), `:34921` (after), and `:54793`
+Origins were `http://127.0.0.1:39515` (before), `:42081` (after), and `:41873`
 (delayed SQL), using the actual source Core API with a complete lifespan and no
 UI bundle. Local validation replaces LAN validation by explicit user instruction.
 No physical device, browser-engine, installed-release, or live-provider result is
 claimed.
 
 The rehearsal verified source and backup integrity, copied the backup to a
-restored database, upgraded the restored copy in **12.089 seconds**, and verified
+restored database, upgraded the restored copy in **21.183 seconds**, and verified
 integrity, projection population, row counts, and a matching SHA-256 over every
 authoritative envelope/revision/timestamp. Legacy size was 1,638,883,328 bytes;
 migrated size was 1,989,644,288 bytes. Peak restored database/WAL/SHM usage sampled
@@ -143,10 +155,10 @@ production backup or storage.
 
 ## Focused checks
 
-The diff-bound `.github/test-selection.json` selects exactly 44 Python tests:
+The diff-bound `.github/test-selection.json` selects exactly 47 Python tests:
 `test_session_record_lookups.py`, the three new hot-lookup/migration/worker files,
 two exact restart-recovery cases, and one exact payload-filter storage case.
-Collection found 44; execution passed 44 in 19.94 seconds. No full suite ran.
+Collection found 47; execution passed 47 in 24.57 seconds. No full suite ran.
 Ruff lint and formatting passed. CI also validates the committed selection receipt.
 
 ## Production promotion remains blocked

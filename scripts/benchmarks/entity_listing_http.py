@@ -136,7 +136,7 @@ async def drive(args, token):
                         "/api/v1/artifacts?engagement_id=bench-project&limit=1000",
                     )
                 )
-                for _ in range(8)
+                for _ in range(args.listing_requests)
             ]
             recover = asyncio.create_task(
                 timed("recovery", "/__synthetic_recovery__", "POST")
@@ -147,6 +147,7 @@ async def drive(args, token):
             await asyncio.gather(*listing, recover)
         return {
             "origin": base,
+            "listing_requests_per_wave": args.listing_requests,
             "latencies": {k: summary(v) for k, v in durations.items()},
         }
 
@@ -158,6 +159,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--slow-read-ms", type=int, default=0)
+    parser.add_argument("--listing-requests", type=int, default=8)
     args = parser.parse_args()
     assert (
         json.loads((args.database.parent / "synthetic.json").read_text())["synthetic"]

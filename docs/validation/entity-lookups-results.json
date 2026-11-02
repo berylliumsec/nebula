@@ -11,57 +11,57 @@
   "before": {
     "artifact_hit": {
       "samples_ms": [
-        1640.329329999986,
-        1815.8701259999361,
-        1727.528297000049,
-        1395.560549000038,
-        1624.2971489999718
+        1327.1528480001962,
+        1499.276350999935,
+        1409.3690289998904,
+        1579.0717630000017,
+        1679.3531889998121
       ],
-      "median_ms": 1640.329329999986,
+      "median_ms": 1499.276350999935,
       "rows": 3
     },
     "artifact_miss": {
       "samples_ms": [
-        1448.8031190001038,
-        1492.0796850000215,
-        1665.8439029999954,
-        1666.8859379999503,
-        1659.7257429999672
+        1478.7985559999015,
+        1459.8798050001278,
+        1330.4876950001017,
+        1377.9552880000665,
+        1569.1463690000091
       ],
-      "median_ms": 1659.7257429999672,
+      "median_ms": 1459.8798050001278,
       "rows": 0
     },
     "recovery_candidates": {
       "samples_ms": [
-        1195.6965979999268,
-        1198.6878010000055,
-        1185.917623000023,
-        1170.8675599999196,
-        1233.2612779999863
+        1050.020671999846,
+        1168.1214850000288,
+        1040.3106429998843,
+        1041.1988190001011,
+        1028.2847819999006
       ],
-      "median_ms": 1195.6965979999268,
+      "median_ms": 1041.1988190001011,
       "rows": 3
     },
     "recovery_pass": {
       "samples_ms": [
-        1247.2284259999924,
-        1370.872965999979,
-        1169.1231109999762,
-        1185.5232589999787,
-        1197.8970050000726
+        978.2427029999781,
+        1044.6581769999739,
+        970.9310820001065,
+        955.9249859999,
+        981.3788740000291
       ],
-      "median_ms": 1197.8970050000726,
+      "median_ms": 978.2427029999781,
       "rows": 0
     },
     "project_list": {
       "samples_ms": [
-        311.63821199993436,
-        311.1290510000799,
-        328.9284449999741,
-        308.4273659999326,
-        488.12929500002156
+        306.52999099993394,
+        311.93742499999644,
+        307.27808699998604,
+        277.1275919999425,
+        439.16542300007677
       ],
-      "median_ms": 311.63821199993436,
+      "median_ms": 307.27808699998604,
       "rows": 1000
     },
     "queries": [
@@ -163,57 +163,57 @@
   "after": {
     "artifact_hit": {
       "samples_ms": [
-        7.908042999815734,
-        0.8147219998591027,
-        0.366590999874461,
-        0.36847399996986496,
-        0.33783899993977684
+        9.202296999774262,
+        0.8289339998555079,
+        0.3702959998008737,
+        0.4875600002378633,
+        0.47520099997200305
       ],
-      "median_ms": 0.36847399996986496,
+      "median_ms": 0.4875600002378633,
       "rows": 3
     },
     "artifact_miss": {
       "samples_ms": [
-        0.23940300002323056,
-        0.21831200001543039,
-        0.24556300013500731,
-        0.2048530000138271,
-        0.2227889999630861
+        0.35668700002133846,
+        0.6928630000402336,
+        0.4143119999753253,
+        0.2557669999987411,
+        0.6210070000634005
       ],
-      "median_ms": 0.2227889999630861,
+      "median_ms": 0.4143119999753253,
       "rows": 0
     },
     "recovery_candidates": {
       "samples_ms": [
-        1.8660640000689455,
-        1.054285999998683,
-        0.8438150000529276,
-        0.7441779998771381,
-        0.581168000053367
+        2.2269689998211106,
+        0.7984290000422334,
+        0.7355259999712871,
+        0.9111559998018492,
+        0.7034489999568905
       ],
-      "median_ms": 0.8438150000529276,
+      "median_ms": 0.7984290000422334,
       "rows": 3
     },
     "recovery_pass": {
       "samples_ms": [
-        0.8075719999851572,
-        0.9878280000066297,
-        0.6532039999456174,
-        1.0989119998612296,
-        0.6014780001351028
+        1.1245509999753267,
+        0.8498649999637564,
+        0.9364630000163743,
+        0.6715410004289879,
+        0.8960330001173133
       ],
-      "median_ms": 0.8075719999851572,
+      "median_ms": 0.8960330001173133,
       "rows": 0
     },
     "project_list": {
       "samples_ms": [
-        20.88131000004978,
-        19.23364699996455,
-        20.103020000078686,
-        19.587800999943283,
-        181.55612300006396
+        19.0239210000982,
+        22.574020999854838,
+        23.811275000298338,
+        19.669911000164575,
+        206.6166989998237
       ],
-      "median_ms": 20.103020000078686,
+      "median_ms": 22.574020999854838,
       "rows": 1000
     },
     "queries": [
@@ -288,102 +288,104 @@
     ],
     "code_root": "/workspace/nebula/src/nebula/v3/database.py",
     "speedups": {
-      "artifact_hit": 4451.682697107904,
-      "artifact_miss": 7449.765218547447,
-      "recovery_candidates": 1417.0127313746825,
-      "recovery_pass": 1483.3315234085499,
-      "project_list": 15.502059491495038
+      "artifact_hit": 3075.060198269938,
+      "artifact_miss": 3523.624237499933,
+      "recovery_candidates": 1304.05937026965,
+      "recovery_pass": 1091.7485213958653,
+      "project_list": 13.61202273188113
     }
   },
   "http_before": {
-    "origin": "http://127.0.0.1:35079",
+    "origin": "http://127.0.0.1:39515",
     "latencies": {
       "listing": {
         "count": 24,
-        "median_ms": 2787.198864000004,
-        "p95_ms": 3132.159435999938,
-        "max_ms": 3136.1422069999207
+        "median_ms": 2968.796095000016,
+        "p95_ms": 3501.2540450002234,
+        "max_ms": 3503.3074610000767
       },
       "lightweight_http": {
         "count": 60,
-        "median_ms": 3.3230470000376044,
-        "p95_ms": 1539.4248379999453,
-        "max_ms": 3040.264125000135
+        "median_ms": 3.8195039999209257,
+        "p95_ms": 2058.9437159999306,
+        "max_ms": 3480.2336400000513
       },
       "recovery": {
         "count": 3,
-        "median_ms": 3820.1494040000625,
-        "p95_ms": 3842.2368280000683,
-        "max_ms": 3842.2368280000683
+        "median_ms": 3992.306570999972,
+        "p95_ms": 4583.266935000211,
+        "max_ms": 4583.266935000211
       }
     },
     "loop_lag": {
-      "count": 275,
-      "median_ms": 0.1804329999595209,
-      "p95_ms": 0.7533240000066141,
-      "max_ms": 2691.9731540000294
+      "count": 344,
+      "median_ms": 0.2023074999806338,
+      "p95_ms": 0.9720979999110566,
+      "max_ms": 3463.6296069997934
     }
   },
   "http_after": {
-    "origin": "http://127.0.0.1:34921",
+    "origin": "http://127.0.0.1:42081",
+    "listing_requests_per_wave": 8,
     "latencies": {
       "listing": {
         "count": 24,
-        "median_ms": 317.7403019999474,
-        "p95_ms": 621.308972000179,
-        "max_ms": 624.477670000033
+        "median_ms": 250.1682394999989,
+        "p95_ms": 654.5144680003432,
+        "max_ms": 659.9864570002865
       },
       "lightweight_http": {
         "count": 60,
-        "median_ms": 4.78108599997995,
-        "p95_ms": 39.9845719998666,
-        "max_ms": 271.844511999916
+        "median_ms": 4.864797999744042,
+        "p95_ms": 31.955974999618775,
+        "max_ms": 329.9527029998899
       },
       "recovery": {
         "count": 3,
-        "median_ms": 22.16133699994316,
-        "p95_ms": 37.11382199981017,
-        "max_ms": 37.11382199981017
+        "median_ms": 14.942582000003313,
+        "p95_ms": 23.944252000092092,
+        "max_ms": 23.944252000092092
       }
     },
     "loop_lag": {
-      "count": 110,
-      "median_ms": 0.48316200001408993,
-      "p95_ms": 20.74313399997663,
-      "max_ms": 266.52852500000336
+      "count": 116,
+      "median_ms": 0.43343900005311276,
+      "p95_ms": 13.65319599994109,
+      "max_ms": 316.4562410004146
     }
   },
   "http_after_slow": {
-    "origin": "http://127.0.0.1:54793",
+    "origin": "http://127.0.0.1:41873",
+    "listing_requests_per_wave": 20,
     "latencies": {
       "listing": {
-        "count": 24,
-        "median_ms": 2825.343285000031,
-        "p95_ms": 3252.9018449999967,
-        "max_ms": 3269.5572860000084
+        "count": 60,
+        "median_ms": 8062.511028500012,
+        "p95_ms": 13502.50326899959,
+        "max_ms": 13587.744907000342
       },
       "lightweight_http": {
         "count": 60,
-        "median_ms": 2.629955999964295,
-        "p95_ms": 5.530442999997831,
-        "max_ms": 8.44051700005366
+        "median_ms": 4.611520500020561,
+        "p95_ms": 15.097460000106366,
+        "max_ms": 17.06986200042593
       },
       "recovery": {
         "count": 3,
-        "median_ms": 19.722312999874703,
-        "p95_ms": 22.567001000197706,
-        "max_ms": 22.567001000197706
+        "median_ms": 30.872858999828168,
+        "p95_ms": 30.988534000243817,
+        "max_ms": 30.988534000243817
       }
     },
     "loop_lag": {
-      "count": 852,
-      "median_ms": 0.1649895000264221,
-      "p95_ms": 1.203345000012632,
-      "max_ms": 319.2696729999989
+      "count": 3721,
+      "median_ms": 0.19218200008253894,
+      "p95_ms": 0.8510279997062751,
+      "max_ms": 378.44173300003604
     }
   },
   "migration": {
-    "migration_seconds": 12.088565061000054,
+    "migration_seconds": 21.18274483999994,
     "legacy_bytes": 1638883328,
     "restored_bytes": 1989644288,
     "peak_database_and_wal_bytes": 3388936944,
@@ -393,9 +395,123 @@
       "mcp_servers": 1,
       "tool_calls": 350001
     },
-    "authoritative_sha256": "2da540ee8cdd7c51ba1aab5b26722504a425f8d92d8bf37d5bfd1e1142530b15",
+    "authoritative_sha256": "76e7c9ad1a39fa4a3baafee9d33056fe0f33842533561541aad833cd0e3c5c57",
     "backup_verified": true,
     "restored_integrity": "ok",
     "authoritative_envelopes_unchanged": true
-  }
+  },
+  "independent_admission_probe": [
+    {
+      "case": "generic14-workers40",
+      "burst": 14,
+      "runtime_default_worker_tokens": 40,
+      "configured_worker_tokens": 40,
+      "pool": {
+        "class": "QueuePool",
+        "size": 5,
+        "max_overflow": 10,
+        "timeout_s": 30.0
+      },
+      "before_devices": {
+        "at_ms": 319.925,
+        "active_artifact_gates": 14,
+        "pool_checked_out": 14,
+        "worker_borrowed_tokens": 14,
+        "worker_total_tokens": 40
+      },
+      "devices": {
+        "at_ms": 328.607,
+        "status": 200,
+        "body": [],
+        "elapsed_ms": 8.357
+      },
+      "maximum_checked_out": 15,
+      "max_heartbeat_gap_ms": 26.044,
+      "gate_timeouts": 0
+    },
+    {
+      "case": "generic20-workers40",
+      "burst": 20,
+      "runtime_default_worker_tokens": 40,
+      "configured_worker_tokens": 40,
+      "pool": {
+        "class": "QueuePool",
+        "size": 5,
+        "max_overflow": 10,
+        "timeout_s": 30.0
+      },
+      "before_devices": {
+        "at_ms": 61.081,
+        "active_artifact_gates": 15,
+        "pool_checked_out": 15,
+        "worker_borrowed_tokens": 20,
+        "worker_total_tokens": 40
+      },
+      "devices": {
+        "at_ms": 1074.351,
+        "status": 200,
+        "body": [],
+        "elapsed_ms": 1012.918
+      },
+      "maximum_checked_out": 15,
+      "max_heartbeat_gap_ms": 1014.757,
+      "gate_timeouts": 0
+    },
+    {
+      "case": "tool20-workers40",
+      "burst": 20,
+      "runtime_default_worker_tokens": 40,
+      "configured_worker_tokens": 40,
+      "pool": {
+        "class": "QueuePool",
+        "size": 5,
+        "max_overflow": 10,
+        "timeout_s": 30.0
+      },
+      "before_devices": {
+        "at_ms": 69.554,
+        "active_artifact_gates": 15,
+        "pool_checked_out": 15,
+        "worker_borrowed_tokens": 20,
+        "worker_total_tokens": 40
+      },
+      "devices": {
+        "at_ms": 1082.254,
+        "status": 200,
+        "body": [],
+        "elapsed_ms": 1012.304
+      },
+      "maximum_checked_out": 15,
+      "max_heartbeat_gap_ms": 1013.977,
+      "gate_timeouts": 0
+    },
+    {
+      "case": "generic20-workers2",
+      "burst": 20,
+      "runtime_default_worker_tokens": 40,
+      "configured_worker_tokens": 2,
+      "pool": {
+        "class": "QueuePool",
+        "size": 5,
+        "max_overflow": 10,
+        "timeout_s": 30.0
+      },
+      "before_devices": {
+        "at_ms": 48.685,
+        "active_artifact_gates": 2,
+        "pool_checked_out": 2,
+        "worker_borrowed_tokens": 2,
+        "worker_total_tokens": 2
+      },
+      "devices": {
+        "at_ms": 53.582,
+        "status": 200,
+        "body": [],
+        "elapsed_ms": 4.672
+      },
+      "maximum_checked_out": 3,
+      "max_heartbeat_gap_ms": 15.088,
+      "gate_timeouts": 0
+    }
+  ]
 }

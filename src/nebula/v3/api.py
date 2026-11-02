@@ -3302,6 +3302,15 @@ def create_app(
             )
         return f"device:{device.id}"
 
+    # Admit before dispatching to workers. The default DB pool has 15 total
+    # connections, while AnyIO permits 40 workers; slow lists must leave room
+    # for ordinary authenticated reads that still acquire on the event loop.
+    entity_listing_slots = asyncio.Semaphore(4)
+
+    async def require_entity_listing_capacity() -> AsyncIterator[None]:
+        async with entity_listing_slots:
+            yield
+
     def _device_response(
         device: PairedDeviceSession, *, current_id: str | None = None
     ) -> PairedDeviceResponse:
@@ -12970,7 +12979,10 @@ def create_app(
             f"{API_PREFIX}/tool-calls/{{tool_call_id}}/artifacts",
             response_model=list[Artifact],
             tags=["artifacts"],
-            dependencies=[Depends(require_auth)],
+            dependencies=[
+                Depends(require_auth),
+                Depends(require_entity_listing_capacity),
+            ],
         )
         def tool_call_artifacts(tool_call_id: str) -> list[Artifact]:
             # FastAPI's capacity-limited worker pool owns the entire sync read,
@@ -14355,6 +14367,7 @@ def create_app(
             entity_validator,
             resource,
             model,
+            listing_capacity=require_entity_listing_capacity,
             read_only=resource in READ_ONLY_RESOURCES,
             append_only=resource in APPEND_ONLY_RESOURCES,
             delete_archived_project=delete_archived_project,
@@ -15176,6 +15189,7 @@ def _register_crud_routes(
     resource: str,
     model: type[Entity],
     *,
+    listing_capacity: Callable[..., Any],
     read_only: bool = False,
     append_only: bool = False,
     after_create: Callable[[Entity], Any] | None = None,
@@ -15679,7 +15693,7 @@ def _register_crud_routes(
         methods=["GET"],
         response_model=list[model],  # type: ignore[valid-type]
         tags=[tag],
-        dependencies=dependencies,
+        dependencies=[*dependencies, Depends(listing_capacity)],
     )
     app.add_api_route(
         f"{base}/{{entity_id}}",

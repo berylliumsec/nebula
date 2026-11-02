@@ -16,9 +16,10 @@ from nebula.v3.domain import Artifact, ChatSession, RiskClass, ToolCall
 from nebula.v3.storage import NebulaStore
 
 
+@pytest.mark.parametrize("worker_tokens", [2, 40])
 @pytest.mark.parametrize("resource", ["artifacts", "tool-artifacts", "chat-sessions"])
 def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
-    tmp_path, resource
+    tmp_path, resource, worker_tokens
 ):
     store = NebulaStore(tmp_path / "workers.db")
     store.create(
@@ -73,9 +74,6 @@ def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
             super().__init__(*args, **kwargs)
             self.owner_thread = threading.get_ident()
             self.finished = False
-            assert self.owner_thread != loop_thread, (
-                "listing Session created on event loop"
-            )
             sessions.append(self)
 
         def _check_owner(self):
@@ -106,6 +104,10 @@ def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
         nonlocal active, maximum, entered
         if not statement.startswith("SELECT") or "FROM entities" not in statement:
             return
+        # The unrelated authenticated read is allowed on the loop. Every
+        # listing query, including enrichment, must stay in its worker.
+        if parameters and parameters[0] == "paired_device_sessions":
+            return
         assert threading.get_ident() != loop_thread
         with guard:
             entered += 1
@@ -122,7 +124,8 @@ def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
     async def exercise():
         limiter = anyio.to_thread.current_default_thread_limiter()
         previous = limiter.total_tokens
-        limiter.total_tokens = 2
+        limiter.total_tokens = worker_tokens
+        expected_capacity = min(worker_tokens, 4)
         tasks = []
         try:
             async with httpx.AsyncClient(
@@ -134,28 +137,37 @@ def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
                             path, headers={"Authorization": "Bearer synthetic-token"}
                         )
                     )
-                    for _ in range(6)
+                    for _ in range(20 if worker_tokens == 40 else 6)
                 ]
                 for _ in range(200):
-                    if entered >= 2:
+                    if entered >= expected_capacity:
                         break
                     if any(task.done() for task in tasks):
                         await next(task for task in tasks if task.done())
                     await asyncio.sleep(0.005)
-                assert entered >= 2
-                assert maximum == 2
-                # Authentication still answers while every read worker is held.
+                await asyncio.sleep(0.05)  # let any incorrectly admitted work start
+                assert entered == expected_capacity
+                assert maximum == expected_capacity
+                # A burst of slow lists must leave DB connections for ordinary
+                # authenticated reads, even with the default 40 worker tokens.
                 response = await asyncio.wait_for(
-                    client.get("/api/v1/auth/devices"), timeout=0.5
+                    client.get(
+                        "/api/v1/auth/devices",
+                        headers={"Authorization": "Bearer synthetic-token"},
+                    ),
+                    timeout=0.5,
                 )
-                assert response.status_code == 401
+                assert response.status_code == 200
+                unauthorized = await asyncio.wait_for(client.get(path), timeout=0.5)
+                assert unauthorized.status_code == 401
                 assert not any(task.done() for task in tasks)
                 release.set()
                 responses = await asyncio.gather(*tasks)
                 assert all(response.status_code == 200 for response in responses)
                 assert all(len(response.json()) == 1 for response in responses)
-                assert maximum == 2
-                assert sessions and all(session.finished for session in sessions)
+                assert maximum == expected_capacity
+                assert any(session.owner_thread != loop_thread for session in sessions)
+                assert all(session.finished for session in sessions)
         finally:
             release.set()
             for task in tasks:
