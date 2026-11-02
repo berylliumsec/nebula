@@ -11,6 +11,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Collection,
     Iterable,
     Iterator,
     Mapping,
@@ -71,6 +72,7 @@ from .domain import (
     Engagement,
     Entity,
     HarnessInteraction,
+    McpServerProfile,
     OperationEvent,
     RunBackend,
     ToolCall,
@@ -1295,6 +1297,39 @@ class NebulaStore:
         if model is None:
             raise NotFoundError(f"unknown entity kind: {kind}")
         return self.get(model, entity_id)
+
+    def mcp_catalog_candidates(
+        self,
+        *,
+        exclude: Collection[str] = (),
+        engagement_id: str | None = None,
+    ) -> list[McpServerProfile]:
+        """Filter the on-demand catalog before decoding large tool snapshots.
+
+        Notebook profiles belong to explicit project selections, and can dwarf
+        the external catalog. Reading a page before filtering both materializes
+        those snapshots and hides eligible servers beyond that page.
+        """
+
+        built_in = EntityRow.payload["metadata"]["built_in"].as_string()
+        statement = select(EntityRow).where(
+            EntityRow.kind == McpServerProfile.entity_kind,
+            or_(built_in.is_(None), built_in != "notebook_v1"),
+            EntityRow.payload["enabled"].as_boolean().is_(True),
+            EntityRow.payload["capabilities"]["checked_at"].as_string().is_not(None),
+        )
+        if exclude:
+            statement = statement.where(EntityRow.id.not_in(list(exclude)))
+        if engagement_id is not None:
+            owner = EntityRow.payload["metadata"]["engagement_id"].as_string()
+            statement = statement.where(
+                or_(owner.is_(None), owner == "", owner == engagement_id)
+            )
+        with self.database.session() as session:
+            return [
+                _row_to_entity(row, McpServerProfile)
+                for row in session.scalars(statement)
+            ]
 
     def list_entities(
         self,

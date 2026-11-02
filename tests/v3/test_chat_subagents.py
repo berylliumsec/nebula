@@ -738,6 +738,7 @@ def test_supervisor_discovers_and_assigns_a_lifecycle_hook_to_one_child(
                         item
                         for item in store.list_entities(NativeHookExecution)
                         if item.chat_turn_id == record.child_turn_id
+                        and item.status != "running"
                     ]
                 )
                 == 2
@@ -1229,6 +1230,13 @@ def test_supervisor_can_enable_ready_command_runtime_for_one_child(
         )
         store, project, _, chat = _setup(tmp_path, provider)
         chat.automation_tool_platform = ReadyRuntime()
+        profile = store.get(ProviderProfile, "provider")
+        store.update(
+            ProviderProfile,
+            profile.id,
+            {"metadata": {"options": {"context_window": 32768}}},
+            expected_revision=profile.revision,
+        )
         prepared = await chat.prepare_async(
             _request(project, content="Delegate runtime check.", allow_subagents=True)
         )

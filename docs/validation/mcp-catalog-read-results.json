@@ -1,0 +1,454 @@
+{
+  "baseline": {
+    "label": "baseline",
+    "origin": "http://172.26.91.237:49927",
+    "synthetic": true,
+    "authentication_enabled": true,
+    "unauthorized_status": 401,
+    "clients": 34,
+    "rounds": 3,
+    "slow_read_ms": 0,
+    "fixture": {
+      "profiles": 2535,
+      "notebook_profiles": 2526,
+      "external_profiles": 9,
+      "notebook_tools": 16
+    },
+    "latencies": {
+      "capabilities": {
+        "count": 102,
+        "median_ms": 15042.839,
+        "p95_ms": 36364.428,
+        "max_ms": 42605.941
+      },
+      "ordinary_http": {
+        "count": 20,
+        "median_ms": 3.445,
+        "p95_ms": 10292.205,
+        "max_ms": 10292.205
+      },
+      "404": {
+        "count": 20,
+        "median_ms": 3.137,
+        "p95_ms": 8327.268,
+        "max_ms": 8327.268
+      },
+      "static": {
+        "count": 20,
+        "median_ms": 3.924,
+        "p95_ms": 8330.628,
+        "max_ms": 8330.628
+      }
+    },
+    "timeouts_at_10_seconds": {
+      "ordinary_http": 3,
+      "404": 5,
+      "static": 5
+    },
+    "transport_errors": {},
+    "all_catalogs_include_late_server": false,
+    "wall_seconds": 58.713,
+    "isolation": {
+      "latency": {
+        "count": 3,
+        "median_ms": 717.703,
+        "p95_ms": 824.524,
+        "max_ms": 824.524
+      },
+      "profile_ids": [
+        "external-0000",
+        "external-0001",
+        "external-0002",
+        "external-0003",
+        "external-0004",
+        "external-0005",
+        "external-0006",
+        "external-0007"
+      ],
+      "materialized_per_call": 1000
+    },
+    "loop_lag": {
+      "count": 114,
+      "median_ms": 0.179,
+      "p95_ms": 2383.358,
+      "max_ms": 6417.941
+    },
+    "hydration": {
+      "profiles_hydrated": 102000,
+      "profiles_hydrated_on_loop": 102000
+    },
+    "gateway_roots": [
+      "/tmp/nebula-mcp-gateway-7cewn0fr",
+      "/tmp/nebula-mcp-gateway-o779l1bz",
+      "/tmp/nebula-mcp-gateway-dfwnv9mh",
+      "/tmp/nebula-mcp-gateway-n8iqnur4",
+      "/tmp/nebula-mcp-gateway-iwbb1wu5",
+      "/tmp/nebula-mcp-gateway-sq3519eq",
+      "/tmp/nebula-mcp-gateway-znkzx8e_",
+      "/tmp/nebula-mcp-gateway-9tm680xm",
+      "/tmp/nebula-mcp-gateway-8jhxc1fe",
+      "/tmp/nebula-mcp-gateway-uoors75s",
+      "/tmp/nebula-mcp-gateway-s71_sg62",
+      "/tmp/nebula-mcp-gateway-9co01ytz",
+      "/tmp/nebula-mcp-gateway-7a50cwau",
+      "/tmp/nebula-mcp-gateway-ykxdv0yh",
+      "/tmp/nebula-mcp-gateway-nmmxz4kg",
+      "/tmp/nebula-mcp-gateway-gbwe98iy",
+      "/tmp/nebula-mcp-gateway-7pud5sdd",
+      "/tmp/nebula-mcp-gateway-snwsza_j",
+      "/tmp/nebula-mcp-gateway-87k1_qmo",
+      "/tmp/nebula-mcp-gateway-6cjpzppf",
+      "/tmp/nebula-mcp-gateway-e2ltamxh",
+      "/tmp/nebula-mcp-gateway-appw_lwn",
+      "/tmp/nebula-mcp-gateway-menm37tp",
+      "/tmp/nebula-mcp-gateway-_ylhhvea",
+      "/tmp/nebula-mcp-gateway-3fzsi9jx",
+      "/tmp/nebula-mcp-gateway-wl1zvtpk",
+      "/tmp/nebula-mcp-gateway-9f1rl2ye",
+      "/tmp/nebula-mcp-gateway-_rbt5ob2",
+      "/tmp/nebula-mcp-gateway-tmwqacpg",
+      "/tmp/nebula-mcp-gateway-gmhu05o_",
+      "/tmp/nebula-mcp-gateway-oiakkhx0",
+      "/tmp/nebula-mcp-gateway-kvnl839w",
+      "/tmp/nebula-mcp-gateway-hll7s74y",
+      "/tmp/nebula-mcp-gateway-fbmab_mv"
+    ],
+    "gateway_directories_removed": true,
+    "server_exit_code": 0,
+    "temporary_directory": "/tmp/nebula-mcp-load-2dc6czap",
+    "temporary_data_removed": true,
+    "server_stopped": true,
+    "source_files_sha256": {
+      "storage.py": "4b2f0fb7d1140d390452bd5ad533d41a462af0eba49deac459bc9a1084c2dd45",
+      "mcp.py": "342caaa95e50a5db6400e32fa32443d20d0760acd662aead440c03d64d17df33",
+      "chat_subagents.py": "69e9391c47e082c678f5af719feb60ce3969d347a2e42996a82a21eac9e003d6",
+      "harnesses.py": "9194551f21c64bb4c93c57cb5b5787d9cc5604c23352515014f4eb253d94cb90"
+    }
+  },
+  "candidate": {
+    "label": "candidate",
+    "origin": "http://172.26.91.237:43437",
+    "synthetic": true,
+    "authentication_enabled": true,
+    "unauthorized_status": 401,
+    "clients": 34,
+    "rounds": 3,
+    "slow_read_ms": 0,
+    "fixture": {
+      "profiles": 2535,
+      "notebook_profiles": 2526,
+      "external_profiles": 9,
+      "notebook_tools": 16
+    },
+    "latencies": {
+      "capabilities": {
+        "count": 102,
+        "median_ms": 1163.954,
+        "p95_ms": 1332.582,
+        "max_ms": 1370.381
+      },
+      "ordinary_http": {
+        "count": 197,
+        "median_ms": 5.909,
+        "p95_ms": 13.763,
+        "max_ms": 128.182
+      },
+      "404": {
+        "count": 150,
+        "median_ms": 11.176,
+        "p95_ms": 25.202,
+        "max_ms": 137.491
+      },
+      "static": {
+        "count": 141,
+        "median_ms": 12.624,
+        "p95_ms": 27.681,
+        "max_ms": 136.487
+      }
+    },
+    "timeouts_at_10_seconds": {},
+    "transport_errors": {},
+    "all_catalogs_include_late_server": true,
+    "wall_seconds": 3.637,
+    "isolation": {
+      "latency": {
+        "count": 3,
+        "median_ms": 39.577,
+        "p95_ms": 40.924,
+        "max_ms": 40.924
+      },
+      "profile_ids": [
+        "external-0000",
+        "external-0001",
+        "external-0002",
+        "external-0003",
+        "external-0004",
+        "external-0005",
+        "external-0006",
+        "external-0007",
+        "external-2534"
+      ],
+      "materialized_per_call": 9
+    },
+    "loop_lag": {
+      "count": 663,
+      "median_ms": 0.485,
+      "p95_ms": 3.758,
+      "max_ms": 41.185
+    },
+    "hydration": {
+      "profiles_hydrated": 918,
+      "profiles_hydrated_on_loop": 0
+    },
+    "gateway_roots": [
+      "/tmp/nebula-mcp-gateway-hpx9h45k",
+      "/tmp/nebula-mcp-gateway-8ojec8ww",
+      "/tmp/nebula-mcp-gateway-of5piv17",
+      "/tmp/nebula-mcp-gateway-b03k1eme",
+      "/tmp/nebula-mcp-gateway-csf266oi",
+      "/tmp/nebula-mcp-gateway-caw2kqd9",
+      "/tmp/nebula-mcp-gateway-ku16tnee",
+      "/tmp/nebula-mcp-gateway-qt3z4zsb",
+      "/tmp/nebula-mcp-gateway-tscpjbjg",
+      "/tmp/nebula-mcp-gateway-l39ub_x2",
+      "/tmp/nebula-mcp-gateway-70jr7165",
+      "/tmp/nebula-mcp-gateway-e0medndt",
+      "/tmp/nebula-mcp-gateway-wkhsbmmu",
+      "/tmp/nebula-mcp-gateway-h8ozwf27",
+      "/tmp/nebula-mcp-gateway-gb0bi7h3",
+      "/tmp/nebula-mcp-gateway-opz4jd9q",
+      "/tmp/nebula-mcp-gateway-9_1vhkgv",
+      "/tmp/nebula-mcp-gateway-g8dqdxxy",
+      "/tmp/nebula-mcp-gateway-yqf0tpuv",
+      "/tmp/nebula-mcp-gateway-up66ggle",
+      "/tmp/nebula-mcp-gateway-58raihna",
+      "/tmp/nebula-mcp-gateway-b3kx18el",
+      "/tmp/nebula-mcp-gateway-7nbharwc",
+      "/tmp/nebula-mcp-gateway-81bm5avd",
+      "/tmp/nebula-mcp-gateway-4mfwybm2",
+      "/tmp/nebula-mcp-gateway-xi9ly9y7",
+      "/tmp/nebula-mcp-gateway-2s_4yobf",
+      "/tmp/nebula-mcp-gateway-_nzjvy0a",
+      "/tmp/nebula-mcp-gateway-6iec3aei",
+      "/tmp/nebula-mcp-gateway-61h3bcvd",
+      "/tmp/nebula-mcp-gateway-4n0kzqd2",
+      "/tmp/nebula-mcp-gateway-acofm6vl",
+      "/tmp/nebula-mcp-gateway-vz2hlwvi",
+      "/tmp/nebula-mcp-gateway-daq24reu"
+    ],
+    "gateway_directories_removed": true,
+    "server_exit_code": 0,
+    "temporary_directory": "/tmp/nebula-mcp-load-c2i1pzaf",
+    "temporary_data_removed": true,
+    "server_stopped": true,
+    "source_files_sha256": {
+      "storage.py": "46a17344d141679b2f5119978a2a078224cc0889a5346e3ac1bf9afada9bf612",
+      "mcp.py": "a749540f8132bcb9a5e75583174dd49bf36dabbb3c4ee787f7e2883cd8d900f5",
+      "chat_subagents.py": "6eefad22b73549559a50f560af94ba37d4d8abe054bd429b2ce8c46ec52c0648",
+      "harnesses.py": "734d5e30ae2b397b1df42773a54a742e6335aa9b9187f9d7e15cae9860311aae"
+    }
+  },
+  "slow_candidate": {
+    "label": "candidate",
+    "origin": "http://172.26.91.237:52657",
+    "synthetic": true,
+    "authentication_enabled": true,
+    "unauthorized_status": 401,
+    "clients": 34,
+    "rounds": 3,
+    "slow_read_ms": 50,
+    "fixture": {
+      "profiles": 2535,
+      "notebook_profiles": 2526,
+      "external_profiles": 9,
+      "notebook_tools": 16
+    },
+    "latencies": {
+      "capabilities": {
+        "count": 102,
+        "median_ms": 1267.366,
+        "p95_ms": 1512.194,
+        "max_ms": 1646.646
+      },
+      "ordinary_http": {
+        "count": 254,
+        "median_ms": 4.461,
+        "p95_ms": 10.328,
+        "max_ms": 137.146
+      },
+      "404": {
+        "count": 200,
+        "median_ms": 8.476,
+        "p95_ms": 20.71,
+        "max_ms": 150.53
+      },
+      "static": {
+        "count": 194,
+        "median_ms": 9.106,
+        "p95_ms": 20.977,
+        "max_ms": 150.588
+      }
+    },
+    "timeouts_at_10_seconds": {},
+    "transport_errors": {},
+    "all_catalogs_include_late_server": true,
+    "wall_seconds": 4.158,
+    "isolation": {
+      "latency": {
+        "count": 3,
+        "median_ms": 38.394,
+        "p95_ms": 42.726,
+        "max_ms": 42.726
+      },
+      "profile_ids": [
+        "external-0000",
+        "external-0001",
+        "external-0002",
+        "external-0003",
+        "external-0004",
+        "external-0005",
+        "external-0006",
+        "external-0007",
+        "external-2534"
+      ],
+      "materialized_per_call": 9
+    },
+    "loop_lag": {
+      "count": 767,
+      "median_ms": 0.311,
+      "p95_ms": 2.794,
+      "max_ms": 16.309
+    },
+    "hydration": {
+      "profiles_hydrated": 918,
+      "profiles_hydrated_on_loop": 0
+    },
+    "gateway_roots": [
+      "/tmp/nebula-mcp-gateway-mkno87yn",
+      "/tmp/nebula-mcp-gateway-h1vfbqpr",
+      "/tmp/nebula-mcp-gateway-h8ee9smf",
+      "/tmp/nebula-mcp-gateway-cqem4y4_",
+      "/tmp/nebula-mcp-gateway-qvrp3h2x",
+      "/tmp/nebula-mcp-gateway-k7nzxrgi",
+      "/tmp/nebula-mcp-gateway-xeny929a",
+      "/tmp/nebula-mcp-gateway-l3jui0mr",
+      "/tmp/nebula-mcp-gateway-ooas77bk",
+      "/tmp/nebula-mcp-gateway-3r7o5e40",
+      "/tmp/nebula-mcp-gateway-ijh0h5lc",
+      "/tmp/nebula-mcp-gateway-qahayl15",
+      "/tmp/nebula-mcp-gateway-t5393n03",
+      "/tmp/nebula-mcp-gateway-1n7ypl98",
+      "/tmp/nebula-mcp-gateway-0gec3l8e",
+      "/tmp/nebula-mcp-gateway-nes6v2hg",
+      "/tmp/nebula-mcp-gateway-8s1mn30h",
+      "/tmp/nebula-mcp-gateway-6cvvaj5h",
+      "/tmp/nebula-mcp-gateway-1m3axyq0",
+      "/tmp/nebula-mcp-gateway-iqlbk28w",
+      "/tmp/nebula-mcp-gateway-8ndl6zln",
+      "/tmp/nebula-mcp-gateway-z5q4wjx6",
+      "/tmp/nebula-mcp-gateway-xf4frnhn",
+      "/tmp/nebula-mcp-gateway-rne8xerr",
+      "/tmp/nebula-mcp-gateway-asybn7pg",
+      "/tmp/nebula-mcp-gateway-8khcw963",
+      "/tmp/nebula-mcp-gateway-0klqex8v",
+      "/tmp/nebula-mcp-gateway-zhosquc7",
+      "/tmp/nebula-mcp-gateway-9plpwolr",
+      "/tmp/nebula-mcp-gateway-tvzvqnv9",
+      "/tmp/nebula-mcp-gateway-5k_94dbv",
+      "/tmp/nebula-mcp-gateway-ldjmbbwo",
+      "/tmp/nebula-mcp-gateway-3yhx__h0",
+      "/tmp/nebula-mcp-gateway-kcax5ht_"
+    ],
+    "gateway_directories_removed": true,
+    "server_exit_code": 0,
+    "temporary_directory": "/tmp/nebula-mcp-load-yahj6_2k",
+    "temporary_data_removed": true,
+    "server_stopped": true,
+    "source_files_sha256": {
+      "storage.py": "46a17344d141679b2f5119978a2a078224cc0889a5346e3ac1bf9afada9bf612",
+      "mcp.py": "a749540f8132bcb9a5e75583174dd49bf36dabbb3c4ee787f7e2883cd8d900f5",
+      "chat_subagents.py": "6eefad22b73549559a50f560af94ba37d4d8abe054bd429b2ce8c46ec52c0648",
+      "harnesses.py": "734d5e30ae2b397b1df42773a54a742e6335aa9b9187f9d7e15cae9860311aae"
+    }
+  },
+  "initial_candidate_diagnostic": {
+    "label": "candidate",
+    "origin": "http://172.26.91.237:58007",
+    "synthetic": true,
+    "authentication_enabled": true,
+    "unauthorized_status": 401,
+    "clients": 34,
+    "rounds": 3,
+    "slow_read_ms": 0,
+    "fixture": {
+      "profiles": 2535,
+      "notebook_profiles": 2526,
+      "external_profiles": 9,
+      "notebook_tools": 16
+    },
+    "latencies": {
+      "capabilities": {
+        "count": 102,
+        "median_ms": 738.668,
+        "p95_ms": 1347.719,
+        "max_ms": 1630.529
+      },
+      "ordinary_http": {
+        "count": 20,
+        "median_ms": 7.938,
+        "p95_ms": 932.266,
+        "max_ms": 932.266
+      },
+      "404": {
+        "count": 20,
+        "median_ms": 5.386,
+        "p95_ms": 1632.432,
+        "max_ms": 1632.432
+      },
+      "static": {
+        "count": 20,
+        "median_ms": 5.057,
+        "p95_ms": 1840.737,
+        "max_ms": 1840.737
+      }
+    },
+    "timeouts_at_10_seconds": {},
+    "transport_errors": {},
+    "all_catalogs_include_late_server": true,
+    "wall_seconds": 2.706,
+    "isolation": {
+      "latency": {
+        "count": 3,
+        "median_ms": 39.261,
+        "p95_ms": 42.097,
+        "max_ms": 42.097
+      },
+      "profile_ids": [
+        "external-0000",
+        "external-0001",
+        "external-0002",
+        "external-0003",
+        "external-0004",
+        "external-0005",
+        "external-0006",
+        "external-0007",
+        "external-2534"
+      ],
+      "materialized_per_call": 9
+    },
+    "loop_lag": {
+      "count": 177,
+      "median_ms": 0.137,
+      "p95_ms": 89.812,
+      "max_ms": 155.786
+    },
+    "hydration": {
+      "profiles_hydrated": 918,
+      "profiles_hydrated_on_loop": 0
+    },
+    "gateway_directories_removed": true,
+    "server_exit_code": 0,
+    "temporary_data_removed": true,
+    "server_stopped": true
+  }
+}
